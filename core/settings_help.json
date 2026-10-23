@@ -1,6 +1,5 @@
 {
   "_comment": "Help text for settings - displayed in settings modal UI",
-  
   "DEFAULT_USERNAME": {
     "short": "Your display name in conversations",
     "long": "The name used to identify you in chat messages. This appears in the message history and can be changed at any time without affecting past messages. Used in prompts via the {user_name} placeholder."
@@ -9,7 +8,14 @@
     "short": "Show avatar images in chat messages",
     "long": "When enabled, user and assistant avatar images appear next to each message in the chat. Disable to hide avatars for a cleaner, text-focused interface. Changes take effect on page refresh."
   },
-  
+  "DEFAULT_BACKGROUND": {
+    "short": "Global underlay scene shown when a chat has no scene of its own",
+    "long": "Name of a scene from the background library used as the app-wide default background. A chat with its own scene (set from the chat sidebar) overrides it, and the underlay image is only fetched when it is actually shown. Empty means no default background."
+  },
+  "ICON_COLOR": {
+    "short": "Tint the gem logo and favicon for this Sapphire instance",
+    "long": "Hex color (e.g. #9b30ff) that recolors the gem logo in the nav rail and the browser tab favicon, so different Sapphire instances are distinguishable at a glance. A chat or persona trim color overrides it while that chat is active. Leave empty for the stock sapphire blue."
+  },
   "SOCKS_ENABLED": {
     "short": "Route web requests through SOCKS proxy",
     "long": "When enabled, all web search and URL fetching will route through the specified SOCKS proxy server. Useful for privacy, accessing region-restricted content, or routing through Tor. Requires SOCKS_HOST and SOCKS_PORT to be configured."
@@ -26,11 +32,18 @@
     "short": "SOCKS proxy connection timeout (seconds)",
     "long": "How long to wait for the SOCKS proxy to respond before timing out. Default is 10 seconds. Increase if your proxy is slow or on a high-latency connection."
   },
-  "PRIVACY_NETWORK_WHITELIST": {
-    "short": "Allowed network destinations when Privacy Mode is enabled",
-    "long": "List of IP addresses, hostnames, and CIDR ranges that are allowed when Privacy Mode is active. All other network connections are blocked. Supports single IPs (192.168.1.50), hostnames (localhost, myserver.local), and CIDR notation for ranges (192.168.0.0/16, 10.0.0.0/8). Default includes RFC1918 private address ranges for LAN-only operation."
+  "SOCKS_REMOTE_DNS": {
+    "short": "Resolve DNS through the proxy (socks5h)",
+    "long": "Off (default): hostnames resolve locally and only the traffic rides the tunnel — compatible with every SOCKS proxy, but this machine's DNS resolver sees the names Sapphire visits. On: names are sent to the proxy and resolved there (socks5h) — no local DNS leak; requires a proxy with server-side DNS. PIA's standalone SOCKS5 lacks it: every request fails 'host unreachable' while this is on."
   },
-  
+  "SOCKS_ROUTE_LLM": {
+    "short": "Route LLM traffic through the proxy",
+    "long": "Off (default): LLM API requests (Claude, OpenAI, Gemini, custom providers) go direct while everything else rides the proxy — the safe default: some providers block proxy IPs, and proxies without server-side DNS (e.g. PIA's standalone SOCKS5) can never carry the LLM lane, which always asks the proxy to resolve names. On: LLM traffic rides the proxy too — full-tunnel privacy; requires a proxy with working remote DNS. Local/LAN LLM servers are always exempt."
+  },
+  "SOCKS_NO_PROXY_EXTRA": {
+    "short": "Hosts that bypass the proxy (comma-separated)",
+    "long": "Extra hostnames or IPs that must never ride the proxy — LAN gear the proxy can't reach, e.g. homeassistant.local, 192.168.1.50. Loopback and detected LAN LLM endpoints are exempted automatically. Applies while the SOCKS proxy is enabled."
+  },
   "BACKUPS_ENABLED": {
     "short": "Enable automatic backup system",
     "long": "When enabled, the system will automatically create backups of the user/ directory on a schedule. Runs at BACKUPS_HOUR daily, weekly on Sundays, monthly on the 1st. Manual backups can be triggered from the UI."
@@ -55,7 +68,10 @@
     "short": "Number of manual backups to retain",
     "long": "How many manual backup files to keep. Manual backups are triggered via the Backup Now button in the UI. Oldest backups are deleted first when the limit is exceeded."
   },
-  
+  "BACKUPS_MAX_SIZE_WARN_MB": {
+    "short": "Warn when a backup grows past this size (MB)",
+    "long": "If the estimated backup size (after exclusions) exceeds this many megabytes, the Backup page shows a warning so you can exclude large folders. Soft warning only — it does not block backups. Set 0 to disable."
+  },
   "AUDIO_INPUT_DEVICE": {
     "short": "Input device index (null = auto-detect)",
     "long": "Specific audio input device to use by index number. Set to null for automatic detection which tries preferred devices first (pipewire, pulse on Linux). Use the Audio tab test feature to find your device index. Useful when you have multiple microphones."
@@ -80,7 +96,6 @@
     "short": "Preferred audio devices on Windows",
     "long": "List of device name fragments to prefer on Windows, tried in order. 'default' uses the Windows default device. Other entries match against device names to prefer specific microphones or sound cards."
   },
-  
   "WAKE_WORD_ENABLED": {
     "short": "Enable wake word detection",
     "long": "When enabled, the system continuously listens for a wake word to trigger voice interaction. Uses OpenWakeWord with ONNX inference for cross-platform compatibility. Continuous audio monitoring may impact system resources on low-power devices."
@@ -89,10 +104,6 @@
     "short": "Audio buffer chunk size in samples",
     "long": "Size of audio chunks for wake word detection. 1280 samples (80ms at 16kHz) is optimal for OpenWakeWord. Larger multiples of 1280 increase efficiency but add latency."
   },
-  "BUFFER_DURATION": {
-    "short": "Wake word audio buffer duration (seconds)",
-    "long": "How many seconds of audio to buffer before processing for wake word detection. Longer buffers improve accuracy but increase latency. 0.5 seconds is typical for responsive detection."
-  },
   "WAKEWORD_MODEL": {
     "short": "Wake word to listen for",
     "long": "The wake word model to use for detection. Built-in models include: 'alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', and 'weather'. Custom models are auto-detected from user/wakeword/models/ - just drop .onnx or .tflite files there and they'll appear in the dropdown. Community models available at github.com/fwartner/home-assistant-wakewords-collection"
@@ -100,6 +111,34 @@
   "WAKEWORD_THRESHOLD": {
     "short": "Detection confidence threshold (0.0-1.0)",
     "long": "Minimum confidence score required to trigger wake word detection. Lower values (0.3-0.4) are more sensitive but may cause false positives. Higher values (0.6-0.8) require clearer pronunciation but reduce false triggers. Default 0.5 is a good balance for most environments."
+  },
+  "CONVERSATION_DTLN": {
+    "short": "Echo cancel: None (headphones) / 256 / 512 (open speakers)",
+    "long": "Picks the conversation-mode mic path. None = headphone tier (no echo cancel) — clean on headphones, but on open speakers she hears herself. 256/512 = DTLN acoustic echo cancellation for open speakers (the duplex tier), so she doesn't barge-in on her own voice; 512 cancels harder than 256 at a little more CPU. Needs the DTLN onnx models in user/models/dtln/ — falls back to None if absent. Takes effect on the next conversation activation (toggle off/on)."
+  },
+  "CONVERSATION_START_WORD": {
+    "short": "Require a spoken start word, e.g. 'hey sapphire' (blank = off, respond to everything)",
+    "long": "An STT-based start word (not a wakeword — no pause). When set, conversation mode only acts on utterances that BEGIN with this phrase, then strips it and answers the rest. Great for rejecting background TV/music that would otherwise trigger her. Comma-separate multiple phrases (e.g. 'hey sapphire, sapphire'). Fuzzy-matched, so 'hey staff fire' still works (see the fuzzy threshold). Blank = off."
+  },
+  "CONVERSATION_START_WORD_FUZZY": {
+    "short": "How close a match the start word needs (0.0-1.0, default 0.7)",
+    "long": "Similarity threshold for the start word, since STT mishears ('hey staff fire' for 'hey sapphire'). 1.0 = exact only; lower (0.6) is more forgiving but may let near-misses through. 0.7 is a good balance. Only used when a start word is set."
+  },
+  "CONVERSATION_VAD_THRESHOLD": {
+    "short": "Speech confidence to count as you talking (0.0-1.0)",
+    "long": "How confidently silero must classify audio as speech before conversation mode treats it as you talking. Raise it (0.6-0.7) to reject keyboard noise, background TV, and quiet sounds; lower it if it misses your soft speech. Default 0.5."
+  },
+  "CONVERSATION_BARGE_HOLD_MS": {
+    "short": "Sustained speech (ms) before you interrupt her",
+    "long": "How long continuous speech must last during her reply before it counts as a barge-in and cuts her off. Raise it (150-250) so keyboard bursts or coughs don't interrupt her; lower it for snappier interrupts. Default 90ms."
+  },
+  "CONVERSATION_MIN_SPEECH_MS": {
+    "short": "Shortest utterance (ms) that starts a turn",
+    "long": "Speech shorter than this is discarded as a blip, not sent to the LLM. Raise it (250-400) to reject clicks/taps; lower it to catch very short replies like 'yes'. Default 200ms."
+  },
+  "CONVERSATION_ENDPOINT_SILENCE_MS": {
+    "short": "Pause (ms) before she decides you're done",
+    "long": "How long you must be silent after speaking before conversation mode sends your utterance to the LLM. Raise it (900-1200) if it cuts you off mid-thought; lower it for faster responses. Default 700ms."
   },
   "WAKEWORD_FRAMEWORK": {
     "short": "Inference framework (onnx or tflite)",
@@ -113,7 +152,6 @@
     "short": "Frequency of wake acknowledgment tone (Hz)",
     "long": "Pitch of the beep tone when wake word is detected. 880 Hz is a pleasant, attention-getting tone (A5 musical note). Higher frequencies are more piercing, lower are more subtle."
   },
-  
   "STT_PROVIDER": {
     "short": "Speech-to-text provider",
     "long": "Select your STT engine. 'Disabled' turns off voice input. 'Local (Faster Whisper)' runs Whisper on your machine (free, requires RAM/VRAM). 'Fireworks Whisper' uses Fireworks AI cloud API (fast, requires API key, ~$0.01/min)."
@@ -124,7 +162,7 @@
   },
   "STT_FIREWORKS_MODEL": {
     "short": "Fireworks Whisper model",
-    "long": "whisper-v3-turbo is faster and cheaper. whisper-v3 is higher quality but slower. For most voice input, turbo is more than good enough."
+    "long": "whisper-v3-turbo is the only Fireworks transcription model still served: Fireworks retired audio inference on 2026-06-10 and the whisper-v3 host now rejects valid keys, while the turbo host still answers. Fast, cheap, and more than good enough for voice input."
   },
   "STT_LANGUAGE": {
     "short": "Language code for speech recognition",
@@ -158,7 +196,6 @@
     "short": "Enable Voice Activity Detection filter",
     "long": "When enabled, uses VAD to filter out non-speech audio before transcription. Improves accuracy by ignoring silence and background noise. Recommended to keep enabled for better results and faster processing."
   },
-  
   "STT_VAD_ENABLED": {
     "short": "Use Silero VAD (recommended)",
     "long": "When enabled, voice activity detection uses Silero — a tiny ML model robust to background noise. Falls back to Classic VAD (amplitude thresholding) if Silero fails to load. When disabled, only Classic VAD runs."
@@ -203,7 +240,6 @@
     "short": "Delay after beep before recording (seconds)",
     "long": "How long to wait after playing the start beep before beginning recording. 0.15 seconds allows the beep to finish and prevents it from being recorded. Too short may capture beep tail."
   },
-  
   "TTS_PROVIDER": {
     "short": "Text-to-speech provider",
     "long": "Which TTS engine to use for voice output. 'kokoro' runs locally (free, requires models). 'elevenlabs' uses the ElevenLabs cloud API (requires API key, per-character billing). 'none' disables TTS."
@@ -282,7 +318,7 @@
   },
   "EMBEDDING_PROVIDER": {
     "short": "Where to run embedding inference",
-    "long": "Local runs Nomic on your CPU (requires onnxruntime + transformers). API sends text to a remote Nomic server. Disable to use text-only search."
+    "long": "Local runs Nomic on your CPU (requires onnxruntime + transformers). API sends text to a remote Nomic server — including the text of key-gated private memories at save time. Disable to use text-only search."
   },
   "EMBEDDING_API_URL": {
     "short": "Remote embedding server URL",
@@ -292,7 +328,6 @@
     "short": "API key for remote server (optional)",
     "long": "Sent as Bearer token. Leave blank if your server has no auth."
   },
-
   "LLM_MAX_HISTORY": {
     "short": "Maximum conversation messages to send (0 = unlimited)",
     "long": "How many past messages to send to LLM. Single messages count, not assistant/user pairs. Truncates earlier messages when exceeded. Set to 0 to disable message-based trimming and rely only on CONTEXT_LIMIT for token-based trimming."
@@ -317,27 +352,26 @@
     "short": "Default parameters for text generation",
     "long": "JSON object with default generation settings: max_tokens (response length limit), temperature (randomness/creativity, 0-2), top_p (nucleus sampling, 0-1), presence_penalty (topic diversity, -2 to 2), frequency_penalty (repetition reduction, -2 to 2). These can be overridden per-request."
   },
-  "FORCE_THINKING": {
-    "short": "Override the AI's initial think tags to force it to think a certain way",
-    "long": "When enabled, prepends THINKING_PREFILL to every prompt to encourage the model to think a certain way. Useful for debugging or understanding decision-making. May make responses longer and slower. Most modern models don't need this."
-  },
-  "THINKING_PREFILL": {
-    "short": "Text to prepend for thinking mode",
-    "long": "Opening text that triggers the model's chain-of-thought reasoning. Only used if FORCE_THINKING is enabled. Should start with a <think> tag or similar, then an INCOMPLETE sentence so the AI finishes it."
+  "SPICE_DELIVERY": {
+    "short": "How the rotating spice reaches the AI",
+    "long": "Ghost message (default): spice arrives in a per-turn app-context message labeled as coming from Sapphire's own app - prompt-cache friendly on cloud models, but the AI knows it's injected and may mention that. System prompt: spice is woven unattributed into the system prompt, so the AI wears it as its own inclination - feels most natural, but the prompt changes on every spice rotation, which re-tokenizes history on cache-billed cloud models (fine and free on local models)."
   },
   "CLAUDE_THINKING_ENABLED": {
-    "short": "Enable Claude extended thinking",
-    "long": "When enabled, Claude uses extended thinking mode with a dedicated token budget for reasoning before responding. Shows thinking process in collapsible accordions. Only applies to Claude models, ignored by other providers."
-  },
-  "CLAUDE_THINKING_BUDGET": {
-    "short": "Claude thinking token budget",
-    "long": "Maximum tokens Claude can use for internal reasoning before responding. Higher values allow deeper thinking but increase response time and cost. Typical range: 5000-32000. Only used when CLAUDE_THINKING_ENABLED is true."
+    "short": "Enable Claude adaptive thinking",
+    "long": "When enabled, Claude uses adaptive thinking — the model decides when and how deeply to reason per request, steered by the provider's Reasoning Effort setting. Shows summarized thinking in collapsible accordions. Only applies to Claude models, ignored by other providers."
   },
   "IMAGE_UPLOAD_MAX_WIDTH": {
     "short": "Max width for uploaded images (0 = disabled)",
     "long": "Images wider than this are resized and compressed to JPEG 85% quality before storing in chat history. Reduces storage and speeds up LLM processing. Set to 0 to disable optimization and keep original images. Only applies if compression actually makes the image smaller."
   },
-  
+  "IMAGE_MEMORY_TURNS": {
+    "short": "Turns an image stays visible to the model (0 = current turn only)",
+    "long": "Every image she or you put in the chat is shown to the model again for this many turns after it arrived — pasted images and the pictures her tools showed her (contact sheets, viewed images). She can refer back to them without re-viewing. Each replayed image costs roughly 1.5k tokens per turn, so 3 keeps a browsing session cheap. Older images stay in the chat forever and she can re-view any of them by handle (img:...)."
+  },
+  "WEB_IMAGES_SAFESEARCH": {
+    "short": "Adult-content filter for web image search",
+    "long": "Passed to the search engine on every web_view_images call. Off returns everything; moderate hides explicit images; strict hides explicit images and text. This only filters what the engine returns — it is not a content policy for the model."
+  },
   "MAX_TOOL_ITERATIONS": {
     "short": "how many total tool iterations can be called (these can be parallel)",
     "long": "How many iterations the AI can do tool calls for. Prevents runaway tool calling."
@@ -346,13 +380,25 @@
     "short": "Maximum tool calls per iteration",
     "long": "How many tools the AI can call in a single tool iteration. Allows multiple tools at once. Multiple iterations per reply."
   },
-  "DEBUG_TOOL_CALLING": {
-    "short": "Enable verbose tool calling debug logs",
-    "long": "When enabled, logs detailed information about every tool call: parameters, responses, timing, errors. Very helpful for debugging tool issues but creates large log files. Disable in production for better performance."
+  "UPDATE_CHECK_ENABLED": {
+    "short": "Check GitHub for updates daily",
+    "long": "When enabled, Sapphire checks GitHub once a day for a newer release. Turn off to stop the only unprompted outbound call the core app makes. A toggle takes effect within a day; restart applies it immediately."
   },
-  "TOOL_MAKER_VALIDATION": {
-    "short": "How strictly AI-created tools are validated",
-    "long": "Controls what the AI is allowed to import/use when creating custom tools via tool_save.\n\n• strict — Only allowlisted imports (json, re, datetime, math, requests, pathlib, etc.). Safest.\n• moderate — Blocks dangerous operations (subprocess, shutil, eval, os.system) but allows most imports.\n• trust — Syntax check only. Full Python access. Use if you trust the AI completely."
+  "AI_TOOLSET_SWITCH_ENABLED": {
+    "short": "Let the AI switch its own toolset",
+    "long": "Adds a switch_toolset tool so the AI can change its active toolset itself (e.g. coding tools, then self-edit tools). When disabled the tool is completely hidden from the AI. Off by default so a fresh install never surprises anyone."
+  },
+  "AI_MODEL_SWITCH_ENABLED": {
+    "short": "Let the AI switch its own LLM",
+    "long": "Adds a switch_model tool so the AI can switch between the models you list below. When disabled the tool is completely hidden from the AI. The model list doubles as scope control: only listed models are switchable."
+  },
+  "AI_MODEL_SWITCH_ROSTER": {
+    "short": "Models the AI may switch between (top = least private)",
+    "long": "Ordered list of providers the AI can switch between with switch_model. Order matters when the privacy ratchet is on: top is least private, bottom is most private."
+  },
+  "AI_MODEL_SWITCH_RATCHET": {
+    "short": "Privacy ratchet: only allow switches DOWN the list",
+    "long": "When enabled, the AI can only switch to models at the same position or lower in the list — privacy rolls downhill and never back up. The current chat's model is the floor."
   },
   "SESSION_TIMEOUT_DAYS": {
     "short": "How long login sessions remain valid (days)",
@@ -366,8 +412,28 @@
     "short": "Web interface port number",
     "long": "Port number for the web interface. Default is 8073. Access the UI at https://hostname:port after restart. Requires restart to take effect."
   },
+  "MAX_DAEMON_TASKS": {
+    "short": "Cap on daemon tasks (Realtime rules count too)",
+    "long": "Daemon tasks and Realtime rules share this cap: a Realtime rule is a daemon task whose source is live (phone calls, Discord voice). Raising this does not raise Max Total Tasks. Applies to new tasks immediately; nothing existing is removed."
+  },
+  "MAX_TOTAL_TASKS": {
+    "short": "Cap on all Continuity tasks combined",
+    "long": "Scheduled, heartbeat, daemon, Realtime and webhook tasks together. Heartbeats stay capped at 4 and webhooks at 10. Applies to new tasks immediately."
+  },
   "WEB_UI_SSL_ADHOC": {
     "short": "Use self-signed SSL certificate",
     "long": "When enabled, the server generates a self-signed SSL certificate for HTTPS. Browser will show security warning but connection is encrypted. Disable only if you're behind a reverse proxy that handles SSL. Requires restart."
+  },
+  "PRIVATE_ALLOW_UNFLAGGED_TOOLS": {
+    "short": "Private chats: allow tools with no locality flag",
+    "long": "Tools declare is_local in their schema; private chats refuse any tool without it (fail-closed — an unknown tool might send data to the cloud). Many plugins predate the flag, so private mode blocks them. Enable to treat UNFLAGGED tools as local on your box — CAUTION: unflagged includes tools that talk out (e.g. Discord, MCP-server tools), which this setting also unblocks. Tools that explicitly declare themselves non-local (web search, email, Telegram, etc.) stay blocked in private chats regardless. Default off."
+  },
+  "VAULT_IDLE_MINUTES": {
+    "short": "Minutes of vault inactivity before auto-lock",
+    "long": "The prompt vault locks itself after this many minutes without vault activity (chat turns wearing a vault prompt, vault edits, unlocks). Listing prompt names does not count as activity. Changes apply to a running timer immediately. Minimum 1 minute; default 30."
+  },
+  "METRICS_ENABLED": {
+    "short": "Record local token-usage metrics",
+    "long": "Records per-LLM-call token usage in a local SQLite database (user/metrics/) for the dashboard's usage charts. Purely on-device either way — this only controls whether the local table is written at all."
   }
 }

@@ -1,0 +1,16 @@
+<style>
+  .reel-wrap { display:flex; flex-direction:column; gap:8px; }
+  .reel-go { padding:9px; border:none; border-radius:8px; background:var(--accent,#4a7dff);
+      color:#fff; font-weight:600; cursor:pointer; }
+  .reel-go.stop { background:#c0392b; }
+  .reel-img { width:100%; border-radius:8px; border:1px solid var(--border,#333); display:none; }
+  .reel-status { font-size:12px; color:var(--text-dim,#9aa); min-height:15px; }
+  .reel-hint { font-size:12px; color:var(--accent,#4a7dff); text-decoration:none; }
+  .reel-hint:hover { text-decoration:underline; }
+</style>
+<div class="reel-wrap">
+  <button class="reel-go" id="reel-go">▶ Start reel</button>
+  <div class="reel-status" id="reel-status"></div>
+  <img class="reel-img" id="reel-img" alt="reel">
+  <a class="reel-hint" href="#apps/sd-server">⚙ Open Image Studio →</a>
+</div>

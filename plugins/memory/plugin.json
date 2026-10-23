@@ -1,13 +1,14 @@
 {
   "name": "memory",
+  "short_display_name": "Memory",
   "short_name": "Memory System",
-  "version": "1.0.0",
-  "description": "Long-term memory, knowledge base, goals, and people — Sapphire's Mind",
+  "version": "1.0.1",
+  "description": "Long-term memory, knowledge base, goals, and people \u2014 Sapphire's Mind",
   "author": "sapphire",
   "icon": "\ud83e\udde0",
   "priority": 0,
   "default_enabled": true,
-  "essential": true,
+  "essential": "memory",
   "capabilities": {
     "tools": [
       "tools/memory_tools.py",

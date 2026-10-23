@@ -56,15 +56,12 @@ def test_sapphire_router_l2_normalizes():
     assert 'linalg.norm' in src, "SapphireRouterEmbedder must L2-normalize"
     assert 'norms[norms == 0] = 1' in src, "must guard zero-norm edge case"
 
-    # Smoke: patch the shared httpx client's post method (the embedder now
-    # routes through _get_http_client() for connection reuse)
+    # Smoke: patch net.post (the embedder now rides the net facade)
     import core.embeddings as emb
-    fake_client = MagicMock()
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
     resp.json.return_value = {'embeddings': [[10.0, 0.0, 0.0, 0.0]]}
-    fake_client.post.return_value = resp
-    with patch.object(emb, '_get_http_client', return_value=fake_client):
+    with patch.object(emb.net, 'post', return_value=resp):
         import os as _os
         _os.environ['SAPPHIRE_ROUTER_URL'] = 'http://fake-router'
         try:

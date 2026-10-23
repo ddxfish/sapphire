@@ -1,7 +1,8 @@
 {
   "name": "email",
-  "version": "1.1.0",
-  "description": "Email — read inbox, send to whitelisted contacts via IMAP/SMTP",
+  "short_display_name": "Email",
+  "version": "1.2.0",
+  "description": "Email — read, search, send, reply, forward, archive & delete via IMAP/SMTP, whitelisted contacts",
   "author": "sapphire",
   "icon": "📧",
   "url": "https://sapphireblue.dev",

@@ -120,10 +120,16 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
                         if block.get("type") == "text":
                             text_parts.append(block.get("text", ""))
                         elif block.get("type") == "image":
-                            images.append({
-                                "data": block.get("data", ""),
-                                "media_type": block.get("media_type", "image/jpeg"),
-                            })
+                            # Stored image (image upgrade 2026-09-10): the row
+                            # carries the store handle; the browser fetches it
+                            # from /api/tool-image/<id>. Legacy rows: base64.
+                            img = {"media_type": block.get("media_type", "image/jpeg")}
+                            handle = str(block.get("handle") or "")
+                            if handle.startswith("img:"):
+                                img["id"] = handle[4:]
+                            else:
+                                img["data"] = block.get("data", "")
+                            images.append(img)
                         elif block.get("type") == "file":
                             user_files.append({
                                 "filename": block.get("filename", ""),

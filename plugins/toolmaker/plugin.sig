@@ -2,8 +2,8 @@
   "plugin": "toolmaker",
   "version": "1.1.0",
   "files": {
-    "plugin.json": "sha256:d4be462bc7a18820518722f885f761893e6cee552fd39cf0660b43805625b32f",
-    "tools/toolmaker.py": "sha256:c8b32dbd8c5203172b4a3e6549fad04f3d38cbe009c2bbb01f8de4d8831fd39a"
+    "plugin.json": "sha256:5115440b79665338d392adeefa6a687054df1dde4f9115d72dc356a22db2a9a6",
+    "tools/toolmaker.py": "sha256:8910e03af9eed98910af9e0f126723831f410fc3a7a9c378f64b4a85a52f3c31"
   },
-  "signature": "UU/J50YdoJg1Zg6UisWjHoRTlq69BA/3JnS2X3AyF+DEeSi6Gt2g0NXFnn9dVRHpOAhA9tBtvlZaVvk8bpdvAA=="
+  "signature": "MqBXq6Qz/8JLaCwQXxvDAx0vbmv3oVI1Va3nOdZEk3lmcOf7hwiHJNe+Ei4FAtMbDMWutjh79jh1RWyY1epTBw=="
 }

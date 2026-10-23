@@ -20,11 +20,6 @@ class NullAudioRecorder:
     def get_stream(self):
         """Return None - no stream available"""
         return None
-        
-    def get_latest_chunk(self, duration):
-        """Return empty array"""
-        import numpy as np
-        return np.array([], dtype=np.int16)
 
 
 class NullWakeWordDetector:

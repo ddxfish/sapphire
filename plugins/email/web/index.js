@@ -257,8 +257,6 @@ export default {
             helpText: 'Configure email accounts for each persona/scope. Each chat can select which email account to use via the sidebar. Works with any IMAP/SMTP server.',
             render: (c) => renderWithDaemonSettings(c),
             load: async () => { await manager.loadItems(); return {}; },
-            save: async () => ({ success: true }),
-            getSettings: () => ({})
         });
     },
 

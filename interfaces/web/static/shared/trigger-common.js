@@ -5,7 +5,7 @@
 // sibling views stay thin and render identically (reusing the existing sched-*
 // CSS). View-specific glue (what data to load, surgical poll updates) stays in
 // each view; everything reusable lives here.
-import { createTask, updateTask, deleteTask, runTask } from './continuity-api.js';
+import { createTask, updateTask, deleteTask, runTask, cancelTask } from './continuity-api.js';
 import { openTriggerEditor } from './trigger-editor/editor.js';
 import { describeCron } from './trigger-editor/trigger-cron.js';
 import { showExportDialog, showImportDialog } from './import-export.js';
@@ -18,16 +18,28 @@ export const TRIGGER_TABS = [
     { id: 'heartbeat', label: 'Heartbeat', icon: '💓' },
     { id: 'scheduled', label: 'Scheduled', icon: '📅' },
     { id: 'daemons', label: 'Daemons', icon: '📡' },
+    { id: 'realtime', label: 'Realtime', icon: '⚡' },
     { id: 'webhooks', label: 'Webhooks', icon: '🔗' },
 ];
 
 // ── Formatters ───────────────────────────────────────────────────────
 
 export function esc(str) {
+    // Quote-escaping included — used in attribute interpolations; same
+    // class as the modal.js fix (2026-07-19).
     if (!str) return '';
     const div = document.createElement('div');
     div.textContent = str;
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+export function chatChip(target) {
+    // '__locked__' is the server's sealed-vault mask for a private chat's
+    // name (never the real value; the scheduler treats it as keep-existing
+    // on write). Render it honestly instead of leaking the sentinel.
+    if (!target) return '';
+    if (target === '__locked__') return '💬 🔒 <em>locked vault</em>';
+    return `💬 ${esc(target)}`;
 }
 
 export function formatHourRange(start, end) {
@@ -86,7 +98,7 @@ export function formatTime(isoString) {
 
 export function getHeartbeatState(hb, timeline) {
     if (!hb.enabled) return { label: 'Flatlined', cls: 'flatlined' };
-    if (hb.running) return { label: 'Ba-bump', cls: 'babump' };
+    if (hb.running) return { label: hb.cancelling ? 'Stopping…' : 'Ba-bump', cls: 'babump' };
     if (!hb.last_run) return { label: 'Warming up', cls: 'warmup' };
     const recent = (timeline.past || []).filter(a => a.task_id === hb.id);
     if (recent.length > 0 && recent[0].status === 'error') return { label: 'Irregular', cls: 'irregular' };
@@ -126,25 +138,39 @@ export function statusRow({ enabled, total, running, desc }) {
 
 // ── Card renderers ────────────────────────────────────────────────────
 
+// ⏹ on any card whose run is live. Lands between LLM rounds server-side, so
+// the card shows "Stopping…" (cancelling) until the run actually exits.
+// Plugin-handler tasks run their own code and can't be interrupted — no ⏹.
+export function stopBtn(t) {
+    if (!t.running || (t.source || '').startsWith('plugin:')) return '';
+    const label = t.cancelling ? 'Stopping…' : 'Stop run';
+    return `<button class="btn-icon danger" data-action="cancel" data-id="${t.id}" title="${label}"${t.cancelling ? ' disabled' : ''}>⏹</button>`;
+}
+
+export function runningText(t) {
+    if (!t.running) return '';
+    return `<span class="sched-progress">${t.cancelling ? 'Stopping…' : 'Running...'}</span>`;
+}
+
 export function renderTaskCard(t) {
     const sched = describeCron(t.schedule);
     const lastRun = t.last_run ? formatTime(t.last_run) : 'Never';
     const isPlugin = (t.source || '').startsWith('plugin:');
     const pluginName = isPlugin ? t.source.replace('plugin:', '') : '';
-    let statusText = '';
-    if (t.running) statusText = `<span class="sched-progress">Running...</span>`;
+    const statusText = runningText(t);
     const meta = [
-        isPlugin ? `<span class="sched-plugin-badge" title="Managed by ${esc(pluginName)} plugin">plugin</span>` : '',
+        isPlugin ? `<span class="sched-plugin-badge" title="Managed by ${esc(pluginName)} plugin">${esc(pluginName)}</span>` : '',
         t.chance < 100 ? `${t.chance}%` : '',
         t.active_hours_start != null ? `🕓 ${formatHourRange(t.active_hours_start, t.active_hours_end)}` : '',
         statusText,
-        t.chat_target ? `💬 ${esc(t.chat_target)}` : '',
+        chatChip(t.chat_target),
         `Last: ${lastRun}`
     ].filter(Boolean).join(' · ');
 
     const actions = isPlugin
         ? `<button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">▶</button>`
-        : `<button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">▶</button>
+        : `${stopBtn(t)}
+           <button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">▶</button>
            <button class="btn-icon" data-action="export" data-id="${t.id}" title="Export">⇩</button>
            <button class="btn-icon" data-action="edit" data-id="${t.id}" title="Edit">✏️</button>
            <button class="btn-icon danger" data-action="delete" data-id="${t.id}" title="Delete">✕</button>`;
@@ -223,6 +249,7 @@ export function renderHeartbeatCard(hb, timeline) {
             <div class="hb-time">${timeParts}</div>
             ${responseHtml}
             <div class="hb-actions">
+                ${stopBtn(hb)}
                 <button class="btn-icon" data-action="run" data-id="${hb.id}" title="Run now">▶</button>
                 <button class="btn-icon" data-action="export" data-id="${hb.id}" title="Export">⇩</button>
                 <button class="btn-icon" data-action="edit" data-id="${hb.id}" title="Edit">✏️</button>
@@ -255,7 +282,8 @@ export function renderDaemonList(daemons) {
         const meta = [
             source,
             hasFilter ? 'filtered' : '',
-            d.chat_target ? `💬 ${esc(d.chat_target)}` : '',
+            runningText(d),
+            chatChip(d.chat_target),
             `Last: ${lastRun}`
         ].filter(Boolean).join(' · ');
 
@@ -270,6 +298,7 @@ export function renderDaemonList(daemons) {
                     <div class="sched-task-meta">${meta}</div>
                 </div>
                 <div class="sched-task-actions">
+                    ${stopBtn(d)}
                     <button class="btn-icon" data-action="export" data-id="${d.id}" title="Export">⇩</button>
                     <button class="btn-icon" data-action="edit" data-id="${d.id}" title="Edit">✏️</button>
                     <button class="btn-icon danger" data-action="delete" data-id="${d.id}" title="Delete">✕</button>
@@ -291,7 +320,8 @@ export function renderWebhookList(webhooks) {
         const lastRun = w.last_run ? formatTime(w.last_run) : 'Never';
         const meta = [
             `${method} /api/events/webhook/${esc(path)}`,
-            w.chat_target ? `💬 ${esc(w.chat_target)}` : '',
+            runningText(w),
+            chatChip(w.chat_target),
             `Last: ${lastRun}`
         ].filter(Boolean).join(' · ');
 
@@ -306,6 +336,7 @@ export function renderWebhookList(webhooks) {
                     <div class="sched-task-meta">${meta}</div>
                 </div>
                 <div class="sched-task-actions">
+                    ${stopBtn(w)}
                     <button class="btn-icon" data-action="export" data-id="${w.id}" title="Export">⇩</button>
                     <button class="btn-icon" data-action="edit" data-id="${w.id}" title="Edit">✏️</button>
                     <button class="btn-icon danger" data-action="delete" data-id="${w.id}" title="Delete">✕</button>
@@ -408,6 +439,12 @@ function buildTaskExport(task) {
     const clean = { ...task };
     EXPORT_STRIP_KEYS.forEach(k => delete clean[k]);
     clean.enabled = false; // always import disabled
+    // Vault hunt U6: while sealed, a private target serves as the
+    // '__locked__' mask — a serve-time disguise, not data. Baking it into
+    // a persistence file meant import (even unlocked) silently stripped it
+    // and the task arrived targetless with no notice. Drop it here instead;
+    // exportTask warns the user the target was withheld.
+    if (clean.chat_target === '__locked__') delete clean.chat_target;
     return {
         sapphire_export: true,
         type: clean.type || 'task',
@@ -419,6 +456,11 @@ function buildTaskExport(task) {
 
 export function exportTask(task) {
     const type = task.type || 'task';
+    if (task.chat_target === '__locked__') {
+        ui.showToast('This task\'s chat is in the locked vault — the export '
+            + 'carries no target; re-pick one after importing (or export '
+            + 'while unlocked)', 'warning');
+    }
     showExportDialog({
         type: type.charAt(0).toUpperCase() + type.slice(1),
         name: task.name,
@@ -502,6 +544,10 @@ export function bindActions(rootEl, getAll, refresh) {
             if (!item || !confirm(`Run "${item.name}" now?`)) return;
             try { await runTask(id); ui.showToast(`Running: ${item.name}`, 'success'); await refresh(); }
             catch { ui.showToast('Run failed', 'error'); }
+        } else if (action === 'cancel') {
+            if (!item) return;
+            try { await cancelTask(id); ui.showToast(`Stopping: ${item.name}`, 'success'); await refresh(); }
+            catch { ui.showToast('Stop failed', 'error'); }
         } else if (action === 'delete') {
             if (!item || !confirm(`Delete "${item.name}"?`)) return;
             try { await deleteTask(id); ui.showToast('Deleted', 'success'); await refresh(); }
@@ -513,7 +559,12 @@ export function bindActions(rootEl, getAll, refresh) {
         if (action === 'toggle' || action === 'hb-toggle') {
             const item = getAll().find(t => t.id === id);
             if (!item) return;
-            try { await updateTask(id, { enabled: !item.enabled }); await refresh(); }
+            try {
+                await updateTask(id, { enabled: !item.enabled });
+                // Toggle-off cancels the in-flight run server-side.
+                if (item.enabled && item.running) ui.showToast(`Stopping: ${item.name}`, 'success');
+                await refresh();
+            }
             catch { ui.showToast('Toggle failed', 'error'); }
         }
     });

@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock, PropertyMock
 
+import config
+
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -203,6 +205,7 @@ class TestFunctionManagerThreadSafety:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "none"
 
             errors = []
@@ -512,7 +515,12 @@ class TestChatReadsAllScopes:
     """chat() must read every scope key from settings and apply via apply_scopes()."""
 
     def test_chat_reads_all_scope_keys_from_settings(self):
-        """chat() must call apply_scopes with chat settings, then set_rag_scope."""
+        """chat() must apply every scope key from settings, then set_rag_scope.
+
+        Post-merge (2026-08-17 dual-path merge) chat() is a blocking consumer
+        of the ONE engine — chat_stream — so scope application happens inside
+        the streaming turn and this test drives the real merged path:
+        chat() → begin_stream → chat_stream → apply_scopes/set_rag_scope."""
         from core.chat.chat import LLMChat
         from core.chat.function_manager import FunctionManager
 
@@ -521,6 +529,7 @@ class TestChatReadsAllScopes:
             mgr._tools_lock = threading.Lock()
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
             mgr.current_toolset_name = "none"
             mgr.function_modules = {}
             mgr.all_possible_tools = []
@@ -531,7 +540,8 @@ class TestChatReadsAllScopes:
         rag_calls = []
         mgr.set_rag_scope = lambda val: rag_calls.append(val)
         mgr.snapshot_scopes = lambda: {}
-        mgr._enabled_tools = []
+        mgr.snapshot_executors = lambda: {}
+        mgr.last_dangling_toolset = None
 
         chat_settings = {
             "memory_scope": "shared",
@@ -540,38 +550,57 @@ class TestChatReadsAllScopes:
             "people_scope": "team",
             "email_scope": "work_email",
             "bitcoin_scope": "wallet_a",
-            "private_chat": True,
+            # False (key still asserted below): True would trip the engine's
+            # REAL sealed-vault refusal on a box whose vault is locked.
+            "private_chat": False,
         }
 
-        # Build a mock LLMChat that skips real __init__
+        # Build a mock LLMChat that skips real __init__ but keeps the REAL
+        # begin_stream/end_stream registry + the real chat() consumer.
         with patch.object(LLMChat, '__init__', lambda self: None):
             chat_obj = LLMChat()
             chat_obj.function_manager = mgr
+            chat_obj.system = None
+            chat_obj.pending_notices = []
+            chat_obj._streams_by_id = {}
+            chat_obj._streams_by_chat = {}
+            chat_obj._streams_lock = threading.Lock()
 
             mock_session = MagicMock()
             mock_session.get_chat_settings.return_value = chat_settings
             mock_session.get_active_chat_name.return_value = "test_chat"
+            mock_session._effective_chat_name.return_value = "test_chat"
             mock_session.get_turn_count.return_value = 1
-            mock_session.add_user_message = MagicMock()
-            mock_session.add_assistant_final = MagicMock()
-            mock_session.get_messages_for_llm.return_value = []
+            mock_session._in_tool_cycle = False
             chat_obj.session_manager = mock_session
             chat_obj.history = mock_session
             chat_obj.current_system_prompt = "test prompt"
-            chat_obj._use_new_config = False
-            chat_obj.provider_primary = MagicMock()
-            chat_obj.provider_primary.health_check.return_value = True
-            chat_obj.provider_primary.provider_name = "test"
-            chat_obj.provider_primary.model = "test-model"
+            # Not under test; keeps the run off real spice/RAG/ghost state.
+            chat_obj.refresh_spice_if_needed = lambda: False
+            chat_obj._build_base_messages = lambda ui, images=None, files=None: [
+                {"role": "system", "content": "test prompt"},
+                {"role": "user", "content": ui},
+            ]
+
+            provider = MagicMock()
+            provider.provider_name = "test"
+            provider.model = "test-model"
+            provider.chat_completion_stream.return_value = iter([
+                {"type": "content", "text": "Hello!"},
+                {"type": "done", "response": None},
+            ])
+            chat_obj._select_provider = lambda: ("test", provider, "")
             chat_obj.tool_engine = MagicMock()
+            chat_obj.tool_engine.extract_function_call_from_text.return_value = None
 
-            mock_response = MagicMock()
-            mock_response.has_tool_calls = False
-            mock_response.content = "Hello!"
-            mock_response.usage = None
-            chat_obj.tool_engine.call_llm_with_metrics.return_value = mock_response
+            with patch('core.chat.chat_streaming.get_generation_params', return_value={}):
+                result = chat_obj.chat("test input")
 
-            chat_obj.chat("test input")
+        # The consumer returns the final event's text
+        assert result == "Hello!"
+        # The one engine counted this turn (F1 Stage A, now structural)
+        mock_session.begin_streaming.assert_called_once()
+        mock_session.end_streaming.assert_called_once()
 
         # apply_scopes must have been called with the full settings dict
         assert len(apply_calls) > 0, "apply_scopes was never called"
@@ -755,61 +784,11 @@ class TestUpdateChatSettingsPartialMerge:
 
 
 # =============================================================================
-# Tier 2: isolated_chat sets all 6 scope types
+# Tier 2: isolated_chat sets all 6 scope types — RETIRED 2026-08-09.
+# isolated_chat was deleted (zero production callers; continuity moved to
+# ExecutionContext, whose _build_scopes carries this invariant with the
+# stronger force-None closure — see TestExecutionContext scope tests).
 # =============================================================================
-
-class TestIsolatedChatSetsAllScopes:
-    """isolated_chat must apply all scope types from task_settings."""
-
-    def test_isolated_chat_sets_all_scopes(self):
-        """All scope setters must be called when isolated_chat has a toolset."""
-        from core.chat.chat import LLMChat
-        from core.chat.function_manager import FunctionManager
-
-        mock_fm = MagicMock(spec=FunctionManager)
-        mock_fm.current_toolset_name = "original"
-        mock_fm._tools_lock = threading.Lock()
-        mock_fm.enabled_tools = [{"function": {"name": "test_func"}}]
-        mock_fm.snapshot_scopes.return_value = {}
-
-        task_settings = {
-            "toolset": "test_tools",
-            "memory_scope": "shared",
-            "goal_scope": "work",
-            "knowledge_scope": "research",
-            "people_scope": "team",
-            "email_scope": "work_email",
-            "bitcoin_scope": "wallet_a",
-        }
-
-        with patch.object(LLMChat, '__init__', lambda self: None):
-            chat_obj = LLMChat()
-            chat_obj.function_manager = mock_fm
-            chat_obj.tool_engine = MagicMock()
-
-            mock_response = MagicMock()
-            mock_response.has_tool_calls = False
-            mock_response.content = "Response"
-            chat_obj.tool_engine.call_llm_with_metrics.return_value = mock_response
-            chat_obj.tool_engine.extract_function_call_from_text.return_value = None
-            chat_obj._use_new_config = False
-            chat_obj.provider_primary = MagicMock()
-            chat_obj.provider_primary.health_check.return_value = True
-            chat_obj.provider_primary.provider_name = "test"
-            chat_obj.provider_primary.model = "test-model"
-            chat_obj.provider_fallback = None
-
-            with patch('core.prompts.get_prompt', return_value={"content": "system prompt"}):
-                with patch('core.chat.chat.get_generation_params', return_value={}):
-                    chat_obj.isolated_chat("hello", task_settings)
-
-        # apply_scopes must have been called with the task settings
-        mock_fm.apply_scopes.assert_called_once_with(task_settings)
-
-        # Toolset must have been restored in finally block
-        mock_fm.update_enabled_functions.assert_called()
-        last_call = mock_fm.update_enabled_functions.call_args_list[-1]
-        assert last_call[0][0] == ["original"]
 
 
 # =============================================================================
@@ -1015,23 +994,9 @@ class TestPluginSettingsEncoding:
         assert "encoding='utf-8'" in source or 'encoding="utf-8"' in source
 
 
-# =============================================================================
-# Bug Hunt 3: TTS prose extraction null safety
-# =============================================================================
-
-class TestExtractEditableContentNullSafety:
-    """extractEditableContent must use optional chaining on querySelector."""
-
-    def test_think_block_div_uses_optional_chaining(self):
-        """querySelector('div') must use ?. to avoid null deref."""
-        ui_js = Path(PROJECT_ROOT / "interfaces" / "web" / "static" / "ui.js")
-        source = ui_js.read_text(encoding='utf-8')
-        # Find the extractEditableContent function
-        start = source.index('extractEditableContent')
-        end = source.index('};', start)
-        fn_source = source[start:end]
-        assert "querySelector('div')?." in fn_source, \
-            "querySelector('div') must use optional chaining"
+# (TestExtractEditableContentNullSafety removed 2026-08-29: extractEditableContent
+# was deleted with the edit-fix of 2026-08-27 — edit mode now reads msg.content,
+# not the DOM — so the guard had nothing left to guard.)
 
 
 if __name__ == '__main__':

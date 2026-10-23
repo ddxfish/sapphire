@@ -29,34 +29,34 @@ curl -sk -H "Cookie: $SAPPHIRE_COOKIE" "$BASE_URL/api/webui/plugins/config" | py
 echo ""
 
 # Get settings for a plugin (empty if not set)
-echo "--- GET /api/webui/plugins/image-gen/settings ---"
-curl -sk -H "Cookie: $SAPPHIRE_COOKIE" "$BASE_URL/api/webui/plugins/image-gen/settings" | python3 -m json.tool
+echo "--- GET /api/webui/plugins/sd-server/settings ---"
+curl -sk -H "Cookie: $SAPPHIRE_COOKIE" "$BASE_URL/api/webui/plugins/sd-server/settings" | python3 -m json.tool
 echo ""
 
-# Save settings for image-gen
-echo "--- PUT /api/webui/plugins/image-gen/settings ---"
+# Save settings for sd-server
+echo "--- PUT /api/webui/plugins/sd-server/settings ---"
 curl -sk -X PUT \
     -H "Cookie: $SAPPHIRE_COOKIE" \
     -H "Content-Type: application/json" \
     -d '{"api_url":"http://localhost:5153","negative_prompt":"ugly, blurry"}' \
-    "$BASE_URL/api/webui/plugins/image-gen/settings" | python3 -m json.tool
+    "$BASE_URL/api/webui/plugins/sd-server/settings" | python3 -m json.tool
 echo ""
 
 # Verify it saved
-echo "--- GET /api/webui/plugins/image-gen/settings (after save) ---"
-curl -sk -H "Cookie: $SAPPHIRE_COOKIE" "$BASE_URL/api/webui/plugins/image-gen/settings" | python3 -m json.tool
+echo "--- GET /api/webui/plugins/sd-server/settings (after save) ---"
+curl -sk -H "Cookie: $SAPPHIRE_COOKIE" "$BASE_URL/api/webui/plugins/sd-server/settings" | python3 -m json.tool
 echo ""
 
 # Cat the actual file
-echo "--- cat user/webui/plugins/image-gen.json ---"
-cat user/webui/plugins/image-gen.json 2>/dev/null || echo "(file not found - test from sapphire root)"
+echo "--- cat user/webui/plugins/sd-server.json ---"
+cat user/webui/plugins/sd-server.json 2>/dev/null || echo "(file not found - test from sapphire root)"
 echo ""
 
-# Toggle a plugin (example: disable image-gen)
-echo "--- PUT /api/webui/plugins/toggle/image-gen ---"
+# Toggle a plugin (example: disable sd-server)
+echo "--- PUT /api/webui/plugins/toggle/sd-server ---"
 curl -sk -X PUT \
     -H "Cookie: $SAPPHIRE_COOKIE" \
-    "$BASE_URL/api/webui/plugins/toggle/image-gen" | python3 -m json.tool
+    "$BASE_URL/api/webui/plugins/toggle/sd-server" | python3 -m json.tool
 echo ""
 
 # Toggle test for non-existent plugin (should fail)

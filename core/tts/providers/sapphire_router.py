@@ -4,7 +4,9 @@ import os
 import logging
 from typing import Optional
 
-import httpx
+import requests
+
+from core import net
 
 from core.tts.providers.base import BaseTTSProvider
 
@@ -41,18 +43,24 @@ class SapphireRouterTTSProvider(BaseTTSProvider):
             tenant_id = self._get_tenant_id()
             if tenant_id:
                 headers['X-Tenant-ID'] = tenant_id
-            resp = httpx.post(
+            resp = net.request(
+                'POST',
                 f'{url}/v1/tts/generate',
                 json={'text': text, 'voice': voice, 'speed': speed},
                 headers=headers,
                 timeout=30.0,
             )
+            if 300 <= resp.status_code < 400:
+                logger.error(f"Sapphire Router TTS: router redirected ({resp.status_code}) — "
+                             f"LAN redirects are refused by policy; check SAPPHIRE_ROUTER_URL "
+                             f"for a trailing-slash/path mismatch")
+                return None
             resp.raise_for_status()
             if resp.headers.get('content-type', '').startswith('audio/'):
                 return resp.content
             logger.error(f"Sapphire Router TTS: unexpected response type")
             return None
-        except httpx.ConnectError:
+        except requests.exceptions.ConnectionError:
             logger.error(f"Sapphire Router TTS: cannot reach router at {url}")
             raise RuntimeError("TTS service unavailable — router is down")
         except Exception as e:

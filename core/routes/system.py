@@ -31,6 +31,14 @@ async def list_backups(request: Request, _=Depends(require_login)):
     return {"backups": backup_manager.list_backups()}
 
 
+@router.get("/api/backup/health")
+async def backup_health(request: Request, _=Depends(require_login)):
+    """Backup trust at a glance (negspace N11, 2026-08-31): sentinel halt,
+    scheduler-thread liveness, newest backup age, last scheduled result."""
+    from core.backup import backup_manager
+    return backup_manager.health_summary()
+
+
 @router.post("/api/backup/create")
 async def create_backup(request: Request, _=Depends(require_login)):
     """Create a backup."""
@@ -56,6 +64,15 @@ async def create_backup(request: Request, _=Depends(require_login)):
         if filename:
             backup_manager.rotate_backups()
             return {"status": "success", "filename": filename}
+    # Explain the most common failure: nothing left after exclusions.
+    try:
+        if backup_manager.estimate_size().get("total_bytes", 1) == 0:
+            raise HTTPException(status_code=400, detail="Backup would be empty — your exclude "
+                                "patterns match every file. Check 'Exclude from backups'.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     raise HTTPException(status_code=500, detail="Backup creation failed")
 
 
@@ -80,6 +97,147 @@ async def download_backup(filename: str, request: Request, _=Depends(require_log
         raise HTTPException(status_code=404, detail="Backup not found")
 
 
+@router.post("/api/backup/estimate")
+async def estimate_backup(request: Request, _=Depends(require_login)):
+    """Estimate the uncompressed backup size with the given (live/unsaved)
+    exclude patterns + a per-folder breakdown — for tuning excludes on the page."""
+    from core.backup import backup_manager
+    data = await request.json() or {}
+    patterns = data.get("patterns")
+    if patterns is not None and not isinstance(patterns, list):
+        patterns = None
+    extra = data.get("extra_patterns")
+    if not isinstance(extra, list):
+        extra = []
+    clean = None if patterns is None else [str(p).strip() for p in patterns if str(p).strip()]
+    extra = [str(p).strip() for p in extra if str(p).strip()]
+    return backup_manager.estimate_size(patterns=clean, extra_patterns=extra)
+
+
+def _schedule_restart():
+    """Trigger a restart shortly after the response flushes (mirrors the update
+    route). main.py applies the staged restore before re-spawning sapphire.py."""
+    import asyncio
+    from core.api_fastapi import get_restart_callback
+    cb = get_restart_callback()
+    if not cb:
+        raise HTTPException(status_code=503, detail="Restart not available — cannot apply restore")
+
+    async def _delayed():
+        await asyncio.sleep(0.8)
+        try:
+            cb()
+        except Exception:
+            pass
+    asyncio.create_task(_delayed())
+
+
+def _stage_restore_from(source_path, password: str, source_label: str, trusted: bool = False):
+    """Decrypt (if needed), validate (real tar.gz rooted at user/), and stage the
+    backup for a restart-time swap. Returns the archive's top-level entries.
+    `trusted` = the user's own backup (faithful extract); False = uploaded (strict).
+    Raises HTTPException on any problem (wrong password, not a backup, etc.)."""
+    import tarfile
+    import uuid
+    from core import backup_crypto
+    from core import restore as restore_mod
+    restore_mod.RESTORE_DIR.mkdir(parents=True, exist_ok=True)
+    tar_path = restore_mod.RESTORE_DIR / f"staging.{uuid.uuid4().hex}.tar.gz"
+
+    try:
+        if backup_crypto.is_encrypted_backup(source_path):
+            if not password:
+                raise HTTPException(status_code=400, detail="This backup is encrypted — a password is required")
+            try:
+                backup_crypto.decrypt_file(source_path, tar_path, password)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+        else:
+            import shutil as _sh
+            _sh.copy2(source_path, tar_path)
+        try:
+            tar_path.chmod(0o600)  # plaintext at rest — restrict before it lingers
+        except OSError:
+            pass
+
+        try:
+            roots = restore_mod.validate_tar(tar_path)
+        except (ValueError, tarfile.TarError) as e:
+            raise HTTPException(status_code=400, detail=f"Not a valid Sapphire backup: {e}")
+
+        restore_mod.request_restore(tar_path, source=source_label, trusted=trusted)
+        return roots
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Any unexpected failure (corrupt header, disk, etc.) → clean 400, not 500.
+        raise HTTPException(status_code=400, detail=f"Could not read backup: {e}")
+    finally:
+        # Never leak the plaintext staging file on a failure (success moved it away).
+        if tar_path.exists():
+            tar_path.unlink(missing_ok=True)
+
+
+@router.post("/api/backup/restore")
+async def restore_backup(request: Request, _=Depends(require_login)):
+    """Restore one of the existing backups over user/. Validates + decrypts (if
+    encrypted), stages it, and restarts — main.py swaps user/ before sapphire
+    re-spawns (the current user/ is kept as user.old for rollback)."""
+    from core.backup import backup_manager
+    data = await request.json() or {}
+    filename = data.get("filename")
+    password = data.get("password", "")
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename required")
+    path = backup_manager.get_backup_path(filename)
+    if not path:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    roots = _stage_restore_from(path, password, f"backup:{filename}", trusted=True)
+    _schedule_restart()
+    return {"status": "restoring", "roots": roots}
+
+
+@router.post("/api/backup/restore-upload")
+async def restore_backup_upload(request: Request, file: UploadFile = File(...),
+                                password: str = Form(""), _=Depends(require_login)):
+    """Restore from an uploaded .tar.gz / .sapphirebak of a user/ folder."""
+    import uuid
+    from core import restore as restore_mod
+    restore_mod.RESTORE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = restore_mod.RESTORE_DIR / f"upload.{uuid.uuid4().hex}.tmp"   # per-request → no collision
+    try:
+        with open(tmp, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass
+        roots = _stage_restore_from(tmp, password, f"upload:{file.filename}")
+    finally:
+        tmp.unlink(missing_ok=True)
+    _schedule_restart()
+    return {"status": "restoring", "roots": roots}
+
+
+@router.get("/api/backup/restore-result")
+async def get_restore_result(request: Request, _=Depends(require_login)):
+    """Outcome of the last restore, for the post-reboot banner. {} if none."""
+    from core import restore as restore_mod
+    return restore_mod.read_restore_result(clear=False) or {}
+
+
+@router.delete("/api/backup/restore-result")
+async def clear_restore_result(request: Request, _=Depends(require_login)):
+    """Dismiss the restore-result banner."""
+    from core import restore as restore_mod
+    restore_mod.read_restore_result(clear=True)
+    return {"status": "cleared"}
+
+
 # =============================================================================
 # AUDIO DEVICE ROUTES
 # =============================================================================
@@ -88,6 +246,7 @@ async def download_backup(filename: str, request: Request, _=Depends(require_log
 async def get_audio_devices(request: Request, _=Depends(require_login)):
     """Get audio devices."""
     from core.audio import get_device_manager
+    from core.audio import backend as _audio_backend
     dm = get_device_manager()
     devices = dm.query_devices(force_refresh=True)
 
@@ -106,7 +265,49 @@ async def get_audio_devices(request: Request, _=Depends(require_login)):
         'output': output_devices,
         'configured_input': getattr(config, 'AUDIO_INPUT_DEVICE', None),
         'configured_output': getattr(config, 'AUDIO_OUTPUT_DEVICE', None),
+        # None when PortAudio is up; the detached reason otherwise (headless/VM, no sound server)
+        'backend_error': _audio_backend.error(),
     }
+
+
+def _quiesce_wakeword(system):
+    """Stop the LISTEN THREAD before touching its stream. The old flow
+    called pause_recording() straight from the HTTP worker — Pa_StopStream
+    landing on a reader blocked in Pa_ReadStream (which it is >90% of wall
+    time) is undefined behavior, not an exception (hunt 2026-08-17 K4).
+    Returns (listener_stopped, stream_paused) for _resume_wakeword."""
+    listener_stopped = False
+    try:
+        det = getattr(system, 'wake_detector', None)
+        if det is not None and getattr(det, 'running', False):
+            det.stop_listening()
+            listener_stopped = True
+    except Exception:
+        pass
+    paused = False
+    try:
+        rec = getattr(system, 'wake_word_recorder', None)
+        if rec and hasattr(rec, 'pause_recording'):
+            paused = rec.pause_recording()
+            if paused:
+                time.sleep(0.3)
+    except Exception:
+        pass
+    return listener_stopped, paused
+
+
+def _resume_wakeword(system, listener_stopped, paused):
+    if paused:
+        try:
+            time.sleep(0.2)
+            system.wake_word_recorder.resume_recording()
+        except Exception:
+            pass
+    if listener_stopped:
+        try:
+            system.wake_detector.start_listening()
+        except Exception:
+            pass
 
 
 @router.post("/api/audio/test-input")
@@ -127,27 +328,14 @@ async def test_audio_input(request: Request, _=Depends(require_login), system=De
 
     def _test_input():
         from core.audio import get_device_manager, classify_audio_error
-        wakeword_paused = False
-        try:
-            if hasattr(system, 'wake_word_recorder') and system.wake_word_recorder:
-                if hasattr(system.wake_word_recorder, 'pause_recording'):
-                    wakeword_paused = system.wake_word_recorder.pause_recording()
-                    if wakeword_paused:
-                        time.sleep(0.3)
-        except Exception:
-            pass
+        listener_stopped, wakeword_paused = _quiesce_wakeword(system)
         try:
             dm = get_device_manager()
             return dm.test_input_device_safe(device_index=device_index, duration=duration)
         except Exception as e:
             return {'success': False, 'error': classify_audio_error(e)}
         finally:
-            if wakeword_paused:
-                try:
-                    time.sleep(0.2)
-                    system.wake_word_recorder.resume_recording()
-                except Exception:
-                    pass
+            _resume_wakeword(system, listener_stopped, wakeword_paused)
 
     import asyncio
     return await asyncio.to_thread(_test_input)
@@ -172,18 +360,10 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
 
     def _test_output():
         import numpy as np
-        import sounddevice as sd
+        from core.audio.backend import sd
 
         # Pause wakeword stream to avoid audio device conflict
-        wakeword_paused = False
-        try:
-            if hasattr(system, 'wake_word_recorder') and system.wake_word_recorder:
-                if hasattr(system.wake_word_recorder, 'pause_recording'):
-                    wakeword_paused = system.wake_word_recorder.pause_recording()
-                    if wakeword_paused:
-                        time.sleep(0.3)
-        except Exception:
-            pass
+        listener_stopped, wakeword_paused = _quiesce_wakeword(system)
 
         try:
             sample_rate = None
@@ -220,12 +400,7 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
             sd.wait()
             return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
         finally:
-            if wakeword_paused:
-                try:
-                    time.sleep(0.2)
-                    system.wake_word_recorder.resume_recording()
-                except Exception:
-                    pass
+            _resume_wakeword(system, listener_stopped, wakeword_paused)
 
     return await asyncio.to_thread(_test_output)
 
@@ -234,12 +409,29 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
 # CONTINUITY ROUTES
 # =============================================================================
 
+def _mask_locked_target(system, task: dict) -> dict:
+    """P3-T14: while the vault is sealed, a task aimed at a private chat must
+    not show that chat's name in the Schedule UI (ruling 7 — no names while
+    locked). The name stays intact AT REST (tasks.json is user-authored);
+    only the served copy masks. The scheduler treats the sentinel as
+    'keep existing' on write, so a sealed round-trip edit can't clobber."""
+    try:
+        tgt = task.get("chat_target")
+        if tgt and system.llm_chat.session_manager.is_chat_hidden(tgt):
+            task = dict(task)
+            task["chat_target"] = "__locked__"
+    except Exception:
+        pass
+    return task
+
+
 @router.get("/api/continuity/tasks")
 async def list_continuity_tasks(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """List continuity tasks. Optional ?heartbeat=true/false or ?type=daemon/webhook filter."""
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         return {"tasks": []}
-    tasks = system.continuity_scheduler.list_tasks()
+    tasks = [_mask_locked_target(system, t)
+             for t in system.continuity_scheduler.list_tasks()]
 
     # Type filter (new)
     type_filter = request.query_params.get("type")
@@ -261,7 +453,11 @@ async def create_continuity_task(request: Request, _=Depends(require_login), sys
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     data = await request.json()
-    task_id = system.continuity_scheduler.create_task(data)
+    try:
+        task_id = system.continuity_scheduler.create_task(data)
+    except ValueError as e:
+        # Task caps and the provider check (2026-09-21) are 400s, not 500s.
+        raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "task_id": task_id}
 
 
@@ -272,7 +468,7 @@ async def get_continuity_task(task_id: str, request: Request, _=Depends(require_
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     task = system.continuity_scheduler.get_task(task_id)
     if task:
-        return task
+        return _mask_locked_target(system, task)
     else:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -283,7 +479,11 @@ async def update_continuity_task(task_id: str, request: Request, _=Depends(requi
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     data = await request.json()
-    if system.continuity_scheduler.update_task(task_id, data):
+    try:
+        ok = system.continuity_scheduler.update_task(task_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if ok:
         return {"status": "success"}
     else:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -306,6 +506,19 @@ def run_continuity_task(task_id: str, request: Request, _=Depends(require_login)
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     result = system.continuity_scheduler.run_task_now(task_id)
+    return result
+
+
+@router.post("/api/continuity/tasks/{task_id}/cancel")
+async def cancel_continuity_task(task_id: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Stop a task's in-flight run (⏹). The run ends at its next cancel
+    point — between LLM rounds; queued fires behind it are dropped. The task
+    stays enabled. Toggle-off does the same cancel implicitly."""
+    if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
+        raise HTTPException(status_code=503, detail="Continuity scheduler not available")
+    result = system.continuity_scheduler.cancel_task(task_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Task not found"))
     return result
 
 
@@ -528,9 +741,12 @@ async def check_for_update(request: Request, _=Depends(require_login)):
     Users who want a fresh check can call ?force=1 (or POST /api/system/update-check-now)."""
     from core.updater import updater
     from core.settings_manager import settings
+    import asyncio
     force = request.query_params.get('force') in ('1', 'true', 'yes')
     if force:
-        status = updater.check_for_update(force=True)
+        # Blocking GitHub round-trip — off the event loop, or one slow check
+        # freezes chat/voice WS for its duration (2026-08-06 hunt, C3).
+        status = await asyncio.to_thread(updater.check_for_update, True)
     else:
         updater.check_for_update_async()
         status = updater.status()
@@ -553,7 +769,18 @@ async def do_update(request: Request, _=Depends(require_login)):
     if settings.is_docker() or settings.is_managed():
         raise HTTPException(status_code=403, detail="Use docker compose pull to update Docker installations")
 
-    success, message = updater.do_update()
+    # No restart callback = the marker would sit until some future manual
+    # restart, while the UI promises "Restarting to apply" — the stranded-
+    # marker hazard (H4). Refuse up front instead of scheduling a lie.
+    from core.api_fastapi import get_restart_callback
+    callback = get_restart_callback()
+    if not callback:
+        raise HTTPException(status_code=503,
+                            detail="Restart isn't available in this run mode — can't apply an update automatically")
+
+    # Preflight (git fetch) + full user/ backup — seconds to tens of seconds
+    # of blocking work. Off the loop (C3).
+    success, message = await asyncio.to_thread(updater.do_update)
     if not success:
         raise HTTPException(status_code=400, detail=message)
 
@@ -561,18 +788,25 @@ async def do_update(request: Request, _=Depends(require_login)):
     # socket can be torn down mid-response and the client sees "update failed"
     # when it actually scheduled fine. Schedule restart on a short delay so
     # the response has time to flush.
-    from core.api_fastapi import get_restart_callback
-    callback = get_restart_callback()
-    if callback:
-        async def _delayed_restart():
-            await asyncio.sleep(0.5)
-            try:
-                callback()
-            except Exception:
-                pass
-        asyncio.create_task(_delayed_restart())
+    async def _delayed_restart():
+        await asyncio.sleep(0.5)
+        try:
+            callback()
+        except Exception:
+            pass
+    asyncio.create_task(_delayed_restart())
 
     return {"status": "scheduled", "message": message}
+
+
+@router.delete("/api/system/update")
+async def cancel_pending_update(request: Request, _=Depends(require_login)):
+    """Cancel a scheduled update that hasn't applied yet (H4 — a stranded
+    marker used to block all future updates with no recourse in the UI)."""
+    from core.updater import updater
+    if not updater.cancel_pending_update():
+        raise HTTPException(status_code=404, detail="No update is pending")
+    return {"status": "cancelled"}
 
 
 @router.get("/api/system/last-update-result")
@@ -601,7 +835,9 @@ async def set_metrics_enabled(request: Request, _=Depends(require_login)):
     from core.settings_manager import settings
     data = await request.json()
     enabled = bool(data.get("enabled", True))
-    settings.set("METRICS_ENABLED", enabled)
+    # persist — a privacy-adjacent toggle silently reverting on restart is
+    # the wrong kind of surprise (HDF scout, 2026-07-19).
+    settings.set("METRICS_ENABLED", enabled, persist=True)
     return {"enabled": enabled}
 
 
@@ -894,3 +1130,95 @@ async def revoke_api_token(token_id: str, _=Depends(require_login)):
     if api_tokens.revoke(token_id):
         return {"status": "revoked"}
     raise HTTPException(status_code=404, detail="Token not found")
+
+
+@router.post("/api/system/password")
+async def change_password(request: Request, _=Depends(require_login)):
+    """Change the login password (Settings › System › Login Password).
+
+    Body {"current", "new"}. The current password is verified against the
+    stored bcrypt hash BEFORE anything else — a valid session alone isn't
+    enough to rotate it. Same 5-per-minute limiter as the auth pages so a
+    hijacked tab can't brute-force the current one. Every OTHER session is
+    logged out (require_login compares the cookie's salt stamp to the live
+    hash); this tab re-stamps and stays in. NOTE for legacy scripts: the
+    X-API-Key header IS the bcrypt hash, so it rotates too — bearer tokens
+    (API Keys, right below this card) are unaffected. 2026-09-08."""
+    from core.auth import check_endpoint_rate, get_client_ip
+    from core.setup import get_password_hash, verify_password, save_password_hash
+    check_endpoint_rate(request, 'password', max_calls=5, window=60)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    current = str(data.get('current') or '')
+    new = str(data.get('new') or '')
+    stored = get_password_hash()
+    if not stored:
+        raise HTTPException(status_code=409, detail="No password is set — run setup first")
+    if not verify_password(current, stored):
+        logger.warning(f"Password change refused — current password wrong (from {get_client_ip(request)})")
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
+    if len(new) < 10:
+        raise HTTPException(status_code=400, detail="New password must be at least 10 characters")
+    if len(new.encode('utf-8')) > 72:
+        # bcrypt's hard limit; 5.x raises past it where 4.x truncated silently (E4#4)
+        raise HTTPException(status_code=400, detail="New password must be at most 72 bytes (bcrypt's limit)")
+    if new == current:
+        raise HTTPException(status_code=400, detail="New password must differ from the current one")
+    new_hash = save_password_hash(new)
+    if not new_hash:
+        raise HTTPException(status_code=500, detail="Failed to save the new password")
+    request.session['pw'] = new_hash[:29]   # this tab survives; every other cookie dies
+    logger.info(f"Password changed (from {get_client_ip(request)})")
+    return {"status": "success"}
+
+
+@router.get("/api/system/integrity")
+async def system_integrity(_=Depends(require_login)):
+    """Verify the core install against the shipped manifest (SHA256). No git needed."""
+    from core.integrity import verify
+    return verify()
+
+
+@router.post("/api/system/integrity/repair")
+async def system_integrity_repair(_=Depends(require_login)):
+    """Restore files that don't match the manifest (git installs), with per-file status."""
+    from core.integrity import repair
+    return repair()
+
+
+@router.put("/api/runtime/true-speech")
+async def toggle_true_speech(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Enter/exit true speech mode (conversation mode — continuous listen, no wakeword).
+
+    System-level + ephemeral. Local mic, headphone tier (open-speaker AEC = later).
+    FAIL-SAFE: if the mic can't be acquired, wakeword is left intact and we report
+    failure — true speech mode simply doesn't engage.
+    """
+    data = await request.json()
+    enabled = bool(data.get("enabled", False))
+    mgr = system.get_conversation_manager()
+    if enabled:
+        # Switching endpoints: an active BROWSER session yields to local (its
+        # source close sends "bye" so the tab shuts down cleanly). Browser mode
+        # itself engages via the WS connect (/ws/conversation), not this PUT.
+        if system.conversation_mode_enabled and getattr(system, "conversation_source", None) == "browser":
+            mgr.stop()
+        ok = mgr.start_local()
+        return {
+            "status": "ok" if ok else "failed",
+            "active": mgr.active,
+            "note": "" if ok else "could not acquire mic — wakeword intact",
+        }
+    mgr.stop()
+    return {"status": "ok", "active": mgr.active}
+
+
+@router.get("/api/runtime/true-speech")
+async def get_true_speech(_=Depends(require_login), system=Depends(get_system)):
+    """Current true speech mode state (system-level, ephemeral) — for UI load-state."""
+    return {"enabled": bool(getattr(system, "conversation_mode_enabled", False)),
+            "source": getattr(system, "conversation_source", None)}

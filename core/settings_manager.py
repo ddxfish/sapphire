@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 from pathlib import Path
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,15 @@ def _fsync_dir(path):
 class SettingsManager:
     """Manages application settings with hot-reload and persistence."""
     
+    # Serializes every settings.json tmp-write+rename across ALL instances.
+    # CLASS attribute on purpose: (1) all four persist sites share ONE tmp
+    # filename and were reachable unlocked from routes — two concurrent saves
+    # interleaved json.dump writes into the same tmp, then renamed the garbage
+    # over settings.json (S5 #5 / wave-3 B1, 2026-08-31); (2) test fixtures
+    # build managers with a patched __init__, so an instance-only lock
+    # AttributeError'd in save() (caught by --long same day).
+    _save_lock = threading.Lock()
+
     def __init__(self):
         self.BASE_DIR = Path(__file__).parent.parent
         self._defaults = {}
@@ -110,13 +120,16 @@ class SettingsManager:
         """Load core/settings_defaults.json"""
         defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
         try:
-            with open(defaults_path, 'r', encoding='utf-8') as f:
+            with open(defaults_path, 'r', encoding='utf-8-sig') as f:
                 nested = json.load(f)
             self._defaults = self._flatten_dict(nested)
             logger.info(f"Loaded default settings from {defaults_path}")
         except Exception as e:
+            # Fatal: without defaults every subsystem limps on empty config
+            # (LLM_PROVIDERS missing sent chat.py into a dead legacy branch
+            # that died with the wrong error). Die loudly with the real one.
             logger.error(f"Failed to load defaults: {e}")
-            self._defaults = {}
+            raise RuntimeError(f"Cannot load {defaults_path}: {e}") from e
     
     def _apply_construction(self):
         """Apply programmatic path/URL construction and platform-specific defaults"""
@@ -147,7 +160,7 @@ class SettingsManager:
         user_path = self.BASE_DIR / 'user' / 'settings.json'
         if user_path.exists():
             try:
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     nested = json.load(f)
                 self._user = self._flatten_dict(nested)
                 logger.info(f"Loaded user settings from {user_path}")
@@ -185,7 +198,7 @@ class SettingsManager:
         custom = self._user.get('LLM_CUSTOM_PROVIDERS', {})
         template_map = {
             'fireworks': 'openai', 'openai': 'openai', 'claude': 'claude',
-            'anthropic': 'anthropic', 'responses': 'responses',
+            'anthropic': 'anthropic', 'responses': 'openai_responses',
             'gemini': 'gemini',
         }
 
@@ -206,7 +219,7 @@ class SettingsManager:
         # save()'s _deep_update_from_flat doesn't delete keys — it only adds/overwrites.
         user_path = self.BASE_DIR / 'user' / 'settings.json'
         try:
-            with open(user_path, 'r', encoding='utf-8') as f:
+            with open(user_path, 'r', encoding='utf-8-sig') as f:
                 nested = json.load(f)
             llm = nested.get('llm', {})
             if isinstance(llm.get('LLM_PROVIDERS'), dict):
@@ -214,14 +227,15 @@ class SettingsManager:
                     llm['LLM_PROVIDERS'].pop(k, None)
             llm['LLM_CUSTOM_PROVIDERS'] = custom
             nested['llm'] = llm
-            tmp_path = user_path.with_suffix('.json.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(nested, f, indent=2)
-                _fsync_file(f)
-            tmp_path.replace(user_path)
-            _fsync_dir(user_path.parent)
-            # Update mtime immediately — no gap for file watcher
-            self._last_mtime = user_path.stat().st_mtime
+            with self._save_lock:   # B1: shared tmp name — serialize
+                tmp_path = user_path.with_suffix('.json.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(nested, f, indent=2)
+                    _fsync_file(f)
+                replace_with_retry(tmp_path, user_path)
+                _fsync_dir(user_path.parent)
+                # Update mtime immediately — no gap for file watcher
+                self._last_mtime = user_path.stat().st_mtime
             logger.info(f"[SETTINGS] Migration persisted to disk")
         except Exception as e:
             logger.error(f"[SETTINGS] Failed to persist migration: {e}")
@@ -265,15 +279,10 @@ class SettingsManager:
         if 'MODEL_GENERATION_PROFILES' in self._defaults and 'MODEL_GENERATION_PROFILES' in self._user:
             self._config['MODEL_GENERATION_PROFILES'] = {**self._defaults['MODEL_GENERATION_PROFILES'], **self._user['MODEL_GENERATION_PROFILES']}
 
-        # Initialize PRIVACY_MODE from persistent START_IN_PRIVACY_MODE on first load
-        if 'PRIVACY_MODE' not in self._config and 'PRIVACY_MODE' not in self._runtime:
-            self._config['PRIVACY_MODE'] = self._config.get('START_IN_PRIVACY_MODE', False)
-
         # Managed mode: lock down for Docker resale
         if os.environ.get('SAPPHIRE_MANAGED'):
             providers = self._config.get('LLM_PROVIDERS', {})
             providers.pop('lmstudio', None)
-            self._config['PRIVACY_MODE'] = False
             self._config['WAKE_WORD_ENABLED'] = False
             if not os.environ.get('SAPPHIRE_UNRESTRICTED'):
                 self._config['ALLOW_UNSIGNED_PLUGINS'] = False
@@ -293,6 +302,20 @@ class SettingsManager:
                 elif val.isdigit():
                     val = int(val)
                 self._config[key] = val
+
+        # LMSTUDIO_BASE_URL: the Docker/compose contract (docs/DOCKER.md
+        # documents it as THE way to point a container at a host LM Studio)
+        # — it was documented but read nowhere (hunt 2026-09-04 S8-1).
+        # Runtime-only: env is re-applied every boot, never persisted.
+        _lms = os.environ.get('LMSTUDIO_BASE_URL')
+        if _lms:
+            try:
+                _prov = self._config.get('LLM_PROVIDERS') or {}
+                if 'lmstudio' in _prov:
+                    _prov['lmstudio']['base_url'] = _lms
+                    logger.info(f"LMSTUDIO_BASE_URL override applied: {_lms}")
+            except Exception as e:
+                logger.warning(f"LMSTUDIO_BASE_URL override failed: {e}")
 
         # Derive STT_ENABLED from STT_PROVIDER for backwards compatibility
         stt_provider = self._config.get('STT_PROVIDER', 'none')
@@ -316,7 +339,7 @@ class SettingsManager:
             try:
                 # Load the defaults again in nested form
                 defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
-                with open(defaults_path, 'r', encoding='utf-8') as f:
+                with open(defaults_path, 'r', encoding='utf-8-sig') as f:
                     nested = json.load(f)
                 
                 # Remove auth section (has env vars and computed values)
@@ -349,7 +372,8 @@ class SettingsManager:
         'SAPPHIRE_ROUTER_URL', 'SAPPHIRE_ROUTER_TENANT_ID',
         'WEB_UI_HOST', 'WEB_UI_PORT', 'WEB_UI_SSL_ADHOC',
         'WAKE_WORD_ENABLED', 'AUDIO_INPUT_DEVICE', 'AUDIO_OUTPUT_DEVICE',
-        'ALLOW_UNSIGNED_PLUGINS', 'PRIVACY_MODE', 'START_IN_PRIVACY_MODE',
+        'ALLOW_UNSIGNED_PLUGINS',
+        'MAX_DAEMON_TASKS', 'MAX_TOTAL_TASKS',
     }
 
     def is_managed(self):
@@ -444,7 +468,7 @@ class SettingsManager:
         try:
             # Load existing nested structure or start fresh
             if user_path.exists():
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     nested = json.load(f)
             else:
                 nested = {"_comment": "Your custom settings - edit freely or use web UI"}
@@ -452,13 +476,19 @@ class SettingsManager:
             # Deep update nested structure with flat changes
             nested = self._deep_update_from_flat(nested, self._user)
 
-            # Strip secrets — keys belong in credentials.json only
+            # Strip secrets — keys belong in credentials.json only.
+            # BOTH provider maps: LLM_CUSTOM_PROVIDERS is where every
+            # non-core provider lives post-migration, and leaving it out
+            # re-persisted plaintext api_keys on every save (the boot
+            # credentials sweep cleans the file once, then the next save
+            # wrote them straight back — hunt 2026-08-17 S9).
             llm_section = nested.get('llm', {})
-            providers = llm_section.get('LLM_PROVIDERS') if isinstance(llm_section, dict) else None
-            if isinstance(providers, dict):
-                for prov in providers.values():
-                    if isinstance(prov, dict):
-                        prov.pop('api_key', None)
+            for _pkey in ('LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS'):
+                providers = llm_section.get(_pkey) if isinstance(llm_section, dict) else None
+                if isinstance(providers, dict):
+                    for prov in providers.values():
+                        if isinstance(prov, dict):
+                            prov.pop('api_key', None)
 
             # Strip service API keys that now live in credentials
             _CRED_KEYS = ('STT_FIREWORKS_API_KEY', 'TTS_ELEVENLABS_API_KEY', 'EMBEDDING_API_KEY')
@@ -469,24 +499,28 @@ class SettingsManager:
                             section[ck] = ''
             
             user_path.parent.mkdir(exist_ok=True)
-            # Atomic write: tmp + fsync + rename + dir fsync to survive power loss
-            tmp_path = user_path.with_suffix('.json.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(nested, f, indent=2)
-                _fsync_file(f)
-            tmp_path.replace(user_path)
-            _fsync_dir(user_path.parent)
-            # Update mtime IMMEDIATELY after rename — no gap for the file watcher
-            # to see a new mtime before _last_mtime is updated (fixes spurious reloads)
-            self._last_mtime = user_path.stat().st_mtime
+            # Atomic write: tmp + fsync + rename + dir fsync to survive power
+            # loss — under _save_lock because all persist sites share ONE tmp
+            # filename (B1).
+            with self._save_lock:
+                tmp_path = user_path.with_suffix('.json.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(nested, f, indent=2)
+                    _fsync_file(f)
+                replace_with_retry(tmp_path, user_path)
+                _fsync_dir(user_path.parent)
+                # Update mtime IMMEDIATELY after rename — no gap for the file watcher
+                # to see a new mtime before _last_mtime is updated (fixes spurious reloads)
+                self._last_mtime = user_path.stat().st_mtime
             logger.info(f"Saved user settings to {user_path}")
             return True
         except Exception as e:
             logger.error(f"Failed to save user settings: {e}")
             try:
-                tmp_path = user_path.with_suffix('.json.tmp')
-                if tmp_path.exists():
-                    tmp_path.unlink()
+                with self._save_lock:   # don't unlink a concurrent writer's tmp (B1)
+                    tmp_path = user_path.with_suffix('.json.tmp')
+                    if tmp_path.exists():
+                        tmp_path.unlink()
             except Exception:
                 pass
             return False
@@ -496,7 +530,7 @@ class SettingsManager:
         # Load category mapping from defaults to know where keys belong
         defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
         try:
-            with open(defaults_path, 'r', encoding='utf-8') as f:
+            with open(defaults_path, 'r', encoding='utf-8-sig') as f:
                 defaults_nested = json.load(f)
         except Exception:
             return nested
@@ -508,15 +542,11 @@ class SettingsManager:
                 if category not in nested:
                     nested[category] = {}
                 
-                # Special handling for nested config objects
-                if isinstance(value, dict) and self._is_config_object(key):
-                    # Deep merge: preserve existing nested values
-                    if key in nested[category]:
-                        nested[category][key] = {**nested[category][key], **value}
-                    else:
-                        nested[category][key] = value
-                else:
-                    nested[category][key] = value
+                # Replace, never merge. Config-objects are stored + set WHOLE (every writer is
+                # read-modify-write the full dict), so the in-memory value IS the full intended
+                # state. Merging re-added deleted sub-keys from the stale disk dict - the
+                # "delete a provider, it resurrects on reload" bug. (Fixed 2026-06-18.)
+                nested[category][key] = value
             else:
                 # Fallback: put at root level if category unknown
                 nested[key] = value
@@ -555,13 +585,14 @@ class SettingsManager:
             user_path = self.BASE_DIR / 'user' / 'settings.json'
             try:
                 user_path.parent.mkdir(exist_ok=True)
-                tmp_path = user_path.with_suffix('.json.tmp')
-                with open(tmp_path, 'w', encoding='utf-8') as f:
-                    json.dump({"_comment": "Your custom settings - edit freely or use web UI"}, f, indent=2)
-                    _fsync_file(f)
-                tmp_path.replace(user_path)
-                _fsync_dir(user_path.parent)
-                self._last_mtime = user_path.stat().st_mtime
+                with self._save_lock:   # B1: shared tmp name — serialize
+                    tmp_path = user_path.with_suffix('.json.tmp')
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        json.dump({"_comment": "Your custom settings - edit freely or use web UI"}, f, indent=2)
+                        _fsync_file(f)
+                    replace_with_retry(tmp_path, user_path)
+                    _fsync_dir(user_path.parent)
+                    self._last_mtime = user_path.stat().st_mtime
                 logger.info("Settings reset to defaults")
                 return True
             except Exception as e:
@@ -678,27 +709,37 @@ class SettingsManager:
         """
         # Hot-reload: These are read per-request, no restart needed
         hot_reload = {
-            'DEFAULT_USERNAME', 'DEFAULT_PERSONA', 'USER_TIMEZONE',
-            'AVATARS_IN_CHAT', 'IMAGE_UPLOAD_MAX_WIDTH',
+            'DEFAULT_USERNAME', 'DEFAULT_PERSONA', 'USER_TIMEZONE', 'PERSONA_FAVORITES',
+            'AVATARS_IN_CHAT', 'ICON_COLOR', 'DEFAULT_BACKGROUND', 'IMAGE_UPLOAD_MAX_WIDTH',
             'GENERATION_DEFAULTS', 'MODEL_GENERATION_PROFILES',
             'LLM_MAX_HISTORY', 'CONTEXT_LIMIT',
-            'FORCE_THINKING', 'THINKING_PREFILL',
-            'CLAUDE_THINKING_ENABLED', 'CLAUDE_THINKING_BUDGET',
+            'IMAGE_MEMORY_TURNS', 'WEB_IMAGES_SAFESEARCH',
+            'CLAUDE_THINKING_ENABLED', 'SPICE_DELIVERY',
+            'PRIVATE_ALLOW_UNFLAGGED_TOOLS',
             'LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
             # SOCKS can be hot-reloaded - session cache is cleared on change
+            # (which also re-derives the process proxy env + httpx pools)
             'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT',
-            # Privacy mode is runtime-only, always hot
-            'PRIVACY_MODE', 'PRIVACY_NETWORK_WHITELIST', 'START_IN_PRIVACY_MODE',
+            'SOCKS_ROUTE_LLM', 'SOCKS_NO_PROXY_EXTRA', 'SOCKS_REMOTE_DNS',
             # Providers hot-swap at runtime via switch_*_provider() methods
             'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER', 'STT_LANGUAGE',
             # Tool settings - read per-request
-            'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS', 'DEBUG_TOOL_CALLING',
+            'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS',
+            # Continuity caps - the scheduler reads them at task-create time
+            'MAX_DAEMON_TASKS', 'MAX_TOTAL_TASKS',
             'TOOL_HISTORY_MAX_ENTRIES', 'RAG_SIMILARITY_THRESHOLD',
+            # AI self-switch gates + roster - read per-request by the
+            # function_manager settings-gate and the meta tools
+            'AI_TOOLSET_SWITCH_ENABLED', 'AI_MODEL_SWITCH_ENABLED',
+            'AI_MODEL_SWITCH_ROSTER', 'AI_MODEL_SWITCH_RATCHET',
             # Backup settings - read per-request by backup scheduler
             'BACKUPS_ENABLED', 'BACKUPS_KEEP_DAILY', 'BACKUPS_KEEP_WEEKLY',
             'BACKUPS_KEEP_MONTHLY', 'BACKUPS_KEEP_MANUAL',
             # Setup wizard progress
             'SETUP_WIZARD_STEP',
+            # Conversation (true speech) mode tunables — read fresh on each activation
+            'CONVERSATION_VAD_THRESHOLD', 'CONVERSATION_BARGE_HOLD_MS',
+            'CONVERSATION_MIN_SPEECH_MS', 'CONVERSATION_ENDPOINT_SILENCE_MS',
         }
         
         # Everything else requires restart (TTS, STT, modules, etc. are initialized at startup)
@@ -785,8 +826,16 @@ class SettingsManager:
                     # restart, STT recorder rebuild, embedder reload) can
                     # take seconds and stalled every concurrent settings
                     # read for the entire rebuild duration. Stop-the-world.
-                    # `set()` already uses this snapshot-then-dispatch
-                    # pattern at L405-410. Wildcard scout 2026-05-07 W2.
+                    # Wildcard scout 2026-05-07 W2.
+                    # WARNING (negspace R1#5, 2026-08-31): set() does NOT use
+                    # this pattern — its callback dispatch still runs under
+                    # self._lock. Currently defused because every live
+                    # provider-switch caller passes _skip_callbacks=True, but
+                    # registering a NEW reload callback reopens an app-wide
+                    # stall (config.X proxies every read through this lock).
+                    # Convert set() to snapshot-then-dispatch before adding
+                    # callbacks. (The old comment here claimed set() was
+                    # already converted — it never was.)
                     with self._lock:
                         snapshot = [
                             (key, cb, self._config.get(key))
@@ -857,20 +906,21 @@ class SettingsManager:
             if not user_path.exists():
                 return
             
-            with open(user_path, 'r', encoding='utf-8') as f:
+            with open(user_path, 'r', encoding='utf-8-sig') as f:
                 nested = json.load(f)
             
             # Find and remove the key from nested structure
             removed = self._remove_from_nested(nested, key)
             
             if removed:
-                tmp_path = user_path.with_suffix('.json.tmp')
-                with open(tmp_path, 'w', encoding='utf-8') as f:
-                    json.dump(nested, f, indent=2)
-                    _fsync_file(f)
-                tmp_path.replace(user_path)
-                _fsync_dir(user_path.parent)
-                self._last_mtime = user_path.stat().st_mtime
+                with self._save_lock:   # B1: shared tmp name — serialize
+                    tmp_path = user_path.with_suffix('.json.tmp')
+                    with open(tmp_path, 'w', encoding='utf-8') as f:
+                        json.dump(nested, f, indent=2)
+                        _fsync_file(f)
+                    replace_with_retry(tmp_path, user_path)
+                    _fsync_dir(user_path.parent)
+                    self._last_mtime = user_path.stat().st_mtime
                 logger.debug(f"Removed '{key}' from settings file")
         except Exception as e:
             logger.error(f"Failed to remove key from file: {e}")

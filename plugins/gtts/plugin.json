@@ -1,5 +1,6 @@
 {
   "name": "gtts",
+  "short_display_name": "Google TTS",
   "version": "1.0.0",
   "description": "Google Translate TTS \u2014 free, zero-config text-to-speech",
   "author": "sapphire",
@@ -14,7 +15,8 @@
         "key": "gtts",
         "display_name": "Google Translate (Free)",
         "entry": "provider.py",
-        "class_name": "GoogleTranslateTTSProvider"
+        "class_name": "GoogleTranslateTTSProvider",
+        "is_local": false
       }
     }
   }

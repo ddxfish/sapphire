@@ -1,0 +1,3 @@
+{
+  "_comment": "Story mode composes from PIECES (character + location + scenario + format + emotions) — no shipped monoliths. The rendered story prompt registers dynamically as story_{slug}."
+}

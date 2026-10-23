@@ -1,6 +1,7 @@
 // ui-parsing.js - Content parsing and formatting
 
 import * as Images from './ui-images.js';
+import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 
 let globalThinkCounter = 0;
 
@@ -229,9 +230,39 @@ export const processMarkdown = (text) => {
             const listLines = [];
             while (i < lines.length) {
                 const lm = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
-                if (!lm) break;
-                listLines.push({ indent: lm[1].length, marker: lm[2], content: lm[3] });
-                i++;
+                if (lm) {
+                    listLines.push({ indent: lm[1].length, marker: lm[2], content: lm[3] });
+                    i++;
+                    continue;
+                }
+                const prev = listLines[listLines.length - 1];
+                const cur = lines[i];
+                // Continuation line: indented past the item's marker column
+                if (cur.trim() && cur.match(/^\s*/)[0].length >= prev.indent + 2) {
+                    prev.content += ' ' + cur.trim();
+                    i++;
+                    continue;
+                }
+                // Loose list: bridge blank lines when the next non-blank line is a
+                // same-kind list item (ordered stays ordered, bullet stays bullet)
+                if (!cur.trim()) {
+                    let j = i;
+                    while (j < lines.length && !lines[j].trim()) j++;
+                    const nm = j < lines.length ? lines[j].match(/^(\s*)([-*+]|\d+\.)\s+/) : null;
+                    if (nm) {
+                        // Compare kind against the last item at the resuming depth,
+                        // not the last item overall (may be a nested sublist)
+                        let ref = prev;
+                        for (let k = listLines.length - 1; k >= 0; k--) {
+                            if (listLines[k].indent <= nm[1].length) { ref = listLines[k]; break; }
+                        }
+                        if (/^\d+\.$/.test(nm[2]) === /^\d+\.$/.test(ref.marker)) {
+                            i = j;
+                            continue;
+                        }
+                    }
+                }
+                break;
             }
             output.push({ type: 'block', html: parseList(listLines) });
             continue;
@@ -362,7 +393,10 @@ const parseList = (items) => {
         
         const isOrdered = /^\d+\.$/.test(items[startIdx].marker);
         const tag = isOrdered ? 'ol' : 'ul';
-        let html = `<${tag}>`;
+        // Preserve source numbering — a list fragmented by upstream splitting
+        // must not restart at 1
+        const startNum = isOrdered ? parseInt(items[startIdx].marker) : 1;
+        let html = startNum > 1 ? `<ol start="${startNum}">` : `<${tag}>`;
         let i = startIdx;
         
         while (i < items.length) {
@@ -426,7 +460,7 @@ const processInlineMarkdown = (html) => {
     // Balanced parens in URL for Wikipedia etc, tolerates space between ] and (
     html = html.replace(/!\[([^\]]*)\]\s*\(([^()]*(?:\([^)]*\)[^()]*)*)\)/g, (m, alt, url) => {
         url = url.trim().replace(/ /g, '%20');
-        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" class="chat-img">`;
+        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" class="chat-img" referrerpolicy="no-referrer" loading="lazy">`;
         return m;
     });
 
@@ -669,107 +703,25 @@ const addToolDeleteButton = (acc, toolCallId) => {
     summary.appendChild(deleteBtn);
 };
 
-// Create category grid from parsed category data (masonry with named captions)
-export const _createCategoryGrid = (categories) => {
-    if (!categories || categories.length === 0) return null;
-
-    const gallery = document.createElement('div');
-    gallery.className = 'image-gallery';
-
-    for (const cat of categories) {
-        if (!cat.thumb) continue;
-
-        const item = document.createElement('div');
-        item.className = 'gallery-item';
-
-        const img = document.createElement('img');
-        img.src = cat.thumb;
-        img.className = 'chat-img';
-        img.dataset.modalReady = 'true';
-        img.addEventListener('click', (e) => {
-            e.stopPropagation();
-            Images.openImageModal(cat.thumb);
-        });
-        item.appendChild(img);
-
-        const caption = document.createElement('a');
-        caption.className = 'gallery-caption';
-        caption.href = cat.url;
-        caption.target = '_blank';
-        caption.rel = 'noopener';
-        caption.textContent = cat.name;
-        item.appendChild(caption);
-
-        gallery.appendChild(item);
-    }
-
-    return gallery.children.length > 0 ? gallery : null;
-};
-
-// Create gallery listing element from parsed gallery data
-export const _createGalleryListing = (galleries) => {
-    if (!galleries || galleries.length === 0) return null;
-
-    const listing = document.createElement('div');
-    listing.className = 'gallery-listing';
-
-    for (const g of galleries) {
-        const item = document.createElement('div');
-        item.className = 'gallery-listing-item';
-
-        const nameLink = document.createElement('a');
-        nameLink.className = 'gallery-listing-name';
-        nameLink.href = g.url;
-        nameLink.target = '_blank';
-        nameLink.rel = 'noopener';
-        nameLink.textContent = g.name;
-        item.appendChild(nameLink);
-
-        if (g.thumbs && g.thumbs.length > 0) {
-            const thumbRow = document.createElement('div');
-            thumbRow.className = 'gallery-listing-thumbs';
-            for (const src of g.thumbs) {
-                const img = document.createElement('img');
-                img.src = src;
-                img.className = 'chat-img';
-                img.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const urls = g.thumbs;
-                    const idx = urls.indexOf(src);
-                    Images.openImageModal(src, urls, idx);
-                });
-                img.dataset.modalReady = 'true';
-                thumbRow.appendChild(img);
-            }
-            item.appendChild(thumbRow);
-        }
-
-        listing.appendChild(item);
-    }
-
-    return listing;
-};
-
 const renderToolResult = (el, part) => {
     const toolName = part.name || 'Unknown Tool';
     const toolCallId = part.tool_call_id;
-    const fullResult = part.content || part.result || '';
+    // Tiles ride a UI marker (shared/gallery-marker.js); the accordion text drops it.
+    const { entries: galleryEntries, title: galleryTitle, text: fullResult } =
+        parseGalleryMarker(part.content || part.result || '');
 
     // Get truncation limit based on tool
-    const maxLen = toolName === 'generate_scene_image' ? 2000 :
-                  toolName === 'web_search' ? 1000 :
+    const maxLen = toolName === 'web_search' ? 1000 :
                   toolName === 'get_website' ? 800 :
-                  toolName === 'get_images' ? 1500 :
-                  toolName === 'get_site_links' ? 1500 :
-                  toolName === 'if_get_gallery' ? 3000 :
-                  toolName === 'if_get_galleries' ? 2000 :
-                  toolName === 'if_get_categories' ? 2000 : 500;
+                  toolName === 'web_search_images' ? 1500 :
+                  toolName === 'web_view_images' ? 1500 :
+                  toolName === 'get_site_links' ? 1500 : 500;
 
-    // Check for image markers
-    const imgMatch = fullResult.match(/<<IMG::([^>]+)>>/);
-    if (imgMatch) {
-        const imageId = imgMatch[1];
-        const textWithoutMarker = fullResult.replace(/<<IMG::[^>]+>>\n?/, '').trim();
+    // Check for image markers. A tool can return SEVERAL (e.g. z-image returns a
+    // grid + the individual full-size images), so match + strip ALL of them.
+    const imgIds = [...fullResult.matchAll(/<<IMG::([^>]+)>>/g)].map(m => m[1]);
+    if (imgIds.length) {
+        const textWithoutMarker = fullResult.replace(/<<IMG::[^>]+>>\n?/g, '').trim();
         const isTruncated = textWithoutMarker.length > maxLen;
         const truncatedText = isTruncated
             ? textWithoutMarker.substring(0, maxLen) + '...'
@@ -791,11 +743,23 @@ const renderToolResult = (el, part) => {
             addExpandToggle(content, inputsPrefix + 'Result:\n', truncatedText, textWithoutMarker);
         }
 
-        const img = Images.createImageElement(imageId, false, null);
-        img.className = 'tool-result-image';
-        content.insertBefore(img, content.firstChild);
+        // Render every returned image. Inserting each before firstChild in marker
+        // order yields the natural top-to-bottom order (grid first, then individuals).
+        // NOTE — PATH 1 of 2 for tool images: this renders them INSIDE the accordion.
+        // PATH 2 is the inline clone in core/events.js `handleImageReady`, which clones
+        // each of these into the reply body once it loads. A tool image shows in BOTH.
+        for (const imageId of imgIds) {
+            const img = Images.createImageElement(imageId, false, null);
+            img.className = 'tool-result-image';   // (a gone-image span keeps its data attr)
+            content.insertBefore(img, content.firstChild);
+        }
 
         el.appendChild(acc);
+        // Her contact sheet stays in the accordion; the row IS the user's view of
+        // the same numbered set (the inline clone in core/events.js skips flagged
+        // accordions — a sheet AND a row would show the pictures twice).
+        if (galleryEntries.length) acc.dataset.gallery = '1';
+        appendGallery(el, galleryEntries, galleryTitle);
         return;
     }
 
@@ -823,49 +787,13 @@ const renderToolResult = (el, part) => {
 
     el.appendChild(acc);
 
-    // Auto-inject from tool results (marker-based, works with any tool)
-    const galleryMatch = fullResult.match(/<!--GALLERY:(\[.*\])-->/s);
-    if (galleryMatch) {
-        try {
-            const imgUrls = JSON.parse(galleryMatch[1]);
-            if (imgUrls.length > 0) {
-                const gallery = document.createElement('div');
-                gallery.className = 'image-gallery';
-                for (const url of imgUrls) {
-                    const item = document.createElement('div');
-                    item.className = 'gallery-item';
-                    const img = document.createElement('img');
-                    img.src = url;
-                    img.className = 'chat-img';
-                    item.appendChild(img);
-                    gallery.appendChild(item);
-                }
-                el.appendChild(gallery);
-            }
-        } catch (e) {
-            console.warn('[Gallery] Failed to parse gallery data:', e);
-        }
-    }
+    appendGallery(el, galleryEntries, galleryTitle);
+};
 
-    const listMatch = fullResult.match(/<!--GALLERIES:(\[.*\])-->/s);
-    if (listMatch) {
-        try {
-            const listing = _createGalleryListing(JSON.parse(listMatch[1]));
-            if (listing) el.appendChild(listing);
-        } catch (e) {
-            console.warn('[Gallery] Failed to parse gallery listing:', e);
-        }
-    }
-
-    const catMatch = fullResult.match(/<!--CATEGORIES:(\[.*\])-->/s);
-    if (catMatch) {
-        try {
-            const grid = _createCategoryGrid(JSON.parse(catMatch[1]));
-            if (grid) el.appendChild(grid);
-        } catch (e) {
-            console.warn('[Gallery] Failed to parse category data:', e);
-        }
-    }
+// Tiles under a tool result — the ONE renderer (history + live stream share it).
+const appendGallery = (el, entries, title = '') => {
+    const gallery = buildGallery(entries, Images.openImageModal, title);
+    if (gallery) el.appendChild(gallery);
 };
 
 // Helper to add expand/collapse toggle for truncated content

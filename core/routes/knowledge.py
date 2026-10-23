@@ -359,6 +359,7 @@ async def save_person(request: Request, _=Depends(require_login)):
         scope=scope,
         person_id=data.get('id'),
         email_whitelisted=data.get('email_whitelisted'),
+        call_whitelisted=data.get('call_whitelisted'),
     )
     return {"id": pid, "created": is_new}
 
@@ -396,7 +397,10 @@ async def import_vcf(request: Request, _=Depends(require_login)):
             if current.get('name'):
                 cards.append(current)
             current = {}
-        elif not current and not isinstance(current, dict):
+        elif not current:
+            # Property line outside any BEGIN:VCARD (concatenated/hand-edited
+            # exports) — the old `and not isinstance` guard was always False,
+            # so these crashed the whole import with a KeyError→500 (S1-04).
             continue
         else:
             # Strip type params: "TEL;TYPE=CELL:+1234" -> key=TEL, val=+1234
@@ -560,9 +564,15 @@ async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Dep
     if len(raw) > 2 * 1024 * 1024:  # 2MB cap
         raise HTTPException(status_code=400, detail="File too large (max 2MB)")
 
-    # Try common encodings
+    # Decode: utf-8-sig FIRST — plain utf-8 also succeeds on BOM'd bytes but
+    # leaves ﻿ glued to the first word (poisoning the first chunk's
+    # embedding), so the old ('utf-8', 'utf-8-sig', ...) order made the sig
+    # entry dead code. cp1252 over latin-1 for the 8-bit fallback: same
+    # coverage, but Windows smart-quotes/em-dashes (the actual bytes in
+    # Krem's-world text files) map to the right characters instead of
+    # C1 control mojibake.
     text = None
-    for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
+    for enc in ('utf-8-sig', 'utf-8', 'cp1252', 'latin-1'):
         try:
             text = raw.decode(enc)
             break
@@ -571,7 +581,10 @@ async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Dep
     if text is None:
         raise HTTPException(status_code=400, detail="Could not decode file — unsupported encoding")
 
-    text = text.strip()
+    # Normalize newlines — raw bytes skip open()'s universal-newline
+    # translation, and CRLF text never matches the '\n\n' paragraph
+    # split in _chunk_text (whole file = one chunk).
+    text = text.replace('\r\n', '\n').replace('\r', '\n').strip()
     if not text:
         raise HTTPException(status_code=400, detail="File is empty")
 

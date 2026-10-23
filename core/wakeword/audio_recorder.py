@@ -8,15 +8,13 @@ resampling if the device doesn't support native 16kHz.
 """
 
 import numpy as np
-import sounddevice as sd
-import array
+from core.audio.backend import sd
 import logging
+import threading
 
 from core.audio import (
     get_device_manager,
-    classify_audio_error,
-    convert_to_mono,
-    resample_audio
+    classify_audio_error
 )
 import config
 
@@ -46,15 +44,8 @@ class AudioRecorder:
         self.available = False
         self._resample_ratio = 1.0
         self._needs_stereo_downmix = False
-        
-        # Frame skipping parameters (hardcoded to 1 - process every frame)
-        self.frame_skip = 1
-        self.frame_counter = 0
-        self.previous_result = np.array([], dtype=np.int16)
-        
-        # Pre-allocate buffer
-        self.buffer = array.array('h', [0] * int(config.BUFFER_DURATION * self.target_rate))
-        self.buffer_index = 0
+        # Guards open/close/pause/resume — see start_recording's comment.
+        self._stream_lock = threading.Lock()
         
         # Find working device via DeviceManager
         self._init_device()
@@ -85,7 +76,7 @@ class AudioRecorder:
                 logger.info(f"Wakeword: Device supports native {self.target_rate}Hz")
             else:
                 logger.info(f"Wakeword: Device using {self.actual_rate}Hz "
-                           f"(will resample to {self.target_rate}Hz)")
+                           f"(wake listen loop resamples to {self.target_rate}Hz)")
 
         except Exception as e:
             logger.error(f"Wakeword device init failed: {classify_audio_error(e)}")
@@ -103,36 +94,47 @@ class AudioRecorder:
         self._needs_stereo_downmix = device_config.needs_stereo_downmix
 
     def start_recording(self):
-        """Open audio input stream. Retries once with device re-resolution on failure."""
+        """Open audio input stream. Retries once with device re-resolution on
+        failure. Returns True when a stream is open, False otherwise — the
+        resume lane in toggle_wakeword reported success on a dead mic because
+        every failure here was voiceless (hunt 2026-09-04 S7-2)."""
         if not self.available:
             logger.warning("Cannot start recording - no audio device available")
-            return
+            return False
 
-        if self.stream is not None:
-            logger.debug("Stream already open")
-            return
+        # _stream_lock: two unlocked concurrent opens both passed the None
+        # check, both opened an InputStream, and the attribute kept only the
+        # second — the first held the mic unreferenced until process exit
+        # (every later STT recording then failed mic_busy). Same lock covers
+        # stop/pause/resume so a double Pa_CloseStream (check-to-call gap =
+        # double free → unexplained SIGABRT) can't happen. Hunt 2026-08-17.
+        with self._stream_lock:
+            if self.stream is not None:
+                logger.debug("Stream already open")
+                return True
 
-        try:
-            self._open_audio_stream()
-        except Exception as e:
-            logger.warning(f"Wakeword stream open failed: {classify_audio_error(e)}")
-            # Retry once — re-resolve device by name in case index shifted
-            if getattr(self, 'device_name', ''):
-                logger.info(f"Retrying with device re-resolution for '{self.device_name}'")
-                dm = get_device_manager()
-                new_config = dm.reopen_device(
-                    self.device_name,
-                    target_rate=self.target_rate,
-                    preferred_blocksize=self.chunk_size
-                )
-                if new_config:
-                    self._apply_device_config(new_config)
-                    try:
-                        self._open_audio_stream()
-                        return
-                    except Exception as e2:
-                        logger.error(f"Wakeword retry also failed: {classify_audio_error(e2)}")
-            self.stream = None
+            try:
+                self._open_audio_stream()
+            except Exception as e:
+                logger.warning(f"Wakeword stream open failed: {classify_audio_error(e)}")
+                # Retry once — re-resolve device by name in case index shifted
+                if getattr(self, 'device_name', ''):
+                    logger.info(f"Retrying with device re-resolution for '{self.device_name}'")
+                    dm = get_device_manager()
+                    new_config = dm.reopen_device(
+                        self.device_name,
+                        target_rate=self.target_rate,
+                        preferred_blocksize=self.chunk_size
+                    )
+                    if new_config:
+                        self._apply_device_config(new_config)
+                        try:
+                            self._open_audio_stream()
+                            return True
+                        except Exception as e2:
+                            logger.error(f"Wakeword retry also failed: {classify_audio_error(e2)}")
+                self.stream = None
+            return self.stream is not None
 
     def _open_audio_stream(self):
         """Open the underlying sd.InputStream. Raises on failure."""
@@ -150,78 +152,45 @@ class AudioRecorder:
 
     def stop_recording(self):
         """Close audio stream."""
-        if self.stream:
-            try:
-                self.stream.stop()
-                self.stream.close()
-            except Exception as e:
-                logger.debug(f"Error closing wakeword stream: {e}")
-            self.stream = None
-            logger.info("Wakeword audio stream closed")
+        with self._stream_lock:
+            if self.stream:
+                try:
+                    self.stream.stop()
+                    self.stream.close()
+                except Exception as e:
+                    logger.debug(f"Error closing wakeword stream: {e}")
+                self.stream = None
+                logger.info("Wakeword audio stream closed")
 
     def pause_recording(self):
         """Pause audio stream without closing (safer for PipeWire)."""
-        if self.stream:
-            try:
-                self.stream.stop()
-                logger.debug("Wakeword audio stream paused")
-                return True
-            except Exception as e:
-                logger.debug(f"Error pausing wakeword stream: {e}")
-        return False
+        with self._stream_lock:
+            if self.stream:
+                try:
+                    self.stream.stop()
+                    logger.debug("Wakeword audio stream paused")
+                    return True
+                except Exception as e:
+                    logger.debug(f"Error pausing wakeword stream: {e}")
+            return False
 
     def resume_recording(self):
         """Resume paused audio stream."""
-        if self.stream:
-            try:
-                self.stream.start()
-                logger.debug("Wakeword audio stream resumed")
-                return True
-            except Exception as e:
-                logger.debug(f"Error resuming wakeword stream: {e}")
-        return False
+        with self._stream_lock:
+            if self.stream:
+                try:
+                    self.stream.start()
+                    logger.debug("Wakeword audio stream resumed")
+                    return True
+                except Exception as e:
+                    logger.debug(f"Error resuming wakeword stream: {e}")
+            return False
 
     def get_stream(self):
         """Return the underlying stream (for compatibility)."""
         return self.stream
 
-    def get_latest_chunk(self, duration):
-        """
-        Get latest audio chunk with frame skipping optimization.
-        
-        Returns audio resampled to 16kHz for OWW compatibility.
-        Returns cached result on skipped frames for performance.
-        """
-        # Frame skipping logic
-        self.frame_counter = (self.frame_counter + 1) % self.frame_skip
-        if self.frame_counter != 0:
-            return self.previous_result
-        
-        if self.stream is None:
-            return self.previous_result
-        
-        # Calculate how many samples to read at actual device rate
-        actual_samples = int(duration * self.actual_rate)
-        
-        try:
-            data, overflowed = self.stream.read(actual_samples)
-            if overflowed:
-                logger.debug("Wakeword audio buffer overflow (non-fatal)")
-            
-            # Convert stereo to mono if needed
-            if self._needs_stereo_downmix:
-                audio = convert_to_mono(data)
-            else:
-                audio = data.flatten().astype(np.int16)
-            
-            # Resample to target rate if needed
-            if self._resample_ratio != 1.0:
-                audio = resample_audio(audio, self.actual_rate, self.target_rate)
-            
-            self.previous_result = audio
-            
-        except Exception as e:
-            logger.warning(f"Error reading wakeword audio chunk: {classify_audio_error(e)}")
-            # Return previous result to avoid breaking detection loop
-        
-        return self.previous_result
+    # get_latest_chunk removed (F4 2026-08-17): it was the CORRECT
+    # downmix+resample read path, but it had zero callers — the listen loop
+    # read the raw stream directly. That conversion now lives in
+    # wake_detector._listen_loop, the one place that reads this stream.

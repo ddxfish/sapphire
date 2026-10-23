@@ -96,6 +96,22 @@ class TestEventBusReplayBuffer:
         types = [e["type"] for e in bus._replay_buffer]
         assert types == ["first", "second", "third"]
 
+    def test_voice_turn_events_not_replayed(self):
+        """voice_turn_* are transient paint events whose durable copy is chat
+        history — and the ring must not hold a private chat's spoken
+        transcript for late-connecting tabs, even past a vault lock
+        (vaulted-chats Phase 0, 2026-08-13). Live delivery is unaffected."""
+        from core.event_bus import EventBus
+
+        bus = EventBus(replay_size=10)
+        bus.publish("voice_turn_start", {"user_text": "secret question"})
+        bus.publish("voice_turn_chunk", {"text": "secret answer"})
+        bus.publish("voice_turn_end", {"message_id": "m1"})
+        bus.publish("message_added", {})
+
+        types = [e["type"] for e in bus._replay_buffer]
+        assert types == ["message_added"]
+
 
 class TestEventBusSubscribers:
     """Test subscriber management."""

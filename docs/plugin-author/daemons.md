@@ -64,10 +64,11 @@ Daemon thread (your code)
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique event identifier (used in `emit_daemon_event`) |
-| `label` | string | Yes | Human-readable name (shown in Schedule UI) |
+| `label` | string | Yes | Human-readable name (shown in the Triggers UI) |
 | `description` | string | No | Tooltip/help text |
 | `filter_fields` | array | No | Fields users can filter on when creating tasks |
-| `task_fields` | array | No | Per-task configuration fields shown in Schedule UI |
+| `task_fields` | array | No | Per-task configuration fields shown in the Triggers UI |
+| `realtime` | bool | No | Gate-only source — its events never fire one-shot tasks (see [Realtime sources](#realtime-sources-gate-only)) |
 
 ### Filter Fields
 
@@ -81,14 +82,35 @@ The scheduler ANDs all filters — every filter must match for the task to fire.
 
 ### Task Fields
 
-Task fields are per-task configuration shown in the Schedule UI when creating a daemon task. They support these types:
+Task fields are per-task configuration shown in the Triggers UI (Daemons) when creating a daemon task. They support these types:
 
 | Type | Description | Extra Properties |
 |------|-------------|-----------------|
-| `select` | Dropdown | `options` (static) or `dynamic` (API URL for async loading) |
+| `select` | Dropdown | `options` (static — strings or `{value, label}` objects) or `dynamic` (API URL for async loading) |
 | `boolean` | Toggle | `default` |
+| `number` | Number input | `min`, `max`, `default` |
+| `string` | Text input (the default for any other type) | `default`, `placeholder`; add `"widget": "password"` to mask the input |
+
+Every field also takes `key`, `label`, `required` (marks the field required), and `help` (rendered as a tooltip).
 
 The `dynamic` property fetches options from an API endpoint at render time — useful for account lists that change.
+
+### Realtime sources (gate-only)
+
+Declare `"realtime": true` on an event source when your daemon handles
+sessions **live** (a voice line, a persistent socket) rather than handing
+discrete events to the scheduler. For a realtime source, tasks are **gates,
+not triggers**: `emit_daemon_event()` deliberately fires nothing — a one-shot
+task would double-handle on top of your live session. Instead, your daemon
+reads its matching tasks to decide whether and how to answer:
+
+- `plugin_loader.active_daemon_accounts(source)` — which accounts are armed.
+- `plugin_loader.get_enabled_daemon_task(source, account, payload)` — the
+  winning task's config (chat target, persona, toolset). With a `payload`
+  (e.g. `{"caller": "+1555..."}`), selection is most-specific-wins: a task
+  whose filter matches beats the no-filter catch-all; a failing filter
+  excludes the task; no match returns `None` and the daemon should decline
+  the session.
 
 ---
 
@@ -178,6 +200,43 @@ def _run():
 
 The payload keys should include anything declared in your `filter_fields` so the scheduler can match filters. Include enough context for the LLM to understand what happened.
 
+### Sending images (vision)
+
+A daemon event can carry images so a vision-capable model *sees* them (e.g. a
+Discord message with an attached screenshot). Add an **`images`** key to the
+payload — a list of `{"data": <base64>, "media_type": ...}` objects:
+
+```python
+import base64
+
+payload = json.dumps({
+    "account": "main",
+    "sender": event.sender,
+    "text": event.text,
+    "images": [
+        {
+            "data": base64.b64encode(image_bytes).decode(),  # raw base64, NOT a data: URI
+            "media_type": "image/png",                        # png | jpeg | gif | webp
+        },
+    ],
+})
+_plugin_loader.emit_daemon_event("my_event", payload)
+```
+
+Contract and behavior:
+
+- **Field name must be exactly `images`**, each entry exactly `{"data", "media_type"}`.
+  `data` is plain base64 (no `data:image/...;base64,` prefix). Anything else is ignored.
+- **Validated at the boundary:** non-image `media_type`, undecodable base64, or images
+  over 10 MB are dropped with a log; max 8 images per event. Malformed entries never
+  reach the model or the chat — they're skipped, not stringified.
+- **Vision gate:** the image is sent to the model only if the task's provider supports
+  vision. For OpenAI-compatible / Anthropic-compatible custom providers, enable the
+  **👁 vision** checkbox on the provider (Settings → LLM). Non-vision providers get a
+  text description of the image instead (local, no network).
+- **Persistence:** the image is stored once in the chat DB and shown in history via a
+  marker — the base64 is *not* re-sent every turn, so it won't bloat the chat.
+
 ---
 
 ## Reply Handlers
@@ -238,7 +297,7 @@ Daemons survive hot-reload — `stop()` is called before unload, then `start()` 
 | Plugin | Event Source | What It Does |
 |--------|------------|--------------|
 | `plugins/telegram/` | `telegram_message` | Telethon client, listens for incoming messages via asyncio event loop |
-| `plugins/discord/` | `discord_message` | Discord.py bot, listens for channel messages |
+| `plugins/discord/` | `discord_message` | py-cord bot, listens for channel messages (also voice, presence, proactive schedules) |
 | `plugins/email/` | `email_message` | IMAP polling (configurable interval), checks for UNSEEN mail |
 | `plugins/mcp_client/` | — | MCP server connections (daemon without event sources) |
 
@@ -254,5 +313,7 @@ DAEMON SYSTEM:
 - Reply handlers route LLM responses back to source platform
 - `active_daemon_accounts(source_name)` returns set of accounts with active tasks
 - Filter fields: AND-matched against event payload
-- Task fields: per-task config (select with static/dynamic options, boolean)
+- Task fields: per-task config — select (static `options` or `dynamic` API URL), boolean (`default`), number (`min`/`max`), string default (`placeholder`, `widget: "password"` masks); all take key/label/required/help
+- `realtime: true` on an event source = gate-only: `emit_daemon_event` fires NO tasks; the daemon reads gates via `active_daemon_accounts(source)` + `get_enabled_daemon_task(source, account, payload)` (most-specific filter wins, no match => decline the session)
 - Lifecycle: start on load, stop on unload, survives hot-reload
+- Images: add `"images": [{"data": <base64>, "media_type": "image/png"}]` to the payload — sent to vision-capable providers (gated on the provider's vision support), stored once in the chat DB via a marker (no per-turn replay bloat); max 8 images, 10 MB each, png/jpeg/gif/webp

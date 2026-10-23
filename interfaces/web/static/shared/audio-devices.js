@@ -112,6 +112,7 @@ export function renderOutputDeviceSelector(selectId = 'audio-output-select') {
 export function renderAudioDevicesSection() {
   return `
     <div class="audio-devices-section">
+      <div class="test-result" data-result="backend"></div>
       <div class="audio-input-section">
         <h4>Input Device (Microphone)</h4>
         <p class="section-desc">Select microphone for voice input. Use "Auto-detect" for automatic selection.</p>
@@ -140,6 +141,14 @@ export function renderAudioDevicesSection() {
 export async function populateDeviceSelects(container, inputSelectId = 'audio-input-select', outputSelectId = 'audio-output-select') {
   try {
     const data = await fetchAudioDevices();
+
+    // No PortAudio backend at all (headless/VM, no sound server): say so above the
+    // empty dropdowns instead of looking like a box with no devices.
+    const backendNote = container.querySelector('[data-result="backend"]');
+    if (backendNote) {
+      backendNote.textContent = data.backend_error ? `✗ No local audio backend: ${data.backend_error}` : '';
+      backendNote.className = data.backend_error ? 'test-result error' : 'test-result';
+    }
 
     // Populate input devices
     const inputSelect = container.querySelector(`#${inputSelectId}`);

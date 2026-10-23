@@ -1,5 +1,6 @@
 {
   "name": "sample-widgets",
+  "short_display_name": "Sample Widgets",
   "version": "1.0.0",
   "description": "Reference plugin demonstrating dashboard widgets. Read the source to learn how to ship your own.",
   "author": "sapphire",

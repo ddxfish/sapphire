@@ -1,5 +1,6 @@
 {
   "name": "webcam",
+  "short_display_name": "Webcam",
   "version": "1.0.0",
   "description": "Webcam capture — lets the AI see through your camera",
   "author": "sapphire",

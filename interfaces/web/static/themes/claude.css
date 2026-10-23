@@ -131,3 +131,27 @@
     /* Tool result accent */
     --tool-result-bg: rgba(74, 222, 128, 0.08);
 }
+
+/* --- Active/selected items --------------------------------------------------
+   This theme sets --trim: transparent for a clean, accent-free look. But the base
+   "active item" rules color the TEXT with var(--trim), so the selected item's emoji
+   + label render in transparent ink and vanish (a var() fallback does NOT fire on a
+   value that is *defined* as transparent). The [data-theme="claude"] prefix outranks
+   the base .active rules, so restore readable text here, and use a subtle row
+   highlight in place of the (now-transparent) trim tint. */
+[data-theme="claude"] .nav-item.active,
+[data-theme="claude"] .settings-nav-item.active,
+[data-theme="claude"] .chat-picker-item.active,
+[data-theme="claude"] .panel-list-item.active,
+[data-theme="claude"] .pr-roster .panel-list-item.active .pr-item-name,
+[data-theme="claude"] .badge-active,
+[data-theme="claude"] .pr-chip.active {
+    color: var(--text);
+}
+
+[data-theme="claude"] .nav-item.active,
+[data-theme="claude"] .settings-nav-item.active,
+[data-theme="claude"] .chat-picker-item.active,
+[data-theme="claude"] .panel-list-item.active {
+    background: var(--bg-hover);
+}

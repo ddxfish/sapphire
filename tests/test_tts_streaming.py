@@ -200,12 +200,22 @@ def test_paragraph_break_splits():
     assert chunks[1]["text"] == "Second para text."
 
 
-def test_ellipsis_boundary_with_long_pause():
+def test_ellipsis_splits_like_period_in_sentence_mode():
+    # `...` has no special boundary — the sentence regex treats its final
+    # dot like any period. Dots stay in the text for Kokoro. 2026-06-11.
     chunks = _collect(["Hmm... Maybe later."])
     assert len(chunks) == 2
     assert chunks[0]["text"] == "Hmm..."
-    assert chunks[0]["boundary"] == "ellipsis"
-    assert chunks[0]["pause_after_ms"] == PAUSE_AFTER_MS["ellipsis"]
+    assert chunks[0]["boundary"] == "sentence"
+    assert chunks[0]["pause_after_ms"] == PAUSE_AFTER_MS["sentence"]
+
+
+def test_ellipsis_does_not_split_in_paragraph_mode():
+    # Paragraph mode doesn't split on periods, so `...` rides through as
+    # one chunk — Kokoro renders the trail-off from the dots. 2026-06-11.
+    chunks = _collect(["Fishy... You know I like pizza."], split_mode="paragraph")
+    assert len(chunks) == 1
+    assert chunks[0]["text"] == "Fishy... You know I like pizza."
 
 
 def test_sentence_boundary_pause():

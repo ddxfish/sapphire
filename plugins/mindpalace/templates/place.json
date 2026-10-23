@@ -1,0 +1,12 @@
+{
+    "kind": "place",
+    "label": "Place",
+    "icon": "📍",
+    "order": 20,
+    "fields": [
+        {"key": "location", "label": "Location / address", "type": "text"},
+        {"key": "url", "label": "URL", "type": "text"},
+        {"key": "nicknames", "label": "Nicknames (comma-separated)", "type": "text"},
+        {"key": "participants", "label": "People there (comma-separated)", "type": "text"}
+    ]
+}

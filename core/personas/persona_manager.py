@@ -4,6 +4,7 @@ import json
 import shutil
 import threading
 from pathlib import Path
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ _STATIC_PERSONA_SETTINGS_KEYS = [
     "prompt", "toolset", "spice_set", "voice", "pitch", "speed",
     "spice_enabled", "spice_turns", "inject_datetime", "custom_context",
     "llm_primary", "llm_model",
-    "trim_color",
+    "trim_color", "background", "motion",
 ]
 
 
@@ -79,7 +80,7 @@ class PersonaManager:
         if user_path.exists():
             # User file is authoritative — no re-seeding on boot
             try:
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 self._personas = {k: v for k, v in data.items() if not k.startswith('_')}
                 logger.info(f"Loaded {len(self._personas)} personas")
@@ -118,7 +119,7 @@ class PersonaManager:
         # First run — seed from core defaults
         core_path = self.BASE_DIR / "personas.json"
         try:
-            with open(core_path, 'r', encoding='utf-8') as f:
+            with open(core_path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             self._personas = {k: v for k, v in data.items() if not k.startswith('_')}
         except Exception as e:
@@ -158,7 +159,7 @@ class PersonaManager:
             tmp_path = user_path.with_suffix('.tmp')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
-            tmp_path.replace(user_path)
+            replace_with_retry(tmp_path, user_path)
             logger.debug(f"Saved {len(self._personas)} personas")
             return True
         except Exception as e:
@@ -193,6 +194,55 @@ class PersonaManager:
 
     # === CRUD ===
 
+    @staticmethod
+    def _favorites_sync(old_name, new_name):
+        """Keep the PERSONA_FAVORITES settings list honest across rename
+        (new_name set) and delete (new_name None). Same referrer-upkeep
+        pattern as _vault_ref_sync — the list is the chat sidebar strip's
+        curation and must never dangle silently. 2026-08-29."""
+        try:
+            from core.settings_manager import settings as app_settings
+            favs = list(app_settings.get('PERSONA_FAVORITES') or [])
+            if old_name not in favs:
+                return
+            if new_name:
+                out = [new_name if n == old_name else n for n in favs]
+            else:
+                out = [n for n in favs if n != old_name]
+            app_settings.set('PERSONA_FAVORITES', out, persist=True)
+        except Exception as e:
+            logger.warning(f"[PERSONAS] favorites sync failed for '{old_name}': {e}")
+
+    @staticmethod
+    def _chat_ref_sync(old_name, new_name):
+        """Rename: re-point every chat whose persona setting references the
+        old name. delete() has its own inline handoff (reset to 'default');
+        without this, a rename left chats holding a dead persona ref -- the
+        strip lost its active face and the hot-reload reapply silently
+        no-op'd (S3 #1, hunt 2026-08-30). Called OUTSIDE self._lock."""
+        try:
+            from core.api_fastapi import get_system
+            sm = getattr(getattr(get_system(), 'llm_chat', None), 'session_manager', None)
+            if sm is None or not hasattr(sm, 'reset_chat_scope_ref'):
+                return
+            affected = sm.reset_chat_scope_ref('persona', old_name, reset_to=new_name) or []
+            if affected:
+                logger.info(f"[PERSONA] Rename '{old_name}' -> '{new_name}' re-pointed "
+                            f"{len(affected)} chat(s): {affected}")
+        except Exception as e:
+            logger.warning(f"[PERSONA] chat ref sync failed for rename "
+                           f"'{old_name}' -> '{new_name}': {e}")
+
+    @staticmethod
+    def _vault_ref_sync(new_prompt, old_prompt):
+        """Personas are one of the three referrer classes of the vault
+        references index. Called OUTSIDE self._lock, best-effort."""
+        try:
+            from core.prompt_crud import vault_ref_sync
+            vault_ref_sync(new_prompt, old_prompt)
+        except Exception:
+            pass
+
     def create(self, name: str, data: dict) -> bool:
         """Create a new persona."""
         safe_name = self._sanitize_name(name)
@@ -210,7 +260,10 @@ class PersonaManager:
                 "settings": self._clean_settings(data.get("settings", {}))
             }
             self._personas[safe_name] = persona
-            return self._save_to_user()
+            ok = self._save_to_user()
+        if ok:
+            self._vault_ref_sync(persona["settings"].get("prompt"), None)
+        return ok
 
     def update(self, name: str, data: dict) -> bool:
         """Update an existing persona."""
@@ -219,6 +272,8 @@ class PersonaManager:
 
         with self._lock:
             persona = self._personas[name]
+            old_prompt = (persona.get("settings") or {}).get("prompt") \
+                if "settings" in data else None
             if "tagline" in data:
                 persona["tagline"] = data["tagline"]
             if "avatar" in data:
@@ -234,7 +289,13 @@ class PersonaManager:
                     persona["name"] = new_name
                     self._personas[new_name] = persona
                     del self._personas[name]
-            return self._save_to_user()
+            ok = self._save_to_user()
+        if ok and "settings" in data:
+            self._vault_ref_sync(persona["settings"].get("prompt"), old_prompt)
+        if ok and persona.get("name") != name:
+            self._favorites_sync(name, persona.get("name"))
+            self._chat_ref_sync(name, persona.get("name"))
+        return ok
 
     def delete(self, name: str) -> bool:
         """Delete a persona.
@@ -297,8 +358,13 @@ class PersonaManager:
             except Exception as e:
                 logger.debug(f"[PERSONA] Active-persona handoff check skipped: {e}")
 
+            old_prompt = (persona.get("settings") or {}).get("prompt")
             del self._personas[name]
-            return self._save_to_user()
+            ok = self._save_to_user()
+        self._vault_ref_sync(None, old_prompt)
+        if ok:
+            self._favorites_sync(name, None)
+        return ok
 
     def duplicate(self, name: str, new_name: str) -> bool:
         """Duplicate a persona with a new name."""
@@ -334,7 +400,10 @@ class PersonaManager:
                 "settings": settings
             }
             self._personas[safe_name] = persona
-            return self._save_to_user()
+            ok = self._save_to_user()
+        if ok:
+            self._vault_ref_sync(settings.get("prompt"), None)
+        return ok
 
     # === Avatar ===
 
@@ -409,7 +478,7 @@ class PersonaManager:
             return 0
 
         try:
-            with open(core_path, 'r', encoding='utf-8') as f:
+            with open(core_path, 'r', encoding='utf-8-sig') as f:
                 core_personas = {k: v for k, v in json.load(f).items() if not k.startswith('_')}
         except Exception as e:
             logger.error(f"Failed to load core personas for merge: {e}")

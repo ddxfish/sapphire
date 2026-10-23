@@ -3,7 +3,6 @@
 Mixed bag of remaining P1/P2 stubs that are cheap to write:
   - Knowledge chunking boundary behavior (3.37, 3.38, 3.25)
   - Goal listing shape (list_goals detail view, empty, permanent tag)
-  - /api/privacy PUT flow (2.46 set_not_persisted, 2.47 publishes_event)
   - /api/settings masks SAPPHIRE_ROUTER_URL (2.49)
   - PluginState.clear / .delete / .all
 
@@ -130,75 +129,6 @@ def test_list_goals_invalid_status_rejected(isolated_goals):
     result, ok = gt._list_goals(status='bogus', scope='default')
     # Whatever it returns, it returned SOMETHING — didn't crash
     assert isinstance(result, str)
-
-
-# ─── /api/privacy PUT flow ───────────────────────────────────────────────────
-
-@pytest.fixture
-def _settings_restore(monkeypatch):
-    """Snapshot + restore settings singleton so privacy/router tests don't
-    leak into siblings (PRIVACY_MODE runtime mutation caused test_trigger_
-    system failures in the full-suite run)."""
-    from core import settings_manager as sm_mod
-    monkeypatch.setattr(sm_mod.settings, 'save', lambda: True)
-    orig_user = dict(sm_mod.settings._user)
-    orig_runtime = dict(sm_mod.settings._runtime)
-    orig_config = dict(sm_mod.settings._config)
-    yield
-    with sm_mod.settings._lock:
-        sm_mod.settings._user = orig_user
-        sm_mod.settings._runtime = orig_runtime
-        sm_mod.settings._config = orig_config
-
-
-def test_privacy_put_sets_runtime_without_persist(client, monkeypatch, _settings_restore):
-    """[PROACTIVE] PUT /api/privacy sets PRIVACY_MODE in settings with
-    persist=False — the flag is runtime-only, never written to disk.
-    Otherwise a mid-session privacy toggle leaks into next session."""
-    from core import settings_manager as sm_mod
-    c, csrf = client
-
-    # Capture .set calls to verify persist=False
-    captured = []
-    orig_set = sm_mod.settings.set
-
-    def _spy(key, value, persist=True):
-        captured.append((key, value, persist))
-        return orig_set(key, value, persist=persist)
-
-    monkeypatch.setattr(sm_mod.settings, 'set', _spy)
-
-    r = c.put('/api/privacy', headers={'X-CSRF-Token': csrf},
-              json={'enabled': True})
-    assert r.status_code == 200
-    body = r.json()
-    assert body['privacy_mode'] is True
-
-    privacy_calls = [c for c in captured if c[0] == 'PRIVACY_MODE']
-    assert privacy_calls, "PRIVACY_MODE was not set"
-    assert privacy_calls[-1][2] is False, \
-        f"privacy must use persist=False; got persist={privacy_calls[-1][2]}"
-
-
-def test_privacy_put_publishes_settings_changed(client, event_bus_capture, _settings_restore):
-    c, csrf = client
-    r = c.put('/api/privacy', headers={'X-CSRF-Token': csrf},
-              json={'enabled': True})
-    assert r.status_code == 200
-
-    events = [d for ev, d in event_bus_capture.events if ev == 'settings_changed']
-    privacy_events = [e for e in events if e.get('key') == 'PRIVACY_MODE']
-    assert privacy_events, f"SETTINGS_CHANGED not fired for PRIVACY_MODE"
-    assert privacy_events[-1]['value'] is True
-
-
-def test_privacy_get_returns_current_mode(client, _settings_restore):
-    c, csrf = client
-    r = c.get('/api/privacy')
-    assert r.status_code == 200
-    body = r.json()
-    assert 'privacy_mode' in body
-    assert 'start_in_privacy' in body
 
 
 # ─── 2.49 SAPPHIRE_ROUTER_URL is masked in GET ───────────────────────────────

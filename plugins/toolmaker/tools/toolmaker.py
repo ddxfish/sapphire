@@ -180,22 +180,24 @@ def _settings_to_schema(settings_dict, help_dict=None):
 
 def _generate_manifest(name, module, code):
     """Generate plugin.json manifest from validated module."""
-    # Title from plugin name: weather_lookup → Weather Lookup
-    title = name.replace('_', ' ').title()
+    # short_display_name = the SHORT label shown in plugin lists (weather_lookup
+    # → Weather Lookup). This is the one field that drives the display title; the
+    # old "Title — description" smushing is dead (it produced giant names when
+    # authors wrote prose). 2026-06-21.
+    short_display_name = name.replace('_', ' ').title()[:40]
 
-    # Description from first tool's description (first sentence, capped)
+    # description = the full sentence, shown UNDER the title — free prose, never
+    # the title itself. From the first tool's description (first sentence, capped).
     tool_desc = ''
     if module.TOOLS:
         func = module.TOOLS[0].get('function', {})
-        tool_desc = func.get('description', '').split('.')[0].strip()[:80]
-
-    # Convention: "Title — short description" (API splits on — for display title)
-    description = f"{title} — {tool_desc}" if tool_desc else title
+        tool_desc = func.get('description', '').split('.')[0].strip()[:120]
 
     manifest = {
         "name": name,
         "version": "1.0.0",
-        "description": description,
+        "short_display_name": short_display_name,
+        "description": tool_desc or short_display_name,
         "author": "ai-toolmaker",
         "default_enabled": True,
         "capabilities": {
@@ -283,18 +285,28 @@ def execute(function_name, arguments, config):
             if not ok:
                 return f"FAILED: Validation failed ({strictness} mode): {err}", False
 
-            # Create plugin directory structure
+            # Create plugin directory structure. A re-save of an EXISTING
+            # plugin must never destroy it: back up the working code and
+            # restore it if the new code fails the smoke test — the old flow
+            # rmtree'd the whole dir (manifest, data and all) on failure.
             plugin_dir = _USER_PLUGINS / name
             tools_dir = plugin_dir / "tools"
+            is_new = not plugin_dir.exists()
             tools_dir.mkdir(parents=True, exist_ok=True)
             filepath = tools_dir / f"{name}.py"
+            old_code = filepath.read_text(encoding='utf-8') if filepath.exists() else None
             filepath.write_text(code, encoding='utf-8')
 
             # Smoke test
             ok, result = _smoke_test(filepath)
             if not ok:
-                shutil.rmtree(plugin_dir, ignore_errors=True)
-                return f"FAILED: Smoke test failed: {result}\nPlugin directory removed — fix and retry.", False
+                if is_new:
+                    shutil.rmtree(plugin_dir, ignore_errors=True)
+                    return f"FAILED: Smoke test failed: {result}\nPlugin directory removed — fix and retry.", False
+                if old_code is not None:
+                    filepath.write_text(old_code, encoding='utf-8')
+                return (f"FAILED: Smoke test failed: {result}\n"
+                        f"Existing plugin '{name}' left untouched — fix and retry."), False
 
             # Generate and write manifest
             manifest = _generate_manifest(name, result, code)
@@ -361,7 +373,16 @@ def execute(function_name, arguments, config):
                     if system and hasattr(system, 'llm_chat'):
                         toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
                         toolset_name = toolset_info.get("name", "custom")
-                        system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+                        # reload_plugin carried extras; a bare re-apply here
+                        # negated it (extras-decay site #10, 2026-08-05)
+                        extras = None
+                        try:
+                            extras = (system.llm_chat.session_manager.get_chat_settings()
+                                      or {}).get('extra_toolsets') or None
+                        except Exception:
+                            pass
+                        system.llm_chat.function_manager.update_enabled_functions(
+                            [toolset_name], extra_toolsets=extras)
                         # Notify frontend so toolset count refreshes
                         from core.event_bus import publish, Events
                         publish(Events.TOOLSET_CHANGED, {"name": toolset_name})

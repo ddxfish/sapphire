@@ -234,6 +234,13 @@ def _ensure_db():
             cursor.execute("ALTER TABLE people ADD COLUMN email_whitelisted INTEGER DEFAULT 0")
             logger.info("Migrated people table: added email_whitelisted column")
 
+        # Migration: add call_whitelisted column if missing (phone_call tool gate)
+        try:
+            cursor.execute('SELECT call_whitelisted FROM people LIMIT 1')
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE people ADD COLUMN call_whitelisted INTEGER DEFAULT 0")
+            logger.info("Migrated people table: added call_whitelisted column")
+
         # Migration: add embedding provenance columns. Scout finding 2026-04-19
         # — without (provider, dim) stamped per row, a provider swap silently
         # invalidates all stored vectors. Read-path filters by these.
@@ -427,6 +434,37 @@ def get_scopes():
         return [{"name": "default", "count": 0}]
 
 
+def status_summary(scope=None):
+    """People + knowledge counts for the status plugin — answered here
+    because knowledge.db is ours (2026-09-11). Counts only; never creates
+    the DB."""
+    out = {'people': 0, 'people_by_scope': {}, 'knowledge_total': 0,
+           'knowledge_scopes': {}, 'scopes': {}, 'current': None}
+    try:
+        if not _get_db_path().exists():
+            return out
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM people GROUP BY scope')
+            out['people_by_scope'] = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT t.scope, COUNT(e.id) FROM knowledge_tabs t '
+                           'LEFT JOIN knowledge_entries e ON e.tab_id = t.id GROUP BY t.scope')
+            out['knowledge_scopes'] = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT name FROM knowledge_scopes')
+            out['scopes'] = {row[0]: 0 for row in cursor.fetchall()}
+        out['people'] = sum(out['people_by_scope'].values())
+        out['knowledge_total'] = sum(out['knowledge_scopes'].values())
+        for counts in (out['people_by_scope'], out['knowledge_scopes']):
+            for name, n in counts.items():
+                out['scopes'][name] = out['scopes'].get(name, 0) + n
+        if scope:
+            out['current'] = {'people': out['people_by_scope'].get(scope, 0),
+                              'knowledge': out['knowledge_scopes'].get(scope, 0)}
+    except Exception as e:
+        logger.warning(f"knowledge status_summary failed: {e}")
+    return out
+
+
 def create_scope(name: str) -> bool:
     try:
         with _get_connection() as conn:
@@ -436,6 +474,36 @@ def create_scope(name: str) -> bool:
             return True
     except Exception as e:
         logger.error(f"Failed to create knowledge scope '{name}': {e}")
+        return False
+
+
+def rename_scope(old_name: str, new_name: str) -> bool:
+    """Rename a knowledge scope in place (tabs follow; entries key on tab_id).
+
+    Used by chat rename to carry a chat's `__rag__:{name}` scope along.
+    No-op (True) if the old scope doesn't exist — a chat without RAG docs
+    has no scope to move. False only on a real failure or collision."""
+    if old_name == 'default':
+        return False
+    try:
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            if not cursor.execute('SELECT 1 FROM knowledge_scopes WHERE name = ?',
+                                  (old_name,)).fetchone():
+                return True  # nothing to rename
+            if cursor.execute('SELECT 1 FROM knowledge_scopes WHERE name = ?',
+                              (new_name,)).fetchone():
+                logger.warning(f"rename_scope: target '{new_name}' already exists")
+                return False
+            cursor.execute('UPDATE knowledge_scopes SET name = ? WHERE name = ?',
+                           (new_name, old_name))
+            cursor.execute('UPDATE knowledge_tabs SET scope = ? WHERE scope = ?',
+                           (new_name, old_name))
+            conn.commit()
+        logger.info(f"Renamed knowledge scope '{old_name}' -> '{new_name}'")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to rename scope '{old_name}' -> '{new_name}': {e}")
         return False
 
 
@@ -524,18 +592,18 @@ def get_people(scope='default'):
     with _get_connection() as conn:
         cursor = conn.cursor()
         scope_sql, scope_params = _scope_condition(scope)
-        cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at, email_whitelisted FROM people WHERE {scope_sql} ORDER BY name', scope_params)
+        cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at, email_whitelisted, call_whitelisted FROM people WHERE {scope_sql} ORDER BY name', scope_params)
         rows = cursor.fetchall()
         return [{"id": r[0], "name": r[1], "relationship": r[2], "phone": r[3],
                  "email": r[4], "address": r[5], "notes": r[6],
                  "created_at": r[7], "updated_at": r[8],
-                 "email_whitelisted": bool(r[9])} for r in rows]
+                 "email_whitelisted": bool(r[9]), "call_whitelisted": bool(r[10])} for r in rows]
 
 
 MAX_PEOPLE_PER_SCOPE = 50_000
 
 
-def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default', person_id=None, email_whitelisted=None):
+def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default', person_id=None, email_whitelisted=None, call_whitelisted=None):
     with _get_connection() as conn:
         cursor = conn.cursor()
         # Cap check — only for new person insertions; updates to existing
@@ -581,6 +649,15 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
             if embs is not None:
                 from core.embeddings import stamp_embedding
                 embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
+            else:
+                # Embed returned None (transient failure) — a NEW person row
+                # lands with a NULL vector, invisible to semantic search while
+                # the backfill latch stays set. Warn + re-arm (mirrors
+                # memory_tools 2026-05-07 #H; negspace N22, 2026-08-31).
+                global _backfill_done
+                _backfill_done = False
+                logger.warning("[KNOWLEDGE] people embed returned None — "
+                               "row may store NULL vector; backfill re-armed.")
 
         now = datetime.now().isoformat()
 
@@ -594,6 +671,8 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
                     updates.append(f'{col} = ?'); params.append(val if val else None)
             if email_whitelisted is not None:
                 updates.append('email_whitelisted = ?'); params.append(int(email_whitelisted))
+            if call_whitelisted is not None:
+                updates.append('call_whitelisted = ?'); params.append(int(call_whitelisted))
             if name.strip():
                 updates.append('name = ?'); params.append(name.strip())
             # Only overwrite embedding + provenance if we produced a fresh one;
@@ -621,11 +700,12 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
         else:
             cursor.execute(
                 'INSERT INTO people (name, relationship, phone, email, address, notes, scope, embedding, '
-                'embedding_provider, embedding_dim, updated_at, email_whitelisted) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'embedding_provider, embedding_dim, updated_at, email_whitelisted, call_whitelisted) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (name.strip(), relationship, phone, email, address, notes, scope,
                  embedding_blob, embedding_provider, embedding_dim, now,
-                 int(email_whitelisted) if email_whitelisted else 0)
+                 int(email_whitelisted) if email_whitelisted else 0,
+                 int(call_whitelisted) if call_whitelisted else 0)
             )
             pid = cursor.lastrowid
             conn.commit()
@@ -779,6 +859,14 @@ def add_entry(tab_id, content, chunk_index=0, source_filename=None):
         if embs is not None:
             from core.embeddings import stamp_embedding
             embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
+        else:
+            # Embed returned None — row stores a NULL vector. Warn + re-arm the
+            # backfill latch so the next search sweeps it up (mirrors
+            # memory_tools 2026-05-07 #H; negspace N22, 2026-08-31).
+            global _backfill_done
+            _backfill_done = False
+            logger.warning("[KNOWLEDGE] add_entry embed returned None — "
+                           "row stored with NULL vector; backfill re-armed.")
 
     with _get_connection() as conn:
         cursor = conn.cursor()
@@ -826,6 +914,13 @@ def update_entry(entry_id, content):
         if embs is not None:
             from core.embeddings import stamp_embedding
             embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
+        else:
+            # Embed returned None — the OLD vector is kept for the NEW content
+            # (guard below). Not NULL, so backfill can't fix it; stale-vector
+            # re-embed is a separate board item. At least say so in the log
+            # (negspace N22, 2026-08-31).
+            logger.warning("[KNOWLEDGE] update_entry embed returned None — "
+                           "content updated but its stored vector is now STALE.")
 
     tab_scope = None
     with _get_connection() as conn:
@@ -1860,7 +1955,9 @@ def execute(function_name, arguments, config):
                 query=arguments.get('query'),
                 category=arguments.get('category'),
                 entry_id=arguments.get('id'),
-                limit=arguments.get('limit', 10),
+                # Clamp: LIMIT -1 = unlimited in SQLite — a stray negative
+                # would dump the whole scope into one permanent history row.
+                limit=min(max(int(arguments.get('limit', 10) or 10), 1), 50),
                 scope=scope or 'default',
                 people_scope=people_scope,
             )

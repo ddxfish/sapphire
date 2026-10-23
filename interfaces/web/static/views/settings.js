@@ -14,8 +14,11 @@ import embeddingTab from './settings-tabs/embedding.js';
 import llmTab from './settings-tabs/llm.js';
 import toolsTab from './settings-tabs/tools.js';
 import networkTab from './settings-tabs/network.js';
+import privacyTab from './settings-tabs/privacy.js';
 import wakewordTab from './settings-tabs/wakeword.js';
+import conversationTab from './settings-tabs/conversation.js';
 import pluginsTab from './settings-tabs/plugins.js';
+import imagesTab from './settings-tabs/images.js';
 
 import backupTab from './settings-tabs/backup.js';
 import systemTab from './settings-tabs/system.js';
@@ -24,8 +27,10 @@ import videosTab from './settings-tabs/videos-tab.js';
 import storeTab from './settings-tabs/store-tab.js';
 
 import { getRegisteredTabs } from '../shared/plugin-registry.js';
+import { snapScroll } from '../shared/dom-guard.js';
+import { commitInto, mergeInto } from '../shared/settings-commit.js';
 
-const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
+const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
 
 let container = null;
 let activeTab = 'dashboard';
@@ -41,14 +46,25 @@ let providerMeta = {};
 let dynamicTabs = [];
 let pluginList = [];
 let lockedPlugins = [];
+let pluginSurfaces = [];   // [{id,label}] — the app's surfaces (plugin 'Show in' strip)
 let mobileMenuCleanup = null;
 let managed = false;
 let docker = false;
 let unrestricted = false;
+// U1 (2026-09-20): a slow refetch must never overwrite a newer one (two tab
+// clicks in flight), and (c)'s future bus repaint needs to know a global
+// Save is mid-flight. Both counters live here, beside the snapshot they guard.
+let _loadSeq = 0;
+let _saveInFlight = 0;
 
 export default {
     init(el) { container = el; },
     async show() {
+        // One-shot deep-link from other views (e.g. sidebar provider ↗ → LLM tab)
+        if (window._settingsTab) {
+            activeTab = window._settingsTab;
+            window._settingsTab = null;
+        }
         await loadData();
         render();
     },
@@ -58,11 +74,13 @@ export default {
 // ── Data Loading ──
 
 async function loadData() {
+    const seq = ++_loadSeq;
     try {
         const [settingsData, helpData] = await Promise.all([
             api.getAllSettings(),
             api.getSettingsHelp().catch(() => ({ help: {} }))
         ]);
+        if (seq !== _loadSeq) return;   // a newer load already landed — never paint the older blob
         settings = settingsData.settings || {};
         defaults = settingsData.defaults || {};
         overrides = settingsData.user_overrides || [];
@@ -78,6 +96,27 @@ async function loadData() {
     }
 }
 
+// Tab-switch refetch (U1 layer a): the settings blob + provider meta only.
+// loadData()'s plugin fan-out (a dynamic import per plugin tab) is boot-weight,
+// not click-weight. Sequence-guarded like loadData; a failure keeps the old
+// snapshot (same as before, just no longer silently stale on purpose).
+async function loadSettingsOnly() {
+    const seq = ++_loadSeq;
+    try {
+        const settingsData = await api.getAllSettings();
+        if (seq !== _loadSeq) return;
+        settings = settingsData.settings || {};
+        defaults = settingsData.defaults || {};
+        overrides = settingsData.user_overrides || [];
+        managed = settingsData.managed || false;
+        docker = settingsData.docker || false;
+        unrestricted = settingsData.unrestricted || false;
+        await loadProviderMeta();
+    } catch (e) {
+        console.warn('Settings refetch failed:', e);
+    }
+}
+
 async function loadPluginList() {
     try {
         const res = await fetch('/api/webui/plugins');
@@ -85,6 +124,7 @@ async function loadPluginList() {
             const d = await res.json();
             pluginList = d.plugins || [];
             lockedPlugins = d.locked || [];
+            pluginSurfaces = d.surfaces || [];
             // Auto-load settings tabs for enabled plugins that have a web UI.
             // Parallelized — sequential awaits here were making Settings tab load ~N*RTT
             // slow (once per enabled plugin). Promise.all gives us max(RTT) instead.
@@ -113,6 +153,7 @@ async function loadPluginTab(name, source) {
                 load: () => pluginsAPI.getSettings(name),
                 save: (s) => pluginsAPI.saveSettings(name, s),
                 getSettings: (box) => readSettingsForm(box, plugin.settings_schema),
+                reset: () => pluginsAPI.resetSettings(name),
             });
             syncDynamicTabs();
             return;
@@ -280,6 +321,7 @@ function render() {
                         <span class="view-subtitle" id="stab-desc">${meta.description || ''}</span>
                     </div>
                     <div class="view-header-actions">
+                        <button class="btn-sm" id="settings-plugin-reset" style="display:none" title="Delete this plugin's stored settings — defaults take over">Reset to Defaults</button>
                         <button class="btn-sm" id="settings-reload">Reload</button>
                         <button class="btn-primary" id="settings-save">Save Changes</button>
                     </div>
@@ -310,6 +352,32 @@ function renderTabContent() {
 
     // Tab-specific listeners
     if (tab.attachListeners) tab.attachListeners(ctx, el);
+
+    updateSaveButtonForTab(tab);
+}
+
+function updateSaveButtonForTab(tab) {
+    // Self-saving plugin tabs — no getSettings in their registration — persist
+    // through their OWN buttons. Showing the global Save there made it a lie:
+    // it "saved" stub values and toasted success while the visible form's edits
+    // were never written (the months-old two-save-buttons bug, found 2026-07-04).
+    // Contract: provide getSettings+save to participate in global Save; omit
+    // them and the button hides on your tab. See docs/PLUGINS.md.
+    const saveBtn = container?.querySelector('#settings-save');
+    if (!saveBtn) return;
+    const selfSaving = !!(tab.isPlugin && tab._reg && !tab._reg.getSettings);
+    saveBtn.style.display = selfSaving ? 'none' : '';
+    const resetBtn = container?.querySelector('#settings-plugin-reset');
+    if (resetBtn) resetBtn.style.display = (tab.isPlugin && tab._reg?.reset) ? '' : 'none';
+    let hint = container.querySelector('#settings-selfsave-hint');
+    if (selfSaving && !hint) {
+        hint = document.createElement('span');
+        hint.id = 'settings-selfsave-hint';
+        hint.style.cssText = 'font-size:0.75rem;color:var(--text-muted);align-self:center';
+        hint.textContent = 'This page saves with its own buttons';
+        saveBtn.parentElement.insertBefore(hint, saveBtn);
+    }
+    if (hint) hint.style.display = selfSaving ? '' : 'none';
 }
 
 // ── Context Object (passed to tab handlers) ──
@@ -318,10 +386,18 @@ function createCtx() {
     return {
         settings, help, overrides, pendingChanges, managed, docker, unrestricted,
         wakewordModels, availableThemes, avatarPaths, providerMeta,
-        pluginList, lockedPlugins,
+        pluginList, lockedPlugins, pluginSurfaces,
         renderFields, renderAccordion, renderInput, formatLabel,
         attachAccordionListeners,
         markChanged(key, value) { pendingChanges[key] = value; },
+        // Write-through for writes the tab ALREADY persisted itself (provider
+        // card PUTs, self-management toggles, dashboard name…). Reads the
+        // module variables at call time — `ctx.settings[key] = v` wrote into
+        // whatever object was current at bind time, which loadData() and a
+        // Save reassign. Commit only server-CONFIRMED values (after the awaited
+        // PUT resolved), never the value you hoped to write. U1 (b), 2026-09-20.
+        commit(key, value) { commitInto({ settings, pendingChanges }, key, value); },
+        commitMerge(mapKey, subKey, updates) { mergeInto({ settings, pendingChanges }, mapKey, subKey, updates); },
         // Source-of-truth read for unsaved state. Custom controls (anything
         // not rendered via renderFields/renderInput) should use this instead
         // of reading `settings[key]` directly — otherwise tab-switch loses
@@ -330,12 +406,37 @@ function createCtx() {
             return key in pendingChanges ? pendingChanges[key] : settings[key];
         },
         async refreshTab() {
+            // Same as a tab switch: a field the user typed in but never
+            // blurred only reaches pendingChanges on 'change' — flush first or
+            // the repaint drops it (20 call sites; DOM-refresh hunt 2026-09-08).
+            flushCurrentInputs();
+            // A refresh is the SAME tab — keep the user's scroll (a switch
+            // goes through renderTabContent directly and lands at the top).
+            const restoreScroll = snapScroll(container?.querySelector('#settings-content'));
             await loadData();
             renderTabContent();
+            restoreScroll();
         },
+        // For async completions (env-build polls etc.): refreshTab() re-renders
+        // whatever tab is CURRENTLY active, wiping its unsaved edits — gate on
+        // this before refreshing from a background task.
+        isTabActive(id) { return activeTab === id; },
         loadPluginTab,
         syncDynamicTabs,
-        refreshSidebar() { render(); }
+        // A plugin toggle with a settings UI adds/removes its nav tab. Repaint
+        // the NAV only — the old full render() tore the plugin list down under
+        // the user (scroll lost; plugins.js' in-place row update then ran on a
+        // detached node). DOM-refresh hunt 2026-09-08.
+        refreshSidebar() {
+            const tabs = getAllTabs();
+            const wasOpen = !!container?.querySelector('.settings-plugin-group')?.open;
+            const sb = container?.querySelector('.settings-sidebar');
+            if (sb) sb.innerHTML = renderSidebarItems(tabs);
+            const grp = container?.querySelector('.settings-plugin-group');
+            if (grp && wasOpen) grp.open = true;
+            const mm = container?.querySelector('#settings-mobile-menu');
+            if (mm) mm.innerHTML = renderMobileItems(tabs);
+        }
     };
 }
 
@@ -409,6 +510,38 @@ function renderInput(key, value, type) {
             ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select>`;
     }
+    if (key === 'CONVERSATION_DTLN') {
+        const opts = [
+            ['none', 'None — headphones (no echo cancel)'],
+            ['256',  'DTLN 256 — open speakers (fast, ~26 dB)'],
+            ['512',  'DTLN 512 — open speakers (stronger, ~31 dB)'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${String(value) === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
+    if (key === 'CONVERSATION_START_WORD') {
+        return `<input type="text" id="${id}" data-key="${key}" value="${escapeAttr(String(value))}" placeholder="hey sapphire">`;
+    }
+    if (key === 'SPICE_DELIVERY') {
+        const opts = [
+            ['ghost',  'Ghost message — labeled app context, cache-friendly (default)'],
+            ['system', 'System prompt — unattributed, feels self-chosen; re-caches on rotation'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
+    if (key === 'WEB_IMAGES_SAFESEARCH') {
+        const opts = [
+            ['off',      'Off — everything the engine has (default)'],
+            ['moderate', 'Moderate — hides explicit images'],
+            ['strict',   'Strict — hides explicit images and text'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
     if (key === 'LOG_LEVEL') {
         const opts = [
             ['DEBUG',   'DEBUG (verbose, dev only)'],
@@ -433,8 +566,7 @@ function renderInput(key, value, type) {
     }
     if (key === 'STT_FIREWORKS_MODEL') {
         const models = [
-            ['whisper-v3-turbo', 'Whisper V3 Turbo (Fast)'],
-            ['whisper-v3', 'Whisper V3 (Quality)']
+            ['whisper-v3-turbo', 'Whisper V3 Turbo']
         ];
         return `<select id="${id}" data-key="${key}">
             ${models.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -462,7 +594,6 @@ function renderInput(key, value, type) {
     if (type === 'checkbox') {
         return `<label class="setting-toggle">
             <input type="checkbox" id="${id}" data-key="${key}" ${value ? 'checked' : ''}>
-            <span>${value ? 'Enabled' : 'Disabled'}</span>
         </label>`;
     }
     if (type === 'json') {
@@ -491,45 +622,64 @@ function renderAccordion(id, keys, title = 'Advanced Settings') {
 
 // ── Events ──
 
+// ONE door for every tab switch (settings-navigate event, desktop sidebar,
+// mobile menu). U1 layer (a), 2026-09-20: the three copies all repainted from
+// the snapshot taken at view entry, so a provider-card PUT, a self-management
+// toggle or the dashboard name looked reverted after a switch. Now: flush
+// typed-but-unblurred values → refetch the blob → paint. If the user clicks
+// on while the fetch is out, that click's own goToTab paints; this one yields.
+async function goToTab(tabId) {
+    flushCurrentInputs();
+    activeTab = tabId;
+    container.querySelectorAll('.settings-nav-item').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === activeTab));
+    // Auto-expand the plugin group when landing on a plugin tab
+    const pluginGroup = container.querySelector('.settings-plugin-group');
+    if (pluginGroup && pluginGroup.querySelector(`.settings-nav-item[data-tab="${tabId}"]`)) pluginGroup.open = true;
+    const meta = getTabMeta();
+    const title = container.querySelector('#stab-title');
+    const desc = container.querySelector('#stab-desc');
+    if (title) title.textContent = `${meta.icon} ${meta.name}`;
+    if (desc) desc.textContent = meta.description || '';
+    // Mobile trigger + menu stay in sync whichever door was used
+    const mobileTrigger = container.querySelector('#settings-mobile-trigger');
+    const mobileMenu = container.querySelector('#settings-mobile-menu');
+    if (mobileTrigger) {
+        const set = (sel, v) => { const n = mobileTrigger.querySelector(sel); if (n) n.textContent = v; };
+        set('.settings-mobile-icon', meta.icon);
+        set('.settings-mobile-label', meta.name);
+        set('.settings-mobile-arrow', '\u25BE');
+    }
+    if (mobileMenu) {
+        mobileMenu.querySelectorAll('.settings-mobile-option').forEach(o =>
+            o.classList.toggle('active', o.dataset.tab === activeTab));
+        mobileMenu.classList.add('hidden');
+    }
+    await loadSettingsOnly();
+    if (activeTab !== tabId) return;
+    renderTabContent();
+}
+
+let _shellNavBound = false;
 function bindShellEvents() {
-    // Navigate to a specific tab programmatically (used by plugin gear icons)
-    container.addEventListener('settings-navigate', e => {
+    // Navigate to a specific tab programmatically (used by plugin gear icons).
+    // Bound ONCE: `container` is the persistent #view-settings and render()
+    // runs on every visit — this listener stacked per visit, so a gear click
+    // ran renderTabContent N times (and N provider-tab second paints).
+    // DOM-refresh hunt 2026-09-08. The other shell listeners sit on nodes
+    // render() replaces, so they don't stack.
+    if (!_shellNavBound) container.addEventListener('settings-navigate', e => {
         const tabId = e.detail?.tab;
         if (!tabId) return;
-        flushCurrentInputs();
-        activeTab = tabId;
-        container.querySelectorAll('.settings-nav-item').forEach(b =>
-            b.classList.toggle('active', b.dataset.tab === activeTab));
-        // Auto-expand plugin group if navigating to a plugin tab
-        const pluginGroup = container.querySelector('.settings-plugin-group');
-        if (pluginGroup) {
-            const isPluginTab = pluginGroup.querySelector(`.settings-nav-item[data-tab="${tabId}"]`);
-            if (isPluginTab) pluginGroup.open = true;
-        }
-        const meta = getTabMeta();
-        const title = container.querySelector('#stab-title');
-        const desc = container.querySelector('#stab-desc');
-        if (title) title.textContent = `${meta.icon} ${meta.name}`;
-        if (desc) desc.textContent = meta.description || '';
-        renderTabContent();
+        goToTab(tabId);
     });
+    _shellNavBound = true;
 
     // Sidebar nav
     container.querySelector('.settings-sidebar')?.addEventListener('click', e => {
         const btn = e.target.closest('.settings-nav-item');
         if (!btn) return;
-        flushCurrentInputs();
-        activeTab = btn.dataset.tab;
-        container.querySelectorAll('.settings-nav-item').forEach(b =>
-            b.classList.toggle('active', b.dataset.tab === activeTab));
-
-        const meta = getTabMeta();
-        const title = container.querySelector('#stab-title');
-        const desc = container.querySelector('#stab-desc');
-        if (title) title.textContent = `${meta.icon} ${meta.name}`;
-        if (desc) desc.textContent = meta.description || '';
-
-        renderTabContent();
+        goToTab(btn.dataset.tab);
     });
 
     // Mobile tab dropdown
@@ -546,30 +696,7 @@ function bindShellEvents() {
         mobileMenu.addEventListener('click', e => {
             const opt = e.target.closest('.settings-mobile-option');
             if (!opt) return;
-            flushCurrentInputs();
-            activeTab = opt.dataset.tab;
-
-            // Sync desktop sidebar
-            container.querySelectorAll('.settings-nav-item').forEach(b =>
-                b.classList.toggle('active', b.dataset.tab === activeTab));
-
-            // Update mobile trigger + header
-            const meta = getTabMeta();
-            mobileTrigger.querySelector('.settings-mobile-icon').textContent = meta.icon;
-            mobileTrigger.querySelector('.settings-mobile-label').textContent = meta.name;
-            mobileTrigger.querySelector('.settings-mobile-arrow').textContent = '\u25BE';
-
-            const title = container.querySelector('#stab-title');
-            const desc = container.querySelector('#stab-desc');
-            if (title) title.textContent = `${meta.icon} ${meta.name}`;
-            if (desc) desc.textContent = meta.description || '';
-
-            // Update menu active states
-            mobileMenu.querySelectorAll('.settings-mobile-option').forEach(o =>
-                o.classList.toggle('active', o.dataset.tab === activeTab));
-
-            mobileMenu.classList.add('hidden');
-            renderTabContent();
+            goToTab(opt.dataset.tab);
         });
 
         const outsideHandler = e => {
@@ -593,6 +720,21 @@ function bindShellEvents() {
             renderTabContent();
         } catch { ui.showToast('Reload failed', 'error'); }
     });
+
+    container.querySelector('#settings-plugin-reset')?.addEventListener('click', async () => {
+        const tab = getTabMeta();
+        const reg = tab._reg;
+        if (!reg?.reset) return;
+        if (!confirm(`Reset all ${reg.name} settings to their defaults? ` +
+                     `Your customizations for this plugin will be cleared.`)) return;
+        try {
+            await reg.reset();
+            ui.showToast(`${reg.name} settings reset to defaults`, 'success');
+            renderTabContent();
+        } catch (e) {
+            ui.showToast(`Reset failed: ${e.message}`, 'error');
+        }
+    });
 }
 
 function attachGenericListeners(el) {
@@ -610,11 +752,6 @@ function attachGenericListeners(el) {
         const row = e.target.closest('.setting-row');
         if (row) row.classList.add('modified');
 
-        // Update toggle label
-        if (e.target.type === 'checkbox') {
-            const span = e.target.parentElement?.querySelector('span');
-            if (span) span.textContent = e.target.checked ? 'Enabled' : 'Disabled';
-        }
     });
 
     // Reset + Help clicks
@@ -691,6 +828,11 @@ async function saveChanges() {
     const tab = getTabMeta();
     if (tab.isPlugin && tab._reg) {
         const reg = tab._reg;
+        // Self-saving tab (button normally hidden) — never fake-save; be honest.
+        if (!reg.getSettings) {
+            ui.showToast('This page saves with its own buttons', 'info');
+            return;
+        }
         const box = container?.querySelector(`#ptab-${reg.id}`);
         if (box && reg.getSettings && reg.save) {
             const saveBtn = container?.querySelector('#settings-save');
@@ -762,6 +904,7 @@ async function saveChanges() {
         }
     }
 
+    _saveInFlight++;
     try {
         const parsed = {};
         for (const [key, value] of Object.entries(valid)) {
@@ -789,6 +932,7 @@ async function saveChanges() {
     } catch (e) {
         ui.showToast('Save failed: ' + e.message, 'error');
     } finally {
+        _saveInFlight--;
         if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
     }
 }

@@ -74,10 +74,22 @@ class StreamingTTSPump:
             `total_chars`, `interrupted`, `stream_id`. Observational.
     """
 
-    def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None):
+    def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None,
+                 voice_override: Optional[str] = None,
+                 split_override: Optional[str] = None,
+                 disabled: bool = False,
+                 chat_settings: Optional[dict] = None):
         self.system = system
         self.tts = getattr(system, "tts", None)
+        # Settings of the chat that PRODUCED the text, when the owner knows
+        # (/api/tts/stream with `chat`). The privacy gate judges these instead
+        # of the effective chat (broadsword H3). None = legacy resolution.
+        self._chat_settings = chat_settings
         self.provider = getattr(self.tts, "_provider", None) if self.tts else None
+        # Explicit per-pump voice (e.g. /api/tts/stream `voice` param). Beats
+        # the brain-override ContextVar and the global voice. None = unchanged
+        # legacy chain — chat streaming never passes this.
+        self.voice_override = (voice_override or "").strip() or None
         # Decide ONCE whether to use the streaming Kokoro endpoint
         # (multi-segment yield per chunk) or the legacy single-blob path.
         # Providers without a real streaming impl fall through to
@@ -88,6 +100,14 @@ class StreamingTTSPump:
             and hasattr(self.provider, "generate_stream")
             and getattr(self.provider, "supports_streaming", False)
         )
+        # Voice/speed/pitch SNAPSHOT — bound ONCE at stream start. Chunks used
+        # to read live client state at synth time, so a chat switch, a
+        # continuity task's set→restore, or a second concurrent stream retuned
+        # the remaining chunks of THIS stream mid-speech (2026-08-08).
+        self._speed = getattr(self.tts, "speed", None) or 1.0
+        self._pitch = getattr(self.tts, "pitch_shift", None) or 1.0
+        self._default_voice = getattr(self.tts, "voice_name", None) or "af_heart"
+        self._provider_pitch = getattr(self.provider, "supports_pitch", False)
         # Chunker bounds — user-tunable via Settings → TTS. Sensible
         # clamps so a typo in settings can't yield zero-size chunks or
         # unbounded buffers.
@@ -96,7 +116,11 @@ class StreamingTTSPump:
         # Split mode + pause overrides — see Settings → TTS → Streaming.
         # 'paragraph' (default) preserves prosody across sentences;
         # 'sentence' lowers latency at the cost of flatter prosody.
-        split_mode = (getattr(config, "TTS_STREAMING_SPLIT_MODE", "paragraph") or "paragraph").strip().lower()
+        # split_override: per-pump forcing (phone calls force 'sentence' —
+        # paragraph mode defers ALL synth to end-of-generation on a typical
+        # one-paragraph spoken reply, which is seconds of dead air on a call).
+        split_mode = ((split_override or "").strip().lower()
+                      or (getattr(config, "TTS_STREAMING_SPLIT_MODE", "paragraph") or "paragraph").strip().lower())
         pause_overrides = {
             "sentence":  int(getattr(config, "TTS_STREAMING_PAUSE_SENTENCE_MS", 0) or 0),
             "paragraph": int(getattr(config, "TTS_STREAMING_PAUSE_PARAGRAPH_MS", 80) or 80),
@@ -131,6 +155,13 @@ class StreamingTTSPump:
         # flush_and_close emits a single SSE `notice` if any present, so
         # the user sees "lost audio for N chunk(s)" instead of silent gap.
         self._dropped_chunks: list = []
+        # disabled=True: the pump's owner voices the final text itself (the
+        # blocking chat() consumer speaks the returned blob via tts.speak).
+        # Same state as a plugin tts_stream_start skip: push() no-ops,
+        # flush_and_close()/cancel() are silent, no tts hooks ever fire.
+        if disabled:
+            self._skip_turn = True
+            self._closed = True
 
     @property
     def enabled(self) -> bool:
@@ -145,6 +176,21 @@ class StreamingTTSPump:
         """Push LLM content text; return SSE event dicts to yield."""
         if not self.enabled or not text or self._closed or self._skip_turn:
             return []
+        if not self._stream_started:
+            # Voice privacy gate (vault v1.1): private chat + cloud TTS = the
+            # response text leaves the machine as a synthesis request. Checked
+            # on first push, not at construction, so it runs inside the
+            # stream's brain context (effective chat resolved in the gate) and
+            # covers every pump owner — web turns and /api/tts/stream alike.
+            # State mirrors the plugin skip_tts cancel; no hooks fired yet, so
+            # none need closing.
+            from core.voice_privacy import tts_gate_reason
+            _gate = tts_gate_reason(self._chat_settings)
+            if _gate:
+                logger.info(f"[TTS-STREAM] {_gate} — streaming TTS skipped")
+                self._skip_turn = True
+                self._closed = True
+                return [{"type": "notice", "severity": "warning", "message": _gate}]
         out: list = []
         if not self._stream_started:
             self._stream_started = True
@@ -434,8 +480,21 @@ class StreamingTTSPump:
             "pause_after_ms": chunk["pause_after_ms"],
             "text": text_to_synth,
         }
-        voice = getattr(self.tts, "voice_name", None) or "af_heart"
-        speed = getattr(self.tts, "speed", None) or 1.0
+        # Per-stream voice: a chat's stored `tts_voice` (e.g. a phone rule's
+        # persona voice, patched by the twilio daemon) beats the global voice.
+        # Resolved here in _submit — still inside the stream's context, so the
+        # brain override ContextVar is visible.
+        voice = self.voice_override
+        if not voice:
+            try:
+                from core.chat.stream_brain import get_override
+                _o = get_override()
+                if _o:
+                    voice = (_o.get("settings") or {}).get("tts_voice") or None
+            except Exception:
+                pass
+        voice = voice or self._default_voice
+        speed = self._speed
         logger.info(
             f"[TTS-STREAM] submit chunk {chunk['index']} "
             f"({chunk['boundary']}, {len(text_to_synth)} chars, "
@@ -466,19 +525,51 @@ class StreamingTTSPump:
         supports_streaming=True but ships the default impl."""
         n_segments = 0
         total_bytes = 0
-        try:
+
+        def _run(v):
+            nonlocal n_segments, total_bytes
+            kw = {"pitch": self._pitch} if self._provider_pitch else {}
             if self._provider_streams:
-                for segment in self.provider.generate_stream(text, voice, speed):
+                for segment in self.provider.generate_stream(text, v, speed, **kw):
                     if segment:
                         seg_queue.put(segment)
                         n_segments += 1
                         total_bytes += len(segment)
             else:
-                audio = self.provider.generate(text, voice, speed)
+                audio = self.provider.generate(text, v, speed, **kw)
                 if audio:
                     seg_queue.put(audio)
                     n_segments += 1
                     total_bytes += len(audio)
+
+        try:
+            try:
+                _run(voice)
+            except Exception as e:
+                logger.warning(
+                    f"[TTS-STREAM] chunk {chunk_index} voice '{voice}' synth failed: {e!r}"
+                )
+            # Transient failure ≠ bad voice: retry the stream's OWN voice once
+            # before degrading, so a hiccup doesn't swap the speaker for one
+            # chunk mid-reply (2026-08-08 — "retries being weird").
+            if n_segments == 0:
+                try:
+                    _run(voice)
+                except Exception as e:
+                    logger.warning(
+                        f"[TTS-STREAM] chunk {chunk_index} same-voice retry failed: {e!r}"
+                    )
+            # A bad per-stream voice (wrong id, other provider's id, undownloaded
+            # model) must degrade to the DEFAULT voice, not to silence — a muted
+            # call reads as a dead line (2026-07-03: 'Eric' vs 'am_eric').
+            # Default from the stream snapshot, not live state.
+            default_voice = self._default_voice
+            if n_segments == 0 and voice != default_voice:
+                logger.warning(
+                    f"[TTS-STREAM] chunk {chunk_index} produced nothing with "
+                    f"'{voice}' — retrying with default '{default_voice}'"
+                )
+                _run(default_voice)
             logger.info(
                 f"[TTS-STREAM] chunk {chunk_index} synth done: voice={voice} "
                 f"streams={self._provider_streams} {n_segments} segments, {total_bytes} bytes"

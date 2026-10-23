@@ -2,7 +2,9 @@
 
 Sapphire can remember facts about your world — people you know, topics you care about, reference documents, and goals you're working toward. The Knowledge system organizes all of this and makes it searchable by the AI during conversations.
 
-Everything lives in the **Mind** view (brain icon in the nav bar), which has five tabs: [Memories](MEMORY.md), [People](PEOPLE.md), Human Knowledge, AI Knowledge, and [Goals](GOALS.md). This guide covers the **Knowledge** tabs (human + AI) and the shared **scope** system used by all five.
+Everything lives in the **Mind** nav group (brain icon in the nav bar) — six views: Self, [Memories](MEMORY.md), [People](PEOPLE.md) (shown as Entities), Knowledge, [Goals](GOALS.md), and Admin. Self and Admin belong to the [Mind Palace](MIND-PALACE.md) engine; with classic memory they just point you to the plugin, and an **AI Knowledge** tab appears on the strip inside the classic Mind views. This guide covers the **Knowledge** tabs (human + AI) and the shared **scope** system.
+
+When the Mind Palace plugin is on, its **Library** replaces this whole knowledge surface — see [MIND-PALACE.md](MIND-PALACE.md).
 
 <img width="50%" alt="sapphire-memories" src="https://github.com/user-attachments/assets/348f1628-5f0c-4ce3-948e-2e0c1385bc75" />
 

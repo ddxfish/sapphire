@@ -1,11 +1,12 @@
+import { becomeViewer } from '../features/viewer.js';
 // handlers/send-handlers.js - Send, stop, and input handlers
 import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
 import * as Images from '../ui-images.js';
-import { isPrivacyMode } from '../features/privacy.js';
 import { dispatch, Events } from '../core/event-bus.js';
+import { focusUnlessEditing } from '../shared/dom-guard.js';
 import {
     getElements,
     getIsProc,
@@ -17,17 +18,27 @@ import {
     setIsCancelling,
     getIsCancelling,
     refresh,
-    setHistLen
+    setHistLen,
+    setSendLabel
 } from '../core/state.js';
 
-export async function handleSend() {
+// refocus=false: a dictated turn (triggerSendWithText) — refocusing the
+// composer after it pops the phone keyboard on every voice turn (D2#4).
+// Wired as a click listener too: an Event has no `refocus` → default true.
+export async function handleSend({ refocus = true } = {}) {
+    // One turn per chat (2026-08-29): Send is hidden behind Stop while a
+    // turn is live, but Enter never checked. Silent — Stop showing IS the
+    // message; the text stays in the box. Same guard as triggerSendWithText
+    // / handleRegen / handleContinue.
+    if (getIsProc()) { console.log('Send blocked: a turn is already live'); return; }
     const { input, sendBtn } = getElements();
     const txt = input.value.trim();
     if (!txt && !Images.hasPendingUploadImages() && !Images.hasPendingFiles()) return;
 
-    // Block send if current prompt requires privacy but privacy mode is off
-    if (getPromptPrivacyRequired() && !isPrivacyMode()) {
-        ui.showToast('This prompt requires Privacy Mode to be enabled', 'error');
+    // Block send if the prompt is private but this chat isn't
+    // (status already computes: prompt private AND chat not private)
+    if (getPromptPrivacyRequired()) {
+        ui.showToast('This prompt is marked private — toggle the eyeball to make this chat private', 'error');
         return;
     }
 
@@ -40,7 +51,7 @@ export async function handleSend() {
     setProc(true);
     input.value = '';
     sendBtn.disabled = true;
-    sendBtn.textContent = '...';
+    setSendLabel('busy');
     input.dispatchEvent(new Event('input'));
     
     // Get pending images and files, then clear them
@@ -56,6 +67,7 @@ export async function handleSend() {
     
     ui.showStatus();
     ui.updateStatus('Connecting...');
+    let viewer = false;   // lost our feed; the server keeps the turn, we reattach (features/viewer.js)
     
     try {
         let streamOk = false;
@@ -69,112 +81,121 @@ export async function handleSend() {
         let myStreamId = -1;
         const streamStillMine = () => myStreamId !== -1 && ui.getCurrentStreamId() === myStreamId;
 
-        await api.streamChat(
-            txt,
-            chunk => {
-                if (!streamOk) {
-                    ui.updateStatus('Generating...');
-                    ui.startStreaming();
-                    myStreamId = ui.getCurrentStreamId();
-                    streamOk = true;
-                }
-                if (!streamStillMine()) return;  // a newer stream took over — drop this chunk
-                ui.appendStream(chunk);
-                // Hide status once actual visible content appears
-                if (ui.hasVisibleContent()) {
-                    ui.hideStatus();
-                }
-            },
-            async (ephemeral) => {
-                if (getIsCancelling()) {
-                    console.log('Stream completed but cancellation in progress - skipping finishStreaming');
-                    return;
-                }
-                
-                if (ephemeral) {
-                    console.log('[EPHEMERAL] Module response - skipping TTS and swap');
-                    await ui.finishStreaming(true);
-                    await refresh(false);
-                    return;
-                }
-                
-                if (streamOk) {
-                    await ui.finishStreaming();
-                    // Note: finishStreaming already syncs with history - no refresh needed
+        // Handlers are named once so the SAME set rides a reattach after a
+        // lost feed (features/viewer.js) — the bubble keeps filling in place.
+        const onChunk = chunk => {
+            if (!streamOk) {
+                ui.updateStatus('Generating...');
+                ui.startStreaming();
+                myStreamId = ui.getCurrentStreamId();
+                streamOk = true;
+            }
+            if (!streamStillMine()) return;  // a newer stream took over — drop this chunk
+            ui.appendStream(chunk);
+            // Hide status once actual visible content appears
+            if (ui.hasVisibleContent()) {
+                ui.hideStatus();
+            }
+        };
+        const onComplete = async (ephemeral, { ttsStreamed = false } = {}) => {
+            if (getIsCancelling()) {
+                console.log('Stream completed but cancellation in progress - skipping finishStreaming');
+                return;
+            }
 
-                    // If brain-side streaming TTS already started during the
-                    // stream, skip the legacy whole-blob fetch — chunks are
-                    // already playing.
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;
-                        // Turn superseded before this fired — user hit Stop
-                        // (handleStop → cancelStreaming) or sent/replayed again
-                        // (startStreaming). Both bump the stream id, so
-                        // streamStillMine() goes false. Without this, the legacy
-                        // whole-blob audio starts AFTER a Stop, requiring a
-                        // second Stop. The regular (non-streaming) path is the
-                        // common case here, so this has to be rock solid.
-                        // 2026-05-28.
-                        if (!streamStillMine()) return;
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+            if (ephemeral) {
+                console.log('[EPHEMERAL] Module response - skipping TTS and swap');
+                await ui.finishStreaming(true);
+                await refresh(false);
+                return;
+            }
+
+            if (streamOk) {
+                // A reattached viewer leaves the swap to the typing-end mirror
+                // (main.js): it finalizes the bubble and repaints from history.
+                if (!viewer) await ui.finishStreaming();
+                // Note: finishStreaming already syncs with history - no refresh needed
+
+                // Whole-blob playback ONLY when the server's streaming-TTS
+                // pump never ran this turn (streaming off / provider can't
+                // stream / privacy gate) — the server says so on llm_done.
+                // The old browser-side "did a chunk arrive" flag was wiped
+                // by the mic ⏹, so a stop mid-speech re-spoke the whole
+                // reply from the top (slow-CPU VM, 2026-09-08).
+                // streamStillMine: Send is back during finishStreaming's
+                // sleep now; a new turn bumps the stream id and owns audio.
+                // A reattached viewer reports ttsStreamed=false: it heard
+                // nothing while away, so it speaks the finished reply once.
+                if (!ttsStreamed && audioFn && streamStillMine()) {
+                    const el = document.querySelector('.message.assistant:last-child .message-content');
+                    if (el) audioFn(ui.extractProseText(el));
                 }
-            },
-            async (e, statusCode) => {
-                if (e.message === 'Cancelled') {
-                    console.log('Stream cancelled by user');
-                    if (streamOk) ui.cancelStreaming();
-                    return;
-                }
-                console.error('Stream failed:', e.message);
+            }
+        };
+        const onToolStart = (id, name, args) => {
+            if (!streamOk) {
+                ui.updateStatus('Generating...');
+                ui.startStreaming();
+                myStreamId = ui.getCurrentStreamId();
+                streamOk = true;
+            }
+            if (!streamStillMine()) return;
+            ui.startTool(id, name, args);
+        };
+        const onToolEnd = (id, name, result, error) => {
+            if (!streamStillMine()) return;
+            ui.endTool(id, name, result, error);
+        };
+        const onStreamStarted = () => { ui.updateStatus('Processing...'); };
+        const onIterationStart = (iteration) => {
+            if (iteration > 1) {
+                ui.showStatus();
+                ui.updateStatus('Generating...');
+            }
+        };
+        const onResync = () => { myStreamId = ui.getCurrentStreamId(); streamOk = true; };
+        const onError = async (e, statusCode, lastSeq) => {
+            if (e.message === 'Cancelled') {
+                console.log('Stream cancelled by user');
                 if (streamOk) ui.cancelStreaming();
+                return;
+            }
+            if (e.feedLost && !viewer) {
+                // Our socket died (phone lock, tab sleep, a proxy) — the turn
+                // did NOT. Keep the bubble, hand the button to the mirror and
+                // reattach `since` the last seq we saw. Set BEFORE any await:
+                // the finally below runs as soon as the stream settles.
+                viewer = true;
+                becomeViewer({
+                    since: lastSeq,
+                    handlers: { onChunk, onComplete, onError, onToolStart, onToolEnd, onStreamStarted, onIterationStart, onResync },
+                    onGiveUp: async () => { ui.hideStatus(); setProc(false); },
+                });
+                return;
+            }
+            if (statusCode === 409) {
+                // Server gate (one turn per chat): another tab's turn is
+                // live and this tab hadn't mirrored it yet. Undo the
+                // optimistic paint — text back in the box, bubble gone.
+                // Attached images/files are dropped (rare cross-tab race).
+                input.value = txt;
+                input.dispatchEvent(new Event('input'));
+                const bubbles = document.querySelectorAll('#chat-container .message.user');
+                bubbles[bubbles.length - 1]?.remove();
                 ui.showToast(e.message, 'error');
-            },
+                return;
+            }
+            console.error('Stream failed:', e.message);
+            if (streamOk) ui.cancelStreaming();
+            ui.showToast(e.message, 'error');
+        };
+
+        await api.streamChat(
+            txt, onChunk, onComplete, onError,
             abortController.signal,
             null,  // prefill
-            // Tool event handlers
-            (id, name, args) => {
-                if (!streamOk) {
-                    ui.updateStatus('Generating...');
-                    ui.startStreaming();
-                    myStreamId = ui.getCurrentStreamId();
-                    streamOk = true;
-                }
-                if (!streamStillMine()) return;
-                ui.startTool(id, name, args);
-            },
-            (id, name, result, error) => {
-                if (!streamStillMine()) return;
-                ui.endTool(id, name, result, error);
-            },
-            // Stream started handler
-            () => {
-                ui.updateStatus('Processing...');
-            },
-            // Iteration start handler (after tool calls)
-            (iteration) => {
-                if (iteration > 1) {
-                    ui.showStatus();
-                    ui.updateStatus('Generating...');
-                }
-            },
-            // Images
+            onToolStart, onToolEnd, onStreamStarted, onIterationStart,
             hasImages ? pendingImages : null,
-            // Files
             hasFiles ? pendingFilesForApi : null
         );
         
@@ -186,11 +207,16 @@ export async function handleSend() {
         }
         return null;
     } finally {
-        ui.hideStatus();
+        if (!viewer) ui.hideStatus();
         sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
-        setProc(false);
+        setSendLabel('send');
+        // Not unconditional: the user may have moved into a sidebar textarea
+        // while she replied — yanking the cursor back was the seeded case of
+        // the DOM-refresh hunt, 2026-09-08. Dictated turns skip it entirely
+        // (nothing editable holds focus after a mic tap, so the guard alone
+        // couldn't stop the keyboard pop).
+        if (refocus) focusUnlessEditing(input);
+        if (!viewer) setProc(false);   // a viewer's button belongs to the typing mirror now
     }
 }
 
@@ -370,24 +396,36 @@ export function setupImageHandlers() {
 
 export async function handleStop() {
     const controller = getAbortController();
-    
+
     if (controller) {
         setIsCancelling(true);
         console.log('Cancellation flag set');
-        
+
         try {
             await api.cancelGeneration();
             console.log('Cancel request sent to backend');
         } catch (e) {
             console.error('Failed to send cancel request:', e);
         }
-        
+
         controller.abort();
         audio.stop(true);
         ui.cancelStreaming();
         ui.hideStatus();
         setProc(false);
         ui.showToast('Generation stopped', 'success');
+    } else {
+        // Voice turn (wake / local conversation): no fetch to abort — the
+        // turn is a server-side stream flagged via /api/cancel. Don't tear
+        // down the live bubble here; the backend saves the partial and the
+        // voice_turn_end event reconciles it with history + restores Send.
+        try {
+            await api.cancelGeneration();
+            console.log('Cancel request sent for voice turn');
+            ui.showToast('Generation stopped', 'success');
+        } catch (e) {
+            console.error('Failed to send cancel request:', e);
+        }
     }
 }
 
@@ -400,7 +438,7 @@ export async function triggerSendWithText(text) {
     const { input } = getElements();
     input.value = text;
     input.dispatchEvent(new Event('input'));
-    await handleSend();
+    await handleSend({ refocus: false });
     return true;
 }
 

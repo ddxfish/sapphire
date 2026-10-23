@@ -1,6 +1,6 @@
 // spice-api.js - Backend communication for Spice Manager
 import { fetchWithTimeout } from './fetch.js';
-import { getInitData } from './init-data.js';
+import { getInitData, refreshInitData } from './init-data.js';
 
 let _initialLoad = true;
 
@@ -102,13 +102,17 @@ export async function saveCustomSpiceSet(name, categories) {
     body: JSON.stringify({ name, categories })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const data = await res.json();
+  refreshInitData();  // bust cached spice-set list so persona/chat dropdowns see the change
+  return data;
 }
 
 export async function deleteSpiceSet(name) {
   const res = await fetch(`/api/spice-sets/${encodeURIComponent(name)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const data = await res.json();
+  refreshInitData();  // bust cached spice-set list so persona/chat dropdowns see the deletion
+  return data;
 }
 
 export async function setSpiceSetEmoji(name, emoji) {
@@ -118,5 +122,7 @@ export async function setSpiceSetEmoji(name, emoji) {
     body: JSON.stringify({ emoji })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const data = await res.json();
+  refreshInitData();  // bust cached spice-set list so the emoji updates in dropdowns
+  return data;
 }

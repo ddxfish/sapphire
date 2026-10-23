@@ -25,6 +25,7 @@ WEBCAM_STATE_KEY = '_sapphire_webcam_state'
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "capture_webcam",
             "description": "Capture a photo from the user's webcam/camera. The browser will prompt for camera access if needed. Returns the image for visual analysis. Use this when the user asks you to look at something, see them, or when visual context would help.",

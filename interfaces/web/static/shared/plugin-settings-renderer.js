@@ -4,25 +4,43 @@
 import { showDangerConfirm } from './danger-confirm.js';
 
 function escapeHtml(s) {
+    // Must escape quotes too — output lands in value="..." attributes; the
+    // list widget stores JSON (`["a"]`) whose quotes truncated the attribute
+    // and the next save persisted [] — silent list-setting wipe (scout find,
+    // 2026-07-19).
     const d = document.createElement('div');
     d.textContent = s ?? '';
-    return d.innerHTML;
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+
+// Manifest keys may contain dots (voice.join_targets) — a raw `#ps-{key}`
+// selector parses the dot as a class boundary and matches nothing, so the
+// field renders fine but reads back as its default (silent settings wipe).
+// Every id lookup must go through this.
+const psSel = key => '#' + CSS.escape('ps-' + key);
 
 /**
  * Render a settings form from a manifest schema array.
  * @param {HTMLElement} container - Where to render
- * @param {Array} schema - [{key, type, label, default, help?, widget?, options?, placeholder?, confirm?}]
+ * @param {Array} schema - [{key, type, label, default, help?, widget?, options?, placeholder?, confirm?, tab?}]
  * @param {Object} values - Current setting values (merged with defaults by backend)
- * @param {Object} [opts] - {onChange: (key, value) => void}
+ * @param {Object} [opts] - {onChange: (key, value) => void, managed, slots}
+ *   slots: [{tab, mount(el)}] — caller-rendered widget sections (dynamic
+ *   pickers, dependent dropdowns, anything the schema can't express) placed
+ *   inside the named tab's pane after that tab's fields. A slot naming a tab
+ *   no field uses creates the tab. Opt-in: without slots, output is unchanged.
  */
-export function renderSettingsForm(container, schema, values = {}, { onChange, managed } = {}) {
-    if (!schema?.length) {
+export function renderSettingsForm(container, schema, values = {}, { onChange, managed, slots = [] } = {}) {
+    // hidden:true fields never render here — they belong to a dedicated UI
+    // (e.g. Mind → Admin) and are skipped by readSettingsForm too, so a
+    // Settings-page save can't clobber them with defaults.
+    schema = (schema || []).filter(f => !f.hidden);
+    if (!schema?.length && !slots.length) {
         container.innerHTML = '<p style="color:var(--text-muted)">No settings available.</p>';
         return;
     }
 
-    const rows = schema.map(field => {
+    const rowHTML = field => {
         const val = values[field.key] ?? field.default ?? '';
         return `
             <div class="setting-row" data-key="${escapeHtml(field.key)}">
@@ -33,9 +51,72 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
                 <div class="setting-input">${renderWidget(field, val)}</div>
             </div>
         `;
-    }).join('');
+    };
 
-    container.innerHTML = `<div class="settings-grid">${rows}</div>`;
+    // Optional per-field "tab" groups fields under a tab strip. Untagged
+    // fields go to "General" (always first); tagged tabs follow in
+    // first-seen schema order. With <2 groups the output is identical to
+    // the untabbed form, so existing plugins render unchanged.
+    const groups = new Map();
+    for (const field of schema) {
+        const tab = String(field.tab || 'General').trim() || 'General';
+        if (!groups.has(tab)) groups.set(tab, []);
+        groups.get(tab).push(field);
+    }
+
+    // Slot sections render as full-width children after their tab's fields.
+    // The wrapper div is renderer-owned; the caller only ever touches the
+    // element handed to mount() — no reaching into pane markup from outside.
+    const slotsByTab = new Map();
+    slots.forEach((slot, i) => {
+        const tab = String(slot.tab || 'General').trim() || 'General';
+        if (!slotsByTab.has(tab)) slotsByTab.set(tab, []);
+        slotsByTab.get(tab).push(i);
+    });
+    const slotHTML = i => `<div class="ps-slot" data-ps-slot="${i}" style="grid-column:1/-1"></div>`;
+    const paneHTML = n => (groups.get(n) || []).map(rowHTML).join('')
+        + (slotsByTab.get(n) || []).map(slotHTML).join('');
+
+    const names = [...groups.keys()];
+    for (const tab of slotsByTab.keys()) {
+        if (!names.includes(tab)) names.push(tab);
+    }
+
+    if (names.length < 2) {
+        container.innerHTML = `<div class="settings-grid">${paneHTML(names[0])}</div>`;
+    } else {
+        if (names.includes('General')) {
+            names.splice(names.indexOf('General'), 1);
+            names.unshift('General');
+        }
+        const strip = `<div class="ps-tabs">${names.map((n, i) =>
+            `<button type="button" class="ps-tab${i === 0 ? ' active' : ''}" data-ps-tab="${escapeHtml(n)}">${escapeHtml(n)}</button>`
+        ).join('')}</div>`;
+        // Every pane stays in the DOM — save (readSettingsForm) and the
+        // widget wiring below scan the whole container by #ps-{key}, so
+        // inactive panes are CSS-hidden, never removed.
+        const panes = names.map((n, i) =>
+            `<div class="settings-grid" data-ps-pane="${escapeHtml(n)}"${i === 0 ? '' : ' hidden'}>${paneHTML(n)}</div>`
+        ).join('');
+        container.innerHTML = strip + panes;
+        container.querySelector('.ps-tabs').addEventListener('click', e => {
+            const btn = e.target.closest('.ps-tab');
+            if (!btn) return;
+            container.querySelectorAll('.ps-tab').forEach(b => b.classList.toggle('active', b === btn));
+            container.querySelectorAll('[data-ps-pane]').forEach(p =>
+                p.toggleAttribute('hidden', p.dataset.psPane !== btn.dataset.psTab));
+        });
+    }
+
+    // Mount slots synchronously so callers can wire events right after this
+    // function returns. One broken widget must not take down the whole form.
+    container.querySelectorAll('[data-ps-slot]').forEach(el => {
+        try {
+            slots[Number(el.dataset.psSlot)].mount(el);
+        } catch (err) {
+            console.error('[plugin-settings] slot mount failed:', err);
+        }
+    });
 
     // Attach confirm gates and onChange handlers
     for (const field of schema) {
@@ -46,7 +127,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
     container.querySelectorAll('.ps-clear-key').forEach(link => {
         link.addEventListener('click', e => {
             e.preventDefault();
-            const input = container.querySelector(`#${link.dataset.field}`);
+            const input = container.querySelector('#' + CSS.escape(link.dataset.field));
             if (input) {
                 input.value = '__CLEAR__';
                 input.placeholder = 'Key cleared — save to apply';
@@ -59,7 +140,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
     // Wire up action buttons
     for (const field of schema) {
         if ((field.widget || inferWidget(field)) !== 'button') continue;
-        const btn = container.querySelector(`#ps-${field.key}`);
+        const btn = container.querySelector(psSel(field.key));
         if (!btn) continue;
 
         // Check status on render if status URL provided
@@ -123,12 +204,72 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         });
     }
 
+    // Wire up list fields (chips + add/remove)
+    for (const field of schema) {
+        if ((field.widget || inferWidget(field)) !== 'list') continue;
+        wireListField(container, field);
+    }
+
     if (onChange) {
         container.addEventListener('change', e => {
             const key = e.target.closest('[data-key]')?.dataset.key;
             if (key) onChange(key, getFieldValue(container, key, schema.find(f => f.key === key)));
         });
     }
+}
+
+function wireListField(container, field) {
+    const wrap = container.querySelector(`.ps-list[data-list-key="${field.key}"]`);
+    if (!wrap) return;
+    const hidden = wrap.querySelector(psSel(field.key));
+    const chipsEl = wrap.querySelector('.ps-list-chips');
+    const srcEl = wrap.querySelector('.ps-list-src');
+
+    const read = () => { try { const a = JSON.parse(hidden.value); return Array.isArray(a) ? a : []; } catch { return []; } };
+    const write = (items) => {
+        hidden.value = JSON.stringify(items);
+        render();
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const render = () => {
+        const items = read();
+        chipsEl.innerHTML = items.map(v => `
+            <span class="ps-list-chip" data-val="${escapeHtml(v)}" style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;background:var(--bg-secondary,#1a1b2e);border:1px solid var(--border,#333);border-radius:12px;font-size:var(--font-sm,13px)">
+                ${escapeHtml(v)}<a href="#" class="ps-list-del" style="color:var(--text-muted);text-decoration:none">✕</a>
+            </span>`).join('') || '<span style="color:var(--text-muted);font-size:var(--font-sm,13px)">None added</span>';
+        if (srcEl.tagName === 'SELECT') refreshOptions(items);
+    };
+    const refreshOptions = (items) => {
+        const current = srcEl.value;
+        const opts = (srcEl._options || []).filter(o => !items.includes(o));
+        srcEl.innerHTML = opts.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('');
+        if (opts.includes(current)) srcEl.value = current;
+    };
+
+    chipsEl.addEventListener('click', e => {
+        const del = e.target.closest('.ps-list-del');
+        if (!del) return;
+        e.preventDefault();
+        const val = del.closest('.ps-list-chip')?.dataset.val;
+        write(read().filter(v => v !== val));
+    });
+    wrap.querySelector('.ps-list-add')?.addEventListener('click', () => {
+        const val = (srcEl.value || '').trim();
+        if (!val) return;
+        const items = read();
+        if (!items.includes(val)) write([...items, val]);
+        if (srcEl.tagName === 'INPUT') srcEl.value = '';
+    });
+
+    if (field.options_endpoint && srcEl.tagName === 'SELECT') {
+        fetch(field.options_endpoint).then(r => r.json()).then(data => {
+            const rows = field.data_key ? (data[field.data_key] || []) : (Array.isArray(data) ? data : []);
+            srcEl._options = rows.map(r => typeof r === 'string' ? r : String(r[field.value_field || 'name'] ?? ''))
+                                 .filter(Boolean);
+            refreshOptions(read());
+        }).catch(() => {});
+    }
+    render();
 }
 
 function renderWidget(field, value) {
@@ -163,11 +304,34 @@ function renderWidget(field, value) {
         case 'toggle':
             return `<label class="setting-toggle">
                 <input type="checkbox" id="${id}" ${value ? 'checked' : ''}>
-                <span>${value ? 'Enabled' : 'Disabled'}</span>
             </label>`;
 
-        case 'number':
-            return `<input type="number" id="${id}" value="${value}" step="any" placeholder="${escapeHtml(field.placeholder || '')}">`;
+        case 'number': {
+            // min/max from the schema — a plugin author could not express a
+            // range before (Discord hunt 2.13.0, row 81: hour 24 fell to the
+            // manifest cron silently).
+            const bounds = (field.min !== undefined ? ` min="${Number(field.min)}"` : '')
+                + (field.max !== undefined ? ` max="${Number(field.max)}"` : '');
+            return `<input type="number" id="${id}" value="${value}" step="any"${bounds} placeholder="${escapeHtml(field.placeholder || '')}">`;
+        }
+
+        case 'list': {
+            // Chips + "+ Add" row. Value lives as JSON in a hidden input so
+            // readSettingsForm/getFieldValue work unchanged. With
+            // options_endpoint the source is a dropdown (populated after
+            // render, added values filtered out); without, a free-text input.
+            const items = Array.isArray(value) ? value : (value ? [String(value)] : []);
+            const src = field.options_endpoint
+                ? `<select class="ps-list-src" style="flex:1"></select>`
+                : `<input type="text" class="ps-list-src" placeholder="${escapeHtml(field.placeholder || '')}" style="flex:1">`;
+            return `<div class="ps-list" data-list-key="${escapeHtml(field.key)}">
+                <input type="hidden" id="${id}" value="${escapeHtml(JSON.stringify(items))}">
+                <div class="ps-list-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+                <div style="display:flex;gap:6px">${src}
+                    <button type="button" class="btn-action ps-list-add">+ Add</button>
+                </div>
+            </div>`;
+        }
 
         case 'button':
             return `<button type="button" id="${id}" class="btn-action" data-action-url="${escapeHtml(field.action || '')}" data-status-url="${escapeHtml(field.status || '')}">${escapeHtml(field.button_label || field.label || 'Action')}</button>`;
@@ -181,6 +345,11 @@ function inferWidget(field) {
     if (field.type === 'boolean') return 'toggle';
     if (field.type === 'number') return 'number';
     if (field.type === 'textarea') return 'textarea';
+    if (field.type === 'list') return 'list';
+    // type:"password" without an explicit widget fell through to 'text' and
+    // rendered the stored secret in a plaintext value="..." (live: the
+    // ElevenLabs API key on screen — HDF scout, 2026-07-19).
+    if (field.type === 'password') return 'password';
     if (field.options) return 'select';
     return 'text';
 }
@@ -193,9 +362,15 @@ export function readSettingsForm(container, schema) {
     for (const field of schema) {
         // Skip action buttons — they're not settings
         if ((field.widget || inferWidget(field)) === 'button') continue;
+        // Skip hidden fields — not in this form's DOM; including them would
+        // send their DEFAULTS and overwrite values owned by another UI.
+        if (field.hidden) continue;
         const val = getFieldValue(container, field.key, field);
-        // Password field: skip if empty (preserve stored key), send empty if sentinel
-        if (field.type === 'password') {
+        // Password field: skip if empty (preserve stored key), send empty if
+        // sentinel. Keyed off the RESOLVED widget, not just type — a
+        // widget:"password" field with a non-password type would otherwise
+        // wipe its stored secret on any unrelated save (scout, 2026-07-20).
+        if (field.type === 'password' || (field.widget || inferWidget(field)) === 'password') {
             if (val === '__CLEAR__') { result[field.key] = ''; continue; }
             if (!val) continue;
         }
@@ -209,22 +384,30 @@ function getFieldValue(container, key, field) {
     const widget = field?.widget || inferWidget(field || {});
 
     if (widget === 'toggle') {
-        const el = container.querySelector(`#${id}`);
+        const el = container.querySelector(psSel(key));
         return el ? el.checked : false;
     }
     if (widget === 'radio') {
         const checked = container.querySelector(`input[name="${id}"]:checked`);
         return coerce(checked?.value ?? field?.default ?? '', field);
     }
-    const el = container.querySelector(`#${id}`);
+    const el = container.querySelector(psSel(key));
     if (!el) return field?.default ?? '';
     return coerce(el.value, field);
 }
 
 function coerce(value, field) {
     if (!field) return value;
-    if (field.type === 'number') return Number(value) || 0;
+    if (field.type === 'number') {
+        let n = Number(value) || 0;
+        if (field.min !== undefined && n < Number(field.min)) n = Number(field.min);
+        if (field.max !== undefined && n > Number(field.max)) n = Number(field.max);
+        return n;
+    }
     if (field.type === 'boolean') return Boolean(value);
+    if (field.type === 'list') {
+        try { const a = JSON.parse(value); return Array.isArray(a) ? a : []; } catch { return []; }
+    }
     return value;
 }
 
@@ -236,7 +419,7 @@ function attachConfirmGate(container, field, managed) {
     const widget = field.widget || inferWidget(field);
     const el = widget === 'radio'
         ? container.querySelectorAll(`input[name="${id}"]`)
-        : container.querySelector(`#${id}`);
+        : container.querySelector(psSel(field.key));
 
     if (!el) return;
     const conf = field.confirm;
@@ -249,8 +432,10 @@ function attachConfirmGate(container, field, managed) {
             return;
         }
 
-        // Block confirm-gated values entirely in managed mode
-        if (managed) {
+        // Block confirm-gated values entirely in managed mode — unless the
+        // manifest opts out (`allow_managed: true`, e.g. alpha-feature gates
+        // that warn rather than protect the host).
+        if (managed && !conf.allow_managed) {
             if (widget === 'select') e.target.value = previousValue;
             else if (widget === 'toggle') { e.target.checked = previousValue === 'true'; }
             else if (widget === 'radio') {
@@ -275,8 +460,6 @@ function attachConfirmGate(container, field, managed) {
                 e.target.value = previousValue;
             } else if (widget === 'toggle') {
                 e.target.checked = previousValue === 'true';
-                const span = e.target.parentElement?.querySelector('span');
-                if (span) span.textContent = e.target.checked ? 'Enabled' : 'Disabled';
             } else if (widget === 'radio') {
                 const prev = container.querySelector(`input[name="${id}"][value="${previousValue}"]`);
                 if (prev) prev.checked = true;

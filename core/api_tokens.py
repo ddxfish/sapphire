@@ -28,6 +28,7 @@ from typing import List, Optional
 
 from core.setup import CONFIG_DIR
 from core.settings_manager import _fsync_file, _fsync_dir
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class ApiTokensManager:
             return
 
         try:
-            with open(API_TOKENS_FILE, 'r', encoding='utf-8') as f:
+            with open(API_TOKENS_FILE, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 self._tokens = data.get('tokens', []) or []
@@ -96,7 +97,10 @@ class ApiTokensManager:
         """Atomic write. Same pattern as credentials_manager._save()."""
         with self._lock:
             try:
-                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                # The file's OWN parent, not the import-time CONFIG_DIR: a
+                # test that patches API_TOKENS_FILE alone must not mkdir
+                # the real config dir (order-dependent PermissionError).
+                API_TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
                 tmp_path = API_TOKENS_FILE.with_suffix('.tmp')
                 payload = {"version": 1, "tokens": self._tokens}
                 with open(tmp_path, 'w', encoding='utf-8') as f:
@@ -104,7 +108,7 @@ class ApiTokensManager:
                     _fsync_file(f)
                 if sys.platform != 'win32':
                     os.chmod(tmp_path, 0o600)
-                tmp_path.replace(API_TOKENS_FILE)
+                replace_with_retry(tmp_path, API_TOKENS_FILE)
                 _fsync_dir(API_TOKENS_FILE.parent)
                 return True
             except Exception as e:

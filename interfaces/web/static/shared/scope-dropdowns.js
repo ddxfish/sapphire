@@ -112,6 +112,18 @@ export function renderScopeDropdowns(container, declarations, settings, options 
     }
     container.innerHTML = html;
 
+    // A pick the user makes while populateScopeOptions is still fetching
+    // marks the select `touched`, so the populate keeps THEIR value instead of
+    // reverting to the seed (and the pending debounce then persisting the old
+    // one). Delegated + latched: this container may be re-rendered many times.
+    // DOM-refresh hunt 2026-09-08.
+    if (!container._scopeTouchBound) {
+        container._scopeTouchBound = true;
+        container.addEventListener('change', e => {
+            if (e.target?.tagName === 'SELECT') e.target.dataset.touched = '1';
+        });
+    }
+
     // Wire nav button handlers (arrow ↗)
     if (options.onNavigate) {
         container.querySelectorAll('[data-scope-nav]').forEach(btn => {
@@ -206,7 +218,9 @@ export async function populateScopeOptions(container, declarations, scopeData, s
 
         const items = scopeData[decl.key] || [];
         const settingKey = `${decl.key}_scope`;
-        const current = (settings && settings[settingKey]) || 'default';
+        // A live pick (touched during the fetch) outranks the seed value.
+        const current = (sel.dataset.touched && sel.value)
+            || (settings && settings[settingKey]) || 'default';
         const valueField = decl.value_field || 'name';
         const formatter = formatters[decl.key];
         const labelTemplate = decl.label_template || '{name}';

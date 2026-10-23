@@ -58,9 +58,9 @@ export const stopLocalTtsPoll = () => {
     localTtsPlaying = false;
 };
 
-export const stopLocalTts = async () => {
+export const stopLocalTts = async (streamId = null) => {
     try {
-        await api.stopLocalTts();
+        await api.stopLocalTts(streamId);
         localTtsPlaying = false;
     } catch {}
     // Re-check server state after a delay to catch races where TTS
@@ -80,8 +80,15 @@ const cleanup = () => {
     }
 };
 
-export const stop = (force = false) => {
-    if (isStreaming && !force) return;
+// Legacy whole-blob lane generation. Bumped by _stopLegacyPlayer so a
+// playText superseded mid-flight (fetch aborted, or a streaming turn took
+// the audio focus) never touches shared state again — its catch used to run
+// `isStreaming = false` AFTER the new streaming turn had set it true, hiding
+// the mic ⏹ until the first chunk. 2026-09-08.
+let _legacyGen = 0;
+
+const _stopLegacyPlayer = () => {
+    _legacyGen += 1;
     if (ttsCtrl) {
         ttsCtrl.abort();
         ttsCtrl = null;
@@ -93,20 +100,31 @@ export const stop = (force = false) => {
         player.src = '';
         player = null;
     }
+    cleanup();
+};
+
+export const stop = (force = false) => {
+    if (isStreaming && !force) return;
+    // Name the pump we're hearing BEFORE the queue teardown moves it to
+    // _stoppedStreamId — the server mutes exactly that pump, never the next
+    // turn that's still thinking. 2026-09-08.
+    const sid = _currentStreamId;
+    _stopLegacyPlayer();
     // Tear down the streaming-TTS chunk queue too — Stop must cut both
     // legacy playback (full-blob) and the new per-chunk queue.
     _ttsStreamStop();
     isStreaming = false;
-    cleanup();
     // Always tell server to stop TTS — even if we don't think it's playing yet.
     // Server stop is idempotent and prevents races where TTS starts after our check.
-    stopLocalTts();
+    stopLocalTts(sid);
 };
 
 export const isTtsPlaying = () => isStreaming;
 
-export const playText = async (txt, cacheKey = null) => {
+export const playText = async (txt, cacheKey = null, voiceOpts = null) => {
     stop(true);
+    const myGen = _legacyGen;          // stop() just bumped it — this run owns the lane
+    const mine = () => myGen === _legacyGen;
     isStreaming = true;
     ttsCtrl = new AbortController();
 
@@ -144,7 +162,7 @@ export const playText = async (txt, cacheKey = null) => {
             blob = ttsCache.get(cacheKey);
             ui.updateStatus('Playing cached TTS...');
         } else {
-            blob = await api.fetchAudio(clean, ttsCtrl.signal);
+            blob = await api.fetchAudio(clean, ttsCtrl.signal, voiceOpts);
             // Cache if key provided
             if (cacheKey !== null) {
                 // LRU eviction
@@ -156,8 +174,8 @@ export const playText = async (txt, cacheKey = null) => {
             }
         }
 
-        // Bail if stopped while fetching
-        if (!isStreaming) return;
+        // Bail if stopped or superseded while fetching
+        if (!isStreaming || !mine()) return;
 
         // fetchWithTimeout returns a raw Response (not a Blob) when the
         // content-type wasn't audio/* — e.g. Brave/an extension/a proxy
@@ -176,12 +194,14 @@ export const playText = async (txt, cacheKey = null) => {
         player.volume = muted ? 0 : volume;
 
         player.onended = () => {
+            if (!mine()) return;
             isStreaming = false;
             ui.hideStatus();
             cleanup();
         };
 
         player.onerror = e => {
+            if (!mine()) return;
             console.error('Audio error:', e);
             isStreaming = false;
             ui.hideStatus();
@@ -192,6 +212,7 @@ export const playText = async (txt, cacheKey = null) => {
         await player.play();
         ui.hideStatus();
     } catch (e) {
+        if (!mine()) return;           // superseded: the new owner drives the flags
         isStreaming = false;
         ui.hideStatus();
         const cls = e.name || '';
@@ -246,7 +267,11 @@ export const replayTts = async (idx) => {
 /** Stream a known text via /api/tts/stream → SSE → existing playback queue.
  * Returns true if at least one chunk arrived, false if the endpoint was
  * unavailable (503) so the caller can fall back. Other errors throw. */
-export const playTextStreaming = async (text) => {
+// `chat`: the chat that produced the text (a room's bound session). The
+// server's privacy gate judges THAT chat instead of the operator's active
+// one — a private room speaking through a public active chat used to reach
+// a cloud TTS provider (broadsword H3). Omit for the operator's own chat.
+export const playTextStreaming = async (text, voice = null, chat = null) => {
     stop(true);  // clear any current playback before starting new stream
 
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -255,7 +280,7 @@ export const playTextStreaming = async (text) => {
         res = await fetch('/api/tts/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ text, ...(voice ? { voice } : {}), ...(chat ? { chat } : {}) }),
         });
     } catch (e) {
         throw new Error(`network: ${e.message}`);
@@ -351,7 +376,9 @@ let _ttsStreamQueue = [];    // [{ blob, pause_after_ms, index, text, boundary }
 let _ttsStreamPlayer = null;
 let _ttsStreamUrl = null;
 let _ttsStreamEnded = false; // server sent tts_stream_end (no more chunks coming)
-let _ttsStreamSawChunk = false; // any chunk arrived this turn? signals send-handlers to skip legacy audioFn
+// (The old `_ttsStreamSawChunk` "skip the whole-blob fallback" flag is gone —
+// the server reports `tts_streamed` on llm_done. It was wiped by the mic ⏹,
+// so a stop mid-speech re-spoke the whole reply from the top. 2026-09-08.)
 // True once at least one chunk's play() promise has resolved (i.e. audio
 // actually started playing) within the current generation. Drives the
 // "chunks arrived but nothing ever played" toast — without it, the .catch
@@ -364,6 +391,10 @@ let _ttsStreamAnyPlayed = false;
 // streaming" overlap that otherwise causes audio bleed across turns.
 // New stream with different id preempts the old one. 2026-05-18 herring #5.
 let _currentStreamId = null;
+// A stream the user just stopped (left-button "stop TTS"). Its already-in-flight
+// chunks must be DROPPED, not played — else the queue "refills" a beat after stop.
+// Cleared when a fresh stream starts. Pairs with the server-side pump mute.
+let _stoppedStreamId = null;
 // Per-turn playback diagnostics — the "black box". Reset on startTtsStream,
 // consumed (logged) at turn end. `played` counts chunks whose audio actually
 // PROGRESSED (currentTime advanced) — not chunks whose play() merely resolved,
@@ -561,7 +592,16 @@ const _ttsStreamPlayNext = (gen) => {
     // promise. NOTE: resolution is NOT proof of audible output — that's why
     // _ttsStreamAnyPlayed is set on real progress (onProgress/onended), not
     // here. The optional-chain guards the rare legacy undefined return.
+    const el = _ttsStreamPlayer;
     _ttsStreamPlayer.play()?.then(() => {
+        if (gen !== _ttsStreamGen) {
+            // Superseded while play() was pending: _disposeItem left this
+            // element alone (aborting a pending play() rejects it), so it
+            // would run to the end with no handle — the rarer "two voices"
+            // overlap on slow machines. 2026-09-08.
+            try { el.pause(); el.src = ''; } catch {}
+            return;
+        }
         if (item.audio) item.audio._playStarted = true;
         // Silent-stall watchdog. play() resolving is NOT proof of sound. If the
         // element never progresses (currentTime stuck at 0) AND never fires
@@ -610,6 +650,13 @@ const _ttsStreamPlayNext = (gen) => {
  */
 export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, pause_after_ms, text, stream_id }) => {
     if (!audio_b64) return;
+    // Drop stragglers from a stream the user just stopped (left-button "stop TTS").
+    // Without this, chunks already in flight replay a beat after stop ("pump refill") —
+    // the old code nulled _currentStreamId on stop, which disabled the guard below.
+    if (stream_id && stream_id === _stoppedStreamId) {
+        console.warn('[TTS-STREAM] dropping straggler from stopped stream', stream_id);
+        return;
+    }
     // Drop chunks tagged with a stream we've already preempted. Without
     // this, an in-flight chunk from a cancelled chat/replay can bleed
     // into the new stream's playback. herring #5.
@@ -619,11 +666,8 @@ export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, paus
     }
     if (!_ttsStats) _ttsStats = _newTtsStats();  // defensive: chunk before start
     _ttsStats.received++;
-    // Decode + Audio() build can throw on bad base64 or unsupported codec.
-    // Build the blob/URL/audio element BEFORE setting sawChunk — otherwise
-    // a malformed first chunk crashes the decode, sawChunk stays true, and
-    // send-handlers skips the legacy fallback → total silent failure with
-    // no audible output. 2026-05-18 herring-table #9.
+    // Decode + Audio() build can throw on bad base64 or unsupported codec —
+    // a failed chunk is counted in the black-box and skipped, never queued.
     let blob, url, audio;
     try {
         blob = _b64ToBlob(audio_b64, content_type);
@@ -642,10 +686,9 @@ export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, paus
             _ttsStats.fails.push({ idx: index, outcome: 'decode-error', detail: e?.message });
         }
         if (url) { try { URL.revokeObjectURL(url); } catch {} }
-        return;  // sawChunk NOT set — legacy fallback can still fire
+        return;
     }
     if (_ttsStats) _ttsStats.decoded++;
-    _ttsStreamSawChunk = true;
     _ttsStreamQueue.push({
         audio, url, blob,
         pause_after_ms: pause_after_ms || 0,
@@ -669,6 +712,11 @@ export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, paus
  * still-playing stream from a previous turn. herring #5. */
 export const startTtsStream = (data = {}) => {
     const newId = data.stream_id || null;
+    // One audio focus: a streaming turn silences a whole-blob player the
+    // same way playText silences the queue. Before this a blob (the
+    // fallback lane) kept talking under the new turn's chunks — the common
+    // "two voices" overlap. 2026-09-08.
+    _stopLegacyPlayer();
     if (_currentStreamId && newId && newId !== _currentStreamId &&
         (_ttsStreamActive || _ttsStreamQueue.length > 0 || _ttsStreamPlayer)) {
         // A NEW stream is starting while a different one is still active.
@@ -677,12 +725,17 @@ export const startTtsStream = (data = {}) => {
         _ttsStreamStop();
     }
     _currentStreamId = newId;
+    _stoppedStreamId = null;   // fresh stream — clear any prior stop guard
     _ttsStreamGen += 1;
     _ttsStreamQueue = [];
     _ttsStreamEnded = false;
-    _ttsStreamSawChunk = false;
     _ttsStreamAnyPlayed = false;
     _ttsStats = _newTtsStats();  // fresh black-box for this turn
+    // The pump is live from its first push — that's the mic ⏹'s real
+    // lifetime, not the first decoded chunk. On a slow CPU the gap between
+    // the two is the whole synth; ⏹ pressed inside it mutes the pump so
+    // nothing ever plays. endTtsStream / _ttsStreamStop clear it.
+    isStreaming = true;
     // Don't clear _ttsStreamActive — first chunk arrival kicks playback.
 };
 
@@ -708,10 +761,6 @@ export const endTtsStream = (data = {}) => {
     }
 };
 
-/** True if any chunk arrived in the current turn — send-handlers uses this
- * to skip the legacy end-of-stream audioFn(prose) fallback. */
-export const ttsStreamSawChunk = () => _ttsStreamSawChunk;
-
 const _ttsStreamStop = () => {
     _ttsStreamGen += 1;       // any in-flight setTimeout / callbacks become no-ops
     // Dispose preloaded audio elements in the queue too — they hold blob
@@ -720,8 +769,8 @@ const _ttsStreamStop = () => {
     _ttsStreamQueue = [];
     _ttsStreamEnded = true;
     _ttsStreamActive = false;
-    _ttsStreamSawChunk = false;
     _ttsStreamAnyPlayed = false;
+    _stoppedStreamId = _currentStreamId || _stoppedStreamId;  // drop its in-flight stragglers
     _currentStreamId = null;  // herring #5 — no stream is current after stop
     _ttsStreamCleanupCurrent();
 };
@@ -910,45 +959,56 @@ export const handlePress = async (btn) => {
 export const handleRelease = async (btn, triggerSendFn) => {
     if (!isRec) return;
     isRec = false;
-    const blob = await stopRec();
-    btn.classList.remove('recording');
-    dispatch(Events.STT_RECORDING_END, { source: 'browser' });
-
-    if (blob && blob.size > 1000) {
-        ui.updateStatus('Transcribing...');
-        dispatch(Events.STT_PROCESSING, { source: 'browser' });
+    // ONE unconditional exit signal (outer finally). stopRec() throwing
+    // BEFORE the old inner try (device unplug, revoked permission,
+    // audioContext failure) skipped every signalMicActive(false) path and
+    // stranded a permanent +1 on the wakeword-suppression counter — she
+    // stopped answering to her name until restart (negspace N3, 2026-08-31).
+    // Server clamps at 0, so the old double-signal paths stay harmless.
+    try {
+        let blob = null;
         try {
-            const response = await api.postAudio(blob);
-            // /api/transcribe manages _web_active in its own finally block
-            const text = response.text;
+            blob = await stopRec();
+        } catch (e) {
+            console.error('stopRec failed:', e);
+        }
+        btn.classList.remove('recording');
+        dispatch(Events.STT_RECORDING_END, { source: 'browser' });
 
-            if (!text || !text.trim()) {
-                const msg = response.quiet
-                    ? 'No audio received — check browser mic selection'
-                    : 'No speech detected';
+        if (blob && blob.size > 1000) {
+            ui.updateStatus('Transcribing...');
+            dispatch(Events.STT_PROCESSING, { source: 'browser' });
+            try {
+                const response = await api.postAudio(blob);
+                // /api/transcribe manages _web_active in its own finally block
+                const text = response.text;
+
+                if (!text || !text.trim()) {
+                    const msg = response.quiet
+                        ? 'No audio received — check browser mic selection'
+                        : 'No speech detected';
+                    ui.updateStatus(msg);
+                    setTimeout(() => ui.hideStatus(), 3000);
+                    return null;
+                }
+
+                ui.hideStatus();
+                await triggerSendFn(text);
+                return text;
+
+            } catch (e) {
+                console.error('Transcription failed:', e);
+                const msg = e.message?.includes('disabled') || e.message?.includes('not initialized')
+                    ? e.message : 'Transcription failed';
                 ui.updateStatus(msg);
-                setTimeout(() => ui.hideStatus(), 3000);
+                setTimeout(() => ui.hideStatus(), 2000);
                 return null;
             }
-
-            ui.hideStatus();
-            await triggerSendFn(text);
-            return text;
-
-        } catch (e) {
-            console.error('Transcription failed:', e);
-            const msg = e.message?.includes('disabled') || e.message?.includes('not initialized')
-                ? e.message : 'Transcription failed';
-            ui.updateStatus(msg);
-            setTimeout(() => ui.hideStatus(), 2000);
-            return null;
-        } finally {
-            signalMicActive(false);
         }
-    } else {
-        signalMicActive(false);
         ui.hideStatus();
         return null;
+    } finally {
+        signalMicActive(false);
     }
 };
 

@@ -1,5 +1,6 @@
 {
   "name": "sapphire-store",
+  "short_display_name": "Store",
   "version": "1.0.0",
   "description": "Sapphire Store — browse and install community plugins",
   "author": "sapphire",

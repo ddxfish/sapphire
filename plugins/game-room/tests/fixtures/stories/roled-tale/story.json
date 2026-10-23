@@ -1,0 +1,13 @@
+{
+  "slug": "roled-tale",
+  "title": "Roled Tale",
+  "description": "Minimal fixture story WITH a shipped role — override tests.",
+  "premise": "Shipped premise text.",
+  "player_role": "Shipped player role.",
+  "start": 1,
+  "role": {
+    "name": "Vera",
+    "text": "Shipped backstory for Vera."
+  },
+  "dm_guide": "Shipped DM guide."
+}

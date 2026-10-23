@@ -1,10 +1,26 @@
 // API functions for Prompt Manager plugin
 import { fetchWithTimeout } from './fetch.js';
+import { refreshInitData } from './init-data.js';
 
 // Fetch fresh components from server (init cache goes stale when AI tools modify components)
 export async function getComponents() {
   const data = await fetchWithTimeout('/api/prompts/components');
   return data.components || {};
+}
+
+// Components + plugin-pack sources ({type: {key: pluginName}}) + vault piece
+// markers in one fetch. (vault_pieces was silently STRIPPED here until
+// 2026-08-11 — the 🗝 piece badges never rendered from a page load; only
+// the creation-time badge worked, which masked it. Krem caught it.)
+export async function getComponentsWithSources() {
+  const data = await fetchWithTimeout('/api/prompts/components');
+  return { components: data.components || {}, sources: data.sources || {},
+           vault_pieces: data.vault_pieces || {},
+           // Hidden pack piece NAMES (engine scaffolding) — membership
+           // checks only: a ref to one still renders, so it isn't "missing".
+           hidden_keys: data.hidden_keys || {},
+           // Shipped piece keys ({type: [keys]}) — the modals' 'Custom' selector.
+           stock_pieces: data.stock_pieces || {} };
 }
 
 export async function listPrompts() {
@@ -13,6 +29,13 @@ export async function listPrompts() {
   const prompts = data.prompts || [];
   const current = data.current;
   if (current) prompts.forEach(p => p.active = (p.name === current));
+  // Vault meta rides as array properties — existing callers see a plain
+  // array, vault-aware ones (prompts view, trigger editor) read these.
+  prompts.vaultState = data.vault_state || { exists: false, unlocked: false };
+  prompts.vaultRefs = data.vault_refs || {};
+  prompts.stock = data.stock || [];
+  // {name: kind} for pack prompts hidden from the list (story costumes etc.)
+  prompts.hidden = data.hidden || {};
   return prompts;
 }
 
@@ -24,24 +47,33 @@ export async function getPrompt(name) {
 
 // Mutations - use fetchWithTimeout for session ID header
 export async function savePrompt(name, data) {
-  return await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`, {
+  const res = await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
+  refreshInitData();  // bust cached prompt list so persona/chat dropdowns see the new/renamed prompt
+  return res;
 }
 
 export async function deletePrompt(name) {
-  return await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`, {
+  const res = await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`, {
     method: 'DELETE'
   });
+  refreshInitData();  // bust cached prompt list so persona/chat dropdowns drop the deleted prompt
+  return res;
 }
 
-export async function saveComponent(type, key, value) {
+export async function saveComponent(type, key, value, reason, origin) {
+  // origin='vault': the editor loaded this piece from the vault — the server
+  // refuses the save (409) if the vault has locked since (stale-editor guard).
+  const body = { value };
+  if (reason) body.reason = reason;
+  if (origin) body.origin = origin;
   return await fetchWithTimeout(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ value })
+    body: JSON.stringify(body)
   });
 }
 
@@ -60,14 +92,49 @@ export async function loadPrompt(name) {
   const data = await resp.json();
 
   if (!resp.ok) {
-    // Handle privacy requirement case with specific error
-    if (data.privacy_required) {
-      const err = new Error(data.error || `Prompt '${name}' requires Privacy Mode`);
-      err.privacyRequired = true;
-      throw err;
-    }
     throw new Error(data.error || `Failed to load prompt '${name}'`);
   }
 
   return data;
+}
+
+// ── cleanup & bulk tools ──
+
+// Usage index: {usage: {type: {key: [prompt names]}}, vault: {...},
+// vault_referenced?: {type: [keys]}} — see /api/prompts/piece-usage.
+export async function getPieceUsage() {
+  return await fetchWithTimeout('/api/prompts/piece-usage');
+}
+
+export async function trashPieces(items) {
+  return await fetchWithTimeout('/api/prompts/pieces/trash', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }) });
+}
+
+export async function restorePieces(items) {
+  return await fetchWithTimeout('/api/prompts/pieces/trash/restore', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }) });
+}
+
+export async function purgeTrash() {
+  return await fetchWithTimeout('/api/prompts/pieces/trash/purge', { method: 'POST' });
+}
+
+export async function listTrash() {
+  const data = await fetchWithTimeout('/api/prompts/pieces/trash');
+  return data.items || [];
+}
+
+// Safe rename: server moves the piece in its own store and repoints every
+// reference (user presets, unlocked vault, assembled state).
+export async function renamePiece(type, oldKey, newKey) {
+  return await fetchWithTimeout('/api/prompts/pieces/rename', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, old: oldKey, new: newKey }) });
+}
+
+export async function stripDanglers() {
+  return await fetchWithTimeout('/api/prompts/pieces/strip-danglers', { method: 'POST' });
 }

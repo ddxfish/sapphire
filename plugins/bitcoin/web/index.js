@@ -342,8 +342,6 @@ export default {
             helpText: 'Manage Bitcoin wallets for each persona/scope. Each chat can select which wallet to use via the sidebar. Private keys are encrypted on disk and never exposed to the AI.',
             render: (c) => manager.renderList(c),
             load: async () => { await manager.loadItems(); return {}; },
-            save: async () => ({ success: true }),
-            getSettings: () => ({})
         });
     },
 

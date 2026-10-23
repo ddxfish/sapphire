@@ -1,7 +1,7 @@
 """Surface 4 tail — PluginState + plugin_loader remaining P1/P2 tests.
 
 Covers:
-  4.14 get_load_errors clears after read
+  4.14 get_load_errors non-destructive read (contract FLIPPED 2026-08-31, N7)
   4.21 uninstall evicts plugin_state cache (already done but verify via PluginLoader)
   4.38 corrupted state file quarantined to .bad-{ts} suffix
   4.39 update_with_lock survives concurrent RMW (MCP/discord/telegram clobber class)
@@ -107,12 +107,14 @@ def test_plugin_state_tmp_file_cleaned_when_save_raises(tmp_path, monkeypatch):
     assert leftovers == [], f"tmp files leaked: {leftovers}"
 
 
-# ─── 4.14 get_load_errors clears after read ──────────────────────────────────
+# ─── 4.14 get_load_errors non-destructive read ──────────────────────────────────
 
-def test_get_load_errors_clears_after_read():
-    """[PROACTIVE] get_load_errors returns accumulated errors AND clears
-    the list — so the frontend toast doesn't re-show the same errors on
-    every poll."""
+def test_get_load_errors_is_non_destructive():
+    """[CONTRACT FLIP — negspace N7/P1#12, 2026-08-31] get_load_errors used to
+    DRAIN the list, so a background tab's /api/init could swallow the only
+    report of a failed plugin. Now: non-destructive read (frontend dedupes its
+    toasts per browser session via sessionStorage) with a size bound instead
+    of a clear."""
     from core.plugin_loader import PluginLoader
     loader = PluginLoader()
     loader._load_errors = [
@@ -122,4 +124,13 @@ def test_get_load_errors_clears_after_read():
     first = loader.get_load_errors()
     assert len(first) == 2
     second = loader.get_load_errors()
-    assert second == [], "second call should return empty (list was cleared)"
+    assert second == first, "read must NOT drain — background tabs swallowed errors"
+    # Bound: >100 entries trims to the newest 50 (keeps latest, drops oldest)
+    loader._load_errors = [{'plugin': f'p{i}', 'error': 'e'} for i in range(150)]
+    bounded = loader.get_load_errors()
+    assert len(bounded) == 50
+    assert bounded[-1]['plugin'] == 'p149'
+    assert bounded[0]['plugin'] == 'p100'
+    # Mutating the returned list must not touch loader state (it's a copy)
+    bounded.clear()
+    assert len(loader.get_load_errors()) == 50

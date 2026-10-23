@@ -26,38 +26,38 @@ function injectBaseStyles(prefix) {
             background: var(--bg-secondary); cursor: pointer; transition: all 0.15s ease;
         }
         .am-item:hover { border-color: var(--accent-blue); background: var(--bg-hover); }
-        .am-item-name { font-weight: 600; font-size: 13px; color: var(--text); min-width: 80px; }
-        .am-item-detail { font-size: 12px; color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; }
+        .am-item-name { font-weight: 600; font-size: 0.8125rem; color: var(--text); min-width: 80px; }
+        .am-item-detail { font-size: 0.75rem; color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; }
 
         .am-add-btn {
             padding: 8px 16px; border: 1px dashed var(--border); border-radius: 8px;
             background: transparent; color: var(--text-muted); cursor: pointer;
-            font-size: 13px; transition: all 0.15s ease;
+            font-size: 0.8125rem; transition: all 0.15s ease;
         }
         .am-add-btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
 
         .am-back-btn {
             padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
             background: transparent; color: var(--text); cursor: pointer;
-            font-size: 12px; transition: all 0.15s ease;
+            font-size: 0.75rem; transition: all 0.15s ease;
         }
         .am-back-btn:hover { background: var(--bg-hover); }
 
         .am-delete-btn {
             padding: 6px 12px; border: 1px solid var(--error, #dc3545); border-radius: 6px;
             background: transparent; color: var(--error, #dc3545); cursor: pointer;
-            font-size: 12px; transition: all 0.15s ease;
+            font-size: 0.75rem; transition: all 0.15s ease;
         }
         .am-delete-btn:hover { background: var(--error-light, #f8d7da); }
 
-        .am-editor-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-        .am-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        .am-editor-title { font-size: 0.9375rem; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+        .am-hint { font-size: 0.6875rem; color: var(--text-muted); margin-top: 4px; }
 
         .am-group { display: flex; flex-direction: column; gap: 6px; }
-        .am-group label { font-size: 13px; font-weight: 500; color: var(--text); }
+        .am-group label { font-size: 0.8125rem; font-weight: 500; color: var(--text); }
         .am-group input, .am-group select {
             padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
-            background: var(--bg-primary); color: var(--text); font-size: 13px; font-family: inherit;
+            background: var(--bg-primary); color: var(--text); font-size: 0.8125rem; font-family: inherit;
         }
         .am-group input:focus { outline: none; border-color: var(--accent-blue); }
         .am-row { display: flex; gap: 8px; align-items: flex-start; }
@@ -66,7 +66,7 @@ function injectBaseStyles(prefix) {
         .am-action-btn {
             padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px;
             background: var(--bg-tertiary); color: var(--text); cursor: pointer;
-            font-size: 13px; white-space: nowrap; transition: all 0.15s ease;
+            font-size: 0.8125rem; white-space: nowrap; transition: all 0.15s ease;
         }
         .am-action-btn:hover { background: var(--bg-hover); }
         .am-action-btn:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -221,11 +221,11 @@ export function createAccountManager(config) {
         container.querySelector('.am-result')?.remove();
         const div = document.createElement('div');
         div.className = `am-result`;
-        div.style.cssText = `padding:10px 14px;border-radius:8px;font-size:13px;line-height:1.4;
+        div.style.cssText = `padding:10px 14px;border-radius:8px;font-size:0.8125rem;line-height:1.4;
             background:${success ? 'var(--success-light, #d4edda)' : 'var(--error-light, #f8d7da)'};
             border:1px solid ${success ? 'var(--success, #28a745)' : 'var(--error, #dc3545)'};
             color:${success ? 'var(--success, #28a745)' : 'var(--error, #dc3545)'}`;
-        div.innerHTML = message + (detail ? `<div style="margin-top:4px;font-size:11px;opacity:0.85">${detail}</div>` : '');
+        div.innerHTML = message + (detail ? `<div style="margin-top:4px;font-size:0.6875rem;opacity:0.85">${detail}</div>` : '');
         container.querySelector('.am-form')?.appendChild(div);
     }
 

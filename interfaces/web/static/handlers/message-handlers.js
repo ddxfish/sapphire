@@ -3,11 +3,12 @@ import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
-import { 
-    getIsProc, 
+import {
+    getIsProc,
     getTtsEnabled,
-    setProc, 
-    setAbortController, 
+    getPromptPrivacyRequired,
+    setProc,
+    setAbortController,
     setIsCancelling,
     getIsCancelling,
     refresh,
@@ -26,14 +27,34 @@ export async function handleRegen(idx) {
         console.log('Regenerate blocked: isProc is true');
         return;
     }
+    // Same guard as handleSend — and it must run BEFORE chat.handleRegen,
+    // which deletes the old reply before streaming (a backend refusal after
+    // that point loses the message).
+    if (getPromptPrivacyRequired()) {
+        ui.showToast('This prompt is marked private — toggle the eyeball to make this chat private', 'error');
+        return;
+    }
     console.log(`Regenerating message ${idx}`);
-    
+
+    // Confirm BEFORE registering the abort controller -- while the dialog
+    // sat open, the registered controller blinded the cross-tab AI_TYPING
+    // mirror (main.js gates on !getAbortController()), so a live foreign
+    // turn never flipped isProc and regen proceeded into a 409 AFTER
+    // deleting the turn (S1 #3, hunt 2026-08-30).
+    if (!confirm('Regenerate this response?')) return;
+
+    // Regen means "that answer was wrong" — cut its voice at the click, not
+    // at the new turn's first chunk (a slow CPU = 10s+ of the wrong answer
+    // still talking). Send deliberately does NOT do this: she finishes the
+    // last answer until the new voice arrives. Krem's ruling A, 2026-09-08.
+    audio.stop(true);
+
     const abortController = new AbortController();
     setAbortController(abortController);
     setIsCancelling(false);
-    
+
     const audioFn = getTtsEnabled() ? audio.playText : null;
-    
+
     const len = await chat.handleRegen(
         idx, 
         setProc, 
@@ -46,30 +67,64 @@ export async function handleRegen(idx) {
     if (len !== null) setHistLen(len);
 }
 
+const THINK_RE = /<(?:seed:)?think[^>]*>[\s\S]*?<\/(?:seed:think|seed:cot_budget_reflect|think)>/gi;
+const _msgEls = () => document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
+
+// Edit wave (2026-09-10): the editor shows the prose only (thinking stays on
+// the row, server-side), the bubble keeps its tool half, Save/Cancel swap
+// just this one message from history — the transcript is never rebuilt, so
+// a reply streaming below is untouched — and a refresh held while the
+// editor was open is replayed on exit. Esc cancels, Ctrl/Cmd+Enter saves.
 export async function handleEdit(idx) {
     const hist = await api.fetchHistory();
     const msg = hist[idx];
-    const msgEl = document.querySelectorAll('#chat-container .message:not(.status):not(.error)')[idx];
-    
-    ui.enterEditMode(msgEl, idx, msg.timestamp);
-    
-    document.getElementById('save-edit').onclick = async () => {
-        const newText = document.getElementById('edit-textarea').value;
-        const timestamp = msgEl.dataset.editTimestamp;
+    const msgEl = _msgEls()[idx];
+    if (!msg || !msgEl) return;
 
-        try {
-            console.log('[EDIT DEBUG] Editing message with timestamp:', timestamp);
-            await api.editMessage(msg.role, timestamp, newText);
-            // refresh() rebuilds DOM, so exitEditMode not needed - new elements won't have edit state
-            await refresh(false);
-        } catch (e) {
-            console.error('Edit failed:', e);
-            ui.showToast(`Edit failed: ${e.message}`, 'error');
-            ui.exitEditMode(msgEl, true);  // Restore on error (element still exists)
+    // User bubbles carry `content` (the markdown you typed). Assistant turns
+    // carry `parts`; the server edits the LAST assistant row of the turn, so
+    // show its content part — minus the reconstructed <think> block.
+    let text = msg.content || '';
+    if (msg.role === 'assistant' && Array.isArray(msg.parts)) {
+        const last = msg.parts.filter(p => p.type === 'content').pop();
+        text = last ? (last.text || '') : '';
+    }
+    text = text.replace(THINK_RE, '').trim();
+    if (!text) {
+        ui.showToast('Nothing to edit here — that reply is thinking only', 'warning');
+        return;
+    }
+
+    let settled = false, saving = false;
+    const exit = async (fresh) => {          // fresh = payload to paint, or null to refetch
+        if (settled) return;
+        settled = true;
+        let payload = fresh, total = hist.length;
+        if (!payload) {
+            const now = await api.fetchHistory();
+            payload = now[idx] || msg;
+            total = now.length;
         }
+        ui.replaceMessage(msgEl, payload, idx, total);
+        if (chat.takeHeldRefresh()) await refresh(false);   // events that arrived mid-edit
     };
-    
-    document.getElementById('cancel-edit').onclick = () => ui.exitEditMode(msgEl, true);
+    ui.enterEditMode(msgEl, text, {
+        onSave: async (newText) => {
+            if (settled || saving) return;
+            if (!newText.trim()) { ui.showToast('Message cannot be empty', 'error'); return; }
+            saving = true;
+            try {
+                await api.editMessage(msg.role, msg.timestamp, newText);
+            } catch (e) {
+                saving = false;
+                console.error('Edit failed:', e);
+                ui.showToast(`Edit failed: ${e.message}`, 'error');
+                return;                       // stay in the editor, text intact
+            }
+            await exit(null);
+        },
+        onCancel: () => exit(msg),
+    });
 }
 
 export async function handleContinue(idx) {

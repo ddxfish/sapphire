@@ -74,7 +74,7 @@ export default {
     icon: '\u26A1',
     description: 'System settings and danger zone',
     essentialKeys: ['WEB_UI_SSL_ADHOC'],
-    advancedKeys: ['WEB_UI_HOST', 'WEB_UI_PORT', 'LOG_LEVEL'],
+    advancedKeys: ['WEB_UI_HOST', 'WEB_UI_PORT', 'LOG_LEVEL', 'MAX_DAEMON_TASKS', 'MAX_TOTAL_TASKS'],
 
     render(ctx) {
         return `
@@ -85,6 +85,38 @@ export default {
                 <h4 style="margin:0 0 10px;font-size:var(--font-sm)">Tools</h4>
                 <button class="btn-primary" id="sys-setup-wizard">Run Setup Wizard</button>
                 <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Configure LLM, audio, voice, and identity settings step by step.</p>
+            </div>
+
+            <div class="integrity-check" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
+                <h4 style="margin:0 0 8px;font-size:var(--font-sm)">Install Integrity</h4>
+                <p class="text-muted" style="font-size:var(--font-xs);margin:0 0 12px">
+                    Checks every core file against the shipped manifest (SHA256). Catches partial updates, half-applied pulls, and corruption.
+                </p>
+                <div id="integrity-status" style="font-size:var(--font-sm);margin-bottom:10px">Checking…</div>
+                <div style="display:flex;gap:8px">
+                    <button class="btn-primary" id="integrity-verify">Verify</button>
+                    <button class="btn-sm danger" id="integrity-repair" style="display:none">Repair</button>
+                </div>
+                <div id="integrity-output" style="margin-top:10px;font-size:var(--font-xs)"></div>
+            </div>
+
+            <div class="login-password" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
+                <h4 style="margin:0 0 8px;font-size:var(--font-sm)">Login Password</h4>
+                <p class="text-muted" style="font-size:var(--font-xs);margin:0 0 12px">
+                    The password for this web UI. This tab stays logged in after changing it;
+                    every other device is logged out. Scripts sending the old hash as
+                    <code>X-API-Key</code> need the new one — API Keys below are unaffected.
+                    Forgot it? The install guide covers the reset.
+                </p>
+                <form id="pw-form" autocomplete="off" style="display:flex;flex-direction:column;gap:8px;max-width:360px">
+                    <input id="pw-current" type="password" placeholder="Current password" autocomplete="current-password" required
+                           style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)" />
+                    <input id="pw-new" type="password" placeholder="New password (10+ characters)" autocomplete="new-password" required minlength="10"
+                           style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)" />
+                    <input id="pw-confirm" type="password" placeholder="Confirm new password" autocomplete="new-password" required
+                           style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:var(--font-sm)" />
+                    <div><button type="submit" class="btn-primary" id="pw-change">Change Password</button></div>
+                </form>
             </div>
 
             <div class="api-tokens" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
@@ -145,6 +177,102 @@ export default {
             } else {
                 ui.showToast('Setup wizard plugin not loaded', 'error');
             }
+        });
+
+        // ─── Install Integrity ──────────────────────────────────────────
+        const integStatus = el.querySelector('#integrity-status');
+        const integVerify = el.querySelector('#integrity-verify');
+        const integRepair = el.querySelector('#integrity-repair');
+        const integOutput = el.querySelector('#integrity-output');
+
+        const _badList = (items) =>
+            `<div style="max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius);padding:8px;font-family:var(--mono,monospace)">${items.map(x => _escapeHtml(x)).join('<br>')}</div>`;
+
+        async function renderIntegrity(report) {
+            if (!report) {
+                try {
+                    const res = await fetch('/api/system/integrity', { credentials: 'same-origin' });
+                    report = await res.json();
+                } catch (e) {
+                    integStatus.innerHTML = `<span style="color:var(--error,#dc3545)">Check failed: ${_escapeHtml(e.message)}</span>`;
+                    return;
+                }
+            }
+            if (!report.available) {
+                integStatus.innerHTML = `<span class="text-muted">No manifest in this build — integrity check unavailable.</span>`;
+                integRepair.style.display = 'none';
+                return;
+            }
+            if (report.ok) {
+                integStatus.innerHTML = `<span style="color:var(--success,#28a745)">✓ OK — ${report.matched}/${report.total} files match v${_escapeHtml(report.version)}</span>`;
+                integRepair.style.display = 'none';
+                integOutput.innerHTML = '';
+            } else {
+                integStatus.innerHTML = `<span style="color:var(--error,#dc3545)">⚠ ${report.mismatched.length} modified, ${report.missing.length} missing — does not match v${_escapeHtml(report.version)} (partial update?)</span>`;
+                const bad = [...report.mismatched.map(f => f + '  (modified)'), ...report.missing.map(f => f + '  (missing)')];
+                integOutput.innerHTML = _badList(bad);
+                integRepair.style.display = '';
+            }
+        }
+
+        if (integStatus) renderIntegrity();
+
+        integVerify?.addEventListener('click', async () => {
+            integStatus.textContent = 'Verifying…';
+            await renderIntegrity();
+        });
+
+        integRepair?.addEventListener('click', async () => {
+            integRepair.disabled = true;
+            integRepair.textContent = 'Repairing…';
+            try {
+                const res = await fetch('/api/system/integrity/repair', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await res.json();
+                const lines = [
+                    ...result.repaired.map(r => `✓ ${r.file} — ${r.detail}`),
+                    ...(result.skipped || []).map(r => `⏸ ${r.file} — ${r.detail}`),
+                    ...result.failed.map(r => `✗ ${r.file} — ${r.detail}`),
+                ];
+                integOutput.innerHTML = _badList(lines) + `<div style="margin-top:6px">${_escapeHtml(result.message)}</div>`;
+                await renderIntegrity(result.reverify);
+                ui.showToast(result.message, result.reverify.ok ? 'success' : 'warning');
+            } catch (e) {
+                ui.showToast(`Repair failed: ${e.message}`, 'error');
+            }
+            integRepair.disabled = false;
+            integRepair.textContent = 'Repair';
+        });
+
+        // ─── Login Password ─────────────────────────────────────────────
+        const pwForm = el.querySelector('#pw-form');
+        pwForm?.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const cur = el.querySelector('#pw-current');
+            const nw = el.querySelector('#pw-new');
+            const cf = el.querySelector('#pw-confirm');
+            const btn = el.querySelector('#pw-change');
+            if (nw.value.length < 10) { ui.showToast('New password must be at least 10 characters', 'error'); nw.focus(); return; }
+            if (nw.value !== cf.value) { ui.showToast('New passwords do not match', 'error'); cf.focus(); return; }
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/system/password', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ current: cur.value, new: nw.value })
+                });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+                pwForm.reset();
+                ui.showToast('Password changed — other devices are logged out', 'success');
+            } catch (e) {
+                ui.showToast(`Change failed: ${e.message}`, 'error');
+                cur.value = nw.value = cf.value = '';   // no password lingers in the DOM (E4#10)
+                cur.focus();
+            }
+            btn.disabled = false;
         });
 
         // ─── API Keys section ───────────────────────────────────────────

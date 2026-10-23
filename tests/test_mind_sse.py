@@ -26,10 +26,11 @@ def test_publish_mind_changed_fires_event(event_bus_capture):
     publish_mind_changed('goal', 'default', 'save')
     types = [t for t, _ in event_bus_capture.events]
     assert 'mind_changed' in types
-    # Payload shape
+    # Payload shape — `origin` is the requesting tab's X-Session-ID (None from
+    # a tool / cron / test: no request in flight), see tests/test_mind_origin.py.
     for t, data in event_bus_capture.events:
         if t == 'mind_changed':
-            assert data == {'domain': 'goal', 'scope': 'default', 'action': 'save'}
+            assert data == {'domain': 'goal', 'scope': 'default', 'action': 'save', 'origin': None}
             break
 
 
@@ -220,13 +221,17 @@ def test_delete_entry_fires_mind_changed(isolated_knowledge, event_bus_capture):
 def test_mind_view_subscribes_to_mind_changed():
     """[REGRESSION_GUARD] Mind view must subscribe to MIND_CHANGED over SSE,
     otherwise the server-side publishes above are noise. Source-level check
-    so a future refactor that drops the handler is caught in CI."""
+    so a future refactor that drops the handler is caught in CI.
+
+    The subscription moved from views/mind.js to shared/mind-common.js
+    (subscribeMindDomain) when the Mind view was split into dispatch + per-domain
+    views — the guarded behavior lives there now."""
     from pathlib import Path
-    mind_js = Path(__file__).parent.parent / 'interfaces/web/static/views/mind.js'
+    mind_js = Path(__file__).parent.parent / 'interfaces/web/static/shared/mind-common.js'
     src = mind_js.read_text()
-    assert 'MIND_CHANGED' in src, "mind.js must reference MIND_CHANGED event"
+    assert 'MIND_CHANGED' in src, "mind-common.js must reference MIND_CHANGED event"
     assert 'subscribeMindSse' in src or 'onBusEvent' in src, \
-        "mind.js must subscribe to the event bus for MIND_CHANGED"
+        "mind-common.js must subscribe to the event bus for MIND_CHANGED"
 
 
 def test_mind_changed_listed_on_frontend_event_bus_constants():

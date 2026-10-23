@@ -1,7 +1,9 @@
 # core/routes/settings.py - System status, settings, credentials, privacy, LLM provider routes
 import asyncio
 import json
+import threading
 import os
+import re
 import logging
 from pathlib import Path
 
@@ -12,6 +14,13 @@ from core.auth import require_login
 from core.api_fastapi import get_system, _apply_chat_settings
 from core.event_bus import publish, Events
 from core import prompts
+
+# The LLM provider maps are read-modify-written whole by every provider
+# route (PUT field, add, delete, reorder). Two overlapping PUTs — the UI
+# fires one per field change — deep-copied the same map and the second
+# write silently reverted the first (scouts S15/F10, 2026-09-20).
+_PROVIDER_MAP_LOCK = threading.Lock()
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -67,18 +76,10 @@ async def get_system_prompt(request: Request, prompt_name: str = None, _=Depends
         return {"prompt": prompt_template, "source": "active_memory_template"}
 
 
-@router.post("/api/system/prompt")
-async def set_system_prompt(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Set system prompt."""
-    data = await request.json()
-    new_prompt = data.get('new_prompt')
-    if not new_prompt:
-        raise HTTPException(status_code=400, detail="A 'new_prompt' key must be provided")
-    success = system.llm_chat.set_system_prompt(new_prompt)
-    if success:
-        return {"status": "success", "message": "System prompt updated."}
-    else:
-        raise HTTPException(status_code=500, detail="Error setting prompt")
+# POST /api/system/prompt (raw transient prompt setter) removed 2026-08-09:
+# no frontend or tool caller; it bypassed preset tracking, and in assembled
+# mode the next spice rotation silently clobbered the injected text anyway.
+# Use /api/prompts (save + activate) instead.
 
 
 # =============================================================================
@@ -189,57 +190,10 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # and leave N memories/knowledge rows invisible to search. Require explicit
     # `confirm_embedding_swap: true` when the swap would invalidate vectors.
     # Scout finding #3 — 2026-04-20.
+    # One gate for both doors — the single-key PUT below shares it (M-C9).
     if 'EMBEDDING_PROVIDER' in settings_dict:
-        new_provider = settings_dict['EMBEDDING_PROVIDER']
-        current_provider = settings.get('EMBEDDING_PROVIDER')
-        if new_provider and new_provider != current_provider and not data.get('confirm_embedding_swap'):
-            try:
-                from core.embeddings import integrity_report
-                # to_thread — see /api/embedding/integrity for rationale
-                # (scout #14). Same 6-select blocking scan.
-                report = await asyncio.to_thread(integrity_report)
-                tables = report.get('tables', {}) or {}
-                def _count(t):
-                    return (t.get('matching_active') or 0) + (t.get('legacy_unstamped') or 0)
-                affected = sum(_count(tables.get(t, {})) for t in ('memories', 'knowledge_entries', 'people'))
-                if affected > 0:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "error": "embedding_swap_requires_confirmation",
-                            "affected_vectors": affected,
-                            "message": (
-                                f"Swapping EMBEDDING_PROVIDER would make {affected} stored "
-                                "vectors invisible to semantic search until re-embedded. "
-                                "Resubmit with `confirm_embedding_swap: true` to proceed."
-                            ),
-                        },
-                    )
-            except HTTPException:
-                raise
-            except Exception as e:
-                # 2026-04-22 fix C — fail CLOSED, not open. Pre-fix, a transient
-                # integrity_report failure (DB busy >10s during re-embed/VACUUM/
-                # heavy-search) caused the gate to silently pass, proceeding with
-                # a destructive swap the user would have refused if the warning
-                # had rendered. The only cases where that's acceptable are ones
-                # the caller explicitly opts into via `confirm_embedding_swap`.
-                logger.error(f"Embedding swap gate: integrity check failed: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "error": "embedding_swap_gate_unavailable",
-                        "reason": str(e),
-                        "message": (
-                            "Cannot verify swap safety — integrity check failed "
-                            "(DB may be busy with re-embed, VACUUM, or heavy "
-                            "search). Wait for the busy operation to finish, or "
-                            "resubmit with `confirm_embedding_swap: true` to "
-                            "bypass the gate if you accept the risk of "
-                            "invalidating stored vectors."
-                        ),
-                    },
-                )
+        await _guard_embedding_swap(settings, settings_dict['EMBEDDING_PROVIDER'],
+                                    bool(data.get('confirm_embedding_swap')))
     results = []
     # Defer provider switches until after all settings are applied
     # (e.g. API key must be in config before provider init reads it)
@@ -254,18 +208,11 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # silently. These get added to persisted_keys in the deferred-action loop
     # only on successful switch. Scout race #4 — 2026-04-21.
     _PROVIDER_SWITCH_KEYS = {'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER'}
-    # Service API keys that should route to credentials manager
-    _SERVICE_CRED_MAP = {
-        'STT_FIREWORKS_API_KEY': 'stt_fireworks',
-        'TTS_ELEVENLABS_API_KEY': 'tts_elevenlabs',
-        'EMBEDDING_API_KEY': 'embedding',
-    }
     for key, value in settings_dict.items():
         try:
-            # Route service API keys to credentials, not settings.json
-            if key in _SERVICE_CRED_MAP and value and isinstance(value, str) and value.strip():
-                from core.credentials_manager import credentials
-                credentials.set_service_api_key(_SERVICE_CRED_MAP[key], value.strip())
+            # Route service API keys to credentials, not settings.json (one
+            # funnel with the single-key PUT — broadsword H11).
+            if _store_service_key(key, value):
                 results.append({"key": key, "status": "success", "tier": "hot"})
                 continue
             tier = settings.validate_tier(key)
@@ -319,9 +266,22 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                     logger.warning(f"Failed to enforce unsigned policy: {e}")
             # Defer SETTINGS_CHANGED for provider keys until after switch completes
             if key not in deferred_keys:
-                publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
+                # origin lets the writing tab skip its own SSE echo (event-bus
+                # self-skip, same as CHAT_SETTINGS_CHANGED) -- without it a
+                # favorites drag repainted the strip it had just reordered
+                # (S2 #4). Deferred provider keys stay unstamped.
+                publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier,
+                                                  "origin": request.headers.get('X-Session-ID')})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
+    # SOCKS session cache: the single-key PUT clears it, but this batch route
+    # -- the one the Settings page actually uses -- never did, so enabling
+    # SOCKS showed green while every web tool kept the cached direct session
+    # (traffic exited the real IP) until restart. Found independently by two
+    # scouts (negspace N2, 2026-08-31).
+    if any(k in settings_dict for k in ('SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA')):
+        from core.socks_proxy import clear_session_cache
+        clear_session_cache()
     # Execute deferred provider switches (runtime values are already set via
     # settings.set above; persistence for provider-switch keys is held until
     # we confirm the switch succeeded, then written to persisted_keys below.
@@ -344,7 +304,14 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                 from core.embeddings import switch_embedding_provider
                 switch_embedding_provider(value)
             else:
-                await asyncio.to_thread(getattr(system, action), value)
+                result = await asyncio.to_thread(getattr(system, action), value)
+                # switch_*/toggle_* report failure by RETURNING False, not
+                # raising (HDF scout, 2026-07-19) — without this, a failed
+                # provider switch persisted as success and the UI toasted OK
+                # while the runtime sat on the fallback.
+                if result is False:
+                    raise RuntimeError(f"{action} reported failure "
+                                       f"(returned False)")
             switch_ok = True
         except Exception as e:
             logger.error(f"Deferred action {action} failed: {e}")
@@ -352,10 +319,16 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             # aligned with what's actually persisted (the old value).
             if key in _PROVIDER_SWITCH_KEYS:
                 try:
-                    # settings.get falls back to _persisted / _defaults when
-                    # runtime isn't populated — we did NOT persist, so this
-                    # returns the pre-swap value.
-                    settings._runtime.pop(key, None)
+                    # set() wrote _config directly and get() READS _config —
+                    # popping the runtime layer alone left the failed value
+                    # live for every later reader (S4; the old comment here
+                    # claiming a fallback was wrong). Restore from the
+                    # persisted layers, which we did NOT touch.
+                    with settings._lock:
+                        settings._runtime.pop(key, None)
+                        _old = settings._user.get(key, settings._defaults.get(key))
+                        if _old is not None:
+                            settings._config[key] = _old
                 except Exception as rollback_err:
                     logger.warning(f"Runtime rollback for {key} failed: {rollback_err}")
             # Record the failure in results so the UI can surface it.
@@ -381,6 +354,15 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # Now publish SETTINGS_CHANGED for deferred keys (provider is ready)
     for _, value, key, tier in deferred_actions:
         publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
+    # Vault idle-timeout hot-apply: re-arm the running timer with the new
+    # value (a SHRUNK timeout would otherwise apply up to one old-timeout
+    # late). No-op while locked or with no vault.
+    if 'VAULT_IDLE_MINUTES' in settings_dict:
+        try:
+            from core import prompt_vault
+            prompt_vault.rearm()
+        except Exception:
+            pass
     return {"status": "success", "results": results}
 
 
@@ -436,7 +418,7 @@ async def save_chat_defaults(request: Request, _=Depends(require_login)):
     tmp_path = defaults_path.with_suffix('.tmp')
     with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
-    tmp_path.replace(defaults_path)
+    replace_with_retry(tmp_path, defaults_path)
     return {"status": "success"}
 
 
@@ -483,6 +465,88 @@ async def get_setting(key: str, request: Request, _=Depends(require_login)):
     return {"key": key, "value": value, "tier": tier, "user_override": is_user_override}
 
 
+# Service API keys live in the credentials manager, never settings.json
+# (SettingsManager.save blanks them on disk). ONE funnel for the batch route
+# AND the single-key PUT — the setup wizard saves through the PUT, which had
+# no branch: "✓ Saved", worked for the session, gone after restart, never in
+# credentials (broadsword H11).
+_SERVICE_CRED_MAP = {
+    'STT_FIREWORKS_API_KEY': 'stt_fireworks',
+    'TTS_ELEVENLABS_API_KEY': 'tts_elevenlabs',
+    'EMBEDDING_API_KEY': 'embedding',
+}
+
+
+def _store_service_key(key, value) -> bool:
+    """True when `key` is a service API key and was stored in credentials."""
+    if key in _SERVICE_CRED_MAP and value and isinstance(value, str) and value.strip():
+        from core.credentials_manager import credentials
+        credentials.set_service_api_key(_SERVICE_CRED_MAP[key], value.strip())
+        return True
+    return False
+
+
+async def _guard_embedding_swap(settings, new_provider, confirmed: bool):
+    """Server-side gate for an EMBEDDING_PROVIDER swap. The JS shows a
+    count-of-affected confirmation dialog, but that gate is client-side only —
+    a direct curl, a stale browser tab, or a toolmaker-generated plugin could
+    silently swap the provider and leave N memories/knowledge rows invisible
+    to search. Require explicit `confirm_embedding_swap: true` when the swap
+    would invalidate vectors. Scout finding #3 — 2026-04-20. Shared by the
+    batch route and the single-key PUT (broadsword M-C9: the PUT was the hole
+    the comment above describes)."""
+    current_provider = settings.get('EMBEDDING_PROVIDER')
+    if not new_provider or new_provider == current_provider or confirmed:
+        return
+    try:
+        from core.embeddings import integrity_report
+        # to_thread — see /api/embedding/integrity for rationale
+        # (scout #14). Same 6-select blocking scan.
+        report = await asyncio.to_thread(integrity_report)
+        tables = report.get('tables', {}) or {}
+        def _count(t):
+            return (t.get('matching_active') or 0) + (t.get('legacy_unstamped') or 0)
+        affected = sum(_count(tables.get(t, {})) for t in ('memories', 'knowledge_entries', 'people'))
+        if affected > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "embedding_swap_requires_confirmation",
+                    "affected_vectors": affected,
+                    "message": (
+                        f"Swapping EMBEDDING_PROVIDER would make {affected} stored "
+                        "vectors invisible to semantic search until re-embedded. "
+                        "Resubmit with `confirm_embedding_swap: true` to proceed."
+                    ),
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 2026-04-22 fix C — fail CLOSED, not open. Pre-fix, a transient
+        # integrity_report failure (DB busy >10s during re-embed/VACUUM/
+        # heavy-search) caused the gate to silently pass, proceeding with
+        # a destructive swap the user would have refused if the warning
+        # had rendered. The only cases where that's acceptable are ones
+        # the caller explicitly opts into via `confirm_embedding_swap`.
+        logger.error(f"Embedding swap gate: integrity check failed: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "embedding_swap_gate_unavailable",
+                "reason": str(e),
+                "message": (
+                    "Cannot verify swap safety — integrity check failed "
+                    "(DB may be busy with re-embed, VACUUM, or heavy "
+                    "search). Wait for the busy operation to finish, or "
+                    "resubmit with `confirm_embedding_swap: true` to "
+                    "bypass the gate if you accept the risk of "
+                    "invalidating stored vectors."
+                ),
+            },
+        )
+
+
 @router.put("/api/settings/{key}")
 async def update_setting(key: str, request: Request, _=Depends(require_login)):
     """Update a setting."""
@@ -497,6 +561,12 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
     # Don't overwrite real secrets with masked placeholder
     if value == '••••••••':
         return {"status": "success", "key": key, "value": value, "tier": settings.validate_tier(key), "persisted": False}
+    # Same two rules the batch route applies (H11 / M-C9): service keys go
+    # to credentials, an embedding swap must be confirmed.
+    if _store_service_key(key, value):
+        return {"status": "success", "key": key, "value": '••••••••', "tier": "hot", "persisted": True}
+    if key == 'EMBEDDING_PROVIDER':
+        await _guard_embedding_swap(settings, value, bool(data.get('confirm_embedding_swap')))
     persist = data.get('persist', True)
     tier = settings.validate_tier(key)
     # Provider-switch keys: defer persist until after switch verifies. Pre-fix,
@@ -513,32 +583,45 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
     # Without _skip_callbacks=True, the callback fires here AND the explicit
     # _do_*_switch fires later, double-running the switch (Kokoro restart
     # twice, STT recorder flap risk). Voice-prep review 2026-05-07 #J.
+    # Captured for honest rollback: toggle/switch failures below must be
+    # able to restore what the user actually had.
+    _prev_value = settings.get(key)
     settings.set(
         key, value,
         persist=(persist and not is_provider_switch),
         _skip_callbacks=is_provider_switch,
     )
-    if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'}:
+    if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA'}:
         clear_session_cache()
+    # Tracks switch outcome so we know whether to persist + rollback.
+    # Defined BEFORE the first toggle site that can set it.
+    switch_ok = {'value': True}  # default True; set False on switch failure
     if key == 'WAKE_WORD_ENABLED':
         system = get_system()
-        await asyncio.to_thread(system.toggle_wakeword, value)
+        ok = await asyncio.to_thread(system.toggle_wakeword, value)
+        if ok is False:
+            # toggle_* report failure by RETURN, not raise (scout,
+            # 2026-07-20 — same class as the batch-route fix).
+            switch_ok['value'] = False
     # Provider switches: fire-and-forget when ?async=true (setup wizard uses this)
     run_async = request.query_params.get('async') == 'true'
 
-    # Tracks switch outcome so we know whether to persist + rollback
-    switch_ok = {'value': True}  # default True; set False on switch failure
-
     async def _do_stt_switch(val):
         try:
-            await asyncio.to_thread(get_system().switch_stt_provider, val)
+            ok = await asyncio.to_thread(get_system().switch_stt_provider, val)
+            if ok is False:
+                # switch_* reports failure by RETURN, not raise (HDF scout,
+                # 2026-07-19) — without this a failed switch persisted as OK.
+                raise RuntimeError("switch_stt_provider returned False")
         except Exception as e:
             logger.error(f"Background STT switch failed: {e}")
             switch_ok['value'] = False
 
     async def _do_tts_switch(val):
         try:
-            await asyncio.to_thread(get_system().switch_tts_provider, val)
+            ok = await asyncio.to_thread(get_system().switch_tts_provider, val)
+            if ok is False:
+                raise RuntimeError("switch_tts_provider returned False")
             try:
                 system = get_system()
                 chat_settings = system.llm_chat.session_manager.get_chat_settings()
@@ -570,7 +653,9 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         else:
             await _do_stt_switch(value)
     if key == 'STT_ENABLED':
-        await asyncio.to_thread(get_system().toggle_stt, value)
+        ok = await asyncio.to_thread(get_system().toggle_stt, value)
+        if ok is False:
+            switch_ok['value'] = False
     if key == 'TTS_PROVIDER':
         if run_async:
             if persist:
@@ -592,7 +677,9 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         else:
             await _do_embedding_switch(value)
     if key == 'TTS_ENABLED':
-        await asyncio.to_thread(get_system().toggle_tts, value)
+        ok = await asyncio.to_thread(get_system().toggle_tts, value)
+        if ok is False:
+            switch_ok['value'] = False
         if value:
             try:
                 system = get_system()
@@ -600,6 +687,21 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
                 _apply_chat_settings(system, chat_settings)
             except Exception as e:
                 logger.warning(f"Failed to re-apply chat settings after TTS toggle: {e}")
+    # Audio toggles: switch_ok was SET here for two hunts but consumed by
+    # nobody — the value persisted at the top, HTTP said 200, and the
+    # checkbox stayed green on a dead feature (hunt 2026-08-17 S3).
+    if key in {'WAKE_WORD_ENABLED', 'STT_ENABLED', 'TTS_ENABLED'} and not switch_ok['value']:
+        try:
+            with settings._lock:
+                settings._config[key] = _prev_value
+                settings._runtime.pop(key, None)
+                if persist:
+                    settings._user[key] = _prev_value
+                    settings.save()
+        except Exception as e:
+            logger.error(f"Rollback after failed {key} toggle also failed: {e}")
+        raise HTTPException(status_code=500,
+                            detail=f"Toggle failed for {key} — setting reverted")
     # Provider keys: persist now (on success) or rollback runtime (on failure).
     # Async paths persisted optimistically above and skip this block.
     persisted = persist
@@ -610,11 +712,13 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
                 settings._runtime.pop(key, None)
                 settings.save()
         else:
-            # Switch failed — drop the runtime override so the runtime layer
-            # stays aligned with the still-old persisted value.
+            # Switch failed — drop the runtime override AND restore _config
+            # (set() wrote it directly; get() reads _config, so popping the
+            # runtime layer alone left the failed value live — S4).
             try:
                 with settings._lock:
                     settings._runtime.pop(key, None)
+                    settings._config[key] = _prev_value
             except Exception:
                 pass
             persisted = False
@@ -684,6 +788,8 @@ async def set_socks_credential(request: Request, _=Depends(require_login)):
     username = data.get('username', '')
     password = data.get('password', '')
     if credentials.set_socks_credentials(username, password):
+        from core.socks_proxy import clear_session_cache
+        clear_session_cache()  # old creds are baked into the cached proxy URL (N2)
         return {"status": "success"}
     else:
         raise HTTPException(status_code=500, detail="Failed to save credentials")
@@ -694,6 +800,8 @@ async def delete_socks_credential(request: Request, _=Depends(require_login)):
     """Delete SOCKS credentials."""
     from core.credentials_manager import credentials
     if credentials.clear_socks_credentials():
+        from core.socks_proxy import clear_session_cache
+        clear_session_cache()  # (N2)
         return {"status": "success"}
     else:
         raise HTTPException(status_code=500, detail="Failed to delete credentials")
@@ -725,42 +833,12 @@ async def test_socks_connection(request: Request, _=Depends(require_login)):
     return await asyncio.to_thread(_test_socks)
 
 
-# =============================================================================
-# PRIVACY ROUTES
-# =============================================================================
-
-@router.get("/api/privacy")
-async def get_privacy_status(request: Request, _=Depends(require_login)):
-    """Get privacy mode status."""
-    from core.settings_manager import settings
-    return {
-        "privacy_mode": settings.get('PRIVACY_MODE', False),
-        "start_in_privacy": settings.get('START_IN_PRIVACY_MODE', False)
-    }
-
-
-@router.put("/api/privacy")
-async def set_privacy_status(request: Request, _=Depends(require_login)):
-    """Set privacy mode."""
-    from core.settings_manager import settings
-    data = await request.json()
-    enabled = data.get('enabled', False)
-    settings.set('PRIVACY_MODE', enabled, persist=False)
-    publish(Events.SETTINGS_CHANGED, {"key": "PRIVACY_MODE", "value": enabled})
-    label = "Privacy mode enabled" if enabled else "Privacy mode disabled"
-    return {"privacy_mode": enabled, "message": label}
-
-
-@router.put("/api/privacy/start-mode")
-async def set_start_in_privacy(request: Request, _=Depends(require_login)):
-    """Set start in privacy mode."""
-    from core.settings_manager import settings
-    if settings.is_locked('START_IN_PRIVACY_MODE'):
-        raise HTTPException(status_code=403, detail="Setting is locked in managed mode")
-    data = await request.json()
-    enabled = data.get('enabled', False)
-    settings.set('START_IN_PRIVACY_MODE', enabled, persist=True)
-    return {"status": "success", "enabled": enabled}
+@router.get("/api/socks/status")
+async def get_socks_status(request: Request, _=Depends(require_login)):
+    """Trust-strip truth for Settings > Network: what the proxy env actually
+    covers right now (SOCKS-for-all, 2026-08-31)."""
+    from core.socks_proxy import proxy_status
+    return proxy_status()
 
 
 # =============================================================================
@@ -797,23 +875,24 @@ async def update_llm_provider(provider_key: str, request: Request, _=Depends(req
         from core.credentials_manager import credentials
         credentials.set_llm_api_key(provider_key, api_key.strip())
 
-    # Determine if core or custom
-    if provider_registry.is_core_provider(provider_key):
-        providers = settings.get('LLM_PROVIDERS', {})
-        if provider_key not in providers:
-            raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
-        providers[provider_key].update(data)
-        for prov in providers.values():
-            prov.pop('api_key', None)
-        settings.set('LLM_PROVIDERS', providers, persist=True)
-    else:
-        custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
-        if provider_key not in custom:
-            raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
-        custom[provider_key].update(data)
-        for prov in custom.values():
-            prov.pop('api_key', None)
-        settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
+    # Determine if core or custom — one lock around each read-modify-write
+    with _PROVIDER_MAP_LOCK:
+        if provider_registry.is_core_provider(provider_key):
+            providers = settings.get('LLM_PROVIDERS', {})
+            if provider_key not in providers:
+                raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
+            providers[provider_key].update(data)
+            for prov in providers.values():
+                prov.pop('api_key', None)
+            settings.set('LLM_PROVIDERS', providers, persist=True)
+        else:
+            custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
+            if provider_key not in custom:
+                raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
+            custom[provider_key].update(data)
+            for prov in custom.values():
+                prov.pop('api_key', None)
+            settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
 
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_PROVIDERS", "value": provider_key})
     return {"status": "success", "provider": provider_key}
@@ -825,8 +904,22 @@ async def update_fallback_order(request: Request, _=Depends(require_login)):
     from core.settings_manager import settings
     data = await request.json()
     order = data.get('order', [])
-    settings.set('LLM_FALLBACK_ORDER', order, persist=True)
+    with _PROVIDER_MAP_LOCK:
+        settings.set('LLM_FALLBACK_ORDER', order, persist=True)
     return {"status": "success", "order": order}
+
+
+def _probe_budget_note(probe_ok: bool, probe_s: float, configured: float) -> str:
+    """Truth strip for Test Connection: Auto and pinned chats decide on
+    health_check() with the provider's own timeout, not on the floored
+    completion the route runs. Say so when the two disagree."""
+    if not probe_ok:
+        return (" — but the health probe FAILED (refused key, wrong URL or no /models): "
+                "Auto will skip this provider; pin it per chat or fix it")
+    if configured and probe_s > configured:
+        return (f" — but the health probe took {probe_s:.1f}s and this provider's timeout is "
+                f"{configured:g}s: Auto will skip it; raise Health timeout on the card")
+    return ""
 
 
 @router.post("/api/llm/test/{provider_key}")
@@ -838,6 +931,7 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
         if provider_key not in providers_config:
             return {"status": "error", "error": f"Unknown provider: {provider_key}"}
 
+        was_enabled = bool(providers_config[provider_key].get('enabled'))
         test_config = dict(providers_config[provider_key])
         test_config['enabled'] = True
 
@@ -847,23 +941,196 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
             body = {}
         for field in ('api_key', 'base_url', 'model'):
             if body.get(field):
-                test_config[field] = body[field]
+                # A typed key must beat the stored one (get_api_key priority) —
+                # ride the explicit override slot, never the persisted field.
+                test_config['api_key_override' if field == 'api_key' else field] = body[field]
+
+        # Probe budget: is_local providers default to a 0.3s health timeout —
+        # right for boot fallback scans, wrong for a human-clicked Test against
+        # a LAN box with a big model loaded (models.list can take seconds while
+        # completions work fine). Floor it at 5s for the test only. 2026-08-06.
+        try:
+            configured_timeout = float(test_config.get('timeout') or 0)
+        except (TypeError, ValueError):
+            configured_timeout = 0.0
+        test_config['timeout'] = max(configured_timeout, 5.0)
 
         providers_config[provider_key] = test_config
 
         def _test_provider():
-            provider = get_provider_by_key(provider_key, providers_config, getattr(config, 'LLM_REQUEST_TIMEOUT', 30))
+            # Bounded request timeout — a button press shouldn't hang for the
+            # full 240s reply budget on a dead-but-accepting endpoint.
+            _t = float(getattr(config, 'LLM_REQUEST_TIMEOUT', 30) or 30)
+            provider = get_provider_by_key(provider_key, providers_config, min(30.0, _t))
             if not provider:
                 return {"status": "error", "error": f"Could not create provider '{provider_key}' — check API key and settings"}
-            result = provider.test_connection()
-            if result.get('ok'):
-                return {"status": "success", "response": result.get("response")}
-            return {"status": "error", "error": result.get("error", "Connection failed")}
+
+            health = provider.test_connection()
+            disabled_note = "" if was_enabled else " — note: provider is DISABLED in settings, enable it before use"
+
+            # The REAL path (Auto / pinned) gates on health_check() with the
+            # card's own timeout, not on this floored completion — measure the
+            # probe so Test can't say OK while Auto silently skips (S4/F9, 2026-09-20).
+            import time as _time
+            _t0 = _time.monotonic()
+            try:
+                probe_ok = bool(provider.health_check())
+            except Exception:
+                probe_ok = False
+            budget_note = _probe_budget_note(probe_ok, _time.monotonic() - _t0, configured_timeout)
+
+            # Real-path probe: replies never call models.list — they call
+            # chat_completion with the reply-path generation params. Test what
+            # a reply actually does whenever a model is known; the health probe
+            # alone passed boxes that couldn't complete and failed boxes that
+            # could (0.3s models.list vs working completions). 2026-08-06.
+            model = str(test_config.get('model') or getattr(provider, 'model', '') or '').strip()
+            if model:
+                try:
+                    from core.chat.llm_providers import get_generation_params
+                    gen = get_generation_params(provider_key, model, providers_config)
+                    gen['model'] = model
+                    provider.chat_completion(
+                        [{"role": "user", "content": "Reply with the single word: OK"}],
+                        generation_params=gen)
+                    return {"status": "success", "response": f"Completion OK ({model}){budget_note}{disabled_note}"}
+                except Exception as e:
+                    return {"status": "error", "error": f"Completion failed — this is the call replies use: {str(e)[:160]}"}
+
+            if health.get('ok'):
+                return {"status": "success", "response": f"Endpoint reachable (no model set — completion untested){disabled_note}"}
+            return {"status": "error", "error": health.get("error", "Connection failed")}
 
         return await asyncio.to_thread(_test_provider)
     except Exception as e:
         logger.error(f"LLM provider test failed for '{provider_key}': {e}")
         return {"status": "error", "error": "Provider test failed — check API key and endpoint configuration"}
+
+
+# A prompt that reliably provokes reasoning on models that support it — the point
+# is to give the model every excuse to think, so a lack of thinking is meaningful.
+_THINKING_PROBE = ("Reason through this step by step using your thinking, then give a "
+                   "one-line final answer: is 91 a prime number?")
+_THINK_TAG_RE = re.compile(r'<think>(.*?)</think>', re.DOTALL | re.IGNORECASE)
+
+
+def _clean_llm_error(e) -> str:
+    """Pull the useful message out of an LLM/HTTP error (esp. OpenAI-client 400s)."""
+    body = getattr(e, 'body', None)
+    if isinstance(body, dict):
+        inner = body.get('error') if isinstance(body.get('error'), dict) else body
+        msg = (inner or {}).get('message')
+        if msg:
+            return str(msg)[:250]
+    return str(e)[:250]
+
+
+def _analyze_thinking(resp) -> dict:
+    """Split an LLMResponse into reasoning vs prose and measure both.
+    Reasoning shows up either as a separate `thinking` field (reasoning_content)
+    or as inline <think>...</think> tags in the content."""
+    content = resp.content or ''
+    reasoning = (getattr(resp, 'thinking', None) or '').strip()
+    prose = content
+    m = _THINK_TAG_RE.search(content)
+    if m:
+        if not reasoning:
+            reasoning = m.group(1).strip()
+        prose = _THINK_TAG_RE.sub('', content).strip()
+    usage = getattr(resp, 'usage', None) or {}
+    return {
+        'had_reasoning': bool(reasoning),
+        'reasoning_chars': len(reasoning),
+        'prose_chars': len(prose.strip()),
+        'completion_tokens': usage.get('completion_tokens'),
+    }
+
+
+@router.post("/api/llm/test-thinking/{provider_key}")
+async def test_llm_thinking(provider_key: str, request: Request, _=Depends(require_login)):
+    """Provoke reasoning, then check whether 'disable thinking' actually suppresses it.
+
+    Runs a baseline (no suppression) and — if suppression is configured — the
+    configured suppression, and compares. The baseline is what makes the verdict
+    honest: it distinguishes 'the switch worked' from 'the model just didn't think'.
+    """
+    from core.chat.llm_providers import get_provider_by_key
+    try:
+        providers_config = {**dict(getattr(config, 'LLM_PROVIDERS', {})),
+                            **dict(getattr(config, 'LLM_CUSTOM_PROVIDERS', {}))}
+        if provider_key not in providers_config:
+            return {"status": "error", "error": f"Unknown provider: {provider_key}"}
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        base = dict(providers_config[provider_key])
+        base['enabled'] = True
+        for field in ('api_key', 'base_url', 'model', 'extra_body'):
+            if body.get(field) is not None:
+                base['api_key_override' if field == 'api_key' else field] = body[field]
+        if 'disable_thinking' in body:
+            base['disable_thinking'] = bool(body['disable_thinking'])
+
+        suppress_active = bool(base.get('disable_thinking') or base.get('disable_thinking_qwen')
+                               or base.get('extra_body'))
+        timeout = getattr(config, 'LLM_REQUEST_TIMEOUT', 30)
+        probe = [{"role": "user", "content": _THINKING_PROBE}]
+
+        def _run(cfg):
+            pc = dict(providers_config)
+            pc[provider_key] = cfg
+            provider = get_provider_by_key(provider_key, pc, timeout)
+            if not provider:
+                return {"error": "Could not create provider — check credentials and settings"}
+            try:
+                resp = provider.chat_completion(probe, generation_params={"max_tokens": 512, "temperature": 0.6})
+            except Exception as e:
+                return {"error": _clean_llm_error(e)}
+            return {"result": _analyze_thinking(resp)}
+
+        def _work():
+            b = _run({**base, 'disable_thinking': False,
+                      'disable_thinking_qwen': False, 'extra_body': ''})
+            if 'error' in b:
+                return {"status": "error", "error": f"Baseline call failed: {b['error']}"}
+            baseline = b['result']
+            if suppress_active:
+                d = _run(dict(base))
+                if 'error' in d:
+                    # The suppression config itself was rejected — this is the useful signal.
+                    return {"status": "error", "baseline": baseline,
+                            "error": f"Your suppression config was rejected: {d['error']}"}
+                disabled = d['result']
+            else:
+                disabled = baseline
+
+            if not suppress_active:
+                verdict = (f"Disable thinking is OFF — the model reasoned ({baseline['reasoning_chars']} chars). "
+                           f"Turn it on and re-test." if baseline['had_reasoning']
+                           else "Disable thinking is OFF, and the model didn't reason on this prompt.")
+                ok = None
+            elif not baseline['had_reasoning']:
+                verdict = ("Inconclusive — the model didn't reason even unsuppressed "
+                           "(it may not support thinking, or chose not to).")
+                ok = None
+            elif not disabled['had_reasoning']:
+                verdict = f"✓ Works — reasoning {baseline['reasoning_chars']} → 0 chars when disabled."
+                ok = True
+            else:
+                verdict = (f"⚠ Not suppressed — still {disabled['reasoning_chars']} chars of reasoning. "
+                           f"Try the Extra body escape hatch.")
+                ok = False
+
+            return {"status": "success", "ok": ok, "suppress_active": suppress_active,
+                    "baseline": baseline, "disabled": disabled, "verdict": verdict}
+
+        return await asyncio.to_thread(_work)
+    except Exception as e:
+        logger.error(f"LLM thinking test failed for '{provider_key}': {e}")
+        return {"status": "error", "error": "Thinking test failed — check the model and connection"}
 
 
 @router.post("/api/llm/custom-providers")
@@ -890,18 +1157,24 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
     if name in custom:
         raise HTTPException(status_code=400, detail=f"Provider '{name}' already exists")
 
+    # Validate BEFORE storing the API key — the old order persisted the key
+    # first, so a 400 on template/base_url left an orphaned credential entry.
+    template = provider_registry.normalize_template(data.get('template', 'openai'))
+    if template not in provider_registry._classes:
+        raise HTTPException(status_code=400, detail=f"Unknown provider template '{template}'")
+    base_url = (data.get('base_url') or '').strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="A base URL is required for a custom provider")
+
     # Route API key to credentials
     api_key = data.pop('api_key', None)
     if api_key and api_key.strip():
         from core.credentials_manager import credentials
         credentials.set_llm_api_key(name, api_key.strip())
-
-    # Build config
-    template = data.get('template', 'openai')
     provider_config = {
         'template': template,
         'display_name': data.get('display_name', name),
-        'base_url': data.get('base_url', ''),
+        'base_url': base_url,
         'model': data.get('model', ''),
         'enabled': data.get('enabled', True),
         'use_as_fallback': data.get('use_as_fallback', True),
@@ -911,18 +1184,21 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
     # Optional fields
     for field in ('api_key_env', 'generation_params', 'auto_discover_models',
                   'session_affinity', 'strip_penalties', 'suggested_models',
-                  'thinking_enabled', 'thinking_budget', 'reasoning_effort'):
+                  'thinking_enabled', 'thinking_budget', 'reasoning_effort',
+                  'supports_images', 'disable_thinking', 'extra_body'):
         if field in data:
             provider_config[field] = data[field]
 
-    custom[name] = provider_config
-    settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
+    with _PROVIDER_MAP_LOCK:
+        custom = settings.get('LLM_CUSTOM_PROVIDERS', {})   # re-read under the lock
+        custom[name] = provider_config
+        settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
 
-    # Add to fallback order
-    order = settings.get('LLM_FALLBACK_ORDER', [])
-    if name not in order:
-        order.append(name)
-        settings.set('LLM_FALLBACK_ORDER', order, persist=True)
+        # Add to fallback order
+        order = settings.get('LLM_FALLBACK_ORDER', [])
+        if name not in order:
+            order.append(name)
+            settings.set('LLM_FALLBACK_ORDER', order, persist=True)
 
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_CUSTOM_PROVIDERS", "value": name})
     return {"status": "success", "name": name, "config": provider_config}
@@ -937,28 +1213,65 @@ async def delete_custom_provider(provider_key: str, request: Request, _=Depends(
     if provider_registry.is_core_provider(provider_key):
         raise HTTPException(status_code=400, detail="Cannot delete core providers")
 
-    custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
-    if provider_key not in custom:
-        raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
+    with _PROVIDER_MAP_LOCK:
+        custom = settings.get('LLM_CUSTOM_PROVIDERS', {})
+        if provider_key not in custom:
+            raise HTTPException(status_code=404, detail=f"Provider '{provider_key}' not found")
 
-    custom.pop(provider_key)
-    settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
+        custom.pop(provider_key)
+        settings.set('LLM_CUSTOM_PROVIDERS', custom, persist=True)
 
-    # Remove from fallback order
-    order = settings.get('LLM_FALLBACK_ORDER', [])
-    if provider_key in order:
-        order.remove(provider_key)
-        settings.set('LLM_FALLBACK_ORDER', order, persist=True)
+        # Remove from fallback order
+        order = settings.get('LLM_FALLBACK_ORDER', [])
+        if provider_key in order:
+            order.remove(provider_key)
+            settings.set('LLM_FALLBACK_ORDER', order, persist=True)
 
     # Clean up credentials
     try:
         from core.credentials_manager import credentials
         credentials.clear_llm_api_key(provider_key)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to clear credentials for deleted provider '{provider_key}': {e}")
 
+    swept = _sweep_llm_pin(provider_key)
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_CUSTOM_PROVIDERS", "value": provider_key})
-    return {"status": "success", "name": provider_key}
+    return {"status": "success", "name": provider_key, "swept": swept}
+
+
+def _sweep_llm_pin(dead_key: str) -> dict:
+    """A deleted provider leaves no pin behind (V8/S13, 2026-09-21): chats,
+    continuity tasks and personas pinned to it go back to 'auto' (model
+    cleared with them). Before this a pinned chat raised on every turn, a
+    task failed every run and a persona re-stamped the dead key. Best
+    effort per store; counts are for the log and the toast."""
+    swept = {"chats": 0, "tasks": 0, "personas": 0}
+    try:
+        sm = get_system().llm_chat.session_manager
+        swept["chats"] = len(sm.reset_chat_scope_ref('llm_primary', dead_key, reset_to='auto') or [])
+    except Exception as e:
+        logger.warning(f"provider sweep (chats) failed for '{dead_key}': {e}")
+    try:
+        sched = getattr(get_system(), 'continuity_scheduler', None)
+        for t in (sched.list_tasks() if sched else []):
+            if str(t.get('provider') or '') == dead_key:
+                sched.update_task(t['id'], {"provider": "auto", "model": ""})
+                swept["tasks"] += 1
+    except Exception as e:
+        logger.warning(f"provider sweep (tasks) failed for '{dead_key}': {e}")
+    try:
+        from core.personas import persona_manager
+        for name, persona in list((persona_manager.get_all() or {}).items()):
+            st = dict(persona.get('settings') or {})
+            if str(st.get('llm_primary') or '') == dead_key:
+                st.update({'llm_primary': 'auto', 'llm_model': ''})
+                if persona_manager.update(name, {"settings": st}):
+                    swept["personas"] += 1
+    except Exception as e:
+        logger.warning(f"provider sweep (personas) failed for '{dead_key}': {e}")
+    if any(swept.values()):
+        logger.info(f"Provider '{dead_key}' deleted — pins reset to auto: {swept}")
+    return swept
 
 
 @router.get("/api/llm/presets")

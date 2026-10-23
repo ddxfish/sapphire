@@ -76,10 +76,15 @@ def test_status_returns_all_expected_keys(status_client):
         'tts_enabled', 'tts_provider', 'stt_enabled', 'stt_provider',
         'stt_ready', 'wakeword_enabled', 'wakeword_ready',
         'tts_playing', 'active_chat', 'is_streaming', 'message_count',
-        'spice', 'context', 'chats', 'chat_settings',
+        'spice', 'context', 'chat_settings',
     ]
     for k in required_keys:
         assert k in body, f"missing key in /api/status: {k}"
+    # 'chats' was DROPPED deliberately (vaulted-chats Phase 0, 2026-08-13):
+    # nobody consumed it, it re-scanned every chat's settings per poll, and
+    # it shipped every chat's name + full settings dict — a standing leak
+    # surface once vaulted chats exist. The chat list lives at /api/chats.
+    assert 'chats' not in body, "/api/status must not ship the chat list"
 
 
 # ─── 2.30 status reflects chat_settings.private_chat ─────────────────────────

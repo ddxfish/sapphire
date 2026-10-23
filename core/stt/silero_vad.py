@@ -19,7 +19,7 @@ import os
 import shutil
 import socket
 import threading
-import urllib.request
+import requests
 from pathlib import Path
 from typing import Optional
 
@@ -38,8 +38,12 @@ _WARMUP_HARD_TIMEOUT_S = 120
 logger = logging.getLogger(__name__)
 
 # Stable upstream — snakers4/silero-vad master branch
-SILERO_VAD_URL = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
-SILERO_VAD_SHA256 = None  # Not pinned for now; could add later if abuse becomes a concern
+# Commit-pinned (negspace fold-in, 2026-08-31): master is a mutable ref —
+# a moved file would have been swallowed silently (sha was never checked).
+# Pin = the model file at its last change (2025-11-06), verified against
+# the locally cached copy. Upstream update -> bump BOTH url commit + sha.
+SILERO_VAD_URL = "https://github.com/snakers4/silero-vad/raw/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx"
+SILERO_VAD_SHA256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 MODEL_CACHE_PATH = PROJECT_ROOT / "user" / "models" / "silero_vad.onnx"
@@ -218,7 +222,7 @@ def run_voice_test(duration_s: float = 5.0) -> dict:
     Used by the "Test my voice" button to let users tune STT_VAD_SPEECH_THRESHOLD
     against their actual voice. Does NOT use the recorder's capture loop —
     direct mic→silero→score path so there's no silent-timeout interference."""
-    import sounddevice as sd
+    from core.audio.backend import sd
     from core.audio import get_device_manager, convert_to_mono, resample_audio
 
     if not is_available():
@@ -326,16 +330,27 @@ def _ensure_model_downloaded() -> Path:
     # a timeout kwarg directly; use urlopen + copyfileobj instead. 2026-05-20.
     tmp_path = MODEL_CACHE_PATH.with_suffix(".onnx.tmp")
     try:
-        req = urllib.request.Request(SILERO_VAD_URL)
-        with urllib.request.urlopen(req, timeout=_DOWNLOAD_READ_TIMEOUT_S) as resp:
-            with open(tmp_path, 'wb') as f:
-                shutil.copyfileobj(resp, f)
+        # get_session, not urllib: urllib can't ride the SOCKS env (no SOCKS
+        # support — under a proxy this download just died), and proxy users
+        # want model pulls routed too. SOCKS-for-all conversion, 2026-08-31.
+        from core.socks_proxy import get_session
+        resp = get_session().get(SILERO_VAD_URL, timeout=_DOWNLOAD_READ_TIMEOUT_S, stream=True)
+        resp.raise_for_status()
+        with open(tmp_path, 'wb') as f:
+            for chunk in resp.iter_content(65536):
+                f.write(chunk)
         if tmp_path.stat().st_size < 1_000_000:
             raise RuntimeError(f"Downloaded file too small ({tmp_path.stat().st_size} bytes) — likely a redirect/error page")
+        if SILERO_VAD_SHA256:
+            import hashlib
+            got = hashlib.sha256(tmp_path.read_bytes()).hexdigest()
+            if got != SILERO_VAD_SHA256:
+                tmp_path.unlink(missing_ok=True)
+                raise RuntimeError(f"silero_vad.onnx sha256 mismatch (got {got[:16]}…) — refusing unverified model")
         os.replace(tmp_path, MODEL_CACHE_PATH)
         logger.info(f"[SILERO] Model cached at {MODEL_CACHE_PATH} ({MODEL_CACHE_PATH.stat().st_size:,} bytes)")
         return MODEL_CACHE_PATH
-    except (socket.timeout, TimeoutError) as e:
+    except (socket.timeout, TimeoutError, requests.exceptions.Timeout) as e:
         # Clean up partial download
         if tmp_path.exists():
             try: tmp_path.unlink()

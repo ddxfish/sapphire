@@ -4,6 +4,8 @@
 import time
 import logging
 import requests
+
+from core import net
 from core.socks_proxy import get_session
 import config
 
@@ -140,7 +142,10 @@ def _website_status(url: str) -> tuple:
         url = 'https://' + url
     
     try:
-        session = get_session()
+        # Facade lane: check_website('sapphire-pi') must classify LAN and
+        # go direct — the hardwired WAN session re-ran the blinds hang for
+        # exactly the hostname shape home LANs use (scout find 2026-09-01).
+        session = net.session_for(url, profile='browser')
     except ValueError as e:
         return f"Network unavailable: {e}", False
     

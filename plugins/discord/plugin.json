@@ -1,16 +1,29 @@
 {
   "name": "discord",
-  "version": "1.0.0",
-  "description": "Discord — bot accounts, messaging, daemon listener",
-  "author": "sapphire",
+  "short_name": "Discord",
+  "short_display_name": "Discord",
+  "version": "2.0.0",
+  "min_core_version": "2.13.0",
+  "description": "Discord bot \u2014 accounts (the only thing it stores), conversation, images in and out, GIFs, silent reactions, and voice channels on Sapphire's conversation engine. Chat and greetings are daemon tasks (Discord: Chat / Greetings), voice is a Realtime rule (Discord: Voice channel); personality modules live in the discord-personality plugin.",
+  "author": "zeebie-the-zebra",
   "url": "https://sapphireblue.dev",
-  "icon": "🎮",
+  "icon": "\ud83c\udfae",
   "priority": 50,
   "default_enabled": false,
-  "pip_dependencies": ["discord.py"],
+  "pip_dependencies": [
+    "py-cord[voice] @ git+https://github.com/Pycord-Development/pycord.git@6e71bfffb520f77948ff28544949925a55767ee7",
+    "davey>=0.1.4",
+    "PyNaCl"
+  ],
   "settingsUI": "plugin",
   "capabilities": {
-    "tools": ["tools/discord_tools.py"],
+    "tools": [
+      "tools/discord_tools.py"
+    ],
+    "hooks": {
+      "prompt_inject": "hooks/voice_prompt_inject.py",
+      "post_chat": "hooks/hangup_sentinel.py"
+    },
     "scopes": [
       {
         "key": "discord",
@@ -19,58 +32,566 @@
         "data_key": "accounts",
         "value_field": "name",
         "name_field": "name",
-        "label_template": "{bot_name}"
+        "label_template": "{label}"
       }
     ],
     "daemon": {
       "entry": "daemon.py",
-      "event_sources": [{
-        "name": "discord_message",
-        "label": "Discord Message",
-        "description": "New message received in a Discord channel",
-        "filter_fields": [
-          {"key": "mentioned", "label": "bot was @mentioned (True/False)"},
-          {"key": "guild_name", "label": "server name"},
-          {"key": "channel_name", "label": "channel name"},
-          {"key": "username", "label": "sender username"},
-          {"key": "content_contains", "label": "keyword in message"},
-          {"key": "channel_name_not", "label": "exclude channel name"},
-          {"key": "guild_name_not", "label": "exclude server name"},
-          {"key": "username_not", "label": "exclude username"},
-          {"key": "guild_id", "label": "server ID (advanced)"},
-          {"key": "channel_id", "label": "channel ID (advanced)"}
-        ],
-        "task_fields": [
-          {
-            "key": "account",
-            "type": "select",
-            "label": "Bot Account",
-            "required": true,
-            "dynamic": "/api/plugin/discord/accounts",
-            "help": "Which Discord bot this daemon listens on. Only this bot will be connected."
-          },
-          {
-            "key": "auto_reply",
-            "type": "boolean",
-            "label": "Auto-reply in channel",
-            "default": true,
-            "help": "ON (default): AI's response posts back to the channel — what you want for a mention-reply bot. OFF: listen-only mode (e.g. pipe to TTS, save to memory, or trigger other tools without replying in Discord). The 5-second cooldown floor protects your bot token from rate-limit bans either way."
-          },
-          {
-            "key": "cooldown",
-            "type": "number",
-            "label": "Reply cooldown (seconds)",
-            "default": 0,
-            "help": "Minimum seconds between replies in the same channel. 0 = no limit. 60 = max once per minute."
-          }
-        ]
-      }]
+      "event_sources": [
+        {
+          "name": "discord_message",
+          "label": "Discord: Chat",
+          "description": "Replies to messages on the selected bot (filters below). This task's provider, persona, toolset and scopes are the brain.",
+          "filter_fields": [
+            {
+              "key": "mentioned",
+              "label": "bot was addressed \u2014 @mention or name match (True/False)"
+            },
+            {
+              "key": "guild_name",
+              "label": "server name"
+            },
+            {
+              "key": "channel_name",
+              "label": "channel name"
+            },
+            {
+              "key": "username",
+              "label": "sender username"
+            },
+            {
+              "key": "content_contains",
+              "label": "keyword in message"
+            },
+            {
+              "key": "channel_name_not",
+              "label": "exclude channel name"
+            },
+            {
+              "key": "guild_name_not",
+              "label": "exclude server name"
+            },
+            {
+              "key": "username_not",
+              "label": "exclude username"
+            },
+            {
+              "key": "guild_id",
+              "label": "server ID (advanced)"
+            },
+            {
+              "key": "channel_id",
+              "label": "channel ID (advanced)"
+            }
+          ],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Bot Account",
+              "required": true,
+              "dynamic": "/api/plugin/discord/accounts",
+              "help": "Which Discord bot this daemon listens on. Only bots selected by an enabled daemon task are connected."
+            },
+            {
+              "key": "auto_reply",
+              "type": "boolean",
+              "label": "Auto-reply in channel",
+              "default": true,
+              "help": "ON (default): AI's response posts back to the channel. OFF: listen-only mode."
+            }
+          ]
+        },
+        {
+          "name": "discord_greetings",
+          "label": "Discord: Greetings",
+          "description": "Daily good-morning / goodnight posts written by this task (its Instructions set the tone). No message replies. One post per channel per day.",
+          "filter_fields": [],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Bot Account",
+              "required": true,
+              "dynamic": "/api/plugin/discord/accounts",
+              "help": "Which Discord bot this daemon listens on. Only bots selected by an enabled daemon task are connected."
+            },
+            {
+              "key": "channels",
+              "type": "string",
+              "label": "Channels (ids, comma-separated)",
+              "required": true,
+              "placeholder": "123456789012345678, 234567890123456789",
+              "help": "Text channel ids the daily posts go to. In Discord: Settings \u2192 Advanced \u2192 Developer Mode, then right-click a channel \u2192 Copy Channel ID."
+            },
+            {
+              "key": "greeting_time",
+              "type": "string",
+              "widget": "time",
+              "label": "Good-morning time",
+              "default": "",
+              "help": "Local HH:MM. Blank = no morning post. Fires once per channel per day inside a five-minute window after the time; a late boot never greets."
+            },
+            {
+              "key": "goodnight_time",
+              "type": "string",
+              "widget": "time",
+              "label": "Goodnight time",
+              "default": "",
+              "help": "Local HH:MM. Blank = no goodnight post."
+            }
+          ]
+        },
+        {
+          "name": "discord_voice",
+          "label": "Discord: Voice channel",
+          "description": "Gate: an enabled rule turns voice ON for the channels its filter covers (no filter = every voice channel the bot can see). She joins on /voice join or her join tool \u2014 or on her own when Auto-join is on and someone is in the channel \u2014 converses live on Sapphire's conversation engine (this rule's persona, provider, model and toolset configure the voice chat), and leaves on <<HANG UP>>, /voice leave, or when the channel empties. Never fires a one-shot reply.",
+          "realtime": true,
+          "filter_fields": [
+            {
+              "key": "guild_name",
+              "label": "server name"
+            },
+            {
+              "key": "channel_name",
+              "label": "voice channel name"
+            },
+            {
+              "key": "guild_name_not",
+              "label": "exclude server name"
+            },
+            {
+              "key": "channel_name_not",
+              "label": "exclude voice channel name"
+            },
+            {
+              "key": "guild_id",
+              "label": "server ID (advanced)"
+            },
+            {
+              "key": "channel_id",
+              "label": "voice channel ID (advanced)"
+            }
+          ],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Bot Account",
+              "required": true,
+              "dynamic": "/api/plugin/discord/accounts",
+              "help": "Which Discord bot joins."
+            },
+            {
+              "key": "auto_join",
+              "type": "boolean",
+              "label": "Auto-join when someone is in the channel",
+              "default": false,
+              "help": "OFF (default): she only joins when asked (/voice join, her join tool). ON: she walks into a covered channel when a human is there and leaves when it empties. A channel she left on purpose (<<HANG UP>>, /voice leave) is not rejoined until it has emptied once."
+            },
+            {
+              "key": "keep_chat_history",
+              "type": "boolean",
+              "label": "Keep voice chat history",
+              "default": false,
+              "help": "OFF (default): each channel's voice chat is deleted 30 minutes after her last session there (strangers' transcripts don't pile up). ON: the chat persists."
+            }
+          ]
+        }
+      ]
     },
     "routes": [
-      {"method": "GET",    "path": "accounts",         "handler": "routes/accounts.py:list_accounts"},
-      {"method": "POST",   "path": "accounts",         "handler": "routes/accounts.py:add_account"},
-      {"method": "DELETE", "path": "accounts/{name}",   "handler": "routes/accounts.py:delete_account"},
-      {"method": "POST",   "path": "accounts/{name}/test", "handler": "routes/accounts.py:test_account"}
+      {
+        "method": "GET",
+        "path": "accounts",
+        "handler": "api/accounts.py:list_accounts"
+      },
+      {
+        "method": "POST",
+        "path": "accounts",
+        "handler": "api/accounts.py:add_account"
+      },
+      {
+        "method": "POST",
+        "path": "accounts/test",
+        "handler": "api/accounts.py:test_token"
+      },
+      {
+        "method": "DELETE",
+        "path": "accounts/{name}",
+        "handler": "api/accounts.py:delete_account"
+      },
+      {
+        "method": "POST",
+        "path": "accounts/{name}/test",
+        "handler": "api/accounts.py:test_account"
+      },
+      {
+        "method": "GET",
+        "path": "settings",
+        "handler": "api/settings.py:get_settings"
+      },
+      {
+        "method": "GET",
+        "path": "health",
+        "handler": "api/health.py:get_health"
+      },
+      {
+        "method": "GET",
+        "path": "channels/text",
+        "handler": "api/channels.py:list_text_channels"
+      },
+      {
+        "method": "GET",
+        "path": "voice/targets",
+        "handler": "api/channels.py:list_voice_targets"
+      },
+      {
+        "method": "GET",
+        "path": "voice/status",
+        "handler": "api/voice.py:voice_status"
+      },
+      {
+        "method": "GET",
+        "path": "bots/allowlist",
+        "handler": "api/channels.py:list_bot_allowlist_candidates"
+      },
+      {
+        "method": "GET",
+        "path": "debug/decisions",
+        "handler": "api/debug.py:list_decisions"
+      },
+      {
+        "method": "POST",
+        "path": "debug/clear",
+        "handler": "api/debug.py:clear_decisions"
+      }
+    ],
+    "schedule": [],
+    "settings": [
+      {
+        "key": "channel.reply_mode",
+        "type": "string",
+        "label": "Reply mode",
+        "default": "default",
+        "tab": "Conversation",
+        "help": "First gate before the LLM. Mentions only is the usual choice for public servers. Default also rolls Human/Bot organic reply chance on unaddressed channel messages.",
+        "options": [
+          {
+            "label": "Default \u2014 reply when addressed, plus organic chance",
+            "value": "default"
+          },
+          {
+            "label": "Mentions only \u2014 require @mention or name match",
+            "value": "mentions_only"
+          },
+          {
+            "label": "Reply to all \u2014 answer every allowed message",
+            "value": "all"
+          },
+          {
+            "label": "Disabled \u2014 never auto-reply in channels",
+            "value": "disabled"
+          }
+        ]
+      },
+      {
+        "key": "channel.ignored_channels",
+        "type": "list",
+        "label": "Ignored channels",
+        "default": [],
+        "hidden": true
+      },
+      {
+        "key": "channel.human_response_chance",
+        "type": "number",
+        "label": "Human organic reply chance (%)",
+        "default": 15.0,
+        "tab": "Conversation",
+        "help": "In Default reply mode only: percent chance (0-100) to reply to a human message that did not address her (@mention / name match). Mentions and DMs always reply. 0 = never chime in unprompted."
+      },
+      {
+        "key": "channel.bot_response_chance",
+        "type": "number",
+        "label": "Bot organic reply chance (%)",
+        "default": 15.0,
+        "tab": "Conversation",
+        "help": "In Default reply mode only: percent chance (0-100) to reply to an eligible bot message that did not address her. Still requires Bot-to-bot replies and allowlist/mode gates. Mentions bypass this roll. 0 = never."
+      },
+      {
+        "key": "channel.name_match_enabled",
+        "type": "boolean",
+        "label": "Respond to bot name (soft mention)",
+        "default": false,
+        "tab": "Conversation",
+        "help": "Reply when a message contains the bot's name anywhere in the text, no @mention needed. OFF (default): only real @mentions count."
+      },
+      {
+        "key": "channel.name_match_case_sensitive",
+        "type": "boolean",
+        "label": "Case-sensitive name match",
+        "default": false,
+        "tab": "Conversation",
+        "help": "ON: the name must match capitalization exactly. OFF (default): any capitalization counts. Only applies when name match is on."
+      },
+      {
+        "key": "channel.batching_seconds",
+        "type": "number",
+        "label": "Batch window (seconds)",
+        "default": 8,
+        "tab": "Conversation",
+        "help": "Collect rapid messages into one reply. Typing extends; questions halve."
+      },
+      {
+        "key": "channel.context_messages",
+        "type": "number",
+        "label": "Give the AI the last X channel messages",
+        "default": 20,
+        "tab": "Conversation",
+        "help": "When she replies, the last X messages of that channel are fetched live from Discord and shown to the AI as 'Recent chat' (0-50; 0 = only the message that triggered her). Nothing is stored \u2014 the plugin keeps no copy of anyone's messages. If the task also keeps a chat, her own past exchanges are in that chat; this window is what other people said."
+      },
+      {
+        "key": "channel.natural_delay",
+        "type": "boolean",
+        "label": "Natural delay",
+        "default": true,
+        "tab": "Conversation",
+        "help": "ON (default): she reads before she types, shows typing\u2026 paced by the reply length, and pauses a beat between chunks \u2014 like a person. OFF: posts instantly."
+      },
+      {
+        "key": "bot.allow_all",
+        "type": "boolean",
+        "label": "Answer any bot",
+        "default": false,
+        "tab": "Conversation",
+        "help": "OFF (default): she only answers the bots in the allowlist below (empty list = no bot at all). ON: any bot \u2014 a mention gets a reply, the rest roll the bot organic chance. Either way, after 5 bot-triggered replies in a row with no human in between she ignores bots in that channel until a human speaks."
+      },
+      {
+        "key": "bot.allowlist_ids",
+        "type": "list",
+        "label": "Allowlisted bots",
+        "default": [],
+        "hidden": true
+      },
+      {
+        "key": "reaction.enabled",
+        "type": "boolean",
+        "label": "LLM reaction tags",
+        "default": true,
+        "tab": "Reactions",
+        "help": "ON (default): a [react:emoji] tag she writes into a reply lands as a reaction on the message she answered. OFF: the tag is stripped and ignored."
+      },
+      {
+        "key": "reaction.silent_enabled",
+        "type": "boolean",
+        "label": "Autonomous silent reactions",
+        "default": true,
+        "tab": "Reactions",
+        "help": "React with an emoji without replying \u2014 one roll per message she reads; the emoji follows the message's tone (a small word list, no model)."
+      },
+      {
+        "key": "reaction.reaction_chance",
+        "type": "number",
+        "label": "Reaction chance (%)",
+        "default": 10.0,
+        "tab": "Reactions",
+        "help": "Chance (0-100%) she silently reacts to a message she reads. 0 = never."
+      },
+      {
+        "key": "reaction.reaction_cooldown_seconds",
+        "type": "number",
+        "label": "Reaction cooldown (seconds)",
+        "default": 30,
+        "tab": "Reactions",
+        "help": "Minimum seconds between her self-initiated reactions in the same channel. 0 = no cooldown."
+      },
+      {
+        "key": "safety.allow_direct_messages",
+        "type": "boolean",
+        "label": "Allow DMs",
+        "default": false,
+        "tab": "Safety",
+        "help": "OFF (default): she won't reply to direct messages \u2014 anyone who shares a server can DM a bot, so it is an outside line until you open it. ON: she replies to DMs (they are stored in the plugin database; scheduled reminders she owes someone may still deliver by DM)."
+      },
+      {
+        "key": "safety.dm_daily_budget",
+        "type": "number",
+        "label": "DM budget per person per day",
+        "default": 30,
+        "tab": "Safety",
+        "help": "When DMs are on: how many DM messages from one person she answers per day before going quiet on them until tomorrow. 0 = unlimited."
+      },
+      {
+        "key": "safety.tools_stay_in_server",
+        "type": "boolean",
+        "label": "Tools stay in the server",
+        "default": true,
+        "tab": "Safety",
+        "help": "ON (default): while she is replying inside a Discord server, her Discord tools can only read or post in THAT server \u2014 a message in one server can't make her post into another, or into someone's DMs. From your own chats she can reach any channel. OFF: no reach limit inside events."
+      },
+      {
+        "key": "safety.rate_limit_seconds",
+        "type": "number",
+        "label": "Reply cooldown (seconds)",
+        "default": 30,
+        "tab": "Safety",
+        "help": "Minimum seconds between replies in the same channel, DMs included (default 30). 0 = no limit. This is the only throttle on the reply pipeline."
+      },
+      {
+        "key": "media.images_in_enabled",
+        "type": "boolean",
+        "label": "Images in",
+        "default": false,
+        "tab": "Media",
+        "help": "ON: images posted in chat ride into her reply as pictures when the daemon task's model can see images (fetched off the gateway, 10 MB each, no captioning). OFF (default): attachments are ignored. Does not affect GIF replies."
+      },
+      {
+        "key": "media.max_images",
+        "type": "number",
+        "label": "Max images per message",
+        "default": 4,
+        "min": 1,
+        "max": 10,
+        "tab": "Media",
+        "help": "How many of one message's images she gets to see."
+      },
+      {
+        "key": "media.gif_enabled",
+        "type": "boolean",
+        "label": "GIF replies",
+        "default": false,
+        "tab": "Media",
+        "help": "ON: she can reply with real GIFs \u2014 she writes [gif:search terms] or calls the send-GIF tool and it's swapped for a GIF from your provider. Requires a GIF API key."
+      },
+      {
+        "key": "media.gif_api_key",
+        "type": "password",
+        "label": "GIF API key",
+        "default": "",
+        "tab": "Media",
+        "help": "API key for the selected GIF provider. GIF replies stay off until this is set, even with the toggle on."
+      },
+      {
+        "key": "media.gif_provider",
+        "type": "string",
+        "label": "GIF provider",
+        "default": "klipy",
+        "tab": "Media",
+        "options": [
+          {
+            "label": "Klipy",
+            "value": "klipy"
+          },
+          {
+            "label": "Giphy",
+            "value": "giphy"
+          },
+          {
+            "label": "Tenor",
+            "value": "tenor"
+          }
+        ],
+        "help": "Which service her GIF searches use: Klipy, Giphy, or Tenor. The API key must match the provider."
+      },
+      {
+        "key": "media.gif_content_filter",
+        "type": "string",
+        "label": "GIF content filter",
+        "default": "medium",
+        "tab": "Media",
+        "options": [
+          {
+            "label": "Off",
+            "value": "off"
+          },
+          {
+            "label": "Low",
+            "value": "low"
+          },
+          {
+            "label": "Medium",
+            "value": "medium"
+          },
+          {
+            "label": "High",
+            "value": "high"
+          }
+        ],
+        "help": "Safety level for GIF search results: Off (unfiltered) to High (strictest). Applies the same direction on Klipy, Giphy, and Tenor."
+      },
+      {
+        "key": "voice.turn_cues_enabled",
+        "type": "boolean",
+        "label": "Turn cues",
+        "help": "Tick while she thinks, ding on barge-in",
+        "default": true,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.conversation_prompt_template",
+        "type": "textarea",
+        "label": "Voice conversation prompt",
+        "default": "",
+        "hidden": true
+      },
+      {
+        "key": "voice.min_silence_seconds",
+        "type": "number",
+        "label": "Silence before she answers (seconds)",
+        "default": 1.5,
+        "tab": "Voice",
+        "help": "How long a speaker must stay quiet before their utterance is transcribed. The listener adds a 1.2 s guard on top and never waits less than 1.8 s, so the default 1.5 means 2.7 s of silence."
+      },
+      {
+        "key": "voice.addressing_mode",
+        "type": "string",
+        "label": "Addressing: mode",
+        "help": "When she treats speech as meant for her",
+        "default": "bot_name",
+        "tab": "Voice",
+        "options": [
+          {
+            "label": "Name required each time",
+            "value": "bot_name"
+          },
+          {
+            "label": "Always respond",
+            "value": "always"
+          }
+        ]
+      },
+      {
+        "key": "voice.addressing_aliases",
+        "type": "list",
+        "label": "Addressing: name aliases",
+        "help": "Extra names that count as hers (sapph, saphire...)",
+        "default": [],
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.solo_no_name",
+        "type": "boolean",
+        "label": "Addressing: alone = no name needed",
+        "help": "One person in the channel with her: everything said is for her",
+        "default": true,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.follow_up_seconds",
+        "type": "number",
+        "label": "Addressing: follow-up window (seconds)",
+        "help": "After she answers someone, that person can keep talking without her name for this long. Others still need it. 0 = off",
+        "default": 20,
+        "tab": "Voice"
+      },
+      {
+        "key": "voice.barge_hold_ms",
+        "type": "number",
+        "label": "Barge-in: hold (ms)",
+        "help": "How long you must keep talking over her before she stops. A click or thump can't hold this long; a word can",
+        "default": 250,
+        "tab": "Voice"
+      }
     ]
   }
 }

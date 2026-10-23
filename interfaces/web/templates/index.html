@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Sapphire</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="icon" type="image/svg+xml" id="favicon-svg" href="/static/logo.svg">
+    <link rel="alternate icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/shared.css?v={{ v }}">
 
     <!-- Syntax Highlighting (local) -->
@@ -27,49 +28,86 @@
     <script>
         // Load saved theme before CSS renders to prevent flash
         (function() {
-            const saved = localStorage.getItem('sapphire-theme') || 'dark';
-            document.documentElement.setAttribute('data-theme', saved);
-
-            // Check if this is a plugin theme (has saved theme data with CSS URL)
-            var themeDataStr = localStorage.getItem('sapphire-theme-data');
-            var themeData = null;
-            try { themeData = themeDataStr ? JSON.parse(themeDataStr) : null; } catch(e) {}
-
-            if (themeData && themeData.id === saved && themeData.css) {
-                // Plugin theme — load from plugin CSS URL
-                var link = document.createElement('link');
-                link.id = 'plugin-theme-css';
-                link.rel = 'stylesheet';
-                link.href = themeData.css;
-                document.head.appendChild(link);
-                // Also load scripts if any
-                if (themeData.scripts) {
-                    themeData.scripts.forEach(function(src) {
-                        var s = document.createElement('script');
-                        s.src = src;
-                        s.dataset.themeScript = saved;
-                        document.head.appendChild(s);
-                    });
-                }
-            } else {
-                // Core theme — load from static/themes/
-                var link = document.createElement('link');
-                link.id = 'theme-stylesheet';
-                link.rel = 'stylesheet';
-                link.href = '/static/themes/' + saved + '.css?v={{ v }}';
-                document.head.appendChild(link);
-            }
-
-            // Restore chat-style data attributes from localStorage
+            // Whole IIFE is guarded: blocked storage (cookies off, partitioned
+            // context) used to throw on the first getItem and kill theming
+            // entirely — no stylesheet at all (P0 hunt 2026-08-16).
             try {
-                for (var i = 0; i < localStorage.length; i++) {
-                    var key = localStorage.key(i);
-                    if (key && key.endsWith('-chat-style')) {
-                        var prefix = key.replace('-chat-style', '');
-                        document.documentElement.setAttribute('data-' + prefix + '-chat', localStorage.getItem(key));
+                var saved = localStorage.getItem('sapphire-theme') || '{{ default_theme }}';
+                document.documentElement.setAttribute('data-theme', saved);
+
+                // Check if this is a plugin theme (has saved theme data with CSS URL)
+                var themeDataStr = localStorage.getItem('sapphire-theme-data');
+                var themeData = null;
+                try { themeData = themeDataStr ? JSON.parse(themeDataStr) : null; } catch(e) {}
+
+                // localStorage is a cache here, not an authority: only load
+                // same-app asset paths from it (a stale/poisoned record must
+                // not become a boot-time script injector — chaos hunt T2).
+                var okUrl = function(u) {
+                    return typeof u === 'string' &&
+                        (u.indexOf('/static/themes/') === 0 || u.indexOf('/plugin-web/') === 0);
+                };
+
+                if (themeData && themeData.id === saved && okUrl(themeData.css)) {
+                    // Plugin theme — load from plugin CSS URL
+                    var link = document.createElement('link');
+                    link.id = 'plugin-theme-css';
+                    link.rel = 'stylesheet';
+                    link.href = themeData.css;
+                    document.head.appendChild(link);
+                    // Also load scripts if any
+                    if (Array.isArray(themeData.scripts)) {
+                        themeData.scripts.filter(okUrl).forEach(function(src) {
+                            var s = document.createElement('script');
+                            s.src = src;
+                            s.dataset.themeScript = saved;
+                            document.head.appendChild(s);
+                        });
                     }
+                } else {
+                    // Core theme — load from static/themes/
+                    var link = document.createElement('link');
+                    link.id = 'theme-stylesheet';
+                    link.rel = 'stylesheet';
+                    link.href = '/static/themes/' + saved + '.css?v={{ v }}';
+                    document.head.appendChild(link);
                 }
-            } catch(e) {}
+
+                // Restore the ACTIVE theme's chat-style attrs only — settings
+                // live under namespaced keys `theme:{id}:{key}` now, so other
+                // themes' leftovers no longer ghost-restore (lifecycle #3/#9).
+                // Per-key try: one junk key must not abort the loop.
+                var pfx = 'theme:' + saved + ':';
+                for (var i = 0; i < localStorage.length; i++) {
+                    try {
+                        var key = localStorage.key(i);
+                        if (key && key.indexOf(pfx) === 0 && key.endsWith('-chat-style')) {
+                            var prefix = key.slice(pfx.length).replace('-chat-style', '');
+                            if (/^[a-z0-9-]+$/.test(prefix)) {
+                                document.documentElement.setAttribute('data-' + prefix + '-chat', localStorage.getItem(key));
+                            }
+                        }
+                    } catch(e) {}
+                }
+
+                // Density + font — moved from main.js initAppearance, which
+                // ran post-module-load and caused a visible reflow (L11).
+                var density = localStorage.getItem('sapphire-density');
+                if (density && density !== 'default') document.documentElement.setAttribute('data-density', density);
+                var savedFont = localStorage.getItem('sapphire-font');
+                if (savedFont && savedFont !== 'system') document.documentElement.setAttribute('data-font', savedFont);
+                var fontsize = localStorage.getItem('sapphire-fontsize');
+                if (fontsize && fontsize !== 'default') document.documentElement.setAttribute('data-fontsize', fontsize);
+            } catch(e) {
+                // Storage unavailable: fall back to the default dark theme.
+                try {
+                    var fallback = document.createElement('link');
+                    fallback.id = 'theme-stylesheet';
+                    fallback.rel = 'stylesheet';
+                    fallback.href = '/static/themes/{{ default_theme }}.css?v={{ v }}';
+                    document.head.appendChild(fallback);
+                } catch(e2) {}
+            }
         })();
     </script>
     <script>
@@ -86,6 +124,7 @@
             };
         })();
     </script>
+    <link rel="stylesheet" href="/static/ui.css?v={{ v }}">
     <link rel="stylesheet" href="/static/style.css?v={{ v }}">
 </head>
 <body>
@@ -93,12 +132,16 @@
          NAV RAIL (left, 64px desktop / bottom bar mobile)
          ================================================================ -->
     <nav id="nav-rail">
-        <div class="nav-logo" title="Sapphire">S</div>
+        <div class="nav-logo" title="Sapphire"><svg viewBox="793.73 373.73 332.54 332.54" aria-hidden="true"><path fill="#3289d9" d="M960,373.73a28.75,28.75,0,0,0-14.39,3.85L826.54,446.33a28.68,28.68,0,0,0-10.49,10.46L960,539.9Z"/><path fill="#036ec3" d="M816.05,456.79a28.67,28.67,0,0,0-3.9,14.47V608.74A28.71,28.71,0,0,0,816,623.06L960,539.9Z"/><path fill="#046dc0" d="M1107.85,471.26a28.67,28.67,0,0,0-3.9-14.47L960,539.9l144,83.16a28.71,28.71,0,0,0,3.81-14.32Z"/><path fill="#62a2e5" d="M1104,456.79a28.68,28.68,0,0,0-10.49-10.46L974.39,377.58A28.75,28.75,0,0,0,960,373.73V539.9Z"/><path fill="#004594" d="M960,706.27a28.75,28.75,0,0,0,14.39-3.85l119.07-68.75A28.72,28.72,0,0,0,1104,623.06L960,539.9Z"/><path fill="#015cb5" d="M816,623.06a28.72,28.72,0,0,0,10.58,10.61l119.07,68.75A28.75,28.75,0,0,0,960,706.27V539.9Z"/></svg></div>
 
-        <button class="nav-item active" data-view="chat">
+        <div class="nav-item active nav-group-parent" data-view="chat" role="button" tabindex="0">
             <span class="nav-icon">&#x1F4AC;</span>
             <span class="nav-label">Chat</span>
-        </button>
+            <div class="nav-flyout">
+                <div class="nav-flyout-item" data-view="chat" role="button" tabindex="0">&#x1F4AC; Chat</div>
+                <div class="nav-flyout-item" data-view="chat-manage" role="button" tabindex="0">&#x1F5C2;&#xFE0F; Manage</div>
+            </div>
+        </div>
         <div class="nav-item nav-group-parent" data-view="personas" role="button" tabindex="0">
             <span class="nav-icon">&#x1F3AD;</span>
             <span class="nav-label">Persona</span>
@@ -116,6 +159,7 @@
                 <div class="nav-flyout-item" data-view="heartbeat" role="button" tabindex="0">&#x1F493; Heartbeat</div>
                 <div class="nav-flyout-item" data-view="scheduled" role="button" tabindex="0">&#x1F4C5; Scheduled</div>
                 <div class="nav-flyout-item" data-view="daemons" role="button" tabindex="0">&#x1F4E1; Daemons</div>
+                <div class="nav-flyout-item" data-view="realtime" role="button" tabindex="0">&#x26A1; Realtime</div>
                 <div class="nav-flyout-item" data-view="webhooks" role="button" tabindex="0">&#x1F517; Webhooks</div>
             </div>
         </div>
@@ -123,14 +167,15 @@
             <span class="nav-icon">&#x1F9E0;</span>
             <span class="nav-label">Mind</span>
             <div class="nav-flyout">
+                <div class="nav-flyout-item" data-view="self" role="button" tabindex="0">&#x1F4A0; Self</div>
                 <div class="nav-flyout-item" data-view="memories" role="button" tabindex="0">&#x1F9E0; Memories</div>
-                <div class="nav-flyout-item" data-view="people" role="button" tabindex="0">&#x1F465; People</div>
-                <div class="nav-flyout-item" data-view="knowledge" role="button" tabindex="0">&#x1F4DA; Human Knowledge</div>
-                <div class="nav-flyout-item" data-view="ai-knowledge" role="button" tabindex="0">&#x1F916; AI Knowledge</div>
+                <div class="nav-flyout-item" data-view="people" role="button" tabindex="0">&#x1F465; Entities</div>
+                <div class="nav-flyout-item" data-view="knowledge" role="button" tabindex="0">&#x1F4DA; Knowledge</div>
                 <div class="nav-flyout-item" data-view="goals" role="button" tabindex="0">&#x1F3AF; Goals</div>
+                <div class="nav-flyout-item" data-view="admin" role="button" tabindex="0">&#x1F6E0;&#xFE0F; Admin</div>
             </div>
         </div>
-        <div class="nav-item nav-group-parent" data-view="settings" role="button" tabindex="0">
+        <div class="nav-item nav-group-parent nav-mobile-overflow" data-view="settings" role="button" tabindex="0">
             <span class="nav-icon">&#x2699;&#xFE0F;</span>
             <span class="nav-label">Settings</span>
             <div class="nav-flyout">
@@ -140,6 +185,8 @@
                 <div class="nav-flyout-item" data-view="video-guide" role="button" tabindex="0">&#x1F3AC; Videos</div>
             </div>
         </div>
+        <!-- Mobile-only gem: dashboard today, quick-actions flyout later -->
+        <button class="nav-item nav-gem" id="nav-gem" data-view="settings" title="Sapphire"><svg viewBox="793.73 373.73 332.54 332.54" aria-hidden="true"><path fill="#3289d9" d="M960,373.73a28.75,28.75,0,0,0-14.39,3.85L826.54,446.33a28.68,28.68,0,0,0-10.49,10.46L960,539.9Z"/><path fill="#036ec3" d="M816.05,456.79a28.67,28.67,0,0,0-3.9,14.47V608.74A28.71,28.71,0,0,0,816,623.06L960,539.9Z"/><path fill="#046dc0" d="M1107.85,471.26a28.67,28.67,0,0,0-3.9-14.47L960,539.9l144,83.16a28.71,28.71,0,0,0,3.81-14.32Z"/><path fill="#62a2e5" d="M1104,456.79a28.68,28.68,0,0,0-10.49-10.46L974.39,377.58A28.75,28.75,0,0,0,960,373.73V539.9Z"/><path fill="#004594" d="M960,706.27a28.75,28.75,0,0,0,14.39-3.85l119.07-68.75A28.72,28.72,0,0,0,1104,623.06L960,539.9Z"/><path fill="#015cb5" d="M816,623.06a28.72,28.72,0,0,0,10.58,10.61l119.07,68.75A28.75,28.75,0,0,0,960,706.27V539.9Z"/></svg></button>
         <button class="nav-item" data-view="apps" id="nav-apps" style="display:none">
             <span class="nav-icon">&#x1F4E6;</span>
             <span class="nav-label">Apps</span>
@@ -171,232 +218,16 @@
         <!-- ============================================================
              CHAT VIEW
              ============================================================ -->
-        <div id="view-chat" class="view active">
-            <!-- Chat Content + Settings Sidebar -->
-            <div class="chat-body">
-                <!-- Messages area -->
-                <div class="chat-main">
-                    <div id="chatbg">
-                        <div id="chatbg-overlay">
-                            <div id="chat-container"></div>
-                        </div>
-                    </div>
-                    <div class="form-wrapper">
-                        <div id="context-bar"></div>
-                        <div id="image-preview-area" style="display: none;"></div>
-                        <form id="chat-form">
-                            <div class="volume-compact" id="volume-compact">
-                                <button type="button" id="mute-btn" class="vol-btn" title="Volume">&#x1F50A;</button>
-                                <div class="volume-popover" id="volume-popover">
-                                    <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume">
-                                </div>
-                            </div>
-                            <button type="button" id="mic-btn" title="Hold to record">&#x1F3A4;</button>
-                            <div class="textarea-wrapper">
-                                <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">&#x1F4CE;</button>
-                                <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
-                            </div>
-                            <input type="file" id="image-upload-input" accept="image/*,.py,.txt,.md,.js,.ts,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.sh,.bash,.html,.css,.xml,.csv,.log,.env,.rs,.go,.java,.c,.cpp,.h" multiple style="display: none;">
-                            <div class="send-btn-wrapper">
-                                <button type="submit" id="send-btn">Send</button>
-                                <button type="button" id="stop-btn" style="display: none;">Stop</button>
-                                <span id="llm-indicator"></span>
-                            </div>
-                        </form>
-                        <div id="prompt-display"></div>
-                        <div id="functions-display"></div>
-                    </div>
-                </div>
-
-                <!-- Chat Settings Sidebar (right) -->
-                <aside class="chat-sidebar">
-                    <div class="chat-sidebar-inner">
-                        <!-- Row 1: accent circle + chat name + collapse (always visible) -->
-                        <div class="sb-chat-header">
-                            <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color (double-click to reset)">
-                            <div class="sb-chat-picker" id="sb-chat-picker">
-                                <button class="sb-chat-picker-btn" id="sb-chat-picker-btn">
-                                    <span id="sb-chat-name">Chat</span>
-                                    <span class="sb-chat-arrow">&#x25BE;</span>
-                                </button>
-                                <div class="sb-chat-picker-dropdown" id="sb-chat-picker-dropdown"></div>
-                            </div>
-                            <button type="button" id="chat-sidebar-toggle" class="sb-icon-btn sb-collapse-btn" title="Hide sidebar">&#x25B6;</button>
-                        </div>
-                        <!-- Row 2: chat actions (always visible) -->
-                        <div class="sb-chat-actions">
-                            <button type="button" id="sb-new-chat" class="sb-icon-btn" title="New Chat">+</button>
-                            <button type="button" id="sb-delete-chat" class="sb-icon-btn sb-icon-danger" title="Delete Chat">&#x1F5D1;</button>
-                            <button type="button" id="clear-chat-btn" class="sb-icon-btn" title="Clear Chat">&#x2715;</button>
-                            <div class="sb-kebab kebab-menu" id="chat-menu">
-                                <button type="button" class="sb-icon-btn kebab-btn" title="More">&#x22EE;</button>
-                                <div class="kebab-dropdown">
-                                    <button id="import-chat-btn">Import</button>
-                                    <button id="export-chat-btn">Export</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Sidebar mode tabs -->
-                        <div class="sb-mode-tabs">
-                            <button class="sb-mode-tab active" data-mode="easy">Persona</button>
-                            <button class="sb-mode-tab" data-mode="full">Settings</button>
-                        </div>
-
-                        <!-- Easy mode: persona-centric view -->
-                        <div class="sb-easy-content" style="display:none">
-                            <div class="sb-persona-grid" id="sb-persona-grid"></div>
-                            <div class="sb-persona-detail" id="sb-persona-detail"></div>
-                        </div>
-
-                        <!-- Full mode: all settings -->
-                        <div class="sb-full-content">
-                        <div class="sidebar-section">
-                            <div class="sb-field">
-                                <label for="sb-prompt">prompt</label>
-                                <div class="sb-field-row">
-                                    <select id="sb-prompt"><option value="sapphire">Sapphire</option></select>
-                                    <button type="button" class="sb-btn-sm sb-goto-view" data-view="prompts" data-select="sb-prompt" title="Open in Prompts">&#x2197;</button>
-                                </div>
-                            </div>
-                            <div class="sb-field">
-                                <label for="sb-toolset">toolset</label>
-                                <div class="sb-field-row">
-                                    <select id="sb-toolset"><option value="all">All</option></select>
-                                    <button type="button" class="sb-btn-sm sb-goto-view" data-view="toolsets" data-select="sb-toolset" title="Open in Toolsets">&#x2197;</button>
-                                </div>
-                            </div>
-                            <div class="sb-field">
-                                <label for="sb-spice-set">spice set</label>
-                                <div class="sb-field-row">
-                                    <select id="sb-spice-set"><option value="default">default</option></select>
-                                    <button type="button" class="sb-btn-sm sb-goto-view" data-view="spices" data-select="sb-spice-set" title="Open in Spices">&#x2197;</button>
-                                </div>
-                            </div>
-                            <div class="sb-field">
-                                <label for="sb-llm-primary">provider</label>
-                                <select id="sb-llm-primary"><option value="auto">Auto</option></select>
-                            </div>
-                            <div class="sb-field" id="sb-model-group" style="display:none">
-                                <label for="sb-llm-model">model</label>
-                                <select id="sb-llm-model"></select>
-                            </div>
-                            <div class="sb-field" id="sb-model-custom-group" style="display:none">
-                                <label for="sb-llm-model-custom">model</label>
-                                <input type="text" id="sb-llm-model-custom" placeholder="Model name">
-                            </div>
-                        </div>
-
-                        <!-- Quick toggles -->
-                        <div class="sb-toggles">
-                            <button type="button" class="sb-toggle active" id="sb-spice-toggle" data-active="true">Spice &middot; 3</button>
-                            <button type="button" class="sb-toggle" id="sb-datetime-toggle" data-active="false">Date/Time</button>
-                        </div>
-
-                        <!-- Mind Scopes Accordion — populated by shared/scope-dropdowns.js
-                             from /api/init scope_declarations. Each editor that needs
-                             scope dropdowns (sidebar, persona, trigger editor) uses the
-                             same renderer; adding a new scope means editing one manifest. -->
-                        <div class="sidebar-section sidebar-accordion">
-                            <div class="sidebar-accordion-header">
-                                <span class="accordion-arrow">&#x25B6;</span>
-                                <span>&#x1F9E0; Mind</span>
-                            </div>
-                            <div class="sidebar-accordion-content" style="display:none">
-                                <div id="sb-scope-dropdowns"></div>
-                            </div>
-                        </div>
-
-                        <!-- Documents (RAG) Accordion -->
-                        <div class="sidebar-section sidebar-accordion">
-                            <div class="sidebar-accordion-header">
-                                <span class="accordion-arrow">&#x25B6;</span>
-                                <span>&#x1F4CE; Documents</span>
-                                <span id="sb-doc-count" class="sb-badge" style="display:none">0</span>
-                            </div>
-                            <div class="sidebar-accordion-content" style="display:none">
-                                <div class="sb-field">
-                                    <label for="sb-rag-context">context</label>
-                                    <select id="sb-rag-context">
-                                        <option value="off">Off</option>
-                                        <option value="light">Light</option>
-                                        <option value="normal" selected>Normal</option>
-                                        <option value="heavy">Heavy</option>
-                                    </select>
-                                </div>
-                                <div id="sb-doc-list"></div>
-                                <label class="sb-upload-btn">
-                                    Upload file
-                                    <input type="file" id="sb-doc-upload" hidden>
-                                </label>
-                            </div>
-                        </div>
-
-                        <!-- TTS (Voice) Accordion -->
-                        <div class="sidebar-section sidebar-accordion">
-                            <div class="sidebar-accordion-header">
-                                <span class="accordion-arrow">&#x25B6;</span>
-                                <span>TTS (Voice)</span>
-                            </div>
-                            <div class="sidebar-accordion-content" style="display:none">
-                                <div class="sb-field">
-                                    <label for="sb-voice">voice</label>
-                                    <select id="sb-voice"></select>
-                                </div>
-                                <div class="sb-field sb-field-stack">
-                                    <label>Pitch: <span id="sb-pitch-val">0.98</span></label>
-                                    <input type="range" id="sb-pitch" min="0.5" max="1.5" step="0.02" value="0.98">
-                                </div>
-                                <div class="sb-field sb-field-stack">
-                                    <label>Speed: <span id="sb-speed-val">1.3</span></label>
-                                    <input type="range" id="sb-speed" min="0.5" max="2.5" step="0.1" value="1.3">
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- System Prompt Accordion -->
-                        <div class="sidebar-section sidebar-accordion">
-                            <div class="sidebar-accordion-header">
-                                <span class="accordion-arrow">&#x25B6;</span>
-                                <span>System Prompt</span>
-                            </div>
-                            <div class="sidebar-accordion-content" style="display:none">
-                                <div class="sb-field">
-                                    <label for="sb-spice-turns">spice turns</label>
-                                    <input type="number" id="sb-spice-turns" min="1" max="20" value="3">
-                                </div>
-                                <div class="sb-field sb-field-stack">
-                                    <label for="sb-custom-context">Custom Context</label>
-                                    <textarea id="sb-custom-context" rows="3" placeholder="Injected into system prompt..."></textarea>
-                                </div>
-                                <div class="sb-field sb-field-stack">
-                                    <label for="sb-ghost-context">Ghost Message</label>
-                                    <textarea id="sb-ghost-context" rows="3" placeholder="Injected as a per-turn ghost message (empty = none)..."></textarea>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Plugin-registered accordions (injected by JS) -->
-                        <div id="sb-plugin-accordions"></div>
-
-                        <!-- Save As New Persona -->
-                        <div class="sidebar-section sb-footer">
-                            <button type="button" id="sb-save-as-persona" class="sb-btn-full">Save As New Persona</button>
-                        </div>
-                        </div><!-- /.sb-full-content -->
-                    </div>
-                </aside>
-                <!-- Sidebar expand tab (visible when collapsed) -->
-                <button type="button" id="chat-sidebar-expand" class="sb-expand-tab" title="Show settings">&#x25C0;</button>
-            </div>
-
-        </div>
+        <!-- Chat view — skeleton is JS-rendered by surface/surface.js + surface/chat-mode.js
+             at boot (before initElements). Phase 1 of tmp/chat-surface-plan.md. -->
+        <div id="view-chat" class="view active"></div>
 
         <div id="toast-container"></div>
 
         <!-- ============================================================
              PLACEHOLDER VIEWS (content in later steps)
              ============================================================ -->
+        <div id="view-chat-manage" class="view" style="display:none"><div class="view-placeholder"><h2>Chat Manager</h2><p>Loading...</p></div></div>
         <div id="view-personas" class="view" style="display:none">
             <div class="view-placeholder">
                 <h2>Personas</h2>
@@ -430,9 +261,13 @@
         <div id="view-daemons" class="view" style="display:none">
             <div class="view-placeholder"><h2>Daemons</h2><p>Loading...</p></div>
         </div>
+        <div id="view-realtime" class="view" style="display:none">
+            <div class="view-placeholder"><h2>Realtime</h2><p>Loading...</p></div>
+        </div>
         <div id="view-webhooks" class="view" style="display:none">
             <div class="view-placeholder"><h2>Webhooks</h2><p>Loading...</p></div>
         </div>
+        <div id="view-self" class="view" style="display:none"><div class="view-placeholder"><h2>Self</h2><p>Loading...</p></div></div>
         <div id="view-memories" class="view" style="display:none"><div class="view-placeholder"><h2>Memories</h2><p>Loading...</p></div></div>
         <div id="view-people" class="view" style="display:none"><div class="view-placeholder"><h2>People</h2><p>Loading...</p></div></div>
         <div id="view-knowledge" class="view" style="display:none"><div class="view-placeholder"><h2>Human Knowledge</h2><p>Loading...</p></div></div>

@@ -4,7 +4,7 @@ import re
 import time
 from typing import Generator, Union, Dict, Any
 import config
-from .chat_tool_calling import strip_ui_markers, wrap_tool_result, _extract_tool_images
+from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text
 from .llm_providers import LLMResponse, get_generation_params
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
@@ -14,12 +14,90 @@ from core.tts.stream_pump import StreamingTTSPump
 logger = logging.getLogger(__name__)
 
 
+def stamp_private_if_unlocked(session_manager):
+    """Vaulted chats — 'messages control the private marker': an operator
+    turn in a chat while the vault is OPEN marks that chat private (one-way;
+    Chat Manager owns the unmark). Skips: no/locked vault (no private mode),
+    managed mode, already-private, and MODE-TAGGED chats (game/story/
+    librarian/limbo belong to plugin surfaces — talking in a game while
+    unlocked must not vault the game). A stamp failure logs and lets the
+    turn run public (systemic-error posture; matches voice_privacy).
+    Module-level (ruling RM3, 2026-08-15) so the non-streaming operator door
+    (REST /api/chat, wake, body) stamps through the same code."""
+    try:
+        from core import prompt_vault
+        vs = prompt_vault.vault_status()
+        if not (vs.get('exists') and vs.get('unlocked')):
+            return
+        from core.settings_manager import settings as sm_settings
+        if sm_settings.is_managed():
+            return
+        sm = session_manager
+        # Name captured BEFORE the write (vault hunt R5 family): if an
+        # eviction retargets the active chat mid-stamp, expected_active
+        # makes the store refuse rather than mark the landing chat.
+        # F1 (2026-09-08): a by-name operator turn stamps ITS chat — the
+        # override-aware name + settings, written by name when the pointer
+        # is elsewhere.
+        active = sm.get_active_chat_name()
+        # Minimal session managers (tests, doubles) may lack the override
+        # resolver — the stamp then means the active chat, as it always did.
+        _eff = getattr(sm, '_effective_chat_name', None)
+        name = _eff() if callable(_eff) else None
+        if not isinstance(name, str) or not name:
+            name = active
+        cur = sm.get_chat_settings()
+        if cur.get('private_chat') or cur.get('mode'):
+            return
+        if name and name != active:
+            ok = bool(sm.set_named_chat_settings(name, {'private_chat': True}))
+        else:
+            ok = bool(sm.update_chat_settings({'private_chat': True},
+                                              expected_active=name))
+        if ok:
+            # No name in the log — it just became a secret (ruling F3).
+            logger.info("[VAULT] chat marked private — spoke while vault open")
+            publish(Events.CHAT_SETTINGS_CHANGED,
+                    {"chat": name, "settings": {"private_chat": True},
+                     "origin": None})
+    except Exception as e:
+        logger.warning(f"[VAULT] talk-stamp failed — turn runs unstamped: {e}")
+
+
+def _stash_pasted(images):
+    """One img: handle per pasted image, or None where the store refused (that
+    one stays inline in the row). Bytes are stored as they arrive — the upload
+    route already applied IMAGE_UPLOAD_MAX_WIDTH; nothing resizes twice."""
+    import base64
+    from core import images as ci
+    out = []
+    for img in images:
+        try:
+            out.append(ci.stash(base64.b64decode(img.get("data", "")), visible=True))
+        except Exception as e:
+            logger.warning(f"[STREAM] pasted image kept inline (store refused: {e})")
+            out.append(None)
+    return out
+
+
 class StreamingChat:
     def __init__(self, main_chat):
         self.main_chat = main_chat
         self.tool_engine = main_chat.tool_engine
         self.cancel_flag = False
         self.current_stream = None
+        # Voice-mute for the current message (left-button "stop TTS"): drops this
+        # stream's TTS without cancelling the LLM. Read by the pump's cancel_check
+        # (flush_and_close bails) + set on the pump's _skip_turn (push no-ops). NOT
+        # the same as cancel_flag, which stops the LLM — TTS/STT is the left button's
+        # domain; the LLM has its own Stop button.
+        self.tts_stopped = False
+        self.tts_pump = None
+        # LLM half of the turn is over (history row + metrics written); only
+        # the streaming-TTS drain may still be running. begin_stream(exclusive)
+        # stops counting a stream as live once this is set. See _emit_llm_done.
+        self.llm_done = False
+        self._typing_ended = False
         self.ephemeral = False
         self.is_streaming = False
         # Name of the chat currently streaming — lets /api/cancel refuse to
@@ -27,6 +105,23 @@ class StreamingChat:
         # interfered). Full per-request streaming state is H4 architecture
         # work; this is the narrow scoping fix. H5 2026-04-22.
         self.active_chat_name = None
+        # A1: the explicit chat this stream targets (None = web/active chat). When
+        # set to a non-active chat (a phone call), the turn runs a per-stream brain
+        # override so it reads/writes ITS chat, not the UI's active one.
+        self.target_chat = None
+
+    def _effective_enabled_tools(self):
+        """A1: the tool list for THIS turn — a per-stream override's tools when the
+        turn targets a non-active chat, else the global active toolset. An override
+        with tools=None means that chat's toolset is 'none' → no tools this turn."""
+        try:
+            from core.chat.stream_brain import get_override
+            o = get_override()
+            if o is not None:
+                return o.get("tools") or []
+        except Exception:
+            pass
+        return self.main_chat.function_manager.enabled_tools
 
     def _cleanup_stream(self):
         """Safely close current stream if it exists."""
@@ -39,7 +134,83 @@ class StreamingChat:
             finally:
                 self.current_stream = None
 
-    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
+    def stop_tts(self):
+        """Left-button "stop TTS": mute her voice for THIS message without cancelling
+        the LLM. Sets tts_stopped (pump's flush_and_close bails within ~100ms via
+        cancel_check) + the pump's _skip_turn (push() stops submitting new synth).
+        Both are bool writes — safe from the API thread while the stream runs in its
+        own thread (no cross-thread list mutation). Idempotent."""
+        self.tts_stopped = True
+        p = self.tts_pump
+        if p is not None:
+            try:
+                p._skip_turn = True
+            except Exception as e:
+                logger.warning(f"[STREAMING] stop_tts failed: {e}")
+
+    def _emit_llm_done(self, tts_pump):
+        """The LLM half of the turn is over — history row written, metrics
+        saved. Returns the wire event. The audio tail (flush_and_close) can
+        take seconds on a slow CPU and nothing that isn't audio should wait
+        on it: the browser flips Stop→Send + paints metrics on this event,
+        mirror tabs + avatar get AI_TYPING_END now (once — the finally covers
+        cancel/error exits), and begin_stream(exclusive) stops counting this
+        stream as live. `tts_streamed` = the pump ran this turn (streamed,
+        user-muted, plugin-skipped alike); False only when no pump ever
+        started — the ONE case the browser falls back to whole-blob playback.
+        Every clean-exit `done` on the wire is preceded by exactly one of
+        these. 2026-09-08, record tmp/llm-done-split-plan.md."""
+        self.llm_done = True
+        if not self._typing_ended:
+            self._typing_ended = True
+            publish(Events.AI_TYPING_END, self._typing_payload())
+        # `ephemeral` rides here, not only on `done`: the browser settles the
+        # turn at llm_done, so a flag that only arrived on the later `done`
+        # was never read (pre-push hunt 2026-09-08, E1#2).
+        return {"type": "llm_done",
+                "ephemeral": bool(getattr(self, "ephemeral", False)),
+                "tts_streamed": bool(getattr(tts_pump, "_stream_started", False))}
+
+    def _typing_payload(self):
+        """AI_TYPING_* payload. `foreign` = this turn's chat is NOT the one
+        the operator's Chat view shows — ONE definition (F1, 2026-09-08),
+        the same `chat != active` the driver and wake doors compute. Before
+        this any target-chat stream was foreign even when the operator was
+        watching that very chat. `chat` = the turn's chat, so a rail bound
+        by name can filter on it."""
+        tgt = getattr(self, "target_chat", None)
+        try:
+            active = self.main_chat.session_manager.get_active_chat_name()
+        except Exception:
+            active = None
+        return {"foreign": bool(tgt) and tgt != active, "chat": tgt or active}
+
+    def _stamp_private_if_unlocked(self):
+        """Streaming-lane wrapper — see stamp_private_if_unlocked below."""
+        stamp_private_if_unlocked(self.main_chat.session_manager)
+
+    def _close_dangling_tool_calls(self):
+        """Inject dummy tool_results for tool_calls that never got one, so
+        provider history stays valid (tool_use without tool_result -> 400).
+        Idempotent; call while the tool cycle is still open. Shared by the
+        cancel partial-save and the finally (S1 #2, hunt 2026-08-30)."""
+        try:
+            msgs = self.main_chat.session_manager._effective_chat().messages
+            for msg in reversed(msgs):
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    existing = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
+                    for tc in msg["tool_calls"]:
+                        tc_id = tc.get("id", "")
+                        if tc_id and tc_id not in existing:
+                            self.main_chat.session_manager.add_tool_result(
+                                tc_id, tc.get("function", {}).get("name", "unknown"),
+                                "[Cancelled by user]"
+                            )
+                    break
+        except Exception as e:
+            logger.warning(f"[CLEANUP] Failed to inject cancel tool results: {e}")
+
+    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None, continue_from: str = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
         Stream chat responses. Yields typed events:
         - {"type": "stream_started"} immediately when processing begins
@@ -49,20 +220,31 @@ class StreamingChat:
         - {"type": "tool_end", "id": "...", "result": "...", "error": bool} when tool completes
         - {"type": "iteration_start", "iteration": N} before each LLM call
         - {"type": "reload"} for page reload signal
+        - {"type": "final", "text": str, "cancelled": bool, "error": bool}
+          terminal event on every clean exit — the definitive turn text for
+          blocking consumers (LLMChat.chat). Raise paths emit none; consumers
+          catch the raise instead. SSE drops it (clients already streamed
+          the content); the phone driver ignores it.
         - str for legacy compatibility (module responses, prefills)
 
         Args:
             user_input: Text input from user
             prefill: Optional assistant prefill for continue mode
             skip_user_message: Don't add user message to history (continue mode)
+            continue_from: In-place Continue — the assistant turn's timestamp. The
+                chat's last reply is resumed from its OWN row (no user row, the row
+                is edited on success, untouched on Stop). Sets prefill/skip itself.
             images: Optional list of {"type": "image", "data": "...", "media_type": "..."}
             files: Optional list of {"filename": "...", "text": "..."}
         """
-        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, images={len(images) if images else 0}, files={len(files) if files else 0}")
+        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, continue_from={continue_from!r}, images={len(images) if images else 0}, files={len(files) if files else 0}")
 
-        # Publish typing start event
+        # Publish typing start event. D4: tag the surface so the operator's browser
+        # ignores a phone call / background conversation's typing (target_chat set =
+        # foreign stream). Untagged, a live call flickered the operator's avatar +
+        # Stop button and re-fetched their active chat.
         self.is_streaming = True
-        publish(Events.AI_TYPING_START)
+        publish(Events.AI_TYPING_START, self._typing_payload())
 
         # Immediate feedback that backend received the request
         yield {"type": "stream_started"}
@@ -78,38 +260,224 @@ class StreamingChat:
         # finishing (M7 stop coordination).
         tts_pump = StreamingTTSPump(
             system=self.main_chat.system,
-            cancel_check=lambda: self.cancel_flag,
+            cancel_check=lambda: self.cancel_flag or self.tts_stopped,
+            # Set by the conversation driver for phone calls (sentence-split =
+            # first audio at the first sentence, not end-of-generation). None
+            # everywhere else — global Settings > TTS behavior unchanged.
+            split_override=getattr(self, "tts_split_override", None),
+            # Blocking consumer lane (LLMChat.chat, merge 2026-08-17): the
+            # door speaks the returned blob itself (process_llm_query →
+            # tts.speak), so the pump stays inert — no synth, no tts hooks,
+            # no double-speak. Must gate HERE, not via tts_stopped: the
+            # generator resets tts_stopped just below.
+            disabled=bool(getattr(self, "suppress_tts", False)),
         )
+        self.tts_pump = tts_pump   # expose for stop_tts() (left-button voice mute)
 
-        # Check if current prompt requires privacy mode
-        try:
-            from core.prompt_state import is_current_prompt_private
-            from core.privacy import is_privacy_mode
-            if is_current_prompt_private() and not is_privacy_mode():
-                chat_settings = self.main_chat.session_manager.get_chat_settings()
-                if not chat_settings.get('private_chat', False):
-                    yield {"type": "error", "text": "This prompt requires Privacy Mode to be enabled."}
-                    return
-        except ImportError:
-            pass
+        # Prompt-privacy enforcement moved to _select_provider (2026-08-09) —
+        # one server-side gate covering ALL doors (web, /api/chat, voice,
+        # phone target-chats), target-chat aware. The old pre-flight here
+        # checked only this door, read the GLOBAL active prompt (wrong chat
+        # for phone streams), and silently self-disabled on ImportError.
+
+        _brain_token = None   # A1: declared before the try so the finally is always safe
+        _reg_chat, _reg_pinned = None, False   # F1: what begin_streaming was told; the finally mirrors it
 
         try:
-            self.main_chat.refresh_spice_if_needed()
-            self.cancel_flag = False
+            # H4 counter, moved to the TOP of the try (vault hunt R3 2026-08-15):
+            # count this stream BEFORE any setup so (a) a vault lock's eviction
+            # defers to end_streaming instead of racing the setup below, and
+            # (b) the unconditional end_streaming in the finally can never
+            # double-decrement a concurrent stream's count when setup throws.
+            # (H4 2026-04-22 history: single bool let two concurrent streams
+            # corrupt mid-turn history; counter fix.)
+            # F1 (2026-09-08): count under THIS stream's chat. A pinned
+            # by-name turn (target_chat) never blocks a pointer switch; the
+            # chat it writes to still refuses delete/rename/clear/append.
+            _reg_chat = getattr(self, "active_chat_name", None) or None
+            _reg_pinned = bool(getattr(self, "target_chat", None))
+            self.main_chat.session_manager.begin_streaming(_reg_chat, pinned=_reg_pinned)
+            # No cancel_flag reset here: StreamingChat is per-request
+            # (__init__ starts it False) -- a reset only EATS a /api/cancel
+            # that landed between registration and this generator's first
+            # next() (S1 #5, hunt 2026-08-30).
+            self.tts_stopped = False
             self.current_stream = None
             self.ephemeral = False
+            # begin_stream() stamped the route-accept active chat on us; the
+            # gap between that and this generator starting is UNCOUNTED — an
+            # eviction may have landed in it.
+            _intended_chat = getattr(self, "active_chat_name", None) or None
             try:
                 self.active_chat_name = self.main_chat.session_manager.get_active_chat_name()
             except Exception:
                 self.active_chat_name = None
-            # H4 follow-up 2026-04-22: was `_is_streaming = True` (single bool).
-            # Two concurrent streams on same chat had the first finisher set
-            # False while the second was still running → append_messages_to_chat
-            # guard failed → mid-turn history corruption. Counter fix.
-            self.main_chat.session_manager.begin_streaming()
+
+            # Vault hunt R3/R4: operator lane — if a lock's eviction moved the
+            # world in that uncounted gap, refuse the turn instead of writing
+            # the user's private-intent text into the eviction landing chat.
+            # Same refusal when the active chat is private in a sealed world
+            # (failed-eviction state): its turns can't persist honestly.
+            if not getattr(self, "target_chat", None):
+                if _intended_chat and self.active_chat_name \
+                        and _intended_chat != self.active_chat_name:
+                    logger.warning("[VAULT] active chat changed during stream "
+                                   "setup — turn refused")
+                    _refusal = ("🔒 The vault locked while this message was "
+                                "in flight and the active chat changed. "
+                                "Please resend.")
+                    yield {"type": "content", "text": _refusal}
+                    yield self._emit_llm_done(tts_pump)
+                    yield {"type": "final", "text": _refusal,
+                           "cancelled": False, "error": True}
+                    return
+                try:
+                    from core import prompt_vault as _pv
+                    _vs_gate = _pv.vault_status()
+                    if _vs_gate.get('exists') and not _vs_gate.get('unlocked') \
+                            and self.main_chat.session_manager.get_chat_settings().get('private_chat'):
+                        logger.warning("[VAULT] turn refused — active chat is "
+                                       "private and the vault is sealed")
+                        _refusal = ("🔒 The vault is locked and this chat is "
+                                    "private — unlock the vault to continue "
+                                    "here.")
+                        yield {"type": "content", "text": _refusal}
+                        yield self._emit_llm_done(tts_pump)
+                        yield {"type": "final", "text": _refusal,
+                               "cancelled": False, "error": True}
+                        return
+                except Exception:
+                    pass
+
+            # A1: if this stream has an EXPLICIT target chat (driver/phone — web
+            # passes None), install a per-context brain override so the whole turn
+            # — messages, provider, persona, tools, scopes — runs in THAT chat from
+            # its STORED settings. Unconditional on the target: comparing against
+            # the active chat let a phone call inherit the UI session's in-memory
+            # brain whenever the user was WATCHING the call's chat (2026-07-03:
+            # Alfred greeting, Sapphire brain). Reset in the outer finally.
+            _brain_token = None
+            _tgt = getattr(self, "target_chat", None)
+            if _tgt:
+                _installed = False
+                try:
+                    from core.chat import stream_brain
+                    from core import prompts as _prompts
+                    sess = self.main_chat.session_manager.make_stream_session(_tgt)
+                    if sess:
+                        _pn = sess["settings"].get("prompt", "default")
+                        _pd = _prompts.get_prompt(_pn)
+                        if not isinstance(_pd, dict):
+                            # Missing name — run on assembled default this turn
+                            # (heals when the prompt re-registers), never the
+                            # literal "System prompt not loaded."
+                            _pd = _prompts.get_prompt("default")
+                        sess["system_prompt"] = (_pd.get("content", "") if isinstance(_pd, dict) else "") or ""
+                        sess["tools"] = self.main_chat._resolve_toolset_tools(
+                            sess["settings"].get("toolset", "all"),
+                            sess["settings"].get("extra_toolsets"))
+                        _brain_token = stream_brain.set_override(sess)
+                        _installed = True
+                        logger.info(f"[A1] stream brain override → chat '{_tgt}' "
+                                    f"(provider={sess['settings'].get('llm_primary')}, "
+                                    f"tools={len(sess['tools']) if sess['tools'] else 0})")
+                except Exception as _e:
+                    logger.warning(f"[A1] stream brain override failed for '{_tgt}': {_e}")
+                    _brain_token = None
+                if not _installed:
+                    # F1 (2026-09-08): a by-name turn whose brain can't be
+                    # built (chat missing, sealed, read error) REFUSES —
+                    # never falls through to the operator's active chat.
+                    # That fall-through is the cross-chat class this door
+                    # exists to close.
+                    logger.warning(f"[A1] turn refused — no brain for '{_tgt}'")
+                    _refusal = (f"🔒 Chat '{_tgt}' isn't reachable right now "
+                                f"(missing or sealed) — the turn was not run.")
+                    yield {"type": "content", "text": _refusal}
+                    yield self._emit_llm_done(tts_pump)
+                    yield {"type": "final", "text": _refusal,
+                           "cancelled": False, "error": True}
+                    return
+                if getattr(self, "operator_lane", False):
+                    # A human typed this by name (a room's bound rail while
+                    # the pointer is elsewhere): the operator rulings ride —
+                    # vault idle touch + talk-stamp on THIS chat (mode-
+                    # tagged sessions skip the stamp inside). Phone and
+                    # background lanes never reach here.
+                    try:
+                        from core import prompt_vault as _pv_touch
+                        _pv_touch.touch()
+                    except Exception:
+                        pass
+                    self._stamp_private_if_unlocked()
+            else:
+                # Talk-marks-private (Krem's ruling 2026-08-14): SPEAKING in a
+                # chat while the vault is open stamps it private — reading
+                # never does; the only unmark is Chat Manager. Operator lanes
+                # only: web typing and browser voice both ride target_chat=
+                # None, while phone/background streams carry an explicit
+                # target and never stamp. Runs BEFORE provider selection so
+                # THIS turn already enforces local-only (stamping after would
+                # leak the first turn to a cloud provider).
+                # An operator turn is USER ACTIVITY for the vault idle clock
+                # (Krem's ruling 2026-08-15): chatting in a private chat must
+                # not read as "idle" to the auto-lock. Phone/background
+                # streams ride the target_chat branch and never touch.
+                try:
+                    from core import prompt_vault as _pv_touch
+                    _pv_touch.touch()
+                except Exception:
+                    pass
+                self._stamp_private_if_unlocked()
+
+            # NULL ROOM (2026-09-03): a mode:limbo chat ('backrooms') is the
+            # vault-eviction holding room — a pointer parking space, not a
+            # conversation. It only ever hosts the active pointer when EVERY
+            # chat is private and sealed, so anything said in it is by
+            # construction the continuation of a private life in a plaintext
+            # row (the talk-stamp skips mode chats). Refuse the turn — same
+            # yield-refusal shape as the vault gates above; the outer finally
+            # handles end_streaming/AI_TYPING_END. After the A1 install so a
+            # stream pinned to the room reads its mode through the override.
+            try:
+                _mode = (self.main_chat.session_manager.get_chat_settings()
+                         or {}).get('mode')
+            except Exception:
+                _mode = None
+            if _mode == 'limbo':
+                logger.info("[LIMBO] turn refused — mode:limbo is a null room")
+                _refusal = ("🔒 Everything you have is in the vault right "
+                            "now. This is just a holding room — create a "
+                            "new chat (or unlock the vault) to talk.")
+                yield {"type": "content", "text": _refusal}
+                yield self._emit_llm_done(tts_pump)
+                yield {"type": "final", "text": _refusal,
+                       "cancelled": False, "error": True}
+                return
+
+            # Spice rail AFTER the A1 override install: before this, a phone
+            # turn's spice cadence read the OPERATOR'S chat settings and turn
+            # count (the ContextVar wasn't set yet) and could rewrite the
+            # global prompt from a foreign stream.
+            self.main_chat.refresh_spice_if_needed()
+
+            # In-place Continue (2026-09-10): the reply's row stays in history.
+            # Resolve the prose she resumes from; refuse — nothing touched —
+            # unless that turn is the chat's last row and ends in plain prose.
+            if continue_from:
+                prefill = self.main_chat.session_manager.continue_target(continue_from)
+                if prefill is None:
+                    logger.info(f"[CONTINUE] refused — turn {continue_from} is not the chat's last prose row")
+                    yield {"type": "notice", "severity": "warning",
+                           "message": "Continue works on the last reply only, and only when it ended in prose."}
+                    yield self._emit_llm_done(tts_pump)
+                    yield {"type": "final", "text": "", "cancelled": False, "error": True}
+                    return
+                skip_user_message = True
 
             # Plugin pre_chat hook — can modify input, bypass LLM, or stop propagation
-            if hook_runner.has_handlers("pre_chat"):
+            # (not on a Continue: there is no new input to react to).
+            if hook_runner.has_handlers("pre_chat") and not continue_from:
                 hook_event = HookEvent(input=user_input, config=config,
                                        metadata={"system": self.main_chat.system})
                 hook_runner.fire("pre_chat", hook_event)
@@ -122,12 +490,34 @@ class StreamingChat:
                         else:
                             self.ephemeral = True
                         yield {"type": "content", "text": response}
-                    publish(Events.AI_TYPING_END)
+                    yield self._emit_llm_done(tts_pump)   # publishes AI_TYPING_END
+                    yield {"type": "final", "text": response,
+                           "cancelled": False, "error": False}
                     self.is_streaming = False
                     return
                 user_input = hook_event.input  # may have been mutated
 
-            messages = self.main_chat._build_base_messages(user_input, images=images, files=files)
+            # Pasted images → the chat's image store NOW (visible=1: the model
+            # sees them this turn and the vision window can replay them), so
+            # the persisted row carries handles + receipts, never base64 (image
+            # upgrade 2026-09-10). Perception frames (images_ephemeral) stay
+            # model-only: never stashed, never persisted.
+            image_handles = []
+            if images and not skip_user_message and not getattr(self, 'images_ephemeral', False):
+                image_handles = _stash_pasted(images)
+            extra = {'image_handles': image_handles} if image_handles else {}   # old call shape otherwise
+            if continue_from:
+                extra['continue_mode'] = True
+            messages = self.main_chat._build_base_messages(user_input, images=images, files=files, **extra)
+            if continue_from:
+                # History's own tail IS the prefill row. Trailing whitespace off
+                # (Claude rejects it), string content (llama.cpp continues a
+                # string tail only), no thinking keys on the row being resumed.
+                if not messages or messages[-1].get("role") != "assistant":
+                    messages.append({"role": "assistant", "content": ""})
+                messages[-1]["content"] = prefill.rstrip()
+                messages[-1].pop("thinking", None)
+                messages[-1].pop("thinking_raw", None)
 
             if not skip_user_message:
                 # Build content list if files or images present, otherwise just text
@@ -141,35 +531,43 @@ class StreamingChat:
                             "filename": f.get("filename", ""),
                             "text": f.get("text", "")
                         })
-                    for img in (images or []):
-                        user_content.append({
-                            "type": "image",
-                            "data": img.get("data", ""),
-                            "media_type": img.get("media_type", "image/jpeg")
-                        })
-                    self.main_chat.session_manager.add_user_message(user_content)
+                    # images_ephemeral (cadence organ, F3 2026-09-09): perception
+                    # frames reach the MODEL this turn only (they're already in
+                    # `messages`); the persisted row keeps the words. F2's blob
+                    # lane replaces this with a marker per frame.
+                    if not getattr(self, 'images_ephemeral', False):
+                        handles = image_handles or [None] * len(images or [])
+                        for img, handle in zip(images or [], handles):
+                            part = {"type": "image", "media_type": img.get("media_type", "image/jpeg")}
+                            if handle:
+                                part["handle"] = handle          # the store has the bytes
+                            else:
+                                part["data"] = img.get("data", "")   # store refused → inline, as before
+                            user_content.append(part)
+                    if len(user_content) == 1 and user_content[0].get("type") == "text":
+                        self.main_chat.session_manager.add_user_message(user_input)
+                    else:
+                        self.main_chat.session_manager.add_user_message(user_content)
                 else:
                     self.main_chat.session_manager.add_user_message(user_input)
             else:
                 logger.info("[CONTINUE] Skipping user message addition (continuing from existing)")
             
-            # Handle manual continue prefill
+            # Prefill lanes. External prefill (the raw API lane): appended as the
+            # tail message, echoed to the wire, and PREFIXED onto whatever row
+            # this turn writes (inline_prefill). In-place Continue: the prefill
+            # already is a row and stays on the page — nothing echoed, nothing
+            # prefixed onto tool rows; the final prose goes INTO that row.
             has_prefill = bool(prefill)
-            if has_prefill:
+            inline_prefill = has_prefill and not continue_from
+            if inline_prefill:
                 # Strip trailing whitespace - Claude API rejects it
                 clean_prefill = prefill.rstrip()
                 messages.append({"role": "assistant", "content": clean_prefill})
                 logger.info(f"[CONTINUE] Continuing with {len(clean_prefill)} char prefill")
                 yield {"type": "content", "text": prefill}  # Show original to user
-            
-            # Handle forced thinking prefill - disabled when continuing
-            force_prefill = None
-            if getattr(config, 'FORCE_THINKING', False) and not has_prefill:
-                force_prefill = getattr(config, 'THINKING_PREFILL', '<think>')
-                # Strip trailing whitespace for Claude compatibility
-                messages.append({"role": "assistant", "content": force_prefill.rstrip()})
-                logger.info(f"[THINK] Forced thinking prefill: {force_prefill}")
-                yield {"type": "content", "text": force_prefill}
+            elif has_prefill:
+                logger.info(f"[CONTINUE] in place from {continue_from}: {len(prefill)} char prefill")
             
             # Set scopes for this chat context
             # Reset first to prevent bleed across chats when plugin scopes come and go
@@ -179,7 +577,9 @@ class StreamingChat:
             reset_scopes()
             chat_settings = self.main_chat.session_manager.get_chat_settings()
             self.main_chat.function_manager.apply_scopes(chat_settings)
-            chat_name = self.main_chat.session_manager.get_active_chat_name()
+            # Effective chat (matches the get_chat_settings() applied above) — a phone
+            # call reads ITS RAG scope, never the operator's active-chat documents.
+            chat_name = self.main_chat.session_manager._effective_chat_name()
             self.main_chat.function_manager.set_rag_scope(f"__rag__:{chat_name}")
 
             # Snapshot scopes as a plain dict — survives across Starlette's
@@ -189,7 +589,36 @@ class StreamingChat:
             # Send only enabled tools - model should only know about active tools
             # Snapshot names too — used to validate tool calls against what LLM actually received
             # Snapshot executors to protect against reload yanking executors mid-chat
-            enabled_tools = self.main_chat.function_manager.enabled_tools
+            # tools_filter hook (2026-08-24): plugins subtract tools from THIS
+            # turn's schema — the game-room scenario fence. Subtract-only by
+            # construction (intersection against the resolved list), fail-open
+            # on any error. Sits at the ONE seam both lanes cross (active
+            # chat + stream-brain override), so _allowed_tool_names below is
+            # derived from the FILTERED list — a hallucinated call to a
+            # fenced tool is refused like any unknown tool.
+            # Closure so the post-tool-cycle refresh applies the SAME filter:
+            # pre-fix the refresh rebuilt from the RAW list, so the fence
+            # evaporated after the first tool call of every turn — and
+            # story_act is NEVER_FENCED, so essentially every story turn
+            # disarmed it (negspace N4, 2026-08-31).
+            def _filtered_enabled_tools():
+                tools = self._effective_enabled_tools()
+                try:
+                    # NO local import here: binding hook_runner OR HookEvent
+                    # locally shadows the module-level names for the WHOLE
+                    # function → UnboundLocal at the pre_chat fire above
+                    # (both bitten and caught by --long, 2026-08-24).
+                    _ev = HookEvent(chat_name=chat_name, tools=list(tools))
+                    hook_runner.fire("tools_filter", _ev)
+                    _kept = {t["function"]["name"] for t in (_ev.tools or [])
+                             if isinstance(t, dict) and "function" in t}
+                    tools = [t for t in tools
+                             if t.get("function", {}).get("name") in _kept]
+                except Exception as e:
+                    logger.warning(f"tools_filter hook failed (unfiltered list ships): {e}")
+                return tools
+
+            enabled_tools = _filtered_enabled_tools()
             _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
             _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
 
@@ -207,10 +636,17 @@ class StreamingChat:
                 }
 
             provider_key, provider, model_override = self.main_chat._select_provider()
-            
+
             # Determine effective model (per-chat override or provider default)
             effective_model = model_override if model_override else provider.model
-            
+
+            # Provenance for tool executors (mindpalace metadata). Patches the
+            # _scopes snapshot taken above, since the model resolves only here.
+            from core.chat.function_manager import set_tool_context
+            set_tool_context(_scopes, chat=chat_name,
+                             persona=chat_settings.get('prompt'),
+                             model=effective_model)
+
             gen_params = get_generation_params(
                 provider_key,
                 effective_model,
@@ -228,9 +664,16 @@ class StreamingChat:
                 logger.info("[CONTINUE] Disabled thinking for continue (can't replay signatures)")
 
             tool_call_count = 0
+            loop_counts = {}  # per-turn per-tool call counts (loop guard); turn-local by design
             # Accumulate token usage across all iterations for final summary
             cumulative_tokens = {"prompt": 0, "completion": 0, "thinking": 0, "total": 0,
                                  "cache_read": 0, "cache_write": 0, "iterations": 0}
+
+            # Bind the per-iteration vars the cancel-save path (below) reads, so a barge-in that
+            # sets cancel_flag before iteration 0 reaches their in-loop init can't UnboundLocalError.
+            current_content = ""
+            current_thinking = ""
+            metadata = None
 
             for iteration in range(config.MAX_TOOL_ITERATIONS):
                 if self.cancel_flag:
@@ -253,7 +696,8 @@ class StreamingChat:
                 tool_pending_sent = set()  # Track which tool indices got early UI hint
                 final_response = None
                 first_chunk_time = None  # Track when generation actually starts
-                
+                chunk_count = 0  # init BEFORE the try — the except reads it, and creation can raise
+
                 try:
                     logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (effective_model={effective_model})")
                     self.current_stream = provider.chat_completion_stream(
@@ -261,8 +705,6 @@ class StreamingChat:
                         tools=enabled_tools if enabled_tools else None,
                         generation_params=gen_params
                     )
-                    
-                    chunk_count = 0
                     for event in self.current_stream:
                         chunk_count += 1
                         
@@ -352,6 +794,24 @@ class StreamingChat:
                         break
                 
                 except Exception as e:
+                    # Silent regen (surface opt-in via stream attrs, set by the
+                    # conversation driver for phone calls): a timeout with ZERO
+                    # chunks received retries once with a fresh provider stream —
+                    # same messages, no error row in history, no spoken apology.
+                    _en = type(e).__name__.lower()
+                    _timeoutish = "timeout" in _en or "timed out" in str(e).lower()
+                    if (_timeoutish and chunk_count == 0 and not self.cancel_flag
+                            and int(getattr(self, "timeout_retry", 0) or 0) > 0):
+                        self.timeout_retry = int(self.timeout_retry) - 1
+                        logger.warning("[STREAMING] first-token timeout — silent retry with a fresh stream")
+                        self._cleanup_stream()
+                        _cb = getattr(self, "on_timeout_retry", None)
+                        if _cb:
+                            try:
+                                _cb()
+                            except Exception:
+                                pass
+                        continue    # burns one tool-iteration slot; messages unchanged
                     logger.error(f"[ERR] [STREAMING] Iteration {iteration + 1} failed: {e}", exc_info=True)
                     self._cleanup_stream()
                     raise
@@ -413,7 +873,9 @@ class StreamingChat:
                     call_type = "tool_call" if tool_calls else "conversation"
                     estimated = metadata["tokens"].get("estimated", False)
                     try:
-                        chat_name = self.main_chat.session_manager.get_active_chat_name()
+                        # effective chat: a phone call's tokens attribute to ITS
+                        # chat ('__private__' for private chats — plaintext deposit).
+                        chat_name = self.main_chat.session_manager.metrics_chat_label()
                         token_metrics.record(chat_name, provider_key, effective_model,
                                              call_type, metadata, estimated=estimated)
                     except Exception:
@@ -425,14 +887,36 @@ class StreamingChat:
                         tc["id"] = f"call_{iteration}_{tool_calls.index(tc)}"
                         logger.info(f"[TOOL] Generated fallback ID for tool call: {tc['function']['name']}")
 
+                # Drop sparse-index padding stubs (id="" name="") BEFORE anything
+                # persists: they used to ride into history whole and emit a
+                # dangling tool_use next turn on providers with non-contiguous
+                # tool-call indexes. openai_compat filters its OWN final list;
+                # the accumulator that writes history didn't (negspace N18,
+                # 2026-08-31).
+                tool_calls = [tc for tc in tool_calls
+                              if tc.get("id") and tc.get("function", {}).get("name")]
+
                 if tool_calls and any(tc.get("id") and tc.get("function", {}).get("name") for tc in tool_calls):
                     logger.info(f"[TOOL] Processing {len(tool_calls)} tool call(s)")
                     
                     tool_calls_to_execute = tool_calls[:config.MAX_PARALLEL_TOOLS]
                     
                     # Combine prefill with current content for history
-                    full_content = prefill + current_content if has_prefill else current_content
-                    
+                    full_content = prefill + current_content if inline_prefill else current_content
+
+                    # When the content carries inline <think> reasoning (Qwen/GLM-style),
+                    # keep only the thinking and drop the trailing decision-prose ("okay,
+                    # I'll generate the image"). Replaying that prose as committed history
+                    # nudges the model to repeat the action — the non-streaming path
+                    # already filters here; streaming didn't. Gated on inline think tags
+                    # so providers whose reasoning lives in thinking_raw (Claude) are
+                    # untouched and never get their prose wrapped. Only `content` changes;
+                    # thinking_raw/thinking are preserved. 2026-06-14.
+                    if "<think" in (full_content or "").lower():
+                        stored_content = filter_to_thinking_only(full_content)
+                    else:
+                        stored_content = full_content
+
                     # Store message with tool calls - include thinking_raw for Claude
                     # tool cycles, AND `thinking` for DeepSeek-reasoner's required
                     # reasoning_content round-trip on subsequent iterations. Without
@@ -442,15 +926,15 @@ class StreamingChat:
                     # tool execution hits 400 "Missing reasoning_content". 2026-05-14.
                     messages.append({
                         "role": "assistant",
-                        "content": full_content,
+                        "content": stored_content,
                         "tool_calls": tool_calls_to_execute,
                         "thinking_raw": thinking_raw,  # Has signatures for Claude API
                         "thinking": current_thinking if current_thinking else None,
                     })
-                    
+
                     # Save to history with new schema
                     self.main_chat.session_manager.add_assistant_with_tool_calls(
-                        content=full_content,
+                        content=stored_content,
                         tool_calls=tool_calls_to_execute,
                         thinking=current_thinking if current_thinking else None,
                         thinking_raw=thinking_raw,
@@ -470,6 +954,8 @@ class StreamingChat:
                         tool_call_count += 1
                         function_name = tool_call["function"]["name"]
                         tool_call_id = tool_call["id"]
+                        # Loop guard: count every attempt this turn (success, throw, or bad JSON).
+                        self.main_chat.function_manager.bump_loop_count(loop_counts, function_name)
 
                         raw_args = tool_call.get("function", {}).get("arguments", "")
                         # Empty string is valid for no-arg tools — Claude/Anthropic
@@ -494,12 +980,14 @@ class StreamingChat:
                                     f"{function_name}: {raw_args!r}"
                                 )
                                 error_result = "Error: Invalid JSON arguments."
+                                # Loop-warn to the LLM only; history keeps raw error.
+                                llm_result = error_result + self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
                                 # CRITICAL: also append to messages — without this, the next
                                 # LLM call sees a tool_use with no matching tool_result and
                                 # Anthropic returns a 400 that kills the whole turn.
                                 # 2026-05-15.
                                 wrapped_err = provider.format_tool_result(
-                                    tool_call_id, function_name, error_result
+                                    tool_call_id, function_name, llm_result
                                 )
                                 messages.append(wrapped_err)
                                 self.main_chat.session_manager.add_tool_result(
@@ -510,7 +998,7 @@ class StreamingChat:
                                     "id": tool_call_id,
                                     "name": function_name,
                                     "result": error_result,
-                                    "is_error": True,
+                                    "error": True,   # was `is_error` — a key with zero consumers, so the failed tool rendered green (broadsword M-C6)
                                 }
                                 continue
 
@@ -527,11 +1015,12 @@ class StreamingChat:
 
                         try:
                             function_result = self.main_chat.function_manager.execute_function(function_name, function_args, scopes=_scopes, allowed_tools=_allowed_tool_names, executor_snapshot=_executor_snapshot)
-                            result_str, tool_imgs = _extract_tool_images(function_result, self.main_chat.session_manager, provider)
+                            result_str, tool_imgs = _extract_tool_images(function_result, self.main_chat.session_manager, provider, function_name)
                             if tool_imgs:
                                 iteration_tool_images.extend(tool_imgs)
                                 logger.info(f"[TOOL] {function_name} returned {len(tool_imgs)} image(s)")
                             clean_result = strip_ui_markers(result_str)
+                            clean_result += self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
 
                             publish(Events.TOOL_COMPLETE, {"name": function_name, "success": True})
 
@@ -561,7 +1050,11 @@ class StreamingChat:
 
                         except Exception as tool_error:
                             logger.error(f"Tool execution error: {tool_error}", exc_info=True)
-                            error_result = f"Error: {str(tool_error)}"
+                            # Exception strings can embed whole payloads — this
+                            # path bypasses _extract_tool_images, so cap here.
+                            error_result = cap_tool_result_text(f"Error: {str(tool_error)}", function_name)
+                            # Loop-warn to the LLM only; history + SSE keep the raw error.
+                            llm_result = error_result + self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
 
                             publish(Events.TOOL_COMPLETE, {"name": function_name, "success": False})
 
@@ -576,7 +1069,7 @@ class StreamingChat:
                             wrapped_msg = provider.format_tool_result(
                                 tool_call_id,
                                 function_name,
-                                error_result
+                                llm_result
                             )
                             messages.append(wrapped_msg)
 
@@ -598,11 +1091,16 @@ class StreamingChat:
                     # on the next iteration. Without this, the LLM would see
                     # new tools in tools= but execute_function would reject
                     # them as "not in active toolset". Mirrors chat.py:680.
-                    enabled_tools = self.main_chat.function_manager.enabled_tools
+                    enabled_tools = _filtered_enabled_tools()  # re-fence (N4)
                     _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
                     _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
 
                     if self.cancel_flag:
+                        # This iteration's prose is already persisted on the
+                        # tool_calls row -- clear it or the cancel partial-
+                        # save stores it a second time as a standalone
+                        # assistant message (S1 #2b).
+                        current_content = ""
                         break
 
                     continue
@@ -624,16 +1122,22 @@ class StreamingChat:
                         logger.info(f"[TOOL] Text-based tool call detected: {text_tool_name}")
 
                         tool_call_count += 1
-                        full_content = prefill + current_content if has_prefill else current_content
+                        full_content = prefill + current_content if inline_prefill else current_content
 
-                        # Execute text-based tool call (function_manager returns error if not active)
+                        # Execute text-based tool call (function_manager returns error if not active).
+                        # allowed_tools + executor_snapshot were missing here for a year
+                        # (validation-bypass drift vs the native tool_calls path above and
+                        # the old blocking lane) — closed in the 2026-08-17 merge.
                         _, text_tool_images = self.tool_engine.execute_text_based_tool_call(
                             function_call_data,
                             full_content,
                             messages,
                             self.main_chat.session_manager,
                             provider,
-                            scopes=_scopes
+                            scopes=_scopes,
+                            allowed_tools=_allowed_tool_names,
+                            executor_snapshot=_executor_snapshot,
+                            loop_counts=loop_counts
                         )
 
                         # Inject tool-returned images for next LLM turn
@@ -660,11 +1164,12 @@ class StreamingChat:
 
                     full_content = current_content
 
-                    if has_prefill:
+                    # In-place continue writes INTO the prefill row when the
+                    # continuation was pure prose (no tools ran); once tools
+                    # ran, the prefill row stays as-is and this is a new row.
+                    in_place = bool(continue_from) and tool_call_count == 0
+                    if has_prefill and (inline_prefill or in_place):
                         full_content = prefill + full_content
-
-                    if force_prefill:
-                        full_content = force_prefill + full_content
 
                     # post_llm hook — plugins can mutate response before save + TTS
                     if hook_runner.has_handlers("post_llm"):
@@ -689,11 +1194,24 @@ class StreamingChat:
                             metadata["cumulative_tokens"]["cache_write"] = cumulative_tokens["cache_write"]
 
                     # Save final response with thinking separated
-                    self.main_chat.session_manager.add_assistant_final(
-                        content=full_content,
-                        thinking=current_thinking if current_thinking else None,
-                        metadata=metadata
-                    )
+                    if in_place and not current_content.strip():
+                        # Providers without prefill (Fireworks, OpenAI, GLM/Z.AI)
+                        # answer a trailing assistant message with nothing. The
+                        # row is untouched — say so instead of a silent no-op.
+                        logger.info("[CONTINUE] provider added nothing — row left as it was")
+                        yield {"type": "notice", "severity": "warning",
+                               "message": "Nothing to add — this provider doesn't continue a reply in place. The message is unchanged."}
+                    elif in_place:
+                        self.main_chat.session_manager.continue_assistant(
+                            continue_from, full_content,
+                            thinking=current_thinking if current_thinking else None,
+                            metadata=metadata)
+                    else:
+                        self.main_chat.session_manager.add_assistant_final(
+                            content=full_content,
+                            thinking=current_thinking if current_thinking else None,
+                            metadata=metadata
+                        )
 
                     if hook_runner.has_handlers("post_chat"):
                         hook_runner.fire("post_chat", HookEvent(
@@ -701,14 +1219,57 @@ class StreamingChat:
                             config=config, metadata={"system": self.main_chat.system}
                         ))
 
+                    # The turn's history is complete — tell the wire BEFORE the
+                    # audio drain below, which blocks on synth (seconds on a
+                    # slow CPU; the whole reply in paragraph split mode).
+                    yield self._emit_llm_done(tts_pump)
+
                     # Flush remaining audio chunks (blocks on synth) + tts_stream_end
                     for tts_ev in tts_pump.flush_and_close():
                         yield tts_ev
 
+                    yield {"type": "final", "text": full_content,
+                           "cancelled": False, "error": False}
                     return
             
-            # If cancelled, don't make another API call — fall through to finally block
+            # If cancelled, KEEP whatever she generated before the interrupt (was:
+            # discard the whole turn — barge-in left a hole in the history). Save the
+            # partial prose as a TEXT assistant message — never a tool_use, so the
+            # tool_use->tool_result contract is untouched. Then fall through. 2026-06-19.
             if self.cancel_flag:
+                # Stop with a tool cycle still open (e.g. between parallel
+                # tool calls): close dangling ids BEFORE the partial save --
+                # add_assistant_final clears _in_tool_cycle, which disarmed
+                # the finally's injector and left tool_calls without results
+                # -> next-turn repair orphaned the tool rows -> provider 400
+                # (S1 #2, hunt 2026-08-30).
+                if self.main_chat.session_manager._in_tool_cycle:
+                    self._close_dangling_tool_calls()
+                partial = (current_content or "").strip()
+                save_content = ""
+                # In-place continue: partial prose goes INTO the prefill row;
+                # nothing generated → the row never left history, nothing lost.
+                in_place = bool(continue_from) and tool_call_count == 0
+                if partial:
+                    save_content = (prefill + current_content
+                                    if has_prefill and (inline_prefill or in_place)
+                                    else current_content)
+                    try:
+                        if in_place:
+                            self.main_chat.session_manager.continue_assistant(
+                                continue_from, save_content,
+                                thinking=current_thinking if current_thinking else None,
+                                metadata=metadata)
+                        else:
+                            self.main_chat.session_manager.add_assistant_final(
+                                content=save_content,
+                                thinking=current_thinking if current_thinking else None,
+                                metadata=metadata,
+                            )
+                    except Exception as e:
+                        logger.warning(f"[STREAMING] partial save on cancel failed: {e}")
+                yield {"type": "final", "text": save_content,
+                       "cancelled": True, "error": False}
                 return
 
             # Loop exhausted - force final response
@@ -808,7 +1369,7 @@ class StreamingChat:
                                 final_metadata["tokens"][k] = resp_usage[k]
                 
                 if final_content:
-                    full_final = (force_prefill or "") + final_content
+                    full_final = final_content
                 else:
                     # Empty content after tool calls — short placeholder + toast.
                     # Old text ("I used N tools and gathered information") was
@@ -846,22 +1407,34 @@ class StreamingChat:
                         config=config, metadata={"system": self.main_chat.system}
                     ))
 
+                yield self._emit_llm_done(tts_pump)
+
                 # Flush streaming TTS for the forced-final path too.
                 for tts_ev in tts_pump.flush_and_close():
                     yield tts_ev
+
+                _forced_text, _forced_error = full_final, False
 
             except Exception as final_error:
                 logger.error(f"[STREAMING] Forced final response failed: {final_error}")
                 error_msg = f"I completed {tool_call_count} tool calls but encountered an error generating the final response."
                 yield {"type": "content", "text": error_msg}
                 self.main_chat.session_manager.add_assistant_final(error_msg)
+                _forced_text, _forced_error = error_msg, True
+
+            if not self.llm_done:   # the except path above saved its row too
+                yield self._emit_llm_done(tts_pump)
+            yield {"type": "final", "text": _forced_text,
+                   "cancelled": False, "error": _forced_error}
 
         except ConnectionError as e:
             logger.warning(f"[STREAMING] {e}")
             # Save error so history doesn't end with a dangling user message
-            self.main_chat.session_manager.add_assistant_final(
-                f"[Connection error: {e}]"
-            )
+            # (a Continue's history already ends on the reply row — leave it).
+            if not continue_from:
+                self.main_chat.session_manager.add_assistant_final(
+                    f"[Connection error: {e}]"
+                )
             # Synthetic tts_stream_end so the frontend's audio queue can
             # finalize even though we're aborting before flush_and_close.
             # Without this, isStreaming stays true / mute pill orphaned
@@ -887,11 +1460,21 @@ class StreamingChat:
             raise
         except Exception as e:
             logger.error(f"[ERR] [STREAMING FATAL] Unhandled error: {e}", exc_info=True)
+            # Learn-once proxy hint — this is the one catcher every streaming
+            # provider failure funnels through (claude stream-enter included),
+            # so proxy-blocked errors get named here. (SOCKS-for-all, 2026-08-31)
+            try:
+                from core.socks_proxy import maybe_llm_proxy_hint
+                maybe_llm_proxy_hint('LLM provider', str(e))
+            except Exception:
+                pass
             # Save error so history doesn't end with a dangling user message
-            # (consecutive user messages break Claude's alternating requirement)
-            self.main_chat.session_manager.add_assistant_final(
-                f"[Error: {type(e).__name__}: {e}]"
-            )
+            # (consecutive user messages break Claude's alternating requirement;
+            # a Continue's history already ends on the reply row — leave it).
+            if not continue_from:
+                self.main_chat.session_manager.add_assistant_final(
+                    f"[Error: {type(e).__name__}: {e}]"
+                )
             if tts_pump._stream_started and not tts_pump._closed:
                 yield {
                     "type": "tts_stream_end",
@@ -911,31 +1494,39 @@ class StreamingChat:
                 logger.warning(f"[CLEANUP] TTS pump cancel failed: {_tts_e!r}")
             # Close any open tool cycle so history isn't left in a broken state
             # (e.g. user hit Stop mid-tool-execution)
-            if self.main_chat.session_manager._in_tool_cycle:
+            # Past llm_done this stream's own cycle is provably closed
+            # (add_assistant_final precedes the emit) — an open cycle then
+            # belongs to a NEWER stream admitted past this audio tail; don't
+            # inject "[Cancelled…]" rows into its turn (E1#5).
+            if self.main_chat.session_manager._in_tool_cycle and not self.llm_done:
                 logger.info("[CLEANUP] Closing orphaned tool cycle from cancelled stream")
-                # Inject dummy tool_results for any pending tool_calls so LLM history
-                # stays valid (providers require tool_result after tool_calls)
-                try:
-                    msgs = self.main_chat.session_manager.current_chat.messages
-                    for msg in reversed(msgs):
-                        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                            existing_results = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
-                            for tc in msg["tool_calls"]:
-                                tc_id = tc.get("id", "")
-                                if tc_id not in existing_results:
-                                    self.main_chat.session_manager.add_tool_result(
-                                        tc_id, tc.get("function", {}).get("name", "unknown"),
-                                        "[Cancelled by user]"
-                                    )
-                            break
-                except Exception as e:
-                    logger.warning(f"[CLEANUP] Failed to inject cancel tool results: {e}")
+                self._close_dangling_tool_calls()
                 self.main_chat.session_manager.add_assistant_final(
                     content="[Cancelled during tool execution]"
                 )
             self._cleanup_stream()
-            self.cancel_flag = False
+            # cancel_flag intentionally NOT reset (S1 #5): flipping it False
+            # here made a cancelled stream read as live-not-cancelled in the
+            # gap before the route's end_stream.
             self.is_streaming = False
             self.active_chat_name = None
-            self.main_chat.session_manager.end_streaming()
-            publish(Events.AI_TYPING_END)
+            # A1: drop the per-stream brain override AFTER the cleanup that
+            # persists via the effective chat (tool-cycle close above) but
+            # BEFORE end_streaming — the 1→0 boundary inside end_streaming
+            # runs the vault eviction (set_active_chat → flush/load of the
+            # ACTIVE chat) and must not resolve through this stream's
+            # override: it would skip the outgoing chat's flush and resync
+            # the override chat's store from a trimmed in-memory window
+            # (day-ruiner hunt 2026-08-17).
+            if _brain_token is not None:
+                try:
+                    from core.chat import stream_brain
+                    stream_brain.reset_override(_brain_token)
+                except Exception:
+                    pass
+            self.main_chat.session_manager.end_streaming(_reg_chat, pinned=_reg_pinned)
+            # Clean exits already published this at llm_done; cancel/error
+            # exits land here.
+            if not self._typing_ended:
+                self._typing_ended = True
+                publish(Events.AI_TYPING_END, self._typing_payload())

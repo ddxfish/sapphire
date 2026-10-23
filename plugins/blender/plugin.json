@@ -1,0 +1,24 @@
+{
+  "name": "blender",
+  "short_display_name": "Blender",
+  "version": "0.1.0",
+  "description": "Drive a running Blender — inspect the scene, run bpy Python, see the viewport. Pairs with the bundled Sapphire Link addon (see README for the one-time Blender-side install).",
+  "author": "sapphire",
+  "icon": "🧊",
+  "priority": 50,
+  "default_enabled": false,
+  "settingsUI": "auto",
+  "capabilities": {
+    "tools": ["tools/blender_tools.py"],
+    "settings": [
+      {"key": "host", "type": "string", "label": "Blender host", "default": "127.0.0.1",
+       "help": "Where the Sapphire Link addon is listening. Leave as localhost unless you know why."},
+      {"key": "port", "type": "number", "label": "Port", "default": 9877,
+       "help": "Must match the port in the addon preferences (Blender > Edit > Preferences > Add-ons > Sapphire Link)."},
+      {"key": "timeout", "type": "number", "label": "Call timeout (sec)", "default": 120,
+       "help": "How long a blender_code call may run (renders and heavy ops take a while)."},
+      {"key": "max_dimension", "type": "number", "label": "Viewport snapshot max dimension (px)", "default": 1024,
+       "help": "Long-edge cap for blender_see images. Lower = fewer vision tokens."}
+    ]
+  }
+}

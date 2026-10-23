@@ -15,6 +15,21 @@ from core.stt.providers.base import BaseSTTProvider
 logger = logging.getLogger(__name__)
 
 
+def _load_whisper(cls, *args, **kwargs):
+    """Local-first (negspace E2, 2026-08-31): a warm model cache loads with
+    zero network — hf_hub otherwise HEADs huggingface.co on every init.
+    Model genuinely missing -> one retry online to download (first run)."""
+    try:
+        return cls(*args, local_files_only=True, **kwargs)
+    except Exception as e:
+        if (type(e).__name__ in ('LocalEntryNotFoundError', 'FileNotFoundError')
+                or 'local_files_only' in str(e)
+                or 'no such file' in str(e).lower()):
+            logger.info("[STT] Whisper model not in local cache — downloading from HF")
+            return cls(*args, **kwargs)
+        raise
+
+
 def _safe_unlink(path, retries=3, delay=0.2):
     """Windows-safe file deletion with retries."""
     for attempt in range(retries):
@@ -69,8 +84,8 @@ class FasterWhisperProvider(BaseSTTProvider):
                     for compute in gpu_compute_types:
                         try:
                             logger.info(f"Loading with device=cuda:{cuda_device}, compute_type={compute}")
-                            self.model = WhisperModel(model_size, device=device,
-                                                      compute_type=compute, num_workers=num_workers)
+                            self.model = _load_whisper(WhisperModel, model_size, device=device,
+                                                       compute_type=compute, num_workers=num_workers)
                             logger.info(f"Successfully loaded model with compute_type={compute}")
                             return
                         except Exception as e:
@@ -79,14 +94,27 @@ class FasterWhisperProvider(BaseSTTProvider):
                     logger.warning(f"CUDA device {cuda_device} not available ({available_gpus} GPUs)")
 
             logger.info("Falling back to CPU model with int8")
-            self.model = WhisperModel(model_size, device="cpu",
-                                      compute_type="int8", num_workers=num_workers)
+            self.model = _load_whisper(WhisperModel, model_size, device="cpu",
+                                       compute_type="int8", num_workers=num_workers)
             logger.info("Successfully loaded model on CPU")
 
         except ImportError as e:
             raise RuntimeError(f"Faster Whisper not installed: {e}")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize STT model: {e}")
+
+    def transcribe_segments(self, audio_path: str, **params) -> list:
+        """faster-whisper's own segments (text, no_speech_prob, avg_logprob, …).
+        Thread-safe. `params` override the defaults (a caller may pass
+        vad_filter=False for audio its own gate already endpointed)."""
+        transcription_params = {
+            'language': config.STT_LANGUAGE,
+            'beam_size': getattr(config, 'FASTER_WHISPER_BEAM_SIZE', 3),
+            **params,
+        }
+        with self._lock:
+            segments, _info = self.model.transcribe(audio_path, **transcription_params)
+            return list(segments)
 
     def _transcribe_impl(self, audio_path: str) -> Optional[str]:
         """Transcribe an audio file. Thread-safe.

@@ -15,7 +15,7 @@ AVAILABLE_FUNCTIONS = ['code_session', 'activate_plugin']
 TOOLS = [
     {
         "type": "function",
-        "is_local": True,
+        "is_local": False,
         "function": {
             "name": "code_session",
             "description": "Run a BLOCKING Claude Code session — you wait for it to finish. Call with no arguments to list recent projects/sessions. Call with a mission to start or resume. For anything that takes more than a few seconds, prefer spawn_agent via the agents plugin. Two agent types available: 'claude_code' for general projects (~/claude-workspaces/), 'claude_code_plugin' for building Sapphire plugins (user/plugins/). For plugins, use spawn_agent(agent_type='claude_code_plugin', plugin_name='name') — it auto-injects plugin docs and validates the result.",

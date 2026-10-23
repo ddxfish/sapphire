@@ -40,9 +40,41 @@ class HookEvent:
         post_chat:         After response saved — observational (`input`, `response`)
         pre_execute:       Before tool call — mutate `arguments`, block with `skip_llm`
         post_execute:      After tool call — observational (`function_name`, `result`)
+        tools_filter:      Per-request tool schema — fired after toolset
+                           resolution with the FINAL tool list for this turn's
+                           LLM call in `tools`; remove entries to withhold
+                           tools from this turn (e.g. the game-room's
+                           per-scenario fence). SUBTRACT-ONLY: the fire site
+                           intersects the result against the original list,
+                           so additions never land. Errors fail open (the
+                           unfiltered list ships). `chat_name` is pre-stamped
+                           by the fire site. 2026-08-24.
         pre_tts:           Before speech — mutate `tts_text`, cancel with `skip_tts`. metadata['tts_client'] = calling TTSClient
         post_tts:          After playback — observational (`tts_text`, metadata has `duration`)
         provider_switched: After TTS/STT/embed provider hot-swap. metadata: `kind` (tts|stt|embed), `provider` (new key). Observational — plugins warm caches / reset state.
+        plugins_ready:     After a registration wave settles. Fires on FOUR legs:
+                           the boot scan, reload_plugin, rescan (per newly loaded
+                           plugin), and toggle-ON — handlers must be idempotent
+                           and must re-check their plugin is still loaded (a
+                           handler thread can outlive a toggle-OFF). The "after
+                           my own registration" moment. 2026-08-05 / 2026-08-17.
+        chat_renamed:      A chat was renamed. metadata: `old`, `new`. Any plugin
+                           keying data by chat name MUST carry it across, or that
+                           data strands and a later chat recycling the old name
+                           inherits a ghost. Fires after the rename succeeds.
+        chat_deleted:      A chat was deleted. metadata: `name`. NOTE (v1.3):
+                           core already deleted the chat's plugin_chat_data rows
+                           before this fires — PluginChatState reads here return
+                           nothing and archive-on-delete is not possible from
+                           this hook. Use it for state kept OUTSIDE the chat DB
+                           (files, caches, registries). Fires after the delete
+                           succeeds, on EVERY path (single, bulk, manage).
+        chat_vaulted:      A chat was just encrypted into the vault (marked
+                           private). metadata: `name`. Plugins holding plaintext
+                           deposits keyed by or containing this chat's name
+                           scrub them here (full-scrub ruling F5, 2026-08-15).
+                           Delivered ONLY to privacy_aware plugins — the event
+                           itself says "this name is private".
 
     Fields:
         input: User's message / STT transcription (mutable in post_stt, pre_chat)
@@ -63,6 +95,14 @@ class HookEvent:
         tts_text: Text about to be spoken for pre_tts (mutable) / spoken text for post_tts
         skip_tts: Set True in pre_tts to cancel TTS entirely
         ephemeral: Set True with skip_llm to show response without persisting to history
+        chat_name: THIS turn's effective chat (stamped by the runner via the
+                   privacy resolver; fire sites may pre-stamp). None until resolved.
+        chat_private: True when that chat is private (vaulted chats Phase 3).
+                   None = not yet resolved — the runner resolves it once per fire.
+                   Private turns are delivered ONLY to plugins that declare
+                   `"privacy_aware": true` in their manifest (ruling F2: core
+                   withholds; a plugin with no privacy signal must not receive
+                   private-chat content it might persist or transmit).
     """
     input: str = ""
     skip_llm: bool = False
@@ -82,9 +122,38 @@ class HookEvent:
     function_name: Optional[str] = None
     arguments: Optional[dict] = None
     result: Optional[str] = None
+    # tools_filter rail: the request's tool-schema list. Handlers REMOVE
+    # entries; the fire site enforces subtract-only via intersection.
+    tools: Optional[List[Dict]] = None
     tts_text: Optional[str] = None
     skip_tts: bool = False
     ephemeral: bool = False
+    chat_name: Optional[str] = None
+    chat_private: Optional[bool] = None
+    # Surface this turn's chat is on ('chat', 'game'…) — stamped by the fire
+    # site from the chat's `surface` setting. Presence hooks (prompt_inject /
+    # ghost_inject) are withheld from plugins whose surfaces exclude it.
+    # None = unknown → deliver to all (plugin surfaces, 2026-08-23).
+    surface: Optional[str] = None
+
+
+# The surfaces a chat can be shown on. A plugin's manifest `surfaces` list
+# (top-level, like privacy_aware) names where its PRESENCE injections
+# belong — an avatar that only renders in the chat view has no business
+# telling her she's visible in a story. Absent = everywhere. The user
+# overrides per plugin from the Plugins page (plugin-state `surfaces`).
+SURFACES = (("chat", "Chat"), ("game", "Game Room"))
+SURFACE_HOOKS = frozenset({"prompt_inject", "ghost_inject"})
+
+
+def surface_for(settings) -> str:
+    """The surface a chat is shown on: an explicit `surface` setting wins;
+    otherwise DERIVED from the mode tag — every game/story session is the
+    Game Room surface without the room having to stamp it (only stories
+    did; poker sessions were 'chat', so the avatar injected into them).
+    F1, 2026-09-08 — one derivation for every fire site."""
+    s = settings or {}
+    return s.get("surface") or ("game" if s.get("mode") == "game" else "chat")
 
 
 class HookRunner:
@@ -102,11 +171,55 @@ class HookRunner:
         80-99: Observation (logging, analytics)
     """
 
+    # Hooks that deliver regardless of chat privacy (vaulted chats ruling F2
+    # carve-out): rename/delete are HOUSEKEEPING — withholding them strands a
+    # private chat's plugin-side data under a stale name, creating the exact
+    # plaintext orphan the gate exists to prevent. The others carry no chat
+    # content and no chat identity.
+    ALWAYS_DELIVER = frozenset({
+        "chat_renamed", "chat_deleted", "chat_cleared", "plugins_ready",
+        "provider_switched", "on_wake",
+    })
+
     def __init__(self):
         # {hook_name: [(priority, handler, plugin_name, voice_match)]}
         self._hooks: Dict[str, List[tuple]] = {}
         self._sorted: Dict[str, bool] = {}
         self._lock = threading.Lock()
+        # Vaulted chats Phase 3 (ruling F2): core installs a resolver at boot
+        # returning (effective_chat_name, is_private) for the current turn;
+        # plugins whose manifest declares privacy_aware register here.
+        self._privacy_resolver: Optional[Callable] = None
+        self._privacy_aware: set = set()
+        # {plugin_name: frozenset(surfaces)} — only plugins that declared
+        # (or were overridden) appear here; absent = everywhere.
+        self._surfaces: Dict[str, frozenset] = {}
+
+    def set_surfaces(self, plugin_name: str, surfaces):
+        """Record where a plugin's presence hooks belong (effective list:
+        user override if set, else the manifest default). None/non-list
+        clears the restriction."""
+        if isinstance(surfaces, (list, tuple, set, frozenset)):
+            self._surfaces[plugin_name] = frozenset(str(s) for s in surfaces)
+        else:
+            self._surfaces.pop(plugin_name, None)
+
+    def surfaces_of(self, plugin_name: str):
+        s = self._surfaces.get(plugin_name)
+        return sorted(s) if s is not None else None
+
+    def set_privacy_resolver(self, resolver: Optional[Callable]):
+        """Install the (chat_name, is_private) resolver. None uninstalls
+        (tests / pre-boot): with no resolver, turns resolve as public."""
+        self._privacy_resolver = resolver
+
+    def mark_privacy_aware(self, plugin_name: str, aware: bool = True):
+        """Record a plugin's manifest-declared privacy awareness. Only
+        privacy_aware plugins receive hooks for private-chat turns."""
+        if aware:
+            self._privacy_aware.add(plugin_name)
+        else:
+            self._privacy_aware.discard(plugin_name)
 
     def register(self, hook_name: str, handler: Callable, priority: int = 50,
                  plugin_name: str = "", voice_match: dict = None):
@@ -125,7 +238,7 @@ class HookRunner:
                 self._hooks[hook_name] = []
             self._hooks[hook_name].append((priority, handler, plugin_name, voice_match))
             self._sorted[hook_name] = False
-        logger.info(f"[HOOKS] Registered {plugin_name}:{handler.__name__} on '{hook_name}' (priority {priority})")
+        logger.debug(f"[HOOKS] Registered {plugin_name}:{handler.__name__} on '{hook_name}' (priority {priority})")
 
     def unregister(self, hook_name: str, plugin_name: str):
         """Remove all handlers for a plugin from a specific hook."""
@@ -144,6 +257,8 @@ class HookRunner:
         """Remove all handlers for a plugin from all hooks."""
         for hook_name in list(self._hooks.keys()):
             self.unregister(hook_name, plugin_name)
+        self._privacy_aware.discard(plugin_name)
+        self._surfaces.pop(plugin_name, None)
 
     def _ensure_sorted(self, hook_name: str):
         if not self._sorted.get(hook_name, True):
@@ -196,7 +311,44 @@ class HookRunner:
 
         is_ghost_hook = (hook_name == "ghost_inject")
 
+        # Resolve this turn's chat identity once per fire (ruling F2). A fire
+        # site may pre-stamp chat_private (e.g. chat_vaulted = True by
+        # definition); ALWAYS_DELIVER hooks skip resolution entirely; a
+        # resolver failure fails CLOSED (treat as private).
+        if event.chat_private is None:
+            if hook_name in self.ALWAYS_DELIVER or self._privacy_resolver is None:
+                event.chat_private = False
+            else:
+                try:
+                    if event.chat_name is not None:
+                        # Pre-stamped identity (stream-brain override lane —
+                        # the override contextvar resets across Starlette
+                        # generator yields, so fire sites stamp the name from
+                        # a local). Resolve privacy FOR THAT chat: pre-fix the
+                        # resolver overwrote the stamp with the ACTIVE chat's
+                        # name+privacy at the one seam built to distinguish
+                        # them (S1 #7 / wave-3 B2, 2026-08-31). A resolver
+                        # without per-name support raises here -> fail closed.
+                        _rn, event.chat_private = self._privacy_resolver(event.chat_name)
+                    else:
+                        event.chat_name, event.chat_private = self._privacy_resolver()
+                except Exception:
+                    event.chat_private = True
+
+        withhold = bool(event.chat_private) and hook_name not in self.ALWAYS_DELIVER
+        surface = event.surface if hook_name in SURFACE_HOOKS else None
+
         for priority, handler, plugin_name, voice_match in snapshot:
+            if withhold and plugin_name not in self._privacy_aware:
+                logger.debug(f"[HOOKS] '{hook_name}' withheld from {plugin_name} "
+                             f"(private chat, plugin not privacy_aware)")
+                continue
+            if surface is not None:
+                allowed = self._surfaces.get(plugin_name)
+                if allowed is not None and surface not in allowed:
+                    logger.debug(f"[HOOKS] '{hook_name}' withheld from {plugin_name} "
+                                 f"(surface '{surface}' not in {sorted(allowed)})")
+                    continue
             if not self._check_voice_match(voice_match, event.input):
                 continue
 
@@ -249,6 +401,9 @@ class HookRunner:
         with self._lock:
             self._hooks.clear()
             self._sorted.clear()
+            self._privacy_resolver = None
+            self._privacy_aware.clear()
+            self._surfaces.clear()
 
 
 # Singleton

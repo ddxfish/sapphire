@@ -19,6 +19,17 @@ The fix mirrors Claude's `thinking_raw` round-trip pattern (already wired
 in `history.py:404`): a provider-specific helper detects the endpoint+model
 combination, and the sanitizer emits `reasoning_content` only when both
 conditions hold (deepseek-official-reasoner AND assistant-with-tool_calls).
+
+2026-09-20 — DeepSeek V4 update (api-docs.deepseek.com/guides/thinking_mode):
+`deepseek-chat` / `deepseek-reasoner` were discontinued 2026-07-24. The
+official endpoint now serves `deepseek-v4-pro` and `deepseek-flash`, BOTH
+thinking by default (switched via extra_body {"thinking": {"type": ...}}),
+and the round-trip rule became: "for requests carrying the tools parameter,
+the reasoning_content must be fully passed back in all subsequent requests —
+even for turns where the model did not perform a tool call". So the gate is
+now endpoint-only and the sanitizer emits `reasoning_content` on any
+assistant turn that carries `thinking`. (History still hands `thinking` to
+the sanitizer on tool-calling turns only — see section 3.)
 """
 from unittest.mock import MagicMock, patch
 
@@ -48,18 +59,20 @@ def _make_provider(base_url, model):
     return p
 
 
-def test_is_deepseek_official_true_for_official_reasoner():
-    """The official endpoint + reasoner model must trigger the round-trip
-    behavior. This is the exact case that 400'd before the fix."""
-    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-reasoner')
+def test_is_deepseek_official_true_for_official_v4_pro():
+    """The official endpoint + a V4 model must trigger the round-trip
+    behavior. This is the case that 400s without it."""
+    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-v4-pro')
     assert p._is_deepseek_official() is True
 
 
-def test_is_deepseek_official_false_for_official_chat_model():
-    """`deepseek-chat` has no reasoning content — adding the field would
-    be useless. The model-name gate must keep it off chat-model requests."""
-    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-chat')
-    assert p._is_deepseek_official() is False
+def test_is_deepseek_official_true_for_every_official_model():
+    """V4: every model on api.deepseek.com thinks by default, so the gate is
+    endpoint-only. The old `reasoner` name gate matched a model that no
+    longer exists and would have silently disarmed the round-trip."""
+    for model in ('deepseek-flash', 'deepseek-v4-flash', 'deepseek-reasoner'):
+        p = _make_provider('https://api.deepseek.com/v1', model)
+        assert p._is_deepseek_official() is True, model
 
 
 def test_is_deepseek_official_false_for_fireworks_deepseek():
@@ -81,9 +94,9 @@ def test_is_deepseek_official_false_for_openrouter_deepseek():
 
 def test_is_deepseek_official_handles_empty_or_none_url():
     """Defensive: a partially-initialized provider mustn't crash the helper."""
-    p = _make_provider(None, 'deepseek-reasoner')
+    p = _make_provider(None, 'deepseek-v4-pro')
     assert p._is_deepseek_official() is False
-    p = _make_provider('', 'deepseek-reasoner')
+    p = _make_provider('', 'deepseek-v4-pro')
     assert p._is_deepseek_official() is False
 
 
@@ -94,10 +107,10 @@ def test_is_deepseek_official_handles_empty_or_none_url():
 
 def test_sanitize_emits_reasoning_content_for_deepseek_official_with_tool_calls():
     """The exact fix path: assistant message with tool_calls + thinking,
-    on the deepseek-official reasoner endpoint, must emit `reasoning_content`
+    on the deepseek-official endpoint, must emit `reasoning_content`
     in the outgoing payload. Without this, request 2+ in the tool cycle 400s.
     """
-    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-reasoner')
+    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-v4-pro')
     messages = [
         {"role": "user", "content": "what time is it?"},
         {
@@ -124,12 +137,12 @@ def test_sanitize_emits_reasoning_content_for_deepseek_official_with_tool_calls(
     assert asst["reasoning_content"] == "I should use the get_time tool here."
 
 
-def test_sanitize_does_not_emit_reasoning_content_on_tool_free_turns():
-    """The other half of DeepSeek's split rule: `reasoning_content` must
-    NOT be sent back on tool-FREE assistant turns or DeepSeek 400s. Test
-    confirms we only emit it when tool_calls are present.
+def test_sanitize_emits_reasoning_content_on_tool_free_turns_too():
+    """V4 rule: once tools are in play, `reasoning_content` must come back
+    on EVERY assistant turn — "even for turns where the model did not
+    perform a tool call". The sanitizer no longer requires tool_calls.
     """
-    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-reasoner')
+    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-v4-pro')
     messages = [
         {"role": "user", "content": "hello"},
         {
@@ -143,10 +156,9 @@ def test_sanitize_does_not_emit_reasoning_content_on_tool_free_turns():
     cleaned = p._sanitize_messages(messages)
 
     asst = next(m for m in cleaned if m.get("role") == "assistant")
-    assert "reasoning_content" not in asst, (
-        "Tool-free assistant turns must NOT carry reasoning_content — "
-        "DeepSeek-reasoner returns 400 if you include it on those turns. "
-        "The fix must respect both halves of the split rule."
+    assert asst.get("reasoning_content") == "User said hello, I greet back.", (
+        "V4 official endpoint wants reasoning_content on every assistant "
+        "turn that has it, tool call or not."
     )
 
 
@@ -180,17 +192,16 @@ def test_sanitize_does_not_emit_reasoning_content_for_fireworks():
     )
 
 
-def test_sanitize_does_not_emit_reasoning_content_for_deepseek_chat_model():
-    """Even on the official endpoint, `deepseek-chat` (the non-reasoning
-    model) doesn't have reasoning content and doesn't need the field. The
-    model-name gate must keep `chat` requests clean.
+def test_sanitize_does_not_emit_empty_reasoning_content():
+    """Nothing to pass back → no field. An empty `thinking` (thinking was
+    off for that turn) must not become `reasoning_content: ""`.
     """
-    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-chat')
+    p = _make_provider('https://api.deepseek.com/v1', 'deepseek-flash')
     messages = [
         {
             "role": "assistant",
             "content": "ok",
-            "thinking": "",  # chat model wouldn't have this anyway
+            "thinking": "",  # thinking was off for this turn
             "tool_calls": [{
                 "id": "call_y",
                 "type": "function",
@@ -302,8 +313,8 @@ def test_deepseek_official_preset_exists_and_is_well_formed():
         "`_is_deepseek_official()` matches and the round-trip fix activates."
     )
     model_ids = {m["id"] for m in p.get("suggested_models", [])}
-    assert "deepseek-reasoner" in model_ids, (
-        "Reasoner model must be in suggested_models — that's the model the "
-        "round-trip fix exists for."
+    assert "deepseek-v4-pro" in model_ids, "V4 Pro is the flagship the round-trip exists for."
+    assert "deepseek-flash" in model_ids, "Flash (V4.1) should be offered too."
+    assert not model_ids & {"deepseek-chat", "deepseek-reasoner"}, (
+        "Both legacy names were discontinued 2026-07-24 — offering them is a trap."
     )
-    assert "deepseek-chat" in model_ids, "Chat model should be offered too."

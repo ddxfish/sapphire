@@ -3,24 +3,51 @@ import * as api from '../api.js';
 import * as audio from '../audio.js';
 import { getElements, setTtsEnabled, setSttEnabled, setSttReady, setPromptPrivacyRequired } from '../core/state.js';
 
+// Provider meta (key → {display_name, is_local}) for the badge. The tint is
+// the privacy affordance: it used to key on a hardcoded name list
+// ['lmstudio','ollama'], so a custom LAN box marked local painted ☁️ beside a
+// 🏠 sidebar (V6, 2026-09-21). Fetched once, lazily; repaints when it lands.
+let _providerMeta = null;
+let _providerMetaPending = null;
+let _lastBadge = null;
+function _loadProviderMeta() {
+    if (_providerMeta || _providerMetaPending) return;
+    _providerMetaPending = fetch('/api/llm/providers')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            _providerMeta = {};
+            for (const p of (data?.providers || [])) _providerMeta[p.key] = p;
+            if (_lastBadge) updateSendButtonLLM(_lastBadge[0], _lastBadge[1]);
+        })
+        .catch(() => { _providerMetaPending = null; });
+}
+export function setProviderMeta(list) {
+    _providerMeta = {};
+    for (const p of (list || [])) _providerMeta[p.key] = p;
+}
+
 // Call this when chat's primary LLM is known (from chat-manager, chat-settings)
 export function updateSendButtonLLM(primary, model = '') {
     const sendBtn = document.getElementById('send-btn');
     const indicator = document.getElementById('llm-indicator');
     if (!sendBtn) return;
+    _lastBadge = [primary, model];
+    if (!_providerMeta && primary && primary !== 'auto' && primary !== 'none') _loadProviderMeta();
 
     // Remove all mode classes first
     sendBtn.classList.remove('llm-local', 'llm-cloud', 'llm-auto');
     if (indicator) indicator.classList.remove('cloud');
 
-    // Detect local vs cloud — local providers have local URLs (localhost, 127.0.0.1)
-    // Default to cloud for any named provider that isn't obviously local
-    const localPatterns = ['lmstudio', 'ollama'];
-    const isLocal = localPatterns.includes(primary) || primary === 'none';
+    // Local vs cloud = the provider's is_local flag (THE rule, resolve.py);
+    // unknown key (meta not loaded yet, or a dead pin) paints cloud — the
+    // safe direction for a privacy tint.
+    const meta = (_providerMeta && _providerMeta[primary]) || null;
+    const isLocal = primary === 'none' || !!(meta && meta.is_local);
     const isCloud = !isLocal && primary !== 'auto';
 
-    // Build display name
+    // Friendly name, never the key (the key is a birth-name fossil)
     const displayName = primary === 'none' ? 'Off' :
+                       (meta && meta.display_name) ? meta.display_name :
                        primary ? primary.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Local';
 
     // Build title suffix for model
@@ -32,7 +59,7 @@ export function updateSendButtonLLM(primary, model = '') {
         if (indicator) indicator.textContent = 'Auto';
     } else if (isCloud) {
         sendBtn.classList.add('llm-cloud');
-        sendBtn.title = `Send: ${primary}${modelSuffix}`;
+        sendBtn.title = `Send: ${displayName}${modelSuffix}`;
         if (indicator) {
             indicator.textContent = displayName;
             indicator.classList.add('cloud');
@@ -40,16 +67,24 @@ export function updateSendButtonLLM(primary, model = '') {
     } else {
         // lmstudio, none, or unknown = local
         sendBtn.classList.add('llm-local');
-        sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send: ${primary || 'local'}${modelSuffix}`;
+        sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send: ${displayName || 'local'}${modelSuffix}`;
         if (indicator) indicator.textContent = displayName;
     }
 }
 
+// Vault hunt U5: newest-wins guard, same pattern as every sibling painter
+// (_sbPaintSeq, _listPaintSeq). Two overlapping status fetches during a
+// lock→unlock storm could let the OLDER response paint the eyeball/border
+// with stale vault state.
+let _sceneSeq = 0;
+
 export async function updateScene() {
+    const mySeq = ++_sceneSeq;
     try {
         // Use unified status endpoint - single call for all state
         const status = await api.fetchStatus();
-        
+        if (mySeq !== _sceneSeq) return null;   // superseded — discard
+
         if (status?.tts_enabled !== undefined) {
             setTtsEnabled(status.tts_enabled);
             const volumeRow = document.querySelector('.sidebar-row-3');
@@ -80,6 +115,44 @@ export async function updateScene() {
         audio.setLocalTtsPlaying(status?.tts_playing || false);
 
         setPromptPrivacyRequired(status?.prompt_privacy_required || false);
+
+        // Private-chat eyeball + toolset cloud warning (status is the sync
+        // source — covers chat switches, persona loads, and other tabs).
+        // Amber = private chat whose vault is asleep (exists && !unlocked);
+        // this poll is the authoritative painter for that third state.
+        const priv = !!status?.chat_settings?.private_chat;
+        const eye = document.getElementById('sb-privacy-eye');
+        const vaultOpen = !!status?.vault?.exists && !!status?.vault?.unlocked;
+        const vaultAsleep = priv && !!status?.vault?.exists && !status?.vault?.unlocked;
+        if (eye) {
+            // Eyeball = VAULT STATE, one job (Krem's ruling 2026-08-14):
+            // blue = private mode armed (talking marks chats private);
+            // amber = standing in a private chat while sealed (the rare
+            // failed-eviction edge). Per-CHAT privacy shows on the chatbg
+            // border and the 🗝 in the dropdown, never on the toggle.
+            eye.classList.toggle('private-on', vaultOpen);
+            eye.classList.toggle('vault-locked', vaultAsleep);
+            // Glyph tracks vault state: open padlock while unlocked. (The
+            // chat-mode.js comment promised this; the line never shipped --
+            // S3 #5, hunt 2026-08-30.)
+            eye.textContent = vaultOpen ? '\u{1F513}︎' : '\u{1F512}︎';
+            eye.title = vaultAsleep ? 'Private chat, vault locked — click to unlock'
+                : vaultOpen ? 'Private mode ON — talking marks the chat private; click to lock'
+                : 'Private mode off — click to unlock the vault';
+        }
+        // Privacy border on the chat area: blue glow = private + vault open
+        // (or plain v1 private), amber = private + vault asleep.
+        const chatbg = document.getElementById('chatbg');
+        if (chatbg) {
+            chatbg.classList.toggle('privacy-open', priv && !vaultAsleep);
+            chatbg.classList.toggle('privacy-asleep', vaultAsleep);
+        }
+        const toolsetSel = document.getElementById('sb-toolset');
+        if (toolsetSel) {
+            const warn = priv && !!status?.has_cloud_tools;
+            toolsetSel.classList.toggle('toolset-cloud-warn', warn);
+            toolsetSel.title = warn ? 'This toolset contains web tools — they will refuse in a private chat' : '';
+        }
 
         return status;
     } catch {

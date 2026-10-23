@@ -29,6 +29,58 @@ logger = logging.getLogger(__name__)
 current_event_data: ContextVar[dict] = ContextVar("current_event_data", default={})
 
 
+# Contract for plugin-supplied images on an event payload:
+#   payload["images"] = [{"data": "<base64>", "media_type": "image/png"}, ...]
+# Plugin authors populate this; core validates strictly and routes through the
+# existing tool-image pipeline (DB blob + <<IMG::...>> marker + vision gate).
+# Malformed entries are dropped with a log — never stringified into the prompt.
+_MAX_EVENT_IMAGES = 8
+_MAX_EVENT_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB decoded, per image
+_VALID_IMAGE_MEDIA = {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"}
+
+
+def _extract_event_images(obj) -> list:
+    """Pull validated images from an event payload dict.
+
+    Returns a list of {"data": <base64 str>, "media_type": <str>} that passed
+    validation, or [] if none/invalid. This is the trust boundary for
+    plugin-supplied binary data: a signed plugin can still be buggy, so we
+    decode-test every entry and cap count + size before anything reaches the
+    LLM context or the chat DB. 2026-06-13.
+    """
+    import base64
+    if not isinstance(obj, dict):
+        return []
+    raw = obj.get("images")
+    if not isinstance(raw, list) or not raw:
+        return []
+    out = []
+    for entry in raw[:_MAX_EVENT_IMAGES]:
+        if not isinstance(entry, dict):
+            logger.warning("[EVENT-IMG] Dropped non-dict image entry")
+            continue
+        data = entry.get("data")
+        media_type = (entry.get("media_type") or "image/jpeg").lower()
+        if not isinstance(data, str) or not data:
+            logger.warning("[EVENT-IMG] Dropped image entry with no base64 'data' string")
+            continue
+        if media_type not in _VALID_IMAGE_MEDIA:
+            logger.warning(f"[EVENT-IMG] Dropped image with unsupported media_type {media_type!r}")
+            continue
+        try:
+            decoded = base64.b64decode(data, validate=True)
+        except Exception:
+            logger.warning("[EVENT-IMG] Dropped image entry — 'data' is not valid base64")
+            continue
+        if len(decoded) > _MAX_EVENT_IMAGE_BYTES:
+            logger.warning(f"[EVENT-IMG] Dropped image — {len(decoded)} bytes exceeds cap")
+            continue
+        out.append({"data": data, "media_type": media_type})
+    if len(raw) > _MAX_EVENT_IMAGES:
+        logger.warning(f"[EVENT-IMG] Payload had {len(raw)} images; capped to {_MAX_EVENT_IMAGES}")
+    return out
+
+
 class ContinuityExecutor:
     """Executes continuity tasks with context isolation."""
 
@@ -78,7 +130,23 @@ class ContinuityExecutor:
 
         text = obj.get("text") or obj.get("content") or None
         if not text:
-            return event_data
+            # Messaging-shaped payloads (daemon events with routing fields) must
+            # never fall through to raw JSON: the payload carries routing
+            # metadata — llm_primary/llm_model, attachment URLs, author ids —
+            # that would enter the prompt AND persist into chat history as the
+            # user turn, where the AI later quotes it as fact ("I'm on <old
+            # model>"). Format normally with a placeholder trigger instead.
+            if any(obj.get(k) for k in ("channel_id", "chat_id", "account")):
+                text = "(message has no text — likely an attachment, sticker, or embed)"
+            else:
+                # Generic non-message events keep raw-JSON visibility, minus
+                # the LLM routing keys, which are never content.
+                redacted = {k: v for k, v in obj.items()
+                            if k not in ("llm_primary", "llm_model")}
+                try:
+                    return json.dumps(redacted, ensure_ascii=False, default=str)
+                except Exception:
+                    return event_data
 
         # Build clean message from common fields
         sender = obj.get("display_name") or obj.get("first_name") or obj.get("username") or obj.get("sender") or ""
@@ -142,9 +210,16 @@ class ContinuityExecutor:
         return "\n".join(parts)
 
     def run(self, task: Dict[str, Any], event_data: str = None,
-            progress_callback=None, response_callback=None) -> Dict[str, Any]:
+            progress_callback=None, response_callback=None,
+            cancel_event=None) -> Dict[str, Any]:
         """
         Execute a continuity task.
+
+        cancel_event: optional threading.Event — set by the scheduler when the
+        user stops the run (⏹ / toggle off / delete). Honored between LLM
+        rounds by ExecutionContext; a cancelled run persists an empty reply,
+        sends nothing to its source, speaks nothing. Plugin-handler tasks
+        (source 'plugin:*') run their own code and can't be interrupted.
 
         Args:
             task: Task definition dict
@@ -168,6 +243,7 @@ class ContinuityExecutor:
         task = copy.deepcopy(task)
 
         # For event-triggered tasks, build message from instructions + event data
+        _ev_token = None
         if event_data is not None:
             event_display = self._format_event_data(event_data)
             instructions = task.get("initial_message", "").strip()
@@ -175,6 +251,18 @@ class ContinuityExecutor:
                 task["initial_message"] = f"{instructions}\n\n{event_display}"
             else:
                 task["initial_message"] = event_display
+
+            # Plugin-supplied images (payload["images"]). Validated here at the
+            # trust boundary; saved to the chat DB + sent to vision models at the
+            # run site. Absent/invalid → [] → behavior identical to text-only. 2026-06-13.
+            try:
+                _img_obj = json.loads(event_data) if isinstance(event_data, str) else event_data
+                event_images = _extract_event_images(_img_obj)
+                if event_images:
+                    task["_event_images"] = event_images
+                    logger.info(f"[EVENT-IMG] {len(event_images)} image(s) attached from event payload")
+            except (json.JSONDecodeError, TypeError):
+                pass
 
             # Auto-set plugin scopes from event data (e.g. discord account)
             # Event source → scope key mapping for auto-fill.
@@ -211,7 +299,7 @@ class ContinuityExecutor:
             try:
                 event_obj = json.loads(event_data) if isinstance(event_data, str) else (event_data or {})
                 if isinstance(event_obj, dict):
-                    current_event_data.set(event_obj)
+                    _ev_token = current_event_data.set(event_obj)
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -230,22 +318,32 @@ class ContinuityExecutor:
             "errors": []
         }
         try:
-            task = self._resolve_persona(task)
-        except Exception as e:
-            err = f"Persona resolution failed: {e}"
-            logger.error(f"[Continuity] {err}", exc_info=True)
-            result["errors"].append(err)
-            result["completed_at"] = datetime.now().isoformat()
-            return result
+            try:
+                task = self._resolve_persona(task)
+            except Exception as e:
+                err = f"Persona resolution failed: {e}"
+                logger.error(f"[Continuity] {err}", exc_info=True)
+                result["errors"].append(err)
+                result["completed_at"] = datetime.now().isoformat()
+                return result
 
-        chat_target = task.get("chat_target", "").strip()
+            chat_target = task.get("chat_target", "").strip()
 
-        # Blank chat_target = ephemeral: isolated, no chat creation, no UI impact
-        if not chat_target:
-            return self._run_background(task, result, progress_callback, response_callback)
+            # Blank chat_target = ephemeral: isolated, no chat creation, no UI impact
+            if not chat_target:
+                return self._run_background(task, result, progress_callback, response_callback,
+                                            cancel_event=cancel_event)
 
-        # Named chat_target = foreground: switches to that chat, runs, restores
-        return self._run_foreground(task, result, progress_callback, response_callback)
+            # Named chat_target = foreground: switches to that chat, runs, restores
+            return self._run_foreground(task, result, progress_callback, response_callback,
+                                        cancel_event=cancel_event)
+        finally:
+            # Reset the event ContextVar. Harmless on today's fresh-thread-per-task
+            # scheduler; load-bearing the day any pooled thread calls run() —
+            # without it the next run on that thread inherits a stale event's
+            # llm_primary and routing ids.
+            if _ev_token is not None:
+                current_event_data.reset(_ev_token)
     
     @staticmethod
     def _extract_task_settings(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -262,13 +360,18 @@ class ContinuityExecutor:
         from core.chat.function_manager import scope_setting_keys
         settings = {
             "prompt": task.get("prompt", "default"),
+            "privacy_required": task.get("privacy_required", False),
             "toolset": task.get("toolset", "none"),
             "provider": task.get("provider", "auto"),
             "model": task.get("model", ""),
+            # Per-chat read deadline (phone chats stamp 20s): reaches the
+            # resolver on chat_from_payload tasks (2026-09-21).
+            "llm_request_timeout": task.get("llm_request_timeout"),
             "inject_datetime": task.get("inject_datetime", False),
             "max_tool_rounds": task.get("max_tool_rounds"),
             "max_parallel_tools": task.get("max_parallel_tools"),
             "context_limit": task.get("context_limit"),
+            "system_append": task.get("system_append"),
         }
         missing_scopes = []
         for setting_key in scope_setting_keys():
@@ -295,7 +398,7 @@ class ContinuityExecutor:
         return settings
 
     def _run_background(self, task: Dict[str, Any], result: Dict[str, Any],
-                        progress_cb=None, response_cb=None) -> Dict[str, Any]:
+                        progress_cb=None, response_cb=None, cancel_event=None) -> Dict[str, Any]:
         """Run task in background mode — fully isolated via ExecutionContext."""
         from core.continuity.execution_context import ExecutionContext
 
@@ -315,7 +418,9 @@ class ContinuityExecutor:
                 ctx = ExecutionContext(
                     self.system.llm_chat.function_manager,
                     self.system.llm_chat.tool_engine,
-                    task_settings
+                    task_settings,
+                    session_manager=self.system.llm_chat.session_manager,
+                    cancel_check=(cancel_event.is_set if cancel_event is not None else None),
                 )
 
                 # Set Discord reply channel for auto-reply targeting
@@ -330,22 +435,62 @@ class ContinuityExecutor:
                 tts_enabled = task.get("tts_enabled", True)
                 browser_tts = task.get("browser_tts", False)
                 msg = task.get("initial_message", "Hello.")
+                # Ephemeral path doesn't persist — images are turn-only, shown to
+                # the LLM (vision-gated in ctx), no DB save / marker needed.
+                _ev_images = task.get("_event_images")
 
                 try:
-                    response = ctx.run(msg)
+                    # Ephemeral carrier (2026-09-03): this lane has NO target
+                    # chat, and without an override every "this chat" seam a
+                    # tool touches (reset_chat, prompt_switch, switch_toolset,
+                    # switch_model, hook privacy resolvers, token metrics)
+                    # fell through to the OPERATOR'S live chat. The carrier
+                    # makes chatlessness first-class: writers refuse loudly,
+                    # readers see the task's declared settings. Same span
+                    # discipline as the foreground lane — ctx.run only.
+                    from core.chat import stream_brain
+                    _brain_token = stream_brain.set_override(
+                        self.system.llm_chat.session_manager
+                            .make_ephemeral_override(task_settings))
+                    try:
+                        response = ctx.run(msg, images=_ev_images)
+                    finally:
+                        stream_brain.reset_override(_brain_token)
+
+                    if getattr(ctx, "cancelled", False):
+                        result["cancelled"] = True   # response is "" — nothing below fires
 
                     if response_cb and response:
-                        try: response_cb(response)
-                        except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
+                        # Same egress rule as the foreground lane: a
+                        # privacy_required task's response stays local.
+                        if bool(task_settings.get("privacy_required")):
+                            logger.info("[Continuity] reply callback suppressed — task requires privacy")
+                        else:
+                            try: response_cb(response)
+                            except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                     if response:
+                        # P3-T5 (background/ephemeral path — no target chat):
+                        # privacy_required is the carrier; local-only TTS via
+                        # the same gate a private chat uses.
                         if browser_tts:
-                            publish(Events.TTS_SPEAK, {"text": response, "task": task_name})
+                            # Same gate as the foreground twin: a privacy-required
+                            # task's text never rides SSE to every open tab.
+                            if bool(task_settings.get("privacy_required")):
+                                logger.info("[Continuity] browser TTS skipped — task requires privacy")
+                            else:
+                                publish(Events.TTS_SPEAK, {"text": response, "task": task_name})
                         elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
-                            try:
-                                self.system.tts.speak_sync(response)
-                            except Exception as tts_err:
-                                logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                            from core.voice_privacy import tts_gate_reason
+                            _gate = tts_gate_reason(
+                                {"private_chat": bool(task_settings.get("privacy_required"))})
+                            if _gate:
+                                logger.info(f"[Continuity] TTS gated: {_gate}")
+                            else:
+                                try:
+                                    self.system.tts.speak_sync(response)
+                                except Exception as tts_err:
+                                    logger.warning(f"[Continuity] TTS failed: {tts_err}")
 
                     result["responses"].append({
                         "iteration": 1,
@@ -385,8 +530,50 @@ class ContinuityExecutor:
         result["completed_at"] = datetime.now().isoformat()
         return result
 
+    @staticmethod
+    def _save_event_images(images, target_chat, session_manager) -> str:
+        """Save plugin event images to the chat DB keyed to target_chat and
+        return a marker suffix to append to the user message text.
+
+        Markers (`<<IMG::tool:id>>`) match the UI strip pattern, so they're
+        stripped before the LLM and rehydrated from the DB by the frontend —
+        the same lifecycle as tool images. Bytes live in the DB; history holds
+        only the marker. 2026-06-13.
+        """
+        import base64
+        import uuid
+        if not images or not hasattr(session_manager, "save_tool_image"):
+            return ""
+        markers = []
+        for img in images:
+            try:
+                media_type = img.get("media_type", "image/jpeg")
+                ext = "png" if "png" in media_type else ("gif" if "gif" in media_type
+                      else ("webp" if "webp" in media_type else "jpg"))
+                img_id = f"{uuid.uuid4().hex[:12]}.{ext}"
+                img_bytes = base64.b64decode(img["data"])
+                # Use the SAME `tool:` marker namespace as tool images — the
+                # frontend (strips `tool:`), serve route, and orphan-pruner all
+                # only recognize `tool:`. A separate `event:` prefix rendered as
+                # a broken image AND got pruned as a false orphan. These ARE
+                # tool_images-table entries, just sourced from an event. 2026-06-13.
+                if session_manager.save_tool_image(img_id, img_bytes, media_type,
+                                                   chat_name=target_chat):
+                    # Marker = the UI's; the receipt line is the model's handle
+                    # (core.images contract) so a plugin-delivered image can be
+                    # filed with memory_save_image(source='img:...'). 2026-09-13.
+                    markers.append(f"<<IMG::tool:{img_id}>>\n(image img:{img_id})")
+                else:
+                    # DB write failed — don't append a marker pointing at a blob
+                    # that isn't there (would 404 on render). LLM still saw the
+                    # image this turn via the images= param; only history skips it.
+                    logger.warning(f"[EVENT-IMG] save_tool_image returned False for {img_id} — marker skipped")
+            except Exception as e:
+                logger.warning(f"[EVENT-IMG] Failed to persist event image: {e}")
+        return ("\n" + "\n".join(markers)) if markers else ""
+
     def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any],
-                        progress_cb=None, response_cb=None) -> Dict[str, Any]:
+                        progress_cb=None, response_cb=None, cancel_event=None) -> Dict[str, Any]:
         """Run task with persistent chat history — no UI switching.
 
         Voice-lock discipline: the lock is held for the ENTIRE duration of
@@ -436,19 +623,58 @@ class ContinuityExecutor:
                 target_chat = match
             else:
                 logger.info(f"[Continuity] Creating new chat: {target_chat}")
+                # create_chat now publishes CHAT_CREATED itself (the creation
+                # chokepoint), so no explicit publish here.
                 if not session_manager.create_chat(target_chat):
-                    # Chat was created between our check and now — use the sanitized name
-                    target_chat = normalized
-                else:
-                    target_chat = normalized
-                    publish(Events.CHAT_CREATED, {"name": target_chat})
+                    # Vaulted chats Phase 1 (Krem's ruling: fail LOUDLY): the
+                    # name may belong to a chat sealed in a locked vault — the
+                    # list above can't see it, but the row exists. Falling
+                    # through would create a plaintext twin and write into it
+                    # in the clear, the one unforgivable outcome. Any create
+                    # failure kills the task.
+                    raise ValueError(
+                        f"chat_target '{target_chat}' could not be created "
+                        f"(name already taken — possibly by a chat sealed in "
+                        f"the locked vault) — task refused.")
+                target_chat = normalized
 
-            # Build ExecutionContext — isolated, no singleton mutation
-            task_settings = self._extract_task_settings(task)
+            # Build ExecutionContext — isolated, no singleton mutation.
+            # "Webhook specifies chat name" (trigger_config.chat_from_payload): the
+            # named chat answers with ITS OWN settings, not the task's — so the reply
+            # runs as if typed in that chat (persona/toolset/scopes come from the chat).
+            # Settings are read unconditionally: the privacy stamp below needs them.
+            # A read failure propagates — a task that can't see its target chat's
+            # settings must not run as if it could (fail-closed, like the gate).
+            chat_settings = session_manager.read_chat_settings(target_chat) or {}
+            if task.get("trigger_config", {}).get("chat_from_payload"):
+                from core.chat.function_manager import scope_setting_keys
+                cc = chat_settings
+                merged = {**task,
+                          "prompt": cc.get("persona") or cc.get("prompt") or "default",
+                          "toolset": cc.get("toolset") or cc.get("ability") or "none",
+                          "provider": cc.get("llm_primary") or "auto",
+                          "model": cc.get("llm_model") or "",
+                          "llm_request_timeout": cc.get("llm_request_timeout"),
+                          **{k: cc[k] for k in scope_setting_keys() if k in cc}}
+                task_settings = self._extract_task_settings(merged)
+            else:
+                task_settings = self._extract_task_settings(task)
+            # Privacy rides the CHAT here, not just the prompt (vaulted-chats
+            # Phase 0, 2026-08-13). This lane is about to read the target
+            # chat's whole transcript into the LLM request — before this, only
+            # a privacy_required PROMPT forced local-only, so a cron/agent/
+            # daemon task with chat_target=<private chat> + a cloud provider
+            # shipped that chat's history out. OR the chat's flag into the
+            # same carrier the prompt gate uses; ExecutionContext then gates
+            # provider selection AND network tools off it.
+            if chat_settings.get("private_chat"):
+                task_settings["privacy_required"] = True
             ctx = ExecutionContext(
                 self.system.llm_chat.function_manager,
                 self.system.llm_chat.tool_engine,
-                task_settings
+                task_settings,
+                session_manager=self.system.llm_chat.session_manager,
+                cancel_check=(cancel_event.is_set if cancel_event is not None else None),
             )
 
             # Set Discord reply channel for auto-reply targeting
@@ -473,14 +699,58 @@ class ContinuityExecutor:
             browser_tts = task.get("browser_tts", False)
             msg = task.get("initial_message", "Hello.")
 
-            # Read history from target chat WITHOUT switching active chat
+            # Plugin event images: save bytes to the chat DB (keyed to target_chat)
+            # and append <<IMG::tool:id>> markers to the persisted text. The base64
+            # is handed to ctx separately for the LLM turn (vision-gated); history
+            # keeps only the marker. 2026-06-13.
+            _ev_images = task.get("_event_images")
+            if _ev_images:
+                msg = msg + self._save_event_images(_ev_images, target_chat, session_manager)
+
+            # Read history from target chat WITHOUT switching active chat.
+            # The task's context_limit (when set) governs the history trim
+            # too — before this, the global CONTEXT_LIMIT silently capped
+            # long-session tasks (the librarian's 128K nights) at read time.
             history_messages = session_manager.read_chat_messages(
-                target_chat, provider=task_settings.get("provider")
+                target_chat, provider=task_settings.get("provider"),
+                context_limit=task_settings.get("context_limit")
             )
 
             try:
-                # Run through isolated ExecutionContext — no singleton contact
-                response = ctx.run(msg, history_messages=history_messages)
+                # Per-stream brain override: for the duration of the run, any
+                # tool that reads/writes "this chat's" state via session_manager
+                # (get_self_info, switch_model, reset_chat, set_voice, …)
+                # resolves the task's own chat_target — NOT the operator's
+                # active web chat. Same primitive the phone-call stream uses
+                # (chat_streaming.py:175). Span is ctx.run only; the
+                # persistence + TTS below never consult it. 2026-08-06 —
+                # closes the daemon↔web state-leak family (a Discord reply
+                # reported the web chat's model as its own).
+                from core.chat import stream_brain
+                from core.chat.history import ConversationHistory
+                _cc = session_manager.read_chat_settings(target_chat)
+                # 'history' is REQUIRED, not decorative: _effective_chat()
+                # diverts on it, and every override consumer (settings
+                # writes, _save_current_chat, _in_tool_cycle) keys off that
+                # divert. Shipping this override without it made a tool's
+                # settings write persist the operator's ACTIVE chat's
+                # settings+messages under target_chat (trinity clobbered
+                # with default, 2026-08-17). Seeded from the messages we
+                # already read — same shape make_stream_session builds.
+                _hist = ConversationHistory(max_history=session_manager.max_history)
+                _hist.messages = list(history_messages or [])
+                _brain_token = stream_brain.set_override({
+                    "chat": target_chat,
+                    "settings": _cc if isinstance(_cc, dict) else {},
+                    "system_prompt": ctx.system_prompt,
+                    "tools": None,
+                    "history": _hist,
+                })
+                try:
+                    # Run through isolated ExecutionContext — no singleton contact
+                    response = ctx.run(msg, history_messages=history_messages, images=_ev_images)
+                finally:
+                    stream_brain.reset_override(_brain_token)
 
                 # If the run ended degraded (context overflow, tool exhaustion,
                 # empty LLM, hallucinated tools), the empty assistant message
@@ -491,6 +761,7 @@ class ContinuityExecutor:
                 # message so the frontend can render it as an italic system
                 # note. Frontend MUST keep this out of any speak/relay paths.
                 degraded = getattr(ctx, 'degraded_reason', None)
+                cancelled = getattr(ctx, 'cancelled', False)
                 if degraded and ctx.new_messages:
                     for _m in ctx.new_messages:
                         if _m.get("role") == "assistant" and not _m.get("content"):
@@ -512,27 +783,76 @@ class ContinuityExecutor:
                 if hasattr(ctx, 'new_messages') and ctx.new_messages:
                     from core.chat.chat_tool_calling import wire_to_canonical
                     canonical_messages = wire_to_canonical(ctx.new_messages)
-                    session_manager.append_messages_to_chat(target_chat, canonical_messages)
+                    appended = session_manager.append_messages_to_chat(
+                        target_chat, canonical_messages)
+                    if appended is False:
+                        # Deleted chat or active-stream-wait timeout — the
+                        # tool effects already happened; the transcript is
+                        # now missing this exchange. Surface it (scout,
+                        # 2026-07-20) instead of discarding the bool.
+                        logger.warning(
+                            f"[Continuity] Transcript append to "
+                            f"'{target_chat}' FAILED — the chat is missing "
+                            f"this exchange (deleted mid-run or stream-busy).")
                 else:
                     # Fallback to simple pair if new_messages not available
                     session_manager.append_to_chat(target_chat, msg, response or "")
 
                 if degraded:
-                    publish(Events.CONTINUITY_TASK_ERROR, {
-                        "task": task.get("name", "Unknown"),
-                        "error": degraded,
-                    })
+                    # Surface degradation in the RESULT too — callers that
+                    # gate work on the run (the librarian's drain stamps)
+                    # must be able to tell "model failed" from "model
+                    # declined"; success stays True for backward compat.
+                    result["degraded"] = degraded
+                    if cancelled:
+                        # The user's stop, not a model failure — no error event.
+                        result["cancelled"] = True
+                    else:
+                        publish(Events.CONTINUITY_TASK_ERROR, {
+                            "task": task.get("name", "Unknown"),
+                            "error": degraded,
+                        })
 
                 if response_cb and response:
-                    try: response_cb(response)
-                    except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
+                    # Reply callbacks are egress (Discord/Telegram/email posts).
+                    # A private target chat's response must not leave the
+                    # machine — same rule the TTS gate below enforces.
+                    if bool(chat_settings.get("private_chat")) or bool(task_settings.get("privacy_required")):
+                        logger.info("[Continuity] reply callback suppressed — target chat is private")
+                    else:
+                        try: response_cb(response)
+                        except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                 if response:
+                    # P3-T5: TTS evaluates the TASK's chat, not the operator's
+                    # (the brain override is already reset here, so the
+                    # client-side self-gate would read the wrong chat). A
+                    # private chat's response never broadcasts to every tab.
+                    _priv_chat = bool(chat_settings.get("private_chat"))
                     if browser_tts:
-                        publish(Events.TTS_SPEAK, {"text": response, "task": task.get("name", "")})
+                        if _priv_chat:
+                            logger.info("[Continuity] browser TTS skipped — target chat is private")
+                        else:
+                            # Carry the TASK's voice/pitch/speed in the payload:
+                            # they're still applied globally here, but the
+                            # finally below restores the operator's before the
+                            # browser's /api/tts request can possibly arrive —
+                            # a text-only payload always spoke the wrong voice.
+                            publish(Events.TTS_SPEAK, {
+                                "text": response, "task": task.get("name", ""),
+                                "voice": getattr(self.system.tts, "voice_name", None),
+                                "pitch": getattr(self.system.tts, "pitch_shift", None),
+                                "speed": getattr(self.system.tts, "speed", None),
+                            })
                     elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
+                        # The gate rides INSIDE speak_sync now (one rule for
+                        # every lane — broadsword H3). The old pre-gate here
+                        # was doubled by speak_sync's own self-gate reading
+                        # the operator's active chat, so a public task chat
+                        # went silent whenever the operator sat on a private one.
                         try:
-                            self.system.tts.speak_sync(response)
+                            self.system.tts.speak_sync(response, chat_settings={
+                                "private_chat": _priv_chat or bool(task_settings.get("privacy_required"))})
                         except Exception as tts_err:
                             logger.warning(f"[Continuity] TTS failed: {tts_err}")
 
@@ -632,6 +952,10 @@ class ContinuityExecutor:
             output = run_func(event)
             result["responses"].append({"output": str(output) if output else None})
             result["success"] = True
+            # The handler's one-line receipt used to live only in activity.json
+            # (a count) and tasks.json (purged per boot) — three days of dev
+            # journal showed MATCHED/Triggering and never a result (row 77).
+            logger.info(f"[Continuity] Plugin task '{task.get('name')}' -> {str(output)[:200] if output else '(no output)'}")
 
             if response_cb and output:
                 try: response_cb(str(output))

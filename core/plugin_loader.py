@@ -15,36 +15,60 @@ from typing import Dict, List, Optional, Any, Callable, Tuple
 
 from core.hooks import hook_runner
 from core.plugin_verify import verify_plugin
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
 
-def _rmtree_robust(path):
-    """shutil.rmtree that survives Windows read-only files.
-
-    Plain `shutil.rmtree` crashes on Windows the first time it hits a
-    read-only file (.pyc, git-set permissions, AV-locked caches). The
-    onerror handler clears the read-only bit and retries the single
-    delete — if that still fails, we swallow the exception so a broken
-    file doesn't abort the whole uninstall and leave a half-deleted tree.
-    """
-    def _on_error(func, p, exc_info):
-        try:
-            os.chmod(p, stat.S_IWRITE)
-            func(p)
-        except Exception as e:
-            logger.warning(f"[PLUGINS] rmtree could not remove {p}: {e}")
-    shutil.rmtree(path, onerror=_on_error)
+# Canonical copy moved to fs_utils so pre-boot code (restore.py) can use it
+# without importing the plugin loader; alias keeps every call site working.
+from core.fs_utils import rmtree_robust as _rmtree_robust
 
 # Plugin search paths (relative to project root)
 PROJECT_ROOT = Path(__file__).parent.parent
 SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
 USER_PLUGINS_DIR = PROJECT_ROOT / "user" / "plugins"
 PLUGIN_STATE_DIR = PROJECT_ROOT / "user" / "plugin_state"
+# Previous versions retained by plugin updates (one generation, = Revert).
+# MUST live outside user/plugins — the scanner registers any subdir with a
+# plugin.json under its manifest name, so a retained copy inside the scan
+# path would shadow-fight the live one. Same filesystem keeps swaps rename-fast.
+PLUGIN_PREV_DIR = PROJECT_ROOT / "user" / "plugin_prev"
 
 # Where enabled/disabled state is stored
 USER_PLUGINS_JSON = PROJECT_ROOT / "user" / "webui" / "plugins.json"
 STATIC_PLUGINS_JSON = PROJECT_ROOT / "interfaces" / "web" / "static" / "core-ui" / "plugins.json"
+
+
+def _time_to_cron(value, fallback: str) -> str:
+    """'HH:MM' or a bare hour (9, 9.0, '9') → daily cron 'M H * * *'. Anything
+    unparsable keeps the manifest cron, so a mistyped settings value degrades
+    to the declared default. The bare-hour form lets a plugin bind a schedule
+    to an existing numeric hour setting (Discord greeting/sleep hours) instead
+    of polling every 15 min and guarding the hour inside the handler."""
+    try:
+        text = str(value).strip()
+        if ':' in text:
+            hh, mm = text.split(':')
+            hh, mm = int(hh), int(mm)
+        else:
+            hh, mm = int(float(text)), 0
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return f"{mm} {hh} * * *"
+    except (ValueError, AttributeError, TypeError, OverflowError):
+        pass
+    return fallback
+
+
+def _version_tuple(text) -> Optional[tuple]:
+    """'2.10.1' → (2, 10, 1). Trailing non-numeric parts drop; None if nothing parses."""
+    parts = []
+    for piece in str(text).strip().split('.'):
+        digits = re.match(r'\d+', piece)
+        if not digits:
+            break
+        parts.append(int(digits.group()))
+    return tuple(parts) if parts else None
 
 
 class PluginState:
@@ -95,7 +119,7 @@ class PluginState:
         tmp = self._path.with_suffix(f'.json.tmp.{_os.getpid()}.{id(self):x}')
         try:
             tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-            tmp.replace(self._path)
+            replace_with_retry(tmp, self._path)
         finally:
             if tmp.exists():
                 try: tmp.unlink()
@@ -140,6 +164,57 @@ class PluginState:
             self._data[key] = new_value
             self._save()
             return new_value
+
+
+class PluginChatState:
+    """Chat-scoped plugin data (vault v1.3). Rows live in the history DB
+    and follow the chat: sealed with vault_chat, renamed with it, deleted
+    with it. Values are JSON-serializable objects. Reads on a hidden chat
+    (private + vault sealed) come back empty; writes RAISE there — never a
+    silent drop. Resolves the chat store lazily per call so this can be
+    handed out at plugin-load time, before the chat system is up."""
+
+    def __init__(self, plugin_name: str):
+        self._name = plugin_name
+
+    @staticmethod
+    def _sm():
+        from core.api_fastapi import get_system
+        return get_system().llm_chat.session_manager
+
+    def get(self, chat_name: str, key: str, default=None):
+        return self._sm().plugin_data_get(self._name, chat_name, key, default)
+
+    def put(self, chat_name: str, key: str, value):
+        self._sm().plugin_data_put(self._name, chat_name, key, value)
+
+    def append(self, chat_name: str, key: str, value) -> int:
+        return self._sm().plugin_data_append(self._name, chat_name, key, value)
+
+    def append_many(self, chat_name: str, key: str, values: list) -> list:
+        """Append several rows in ONE transaction — all land or none."""
+        return self._sm().plugin_data_append_many(self._name, chat_name, key, values)
+
+    def read_all(self, chat_name: str, key: str) -> list:
+        return self._sm().plugin_data_read_all(self._name, chat_name, key)
+
+    def replace(self, chat_name: str, key: str, values: list):
+        self._sm().plugin_data_replace(self._name, chat_name, key, values)
+
+    def delete(self, chat_name: str, key: str = None):
+        self._sm().plugin_data_delete(self._name, chat_name, key)
+
+    def keys(self, chat_name: str) -> list:
+        return self._sm().plugin_data_keys(self._name, chat_name)
+
+    def get_all_chats(self, key: str) -> dict:
+        """{chat: value} across every VISIBLE chat holding `key` — hidden
+        chats structurally absent (core filters, not the plugin)."""
+        return self._sm().plugin_data_get_all_chats(self._name, key)
+
+    def meta(self, chat_name: str, key: str):
+        """{'rows': n, 'updated_at': max-ISO} or None when absent/hidden."""
+        return self._sm().plugin_data_meta(self._name, chat_name, key)
 
 
 class PluginLoader:
@@ -189,7 +264,11 @@ class PluginLoader:
         # Load enabled plugins
         loaded = 0
         blocked = []
-        for name, info in self._plugins.items():
+        # Add-ons (`requires_plugins`) load after every host, so a dependent
+        # that sorts before its host by name still finds it loaded (S0 doors).
+        ordered = sorted(self._plugins.items(),
+                         key=lambda kv: bool((kv[1].get("manifest") or {}).get("requires_plugins")))
+        for name, info in ordered:
             if info["enabled"]:
                 if self._load_plugin(name):
                     loaded += 1
@@ -202,11 +281,57 @@ class PluginLoader:
                     # no UI click needed.
                     info["enabled"] = False
                     blocked.append(name)
+                    # Surface it: the reload path publishes on a block, the boot path
+                    # only logged — the user saw a toggle that was simply off
+                    # (Discord hunt 2.13.0, row 84).
+                    err_data = {"plugin": name,
+                                "error": f"Blocked at boot: {info.get('verify_msg') or 'load failure'}"}
+                    self._load_errors.append(err_data)
+                    try:
+                        from core.event_bus import publish, Events
+                        publish(Events.PLUGIN_LOAD_ERROR, err_data)
+                    except Exception:
+                        pass
 
         if blocked:
             logger.warning(f"[PLUGINS] Enabled but blocked (intent preserved, retry next restart): {blocked}")
 
         logger.info(f"[PLUGINS] Scan complete: {len(self._plugins)} found, {loaded} loaded")
+
+        # plugins_ready: fires once per scan, after every enabled plugin has
+        # registered (tools, hooks, prompt packs, games). The "after my own
+        # pack registered" moment plugins had no way to reach — e.g. game-room
+        # re-merging its runtime-rendered story prompts so names like 'rose'
+        # resolve before sapphire.py's post-scan re-prime reads them.
+        # (Sapph-not-Rose reboot bug, 2026-08-05.)
+        self._fire_plugins_ready("scan", loaded)
+
+    def _fire_plugins_ready(self, reason: str, loaded: int = 1):
+        """The "registration finished, re-assert anything runtime-owned" moment.
+        Fires after the boot scan AND after every out-of-scan (re)load — reload,
+        enable-toggle, dep-install, dev-watcher, rescan. Manifest-only
+        re-registration wipes runtime-rendered entries (a story costume the
+        pack files don't contain), and core's missing-prompt fallback then
+        permanently rewrites the chat's prompt to 'default' — so this must
+        fire on EVERY path, not just boot (Sapph-not-Rose reload leg, 2026-08-05)."""
+        try:
+            if hook_runner.has_handlers("plugins_ready"):
+                from core.hooks import HookEvent
+                hook_runner.fire("plugins_ready",
+                                 HookEvent(metadata={"loaded": loaded, "reason": reason}))
+        except Exception as e:
+            logger.warning(f"[PLUGINS] plugins_ready ({reason}) dispatch failed: {e}")
+        # Re-derive the NO_PROXY belt now that this (re)load wave changed the
+        # set of registered direct hosts: unmigrated raw-requests plugins and
+        # daemon subprocesses (which inherit env at spawn) need late-added LAN
+        # gear in NO_PROXY. Migrated callers read direct_hosts() live and don't
+        # care. Boot's post-scan re-derive is now the scan-leg special case of
+        # this general rule (net-facade wave 2).
+        try:
+            from core.socks_proxy import apply_proxy_env
+            apply_proxy_env()
+        except Exception as e:
+            logger.debug(f"[PLUGINS] belt re-derive after plugins_ready failed: {e}")
 
     def _scan_dir(self, directory: Path, band: str, enabled_list: list, disabled_list: list = None):
         """Scan a directory for plugin.json manifests."""
@@ -223,7 +348,7 @@ class PluginLoader:
                 continue
 
             try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
             except Exception as e:
                 logger.warning(f"[PLUGINS] Bad manifest in {child.name}: {e}")
                 continue
@@ -250,6 +375,12 @@ class PluginLoader:
             except Exception:
                 manifest_mtime = 0
 
+            prev = self._plugins.get(name)
+            if prev is not None and prev.get("band") != band:
+                logger.warning(
+                    f"[PLUGINS] '{name}' ({band} band) shadows the {prev.get('band')} copy "
+                    f"at {prev.get('path')} — only the {band} copy will load"
+                )
             self._plugins[name] = {
                 "manifest": manifest,
                 "path": child,
@@ -296,27 +427,134 @@ class PluginLoader:
                 missing.append(spec)
         return missing
 
-    def _get_enabled_list(self) -> list:
-        """Read enabled plugins from user/webui/plugins.json."""
+    @staticmethod
+    def pip_hint(missing: list) -> str:
+        """The copy-paste line for missing pip_dependencies. Specs carrying
+        operators / extras / direct references are double-quoted — the one
+        quote cmd, PowerShell and bash all accept. Unquoted, `davey>=0.1.4`
+        is a shell redirect and `py-cord[voice] @ git+…` splits at the `@`
+        (Windows scout 2026-09-20). Every hint site calls this."""
+        def q(s):
+            return f'"{s}"' if re.search(r'[<>=!~\[\]@ ;]', s) else s
+        return "pip install " + " ".join(q(s) for s in missing)
+
+    @staticmethod
+    def _warn_min_core_version(name: str, manifest: dict):
+        """Shout when a plugin declares min_core_version newer than this core.
+
+        A newer plugin on an older core fails at runtime with zero explanation
+        (missing renderer features, absent routes). This turns that mystery
+        into one loud log line. Never blocks the load."""
+        want_raw = str(manifest.get("min_core_version") or "").strip()
+        if not want_raw:
+            return
+        try:
+            have_raw = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        except Exception:
+            return
+        want, have = _version_tuple(want_raw), _version_tuple(have_raw)
+        if want is None or have is None:
+            return
+        if have < want:
+            logger.warning(
+                f"[PLUGINS] VERSION MISMATCH: '{name}' wants Sapphire core >= {want_raw} "
+                f"but this install is {have_raw}. Loading anyway — expect broken settings "
+                f"pages or missing features until the core is updated (git pull)."
+            )
+
+    def _read_plugins_json(self, key: str) -> list:
+        """Read a list from user/webui/plugins.json, falling back to the
+        shipped static file. A corrupt USER file is quarantined at ERROR —
+        silently falling through to the static list (enabled: setup-wizard
+        only) would turn every explicitly-enabled plugin dark on next boot
+        with two WARNING lines as the only trace."""
         for path in (USER_PLUGINS_JSON, STATIC_PLUGINS_JSON):
             if path.exists():
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
-                    return data.get("enabled", [])
+                    return data.get(key, [])
                 except Exception as e:
-                    logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
+                    if path == USER_PLUGINS_JSON:
+                        from datetime import datetime
+                        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                        quarantine = path.with_name(path.name + f".bad-{stamp}")
+                        try:
+                            path.rename(quarantine)
+                            logger.error(f"[PLUGINS] CORRUPT {path.name} quarantined to "
+                                         f"{quarantine.name} — plugin enable state LOST, "
+                                         f"reverting to defaults: {e}")
+                        except OSError:
+                            logger.error(f"[PLUGINS] CORRUPT {path.name} (quarantine "
+                                         f"failed) — plugin enable state ignored: {e}")
+                        try:
+                            from core.event_bus import publish, Events
+                            publish(Events.PLUGIN_LOAD_ERROR, {
+                                "plugin": "plugins.json",
+                                "error": "Corrupt plugin enable-state file — reverted to defaults",
+                            })
+                        except Exception:
+                            pass
+                    else:
+                        logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
         return []
+
+    def _get_enabled_list(self) -> list:
+        """Read enabled plugins from user/webui/plugins.json."""
+        return self._read_plugins_json("enabled")
 
     def _get_disabled_list(self) -> list:
         """Read explicitly-disabled plugins (overrides default_enabled)."""
-        for path in (USER_PLUGINS_JSON, STATIC_PLUGINS_JSON):
-            if path.exists():
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    return data.get("disabled", [])
-                except Exception as e:
-                    logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
-        return []
+        return self._read_plugins_json("disabled")
+
+    def _install_pkg_alias(self, name: str, plugin_dir: Path, info: dict):
+        """Make a user-band plugin importable as `plugins.<name>`.
+
+        Installs a package module in sys.modules with submodule_search_locations
+        pointing at the plugin dir, so submodule imports resolve through the
+        standard machinery. No-op if a real plugins/<name> exists on disk
+        (the genuine namespace package wins) or the alias is already present.
+        Removed in unload_plugin via info["_pkg_alias"].
+        """
+        import sys
+        import importlib
+        import importlib.util
+        from importlib.machinery import ModuleSpec
+
+        alias = f"plugins.{name}"
+        if alias in sys.modules:
+            return
+        # A system plugins/<name>/ on disk normally wins (genuine namespace
+        # package) — unless the registry winner is this user-band plugin
+        # (user shadows system by name). Then imports must follow the registry,
+        # or the shadowed system copy's code would execute instead.
+        reg = self._plugins.get(name)
+        if (SYSTEM_PLUGINS_DIR / name).is_dir() and not (reg and reg.get("band") == "user"):
+            return
+        try:
+            pkg = importlib.import_module("plugins")
+            spec = ModuleSpec(alias, None, is_package=True)
+            spec.submodule_search_locations = [str(plugin_dir)]
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[alias] = mod
+            setattr(pkg, name, mod)
+            info["_pkg_alias"] = alias
+        except Exception as e:
+            logger.warning(f"[PLUGINS] {name}: package alias install failed: {e}")
+
+    def _remove_pkg_alias(self, name: str, info: dict):
+        """Drop the plugins.<name> alias and everything imported under it."""
+        import sys
+        alias = info.pop("_pkg_alias", None)
+        if not alias:
+            return
+        for key in [k for k in list(sys.modules) if k == alias or k.startswith(alias + ".")]:
+            sys.modules.pop(key, None)
+        try:
+            import plugins as pkg
+            if getattr(pkg, name, None) is not None:
+                delattr(pkg, name)
+        except Exception:
+            pass
 
     def _load_plugin(self, name: str) -> bool:
         """Load an enabled plugin — check cached verification, register hooks, voice commands.
@@ -324,6 +562,14 @@ class PluginLoader:
         info = self._plugins.get(name)
         if not info:
             return False
+
+        # A fresh load ATTEMPT supersedes this plugin's stale errors — since
+        # get_load_errors went non-destructive (N7), a fixed-then-reloaded
+        # plugin's old failure would otherwise toast in every new browser
+        # session forever. Fail again and this same call re-appends the
+        # current truth. (wave-3 A1, 2026-08-31)
+        self._load_errors[:] = [e for e in self._load_errors
+                                if e.get("plugin") != name]
 
         # Use verification result from scan
         verified = info.get("verified", False)
@@ -363,14 +609,25 @@ class PluginLoader:
         manifest = info["manifest"]
         plugin_dir = info["path"]
         band = info["band"]
-        base_priority = manifest.get("priority", 50)
+        try:
+            base_priority = int(manifest.get("priority", 50))
+        except (TypeError, ValueError):
+            # A non-int priority ("50", null) used to ride into the hook
+            # registry and blow up fire()'s sort INSIDE the lock, on every
+            # turn, forever (hunt 2026-09-04 S2-01). Coerce or default.
+            logger.warning(f"[PLUGINS] {name}: manifest priority "
+                           f"{manifest.get('priority')!r} is not an int — using 50")
+            base_priority = 50
+
+        # Version-skew shout — warns loudly, never blocks
+        self._warn_min_core_version(name, manifest)
 
         # Pre-flight dependency check — before any code loads
         missing = self._check_dependencies(manifest)
         info.pop("missing_deps", None)  # Clear stale dep state on reload
         if missing:
             info["missing_deps"] = missing
-            pip_cmd = f"pip install {' '.join(missing)}"
+            pip_cmd = self.pip_hint(missing)
             logger.warning(f"[PLUGINS] {name}: missing dependencies: {missing} — {pip_cmd}")
             err_data = {
                 "plugin": name,
@@ -384,9 +641,37 @@ class PluginLoader:
             # Stay enabled but not loaded — user can install deps and reload
             return True  # Don't block/disable, just skip loading code
 
+        # requires_plugins (S0 doors, 2026-09-21): an add-on that rides another
+        # plugin's hooks + api facade (discord-personality -> discord) does not
+        # load while its host is missing or disabled. Same shape as missing
+        # deps: stays enabled, reports once, retried when the host loads
+        # (_load_dependents) or at the next boot.
+        required = [str(r) for r in (manifest.get("requires_plugins") or [])]
+        info.pop("missing_plugins", None)
+        missing_hosts = [r for r in required
+                         if not (self._plugins.get(r) or {}).get("loaded")]
+        if missing_hosts:
+            info["missing_plugins"] = missing_hosts
+            hosts = ", ".join(missing_hosts)
+            logger.warning(f"[PLUGINS] {name}: requires {hosts} — not loaded")
+            err_data = {"plugin": name,
+                        "error": f"Requires plugin(s) not loaded: {hosts}",
+                        "hint": f"Enable {hosts} first, then reload {name}",
+                        "missing_plugins": missing_hosts}
+            self._load_errors.append(err_data)
+            from core.event_bus import publish, Events
+            publish(Events.PLUGIN_LOAD_ERROR, err_data)
+            return True
+
         # Offset user plugins into 100-199 band
         if band == "user":
             base_priority = min(base_priority + 100, 199)
+            # User-band plugins live outside the real plugins/ namespace
+            # package, so their own absolute imports ("from plugins.<name>.
+            # tools import x") can't resolve from disk. Install a package
+            # alias whose search path points at the plugin dir — the normal
+            # import machinery handles everything below it.
+            self._install_pkg_alias(name, plugin_dir, info)
 
         capabilities = manifest.get("capabilities", {})
 
@@ -410,7 +695,14 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: failed to register scopes: {e}", exc_info=True)
 
-        # Register hooks
+        # Register hooks. privacy_aware (manifest top-level, vaulted chats
+        # ruling F2): only plugins declaring it receive hooks for private-chat
+        # turns — undeclared plugins are withheld, fail-closed.
+        hook_runner.mark_privacy_aware(name, bool(manifest.get("privacy_aware")))
+        # Plugin surfaces (2026-08-23): manifest `surfaces` = where this
+        # plugin's presence injections belong; the user's override (plugin
+        # state `surfaces`, Plugins page) wins. Absent = everywhere.
+        hook_runner.set_surfaces(name, self.effective_surfaces(name, manifest))
         hooks = capabilities.get("hooks", {})
         for hook_name, handler_path in hooks.items():
             handler_func = self._load_handler(plugin_dir, handler_path, hook_name)
@@ -443,10 +735,45 @@ class PluginLoader:
                     voice_match=voice_match
                 )
 
-        # Register tools with FunctionManager
+        # Register tools with FunctionManager. A refusal dict means a tool-name
+        # collision with an already-loaded plugin — mutual exclusivity by design
+        # (e.g. memory vs mindpalace share tool names on purpose). Unwind this
+        # plugin's partial registrations and report not-loaded; the boot loop
+        # preserves user intent (retry next restart). Scopes stay — the scope
+        # registry is idempotent and the owning plugin's entry was never
+        # displaced.
         tool_paths = capabilities.get("tools", [])
         if tool_paths and self._function_manager:
-            self._function_manager.register_plugin_tools(name, plugin_dir, tool_paths)
+            refusal = self._function_manager.register_plugin_tools(name, plugin_dir, tool_paths)
+            if refusal:
+                self._function_manager.unregister_plugin_tools(name)
+                hook_runner.unregister_plugin(name)
+                # A refused plugin's tool files already EXEC'd — any
+                # module-level side effects (contacts providers, etc.) must
+                # unwind too, or a "not loaded" plugin keeps serving
+                # whitelist decisions from the wrong store (scout find,
+                # 2026-07-19: mindpalace's provider survived the memory-
+                # collision refusal).
+                try:
+                    from core.contacts import unregister_provider as _unreg_contacts
+                    _unreg_contacts(name)
+                except Exception:
+                    pass
+                try:
+                    from core.audit import unregister_sink as _unreg_audit
+                    _unreg_audit(name)
+                except Exception:
+                    pass
+                try:
+                    from core.socks_proxy import unregister_direct_hosts as _unreg_dh
+                    _unreg_dh(name)
+                except Exception:
+                    pass
+                self._load_errors.append(refusal)
+                from core.event_bus import publish, Events
+                publish(Events.PLUGIN_LOAD_ERROR, refusal)
+                logger.warning(f"[PLUGINS] {name}: not loaded — {refusal['error']}")
+                return False
 
         # Register dashboard widgets — same shape as other capabilities.
         # Widget render modules are served at /plugin-web/{name}/{render_path}.
@@ -486,7 +813,7 @@ class PluginLoader:
                         settings_schema=w.get("settings_schema", []) or [],
                         api_version=w.get("api_version", 1),
                     ))
-                logger.info(f"[PLUGINS] Registered {len(widgets)} widget(s) for {name}")
+                logger.debug(f"[PLUGINS] Registered {len(widgets)} widget(s) for {name}")
             except Exception as e:
                 logger.warning(f"[PLUGINS] Widget registration failed for {name}: {e}")
 
@@ -517,7 +844,7 @@ class PluginLoader:
                     continue
                 try:
                     ns = {"__file__": str(provider_path), "__name__": f"plugin_provider_{name}_{system_name}"}
-                    exec(compile(provider_path.read_text(encoding='utf-8'), str(provider_path), 'exec'), ns)
+                    exec(compile(provider_path.read_text(encoding='utf-8-sig'), str(provider_path), 'exec'), ns)
                     provider_class = ns.get(class_name)
                     if not provider_class:
                         logger.error(f"[PLUGINS] Class '{class_name}' not found in {provider_path}")
@@ -531,7 +858,53 @@ class PluginLoader:
                     logger.error(f"[PLUGINS] Failed to load provider {class_name} for {name}: {e}", exc_info=True)
             if registered:
                 info["registered_providers"] = registered
-                logger.info(f"[PLUGINS] {name}: registered {len(registered)} provider(s)")
+                logger.debug(f"[PLUGINS] {name}: registered {len(registered)} provider(s)")
+
+        # Register memory layers (mirror-mode declarations consumed by the
+        # active memory plugin; harmless when no memory plugin is loaded)
+        layer_defs = capabilities.get("memory_layers", [])
+        if layer_defs:
+            try:
+                from core.memory_layers import register_layer
+                accepted = [ld.get("key") for ld in layer_defs
+                            if isinstance(ld, dict) and register_layer(ld.get("key"), ld, name)]
+                if accepted:
+                    info["registered_memory_layers"] = accepted
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: memory layer registration failed: {e}")
+
+        # Register games (declarations consumed by a game HOST plugin, e.g.
+        # game-room; harmless when no host is loaded — the registry just holds)
+        game_defs = capabilities.get("games", [])
+        if game_defs:
+            try:
+                from core.games_registry import register_game
+                accepted = [gd.get("id") for gd in game_defs
+                            if isinstance(gd, dict) and register_game(gd.get("id"), gd, name)]
+                if accepted:
+                    info["registered_games"] = accepted
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: game registration failed: {e}")
+
+        # Register prompt pack (mirror-only — merged into the prompt system
+        # at read time, never written to user/prompts; user wins collisions)
+        prompts_decl = capabilities.get("prompts", {})
+        if prompts_decl and isinstance(prompts_decl, dict):
+            try:
+                from core import prompt_packs
+                monoliths, pieces = None, None
+                mono_rel = prompts_decl.get("monoliths")
+                if mono_rel:
+                    monoliths = json.loads((plugin_dir / mono_rel).read_text(encoding="utf-8-sig"))
+                pieces_rel = prompts_decl.get("pieces")
+                if pieces_rel:
+                    pieces = json.loads((plugin_dir / pieces_rel).read_text(encoding="utf-8-sig"))
+                counts = prompt_packs.register_pack(name, monoliths=monoliths, pieces=pieces,
+                                                    kind=prompts_decl.get("kind"))
+                info["registered_prompt_pack"] = True
+                logger.info(f"[PLUGINS] {name}: prompt pack registered {counts}")
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: prompt pack registration failed: {e}")
 
         # Register scheduled tasks with continuity scheduler
         schedules = capabilities.get("schedule", [])
@@ -539,19 +912,14 @@ class PluginLoader:
             task_ids = []
             for sched in schedules:
                 try:
-                    task = self._scheduler.create_task({
-                        "name": sched.get("name", f"{name} task"),
-                        "schedule": sched.get("cron", "0 9 * * *"),
-                        "enabled": sched.get("enabled", True),
-                        "chance": sched.get("chance", 100),
-                        "initial_message": sched.get("description", "Plugin scheduled task"),
-                        "source": f"plugin:{name}",
-                        "handler": sched.get("handler", ""),
-                        "plugin_dir": str(plugin_dir),
-                    })
+                    task = self._scheduler.create_task(
+                        self._sched_task_def(name, sched, plugin_dir))
                     task_ids.append(task["id"])
-                    logger.info(f"[PLUGINS] Registered schedule task '{sched.get('name')}' for {name}")
+                    logger.debug(f"[PLUGINS] Registered schedule task '{sched.get('name')}' for {name}")
                 except Exception as e:
+                    # None placeholder keeps task_ids aligned with the manifest
+                    # order — resync_plugin_schedules zips them positionally.
+                    task_ids.append(None)
                     logger.error(f"[PLUGINS] Failed to register schedule for {name}: {e}")
             info["schedule_task_ids"] = task_ids
 
@@ -568,14 +936,16 @@ class PluginLoader:
                         "filter_fields": src.get("filter_fields", []),
                         "task_fields": src.get("task_fields", []),
                         "description": src.get("description", ""),
+                        "realtime": bool(src.get("realtime", False)),
                     } for src in event_sources]
-                logger.info(f"[PLUGINS] Registered {len(event_sources)} event source(s) for {name}")
+                logger.debug(f"[PLUGINS] Registered {len(event_sources)} event source(s) for {name}")
 
             # Load daemon module (start is deferred until scheduler is ready)
             daemon_entry = daemon_config.get("entry")
             if daemon_entry:
                 try:
-                    daemon_mod = self._load_daemon_module(plugin_dir, daemon_entry)
+                    pkg_base = f"plugins.{name}" if band == "user" else None
+                    daemon_mod = self._load_daemon_module(plugin_dir, daemon_entry, pkg_base)
                     if daemon_mod and hasattr(daemon_mod, "start"):
                         info["daemon_module"] = daemon_mod
                         if self._scheduler:
@@ -597,8 +967,26 @@ class PluginLoader:
                     publish(Events.PLUGIN_LOAD_ERROR, err_data)
                 except Exception as e:
                     logger.error(f"[PLUGINS] Failed to load daemon for {name}: {e}", exc_info=True)
+                    err_data = {"plugin": name, "error": f"Daemon failed to load: {e}"}
+                    self._load_errors.append(err_data)
+                    try:
+                        from core.event_bus import publish, Events
+                        publish(Events.PLUGIN_LOAD_ERROR, err_data)
+                    except Exception:
+                        pass
+
+        # Subprocess services (capabilities.services) — spawned via
+        # ProcessManager with the plugin's own conda env python when the
+        # manifest declares an environment (core/plugin_envs.py). Deferred
+        # until boot completes, same as daemons.
+        if capabilities.get("services"):
+            if self._scheduler:
+                self._start_services(name)
+            else:
+                logger.info(f"[PLUGINS] Services for {name} deferred until boot completes")
 
         info["loaded"] = True
+        self._load_dependents(name)
 
         # Seed default settings if manifest declares schema and no settings file exists
         settings_schema = capabilities.get("settings", [])
@@ -610,13 +998,13 @@ class PluginLoader:
                     settings_file.parent.mkdir(parents=True, exist_ok=True)
                     tmp = settings_file.with_suffix('.json.tmp')
                     tmp.write_text(json.dumps(defaults, indent=2), encoding="utf-8")
-                    tmp.replace(settings_file)
+                    replace_with_retry(tmp, settings_file)
                     logger.debug(f"[PLUGINS] Seeded default settings for {name}")
 
         logger.info(f"[PLUGINS] Loaded: {name} (priority {base_priority}, {band})")
         return True
 
-    def _load_daemon_module(self, plugin_dir: Path, entry_path: str):
+    def _load_daemon_module(self, plugin_dir: Path, entry_path: str, pkg_base: str = None):
         """Load a daemon module from a plugin. Returns the module namespace."""
         full_path = plugin_dir / entry_path
         try:
@@ -635,11 +1023,19 @@ class PluginLoader:
             # Derive the natural package import path so that tools doing
             # "from plugins.telegram.daemon import X" find this same module
             # instead of importing a second copy with separate state.
-            try:
-                rel = full_path.resolve().relative_to(Path.cwd())
-                pkg_name = str(rel.with_suffix("")).replace("/", ".").replace("\\", ".")
-            except ValueError:
-                pkg_name = f"plugin_daemon_{plugin_dir.name}"
+            if pkg_base:
+                # User-band plugins import themselves as plugins.<name>.* via
+                # the package alias — the daemon must register under that same
+                # path or "from plugins.<name>.daemon import X" execs a second
+                # copy with separate state.
+                entry_dotted = str(Path(entry_path).with_suffix("")).replace("/", ".").replace("\\", ".")
+                pkg_name = f"{pkg_base}.{entry_dotted}"
+            else:
+                try:
+                    rel = full_path.resolve().relative_to(Path.cwd())
+                    pkg_name = str(rel.with_suffix("")).replace("/", ".").replace("\\", ".")
+                except ValueError:
+                    pkg_name = f"plugin_daemon_{plugin_dir.name}"
 
             spec = importlib.util.spec_from_file_location(pkg_name, str(full_path))
             mod = importlib.util.module_from_spec(spec)
@@ -650,6 +1046,19 @@ class PluginLoader:
         except Exception as e:
             logger.error(f"[PLUGINS] Failed to load daemon module {full_path}: {e}", exc_info=True)
             return None
+
+    def _load_dependents(self, host: str):
+        """Retry add-ons that failed earlier for want of `host` (toggle-on lane).
+        Boot never sets missing_plugins before an attempt, so this is a no-op
+        during scan() — no double registration."""
+        for dep, dinfo in list(self._plugins.items()):
+            if (dinfo.get("enabled") and not dinfo.get("loaded")
+                    and host in (dinfo.get("missing_plugins") or [])):
+                logger.info(f"[PLUGINS] {host} loaded — retrying {dep}")
+                try:
+                    self._load_plugin(dep)
+                except Exception as e:
+                    logger.error(f"[PLUGINS] {dep}: retry after {host} loaded failed: {e}")
 
     def _load_handler(self, plugin_dir: Path, handler_path: str, hook_name: str, ns_cache: dict = None):
         """Import a Python handler from a plugin directory.
@@ -677,7 +1086,7 @@ class PluginLoader:
             return None
 
         try:
-            source = full_path.read_text(encoding="utf-8")
+            source = full_path.read_text(encoding="utf-8-sig")
             namespace = {"__file__": str(full_path), "__name__": f"plugin_{plugin_dir.name}_{full_path.stem}"}
             exec(compile(source, str(full_path), "exec"), namespace)
 
@@ -723,10 +1132,21 @@ class PluginLoader:
 
     def unload_plugin(self, name: str):
         """Unload a plugin — deregister all hooks, tools, routes, providers, schedule tasks, event sources, scopes, and dashboard widgets."""
+        # User turned it off / it's going away — its load errors are moot
+        # (and would otherwise toast forever now that the list is
+        # non-destructive). (wave-3 A1)
+        self._load_errors[:] = [e for e in self._load_errors
+                                if e.get("plugin") != name]
+        quiet = [n for n, i in self._plugins.items() if i.get("loaded")
+                 and name in ((i.get("manifest") or {}).get("requires_plugins") or [])]
+        if quiet:
+            logger.info(f"[PLUGINS] {name} unloading — {quiet} stay loaded; "
+                        f"their {name} hooks go quiet until it is back")
         hook_runner.unregister_plugin(name)
         if self._function_manager:
             self._function_manager.unregister_plugin_tools(name)
         self._unregister_routes(name)
+        self._remove_pkg_alias(name, self._plugins.get(name, {}))
 
         # Unregister dashboard widgets contributed by this plugin.
         # Refuse to touch the 'core' namespace — that's where built-ins live;
@@ -737,6 +1157,15 @@ class PluginLoader:
                 unregister_plugin_widgets(name)
         except Exception as e:
             logger.warning(f"[PLUGINS] {name}: failed to unregister widgets: {e}")
+
+        # Direct-host providers (net facade): a not-loaded plugin must not
+        # keep steering global proxy policy from a dead closure — same
+        # rationale as the contacts/audit legs above. 2026-09-01.
+        try:
+            from core.socks_proxy import unregister_direct_hosts as _unreg_dh
+            _unreg_dh(name)
+        except Exception:
+            pass
 
         # Unregister scopes this plugin contributed so a later manifest edit
         # with a different default takes effect on re-register instead of
@@ -749,9 +1178,25 @@ class PluginLoader:
                 for sd in scope_defs:
                     key = sd.get("key")
                     if key:
-                        unregister_plugin_scope(key)
+                        unregister_plugin_scope(key, plugin_name=name)
         except Exception as e:
             logger.warning(f"[PLUGINS] {name}: failed to unregister scopes: {e}")
+
+        # Unregister any contacts provider this plugin installed
+        try:
+            from core.contacts import unregister_provider as _unreg_contacts
+            _unreg_contacts(name)
+        except Exception:
+            pass
+
+        # Unregister any change-audit sink this plugin installed (same
+        # unwind rationale as contacts: tool files EXEC'd at load, their
+        # module-level registrations must not outlive the plugin)
+        try:
+            from core.audit import unregister_sink as _unreg_audit
+            _unreg_audit(name)
+        except Exception:
+            pass
 
         # Unregister providers — reset active setting if it pointed to this plugin
         info = self._plugins.get(name, {})
@@ -759,10 +1204,46 @@ class PluginLoader:
             registry = self._get_provider_registry(system_name)
             if registry:
                 if registry.get_active_key() == prov_key:
-                    from core.settings_manager import settings_manager
-                    settings_manager.set(registry.setting_key, 'none')
-                    logger.info(f"[PLUGINS] Reset {registry.setting_key} to 'none' (was '{prov_key}' from disabled plugin)")
+                    # Wrapped like every sibling leg: this used to import a
+                    # name that doesn't exist (`settings_manager`) and blow
+                    # the whole unload half-way whenever the disabled plugin
+                    # provided the ACTIVE provider (broadsword hunt H10).
+                    try:
+                        from core.settings_manager import settings
+                        settings.set(registry.setting_key, 'none', persist=True)
+                        logger.info(f"[PLUGINS] Reset {registry.setting_key} to 'none' (was '{prov_key}' from disabled plugin)")
+                    except Exception as e:
+                        logger.warning(f"[PLUGINS] {name}: failed to reset {registry.setting_key}: {e}")
                 registry.unregister_plugin(name)
+
+        # Unregister memory layers (registered layers go dark in the memory
+        # plugin — data survives, reads exclude it until re-enable)
+        if info.get("registered_memory_layers"):
+            try:
+                from core.memory_layers import unregister_plugin as _unreg_layers
+                _unreg_layers(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister memory layers: {e}")
+
+        # Unregister games (they go dark in the host; plugin-owned state and
+        # saves survive until re-enable)
+        if info.get("registered_games"):
+            try:
+                from core.games_registry import unregister_plugin as _unreg_games
+                _unreg_games(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister games: {e}")
+
+        # Unregister prompt pack (pack prompts go dark; if one was the active
+        # prompt and no user entry shadows it, the registry hands off to
+        # default loudly)
+        if info.get("registered_prompt_pack"):
+            try:
+                from core import prompt_packs
+                prompt_packs.unregister_plugin(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister prompt pack: {e}")
+
         # Remove plugin schedule tasks and event sources
         # Snapshot daemon_mod under lock, then stop OUTSIDE lock to avoid
         # ABBA deadlock: _lock → _lifecycle_lock vs _lifecycle_lock → _lock
@@ -770,15 +1251,18 @@ class PluginLoader:
         with self._lock:
             if self._scheduler and name in self._plugins:
                 for tid in self._plugins[name].get("schedule_task_ids", []):
+                    if not tid:
+                        continue  # None placeholder from a failed registration
                     try:
                         self._scheduler.delete_task(tid)
                     except Exception as e:
                         logger.warning(f"[PLUGINS] Failed to delete schedule task {tid}: {e}")
                 self._plugins[name].pop("schedule_task_ids", None)
             self._event_sources.pop(name, None)
-            self._reply_handlers.pop(name, None)
             if name in self._plugins:
                 daemon_mod = self._plugins[name].get("daemon_module")
+            if not (daemon_mod and hasattr(daemon_mod, "stop")):
+                self._reply_handlers.pop(name, None)
 
         # Stop daemon outside _lock (daemon.stop() acquires _lifecycle_lock)
         if daemon_mod and hasattr(daemon_mod, "stop"):
@@ -787,11 +1271,19 @@ class PluginLoader:
                 logger.info(f"[PLUGINS] Stopped daemon for {name}")
             except Exception as e:
                 logger.warning(f"[PLUGINS] Failed to stop daemon for {name}: {e}")
+            # Reply handler goes AFTER the daemon is down (row 85): popping it
+            # first left a window where an inbound event ran the LLM and the
+            # scheduler dropped the answer (reply_callback=None, no log).
+            with self._lock:
+                self._reply_handlers.pop(name, None)
             # Clean sys.modules so file handles are released (needed for Windows rmtree)
             pkg = getattr(daemon_mod, "_pkg_name", None)
             if pkg:
                 import sys
                 sys.modules.pop(pkg, None)
+
+        # Stop subprocess services (no core locks held by these)
+        self._stop_services(name)
 
         # Evict plugin's lib/ modules from sys.modules so the next load picks
         # up edited code instead of stale cache. Without this, hook files
@@ -851,7 +1343,7 @@ class PluginLoader:
             data["enabled"] = [n for n in enabled if n not in names]
             tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
             tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp_path.replace(USER_PLUGINS_JSON)
+            replace_with_retry(tmp_path, USER_PLUGINS_JSON)
         except Exception as e:
             logger.warning(f"[PLUGINS] Failed to update enabled list: {e}")
 
@@ -880,8 +1372,11 @@ class PluginLoader:
                     if manifest_path.exists():
                         try:
                             self._plugins[name]["manifest"] = json.loads(
-                                manifest_path.read_text(encoding="utf-8")
+                                manifest_path.read_text(encoding="utf-8-sig")
                             )
+                            # Restamp, or rescan() re-queues this reload FOREVER
+                            # after any manifest edit (negspace N14, 2026-08-31).
+                            self._plugins[name]["_manifest_mtime"] = manifest_path.stat().st_mtime
                         except Exception as e:
                             logger.warning(f"[PLUGINS] Failed to re-read manifest for {name}: {e}")
                     # Re-verify signature (code may have been tampered with since scan)
@@ -891,7 +1386,21 @@ class PluginLoader:
                     self._plugins[name]["verified_author"] = verify_meta.get("author")
             if should_load:
                 try:
-                    self._load_plugin(name)
+                    if not self._load_plugin(name):
+                        # Signature block / load refusal: the old flow still
+                        # logged "Reloaded" and left the UI toggle ON while
+                        # every tool, hook and route was gone — the exact
+                        # edit-without-resign dev-watcher trap.
+                        logger.error(f"[PLUGINS] Reload BLOCKED for {name} — "
+                                     f"plugin did not load (unsigned/tampered or "
+                                     f"load failure); its tools, hooks and routes "
+                                     f"are now OFFLINE until a successful reload")
+                        from core.event_bus import publish, Events
+                        publish(Events.PLUGIN_LOAD_ERROR, {
+                            "plugin": name,
+                            "error": "Reload blocked — signature or load failure",
+                        })
+                        return
                     # Re-enable tools in active toolset. Capture the toolset
                     # name UNDER the function_manager's tools lock so a
                     # concurrent toolset save (dev-watcher fires while user
@@ -902,8 +1411,22 @@ class PluginLoader:
                         with fm._tools_lock:
                             current = fm.current_toolset_name
                         if current:
-                            fm.update_enabled_functions([current])
+                            # Carry the active chat's extra_toolsets through the
+                            # resync — a by-name-only re-apply silently strips
+                            # them from the enabled set (story-tools decay bug,
+                            # 2026-08-03). Settings survive; runtime must too.
+                            extras = None
+                            try:
+                                from core.api_fastapi import get_system
+                                _sys = get_system()
+                                if _sys is not None:
+                                    extras = (_sys.llm_chat.session_manager.get_chat_settings()
+                                              or {}).get('extra_toolsets') or None
+                            except Exception:
+                                pass
+                            fm.update_enabled_functions([current], extra_toolsets=extras)
                     logger.info(f"[PLUGINS] Reloaded: {name}")
+                    self._fire_plugins_ready("reload")
                     from core.event_bus import publish, Events
                     publish(Events.PLUGIN_RELOADED, {"plugin": name})
                 except Exception as e:
@@ -924,6 +1447,17 @@ class PluginLoader:
         if info.get("loaded"):
             self.unload_plugin(name)
 
+        # Best-effort conda env cleanup in the background — multi-GB envs take
+        # tens of seconds to remove and nothing else will ever reclaim them
+        # once the plugin is gone (the UI's env strip goes with it).
+        if info.get("manifest", {}).get("environment"):
+            try:
+                from core import plugin_envs
+                threading.Thread(target=plugin_envs.remove_env, args=(name,),
+                                 daemon=True, name=f"env-rm-{name}").start()
+            except Exception:
+                pass
+
         # Remove from internal dict
         with self._lock:
             self._plugins.pop(name, None)
@@ -935,6 +1469,12 @@ class PluginLoader:
         plugin_dir = info["path"] if info else USER_PLUGINS_DIR / name
         if plugin_dir.exists():
             _rmtree_robust(plugin_dir)
+
+        # Retained previous version (update-revert copy) goes too — a later
+        # revert must never resurrect an uninstalled plugin.
+        prev_dir = PLUGIN_PREV_DIR / name
+        if prev_dir.exists():
+            _rmtree_robust(prev_dir)
 
         # Delete settings
         settings_file = PROJECT_ROOT / "user" / "webui" / "plugins" / f"{name}.json"
@@ -1053,6 +1593,63 @@ class PluginLoader:
 
         logger.info(f"[PLUGINS] Uninstalled: {name}")
 
+    def _sched_task_def(self, name: str, sched: dict, plugin_dir) -> dict:
+        """Build the scheduler task dict for one manifest schedule entry.
+
+        Settings-linked fields: `time_setting` names a plugin-settings key
+        holding "HH:MM" (built into a daily cron, user-local like all crons);
+        `enabled_setting` names a boolean key. Both fall back to the static
+        manifest values, so a bad setting never kills the task.
+        """
+        cron = sched.get("cron", "0 9 * * *")
+        enabled = sched.get("enabled", True)
+        if sched.get("time_setting") or sched.get("enabled_setting"):
+            s = self.get_plugin_settings(name)
+            if sched.get("time_setting"):
+                raw = s.get(sched["time_setting"])
+                parsed = _time_to_cron(raw, None)
+                if parsed is None and raw not in (None, ""):
+                    # The fallback is deliberate (a bad value never kills the task)
+                    # but it used to be silent: the resync log printed the manifest
+                    # cron as if the user had chosen it (row 81).
+                    logger.warning(f"[PLUGINS] {name}: {sched['time_setting']}={raw!r} is not a valid "
+                                   f"hour or HH:MM — schedule '{sched.get('name')}' keeps '{cron}'")
+                cron = parsed or cron
+            if sched.get("enabled_setting") and sched["enabled_setting"] in s:
+                enabled = bool(s[sched["enabled_setting"]])
+        return {
+            "name": sched.get("name", f"{name} task"),
+            "schedule": cron,
+            "enabled": enabled,
+            "chance": sched.get("chance", 100),
+            "initial_message": sched.get("description", "Plugin scheduled task"),
+            "source": f"plugin:{name}",
+            "handler": sched.get("handler", ""),
+            "plugin_dir": str(plugin_dir),
+        }
+
+    def resync_plugin_schedules(self, name: str):
+        """Re-resolve settings-linked schedule fields after a plugin-settings
+        save, updating the live scheduler tasks in place. Static entries (no
+        time_setting/enabled_setting) are left alone. Called from the plugin
+        settings PUT route; a restart reaches the same state via re-registration."""
+        info = self._plugins.get(name)
+        if not info or not self._scheduler or not info.get("loaded"):
+            return
+        schedules = info["manifest"].get("capabilities", {}).get("schedule", [])
+        task_ids = info.get("schedule_task_ids") or []
+        for sched, tid in zip(schedules, task_ids):
+            if not tid or not (sched.get("time_setting") or sched.get("enabled_setting")):
+                continue
+            try:
+                d = self._sched_task_def(name, sched, info["path"])
+                self._scheduler.update_task(
+                    tid, {"schedule": d["schedule"], "enabled": d["enabled"]})
+                logger.info(f"[PLUGINS] Schedule '{d['name']}' resynced for {name}: "
+                            f"'{d['schedule']}' enabled={d['enabled']}")
+            except Exception as e:
+                logger.warning(f"[PLUGINS] Schedule resync failed for {name}: {e}")
+
     def set_scheduler(self, scheduler):
         """Set the continuity scheduler for plugin schedule tasks.
 
@@ -1062,6 +1659,7 @@ class PluginLoader:
         self._scheduler = scheduler
         self._register_pending_schedules()
         self._start_pending_daemons()
+        self._start_pending_services()
         self._reactivate_plugin_providers()
 
     def _register_pending_schedules(self):
@@ -1082,19 +1680,12 @@ class PluginLoader:
             task_ids = []
             for sched in schedules:
                 try:
-                    task = self._scheduler.create_task({
-                        "name": sched.get("name", f"{name} task"),
-                        "schedule": sched.get("cron", "0 9 * * *"),
-                        "enabled": sched.get("enabled", True),
-                        "chance": sched.get("chance", 100),
-                        "initial_message": sched.get("description", "Plugin scheduled task"),
-                        "source": f"plugin:{name}",
-                        "handler": sched.get("handler", ""),
-                        "plugin_dir": str(plugin_dir),
-                    })
+                    task = self._scheduler.create_task(
+                        self._sched_task_def(name, sched, plugin_dir))
                     task_ids.append(task["id"])
                     logger.info(f"[PLUGINS] Deferred schedule registration: '{sched.get('name')}' for {name}")
                 except Exception as e:
+                    task_ids.append(None)
                     logger.error(f"[PLUGINS] Failed deferred schedule for {name}: {e}")
             info["schedule_task_ids"] = task_ids
 
@@ -1167,6 +1758,196 @@ class PluginLoader:
                 logger.info(f"[PLUGINS] Started deferred daemon for {name}")
             except Exception as e:
                 logger.error(f"[PLUGINS] Failed to start deferred daemon for {name}: {e}", exc_info=True)
+                # A daemon that failed to start used to leave the plugin "loaded
+                # and on" with no bot behind it — error log only (row 75).
+                err_data = {"plugin": name, "error": f"Daemon failed to start: {e}"}
+                self._load_errors.append(err_data)
+                try:
+                    from core.event_bus import publish, Events
+                    publish(Events.PLUGIN_LOAD_ERROR, err_data)
+                except Exception:
+                    pass
+
+    # ── Plugin services (subprocess servers, optional per-plugin conda env) ──
+
+    def _start_services(self, name: str):
+        """Start declared subprocess services for a loaded plugin.
+
+        If the manifest declares an environment, services only start when
+        that env is built and matches the spec — otherwise they stay dormant
+        and the UI offers a Build button (info['services_blocked'] carries why).
+        """
+        import sys
+        info = self._plugins.get(name)
+        if not info or info.get("service_managers"):
+            return
+        manifest = info["manifest"]
+        services = manifest.get("capabilities", {}).get("services", [])
+        if not services:
+            return
+        plugin_dir = info["path"]
+        env_spec = manifest.get("environment")
+
+        from core.process_manager import ProcessManager, kill_process_on_port
+        python = sys.executable
+        if env_spec:
+            from core import plugin_envs
+            status = plugin_envs.env_status(name, env_spec)
+            if status != "ready":
+                info["services_blocked"] = status
+                logger.warning(f"[PLUGINS] {name}: services not started — env {status}")
+                return
+            python = str(plugin_envs.env_python(name))
+
+        managers = {}
+        settings = self.get_plugin_settings(name)
+        for svc in services:
+            svc_name = svc.get("name", "service")
+            if not svc.get("autostart", True):
+                continue
+            entry = svc.get("entry")
+            if not entry:
+                logger.warning(f"[PLUGINS] Service '{svc_name}' for {name} has no entry")
+                continue
+            full_path = plugin_dir / entry
+            try:
+                full_path.resolve().relative_to(plugin_dir.resolve())
+            except ValueError:
+                logger.error(f"[PLUGINS] Path traversal blocked in service entry: {entry}")
+                continue
+            if not full_path.exists():
+                logger.warning(f"[PLUGINS] Service entry not found: {full_path}")
+                continue
+
+            port = None
+            port_setting = svc.get("port_setting")
+            if port_setting:
+                port = settings.get(port_setting)
+            port = port or svc.get("port")
+            if port:
+                try:
+                    port = int(port)
+                except (TypeError, ValueError):
+                    logger.warning(f"[PLUGINS] Invalid service port {port!r} for '{name}' — service not started")
+                    continue
+                # Never kill/claim Sapphire's own ports — a typo'd plugin port
+                # setting must not SIGTERM the web UI, TTS server, or proxy.
+                import config
+                core_ports = {int(getattr(config, k, 0) or 0)
+                              for k in ("WEB_UI_PORT", "TTS_SERVER_PORT", "SOCKS_PORT")} - {0}
+                if port in core_ports:
+                    logger.error(f"[PLUGINS] Service port {port} for '{name}' is a Sapphire core port — service NOT started (fix the plugin's port setting)")
+                    continue
+                try:
+                    kill_process_on_port(port)
+                except Exception:
+                    pass
+
+            def _make_env(plugin=name, service_port=port):
+                env = dict(os.environ)
+                env["SAPPHIRE_PLUGIN"] = plugin
+                env["SAPPHIRE_ROOT"] = str(PROJECT_ROOT)
+                if service_port:
+                    env["SAPPHIRE_SERVICE_PORT"] = str(service_port)
+                try:
+                    env["SAPPHIRE_PLUGIN_SETTINGS"] = json.dumps(self.get_plugin_settings(plugin))
+                except Exception:
+                    pass
+                return env
+
+            pm = ProcessManager(
+                script_path=full_path,
+                log_name=f"{name}-{svc_name}",
+                base_dir=PROJECT_ROOT,
+                env_callback=_make_env,
+                python_exe=python,
+            )
+            if pm.start():
+                if svc.get("restart", True):
+                    pm.monitor_and_restart(check_interval=10)
+                managers[svc_name] = pm
+                port_note = f" (port {port})" if port else ""
+                logger.info(f"[PLUGINS] Started service '{svc_name}' for {name}{port_note}")
+
+        if managers:
+            info["service_managers"] = managers
+            info.pop("services_blocked", None)
+
+    def _stop_services(self, name: str):
+        """Stop all subprocess services for a plugin."""
+        info = self._plugins.get(name)
+        if not info:
+            return
+        managers = info.pop("service_managers", None) or {}
+        for svc_name, pm in managers.items():
+            try:
+                pm.stop()
+                logger.info(f"[PLUGINS] Stopped service '{svc_name}' for {name}")
+            except Exception as e:
+                logger.warning(f"[PLUGINS] Failed to stop service '{svc_name}' for {name}: {e}")
+
+    def _start_pending_services(self):
+        """Start services for plugins loaded before boot completed (mirrors daemons)."""
+        with self._lock:
+            snapshot = list(self._plugins.keys())
+        for name in snapshot:
+            info = self._plugins.get(name)
+            if not info or not info.get("loaded") or info.get("service_managers"):
+                continue
+            if not info["manifest"].get("capabilities", {}).get("services"):
+                continue
+            try:
+                self._start_services(name)
+            except Exception as e:
+                logger.error(f"[PLUGINS] Failed to start deferred services for {name}: {e}", exc_info=True)
+
+    def stop_all_services(self):
+        """Stop all plugin service subprocesses. Called at shutdown alongside daemons."""
+        with self._lock:
+            names = [n for n, info in self._plugins.items() if info.get("service_managers")]
+        for n in names:
+            self._stop_services(n)
+
+    def get_env_status(self, name: str) -> dict:
+        """Env + services summary for the UI. required=False when the manifest
+        declares no environment section."""
+        info = self._plugins.get(name)
+        if not info:
+            return {"required": False}
+        manifest = info.get("manifest", {})
+        env_spec = manifest.get("environment")
+        services = manifest.get("capabilities", {}).get("services", [])
+        result = {"required": bool(env_spec), "has_services": bool(services)}
+        if env_spec:
+            from core import plugin_envs
+            result["state"] = plugin_envs.env_status(name, env_spec)
+            result["env_name"] = plugin_envs.env_name(name)
+            b = plugin_envs.build_state(name)
+            if b:
+                result["build"] = {"state": b.get("state"), "step": b.get("step"),
+                                   "error": b.get("error")}
+        if services:
+            managers = info.get("service_managers") or {}
+            result["services"] = [{
+                "name": s.get("name", "service"),
+                "running": bool(managers.get(s.get("name", "service"))
+                                and managers[s.get("name", "service")].is_running()),
+            } for s in services]
+            if info.get("services_blocked"):
+                result["services_blocked"] = info["services_blocked"]
+        return result
+
+    def get_env_python(self, name: str) -> str:
+        """Interpreter for a plugin: its own env python if declared and built,
+        else Sapphire's. Convenience for plugins running one-shot scripts."""
+        import sys
+        info = self._plugins.get(name)
+        if info and info.get("manifest", {}).get("environment"):
+            from core import plugin_envs
+            p = plugin_envs.env_python(name)
+            if p:
+                return str(p)
+        return sys.executable
 
     def rescan(self):
         """Scan for new plugins and clean up removed ones.
@@ -1191,8 +1972,20 @@ class PluginLoader:
                 if not manifest_path.exists():
                     continue
                 try:
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                except Exception:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+                except Exception as e:
+                    # "Can't parse" is not "gone": the removal sweep below
+                    # would otherwise classify it as removed-from-disk and
+                    # unload a plugin whose manifest is mid-save/corrupt.
+                    logger.warning(f"[PLUGINS] Rescan: unreadable plugin.json in "
+                                   f"{child.name} — keeping current state: {e}")
+                    with self._lock:
+                        for known, info in self._plugins.items():
+                            if info.get("path") == child:
+                                on_disk.add(known)
+                                break
+                        else:
+                            on_disk.add(child.name)
                     continue
                 name = manifest.get("name", child.name)
                 on_disk.add(name)
@@ -1244,6 +2037,7 @@ class PluginLoader:
 
                 if is_enabled:
                     if self._load_plugin(name):
+                        self._fire_plugins_ready("rescan")
                         logger.info(f"[PLUGINS] Rescan: loaded new plugin '{name}'")
                     else:
                         # Failed verification — mark in-memory False but preserve
@@ -1319,7 +2113,7 @@ class PluginLoader:
             compiled = re.compile(f'^{regex_pattern}$')
 
             registered.append((method, compiled, param_names, handler_func))
-            logger.info(f"[PLUGINS] Registered route: {method} /api/plugin/{name}/{path}")
+            logger.debug(f"[PLUGINS] Registered route: {method} /api/plugin/{name}/{path}")
 
         if registered:
             with self._lock:
@@ -1330,7 +2124,7 @@ class PluginLoader:
         with self._lock:
             if name in self._routes:
                 del self._routes[name]
-                logger.info(f"[PLUGINS] Unregistered routes for: {name}")
+                logger.debug(f"[PLUGINS] Unregistered routes for: {name}")
 
     def get_route_handler(self, plugin_name: str, method: str, path: str) -> Optional[Tuple[Callable, dict]]:
         """Find a matching route handler. Returns (handler_func, path_params) or None."""
@@ -1358,6 +2152,45 @@ class PluginLoader:
                 sources.extend(plugin_sources)
         return sources
 
+    def get_enabled_daemon_task(self, source_name: str, account: str = None,
+                                payload: dict = None) -> Optional[dict]:
+        """Return the enabled daemon task for a source (optionally matching an
+        account), or None. Lets a realtime daemon read its gate task's AI config
+        (chat_target, persona, toolset) to configure a live session.
+
+        With `payload` (e.g. {"caller": "+1555..."}), rules are selected
+        most-specific-wins: a rule whose filter MATCHES the payload beats a rule
+        with no filter (the catch-all); a rule whose filter FAILS is excluded
+        entirely. Two rules on one number = "just me" + "everyone else". No
+        match at all -> None (the daemon should decline the session)."""
+        if not self._scheduler:
+            return None
+        catch_all = None
+        for task in self._scheduler.find_tasks_by_event(source_name):
+            tc = task.get("trigger_config", {})
+            if account is not None and tc.get("account") != account:
+                continue
+            if payload is None:
+                return task                                  # legacy: first match
+            raw = tc.get("filter") if isinstance(tc.get("filter"), dict) else {}
+            task_filter = {k: v for k, v in raw.items() if str(v).strip()}
+            if not task_filter:
+                catch_all = catch_all or task
+            elif self._scheduler.filter_matches(task_filter, payload,
+                                                task.get("name", "")):
+                return task                                  # specific match wins
+        return catch_all
+
+    def _is_realtime_source(self, source_name: str) -> bool:
+        """True if the named event source declared `realtime: true` (a live-handled
+        gate — its tasks must never be fired as one-shot event tasks)."""
+        with self._lock:
+            for plugin_sources in self._event_sources.values():
+                for src in plugin_sources:
+                    if src.get("name") == source_name:
+                        return bool(src.get("realtime"))
+        return False
+
     def register_reply_handler(self, plugin_name: str, handler: Callable):
         """Register a reply handler for a daemon plugin.
 
@@ -1366,16 +2199,63 @@ class PluginLoader:
         """
         with self._lock:
             self._reply_handlers[plugin_name] = handler
-        logger.info(f"[PLUGINS] Registered reply handler for {plugin_name}")
+        logger.debug(f"[PLUGINS] Registered reply handler for {plugin_name}")
+
+    def unregister_reply_handler(self, plugin_name: str):
+        """Drop a daemon's reply handler (its stop() calls this — a handler bound
+        to a dead runtime consumed events into 'runtime unavailable', row 85)."""
+        with self._lock:
+            self._reply_handlers.pop(plugin_name, None)
+
+    def _source_plugin(self, source_name: str) -> Optional[str]:
+        """Which plugin declared this event source (None = nobody)."""
+        with self._lock:
+            for plugin_name, sources in self._event_sources.items():
+                if any(src["name"] == source_name for src in sources):
+                    return plugin_name
+        return None
 
     def _get_reply_handler(self, source_name: str) -> Optional[Callable]:
         """Find the reply handler for an event source by looking up its plugin."""
+        owner = self._source_plugin(source_name)
         with self._lock:
-            for plugin_name, sources in self._event_sources.items():
-                for src in sources:
-                    if src["name"] == source_name:
-                        return self._reply_handlers.get(plugin_name)
-        return None
+            return self._reply_handlers.get(owner) if owner else None
+
+    def tasks_for_source(self, source_name: str) -> List[dict]:
+        """Enabled daemon tasks listening on `source_name`, trigger_config
+        included — a daemon's own clock reads its task_fields (greeting_time,
+        goodnight_time…) from these. Empty before the scheduler exists."""
+        if not self._scheduler:
+            return []
+        return self._scheduler.find_tasks_by_event(source_name)
+
+    def fire_task(self, task_id: str, payload, *, plugin: str = None) -> dict:
+        """A daemon fires ONE named task it owns (S0 doors, 2026-09-21).
+
+        emit_daemon_event fans a payload out to every listener of a source;
+        this targets a task — the Discord daemon's clock fires the greetings
+        task whose own greeting_time just passed, and nobody else's. The
+        task's source must be one this plugin declared (when `plugin` is
+        given); the answer routes to that plugin's reply handler. Scheduler
+        rules still apply: enabled, account match. The task's MESSAGE filter
+        does not — the clock fires a task, not a message. Realtime gates
+        refuse (they are switches, not tasks)."""
+        if not self._scheduler:
+            return {"success": False, "error": "no scheduler"}
+        task = self._scheduler.get_task(task_id)
+        if not task:
+            return {"success": False, "error": "Task not found"}
+        source = str((task.get("trigger_config") or {}).get("source") or "")
+        owner = self._source_plugin(source)
+        if owner is None or (plugin and owner != plugin):
+            return {"success": False,
+                    "error": f"source '{source}' is not owned by {plugin or 'any plugin'}"}
+        if self._is_realtime_source(source):
+            return {"success": False, "error": f"'{source}' is a realtime gate, not a fireable task"}
+        data = payload if isinstance(payload, str) else json.dumps(payload)
+        with self._lock:
+            handler = self._reply_handlers.get(owner)
+        return self._scheduler.fire_event_task(task_id, data, reply_callback=handler, skip_filter=True)
 
     def emit_daemon_event(self, source_name: str, event_data: str):
         """Emit an event from a daemon plugin, triggering matching tasks.
@@ -1388,6 +2268,13 @@ class PluginLoader:
             logger.warning(f"[PLUGINS] Cannot emit event '{source_name}': no scheduler")
             return
 
+        # Realtime sources (e.g. live voice) are GATES, not fire-a-task events —
+        # their tasks are read via active_daemon_accounts to gate a live handler.
+        # Never run a one-shot task for them (would double-handle atop the live session).
+        if self._is_realtime_source(source_name):
+            logger.debug(f"[PLUGINS] '{source_name}' is realtime — gate only, not firing tasks")
+            return
+
         tasks = self._scheduler.find_tasks_by_event(source_name)
         if not tasks:
             logger.debug(f"[PLUGINS] No tasks listening for event source '{source_name}'")
@@ -1397,7 +2284,11 @@ class PluginLoader:
         any_accepted = False
         for task in tasks:
             result = self._scheduler.fire_event_task(task["id"], event_data, reply_callback=reply_handler)
-            if result.get("success", False) or result.get("error") not in ("Event filtered out", "Account mismatch"):
+            # Accepted = the task took it (ran or queued). Before 2026-09-17 this was a
+            # negative allowlist — task-disabled / not-found / wrong-type / unparseable /
+            # queue-full all reported "accepted", so a plugin recorded its cooldown and
+            # posted nothing (Discord hunt 2.13.0, rows 3 + 52).
+            if result.get("success", False):
                 any_accepted = True
         return any_accepted
 
@@ -1421,8 +2312,18 @@ class PluginLoader:
         if path.exists():
             try:
                 stored = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as e:
+                # Shout — a corrupt settings file silently reverting EVERY
+                # setting of this plugin to manifest defaults is invisible
+                # otherwise (daemon quietly switches models, gates flip, etc.)
+                # Once per file: this is a hot path (re-read per resolve).
+                warned = getattr(self, "_warned_corrupt_settings", None)
+                if warned is None:
+                    warned = self._warned_corrupt_settings = set()
+                if name not in warned:
+                    warned.add(name)
+                    logger.error(f"[PLUGINS] Corrupt settings file {path} — "
+                                 f"'{name}' is running on manifest DEFAULTS: {e}")
         return {**defaults, **stored}
 
     # ── Query methods ──
@@ -1436,10 +2337,16 @@ class PluginLoader:
         return [n for n, info in self._plugins.items() if info["enabled"]]
 
     def get_load_errors(self) -> list:
-        """Get accumulated plugin load errors (for startup toast display)."""
-        errors = list(self._load_errors)
-        self._load_errors.clear()
-        return errors
+        """Get accumulated plugin load errors (for startup toast display).
+
+        NON-destructive (negspace N7/P1#12, 2026-08-31): any /api/init — a
+        background tab, an SSE-reconnect refresh — used to DRAIN the list, so
+        the only report of a failed plugin could be swallowed by a tab nobody
+        was looking at. The frontend dedupes its toasts per browser session;
+        the list is bounded here instead of cleared."""
+        if len(self._load_errors) > 100:
+            del self._load_errors[:-50]
+        return list(self._load_errors)
 
     def get_loaded_plugins(self) -> List[str]:
         """Names of currently loaded plugins."""
@@ -1462,11 +2369,15 @@ class PluginLoader:
             "verify_tier": info.get("verify_tier", "unsigned"),
             "verified_author": info.get("verified_author"),
             "missing_deps": info.get("missing_deps", []),
+            "missing_plugins": info.get("missing_plugins", []),
+            "env": self.get_env_status(name),
         }
 
     def get_all_plugin_info(self) -> List[dict]:
         """Get info for all discovered plugins."""
-        return [self.get_plugin_info(n) for n in self._plugins]
+        # list() snapshot: a concurrent rescan() pops from _plugins and an
+        # unsnapshotted iteration raises RuntimeError mid-listing.
+        return [self.get_plugin_info(n) for n in list(self._plugins)]
 
     _plugin_state_cache: dict = {}
     _plugin_state_cache_lock = threading.Lock()
@@ -1477,6 +2388,43 @@ class PluginLoader:
             if name not in self._plugin_state_cache:
                 self._plugin_state_cache[name] = PluginState(name)
             return self._plugin_state_cache[name]
+
+    def effective_surfaces(self, name: str, manifest: dict = None):
+        """Where a plugin's presence hooks fire: the user's override (plugin
+        state `surfaces`) if it is a list, else the manifest's `surfaces`,
+        else None (= everywhere). Unknown surface ids are dropped."""
+        from core.hooks import SURFACES
+        known = {s for s, _ in SURFACES}
+        if manifest is None:
+            manifest = (self._plugins.get(name) or {}).get("manifest") or {}
+        declared = manifest.get("surfaces")
+        if not isinstance(declared, list):
+            return None
+        override = self.get_plugin_state(name).get("surfaces")
+        chosen = override if isinstance(override, list) else declared
+        return [s for s in chosen if s in known]
+
+    def set_surfaces_override(self, name: str, surfaces):
+        """Persist the user's per-plugin surfaces choice (None = back to the
+        manifest default) and apply it to the live runner."""
+        state = self.get_plugin_state(name)
+        if surfaces is None:
+            state.delete("surfaces")
+        else:
+            state.save("surfaces", list(surfaces))
+        eff = self.effective_surfaces(name)
+        hook_runner.set_surfaces(name, eff)
+        return eff
+
+    _chat_state_cache: dict = {}
+
+    def get_chat_state(self, name: str) -> PluginChatState:
+        """Chat-scoped plugin data helper (cached per name). Sibling of
+        get_plugin_state; rows ride the chat's vault/rename/delete."""
+        with self._plugin_state_cache_lock:
+            if name not in self._chat_state_cache:
+                self._chat_state_cache[name] = PluginChatState(name)
+            return self._chat_state_cache[name]
 
     def get_credentials(self):
         """Get the credentials manager singleton. Convenience for plugins."""

@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 AVATAR_DIR = Path(__file__).parent.parent.parent.parent / "user" / "avatar"
 MAX_SIZE = 50 * 1024 * 1024  # 50MB hard limit
+_WIN_RESERVED = ({'con', 'prn', 'aux', 'nul'}
+                 | {f'com{i}' for i in range(1, 10)}
+                 | {f'lpt{i}' for i in range(1, 10)})
 
 
 def _get_state():
@@ -43,6 +46,7 @@ def _get_config():
     return {
         'active_model': active,
         'models': models,
+        'enabled': state.get('enabled', True),
         'inject_prompt': state.get('inject_prompt', True),
         'strip_tags': state.get('strip_tags', False),
         'user_tags': state.get('user_tags', False),
@@ -104,6 +108,9 @@ async def upload_model(**kwargs):
         safe_name = 'avatar.glb'
     if not safe_name.lower().endswith('.glb'):
         safe_name += '.glb'
+    # CON/NUL-class stems are device files on Windows
+    if safe_name.split('.')[0].lower() in _WIN_RESERVED:
+        safe_name = '_' + safe_name
 
     # Read file with size check
     content = await file.read()
@@ -149,8 +156,10 @@ async def delete_model(**kwargs):
     """Delete an avatar model."""
     filename = kwargs.get('filename', '')
 
-    # Sanitize
-    if not filename or '/' in filename or '\\' in filename:
+    # Sanitize: charset check (not just slash check) — on Windows a ':' makes
+    # 'C:evil' drive-relative and escapes AVATAR_DIR entirely.
+    if (not filename or not all(c.isalnum() or c in '.-_' for c in filename)
+            or filename.split('.')[0].lower() in _WIN_RESERVED):
         return {'error': 'Invalid filename'}
 
     path = AVATAR_DIR / filename
@@ -215,6 +224,10 @@ async def save_config(**kwargs):
             cfg['models'][model_name] = model_cfg
 
     # Update global avatar settings
+    if 'enabled' in body:
+        # The accordion's Enabled switch (Krem 2026-08-23): off = no render
+        # (frees the browser's GPU share) AND no prompt instructions.
+        _get_state().save('enabled', bool(body['enabled']))
     if 'inject_prompt' in body:
         state = _get_state()
         state.save('inject_prompt', bool(body['inject_prompt']))

@@ -1,0 +1,32 @@
+{
+  "name": "wordpress",
+  "short_display_name": "WordPress",
+  "version": "1.0.0",
+  "description": "WordPress - manage posts, pages, users, plugins and settings of a WordPress site via its REST API",
+  "author": "sapphire",
+  "url": "https://sapphireblue.dev",
+  "icon": "🌐",
+  "priority": 50,
+  "default_enabled": false,
+  "capabilities": {
+    "tools": ["tools/wordpress.py"],
+    "scopes": [
+      {
+        "key": "wordpress",
+        "label": "wordpress",
+        "endpoint": "/api/plugin/wordpress/accounts",
+        "data_key": "accounts",
+        "value_field": "scope",
+        "name_field": "scope",
+        "label_template": "{label}"
+      }
+    ],
+    "routes": [
+      {"method": "GET", "path": "accounts", "handler": "routes/manage.py:list_accounts"},
+      {"method": "PUT", "path": "accounts/{scope}", "handler": "routes/manage.py:put_account"},
+      {"method": "DELETE", "path": "accounts/{scope}", "handler": "routes/manage.py:delete_account"},
+      {"method": "GET", "path": "config", "handler": "routes/manage.py:get_config"},
+      {"method": "PUT", "path": "config", "handler": "routes/manage.py:put_config"}
+    ]
+  }
+}

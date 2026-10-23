@@ -34,9 +34,11 @@ class TestCancelDuringToolCycle:
             sm = ChatSessionManager.__new__(ChatSessionManager)
             sm._db_path = Path(tmpdir) / "test.db"
             sm._db_conn = None
-            sm._in_tool_cycle = False
+            # current_chat must exist before _in_tool_cycle — the latter is now a
+            # property that routes through the effective chat (A3, 2026-07-09).
             sm.current_chat = MagicMock()
             sm.current_settings = {}
+            sm._in_tool_cycle = False
 
             # Simulate opening a tool cycle
             sm._in_tool_cycle = True

@@ -40,6 +40,8 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "none"
 
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
@@ -57,6 +59,8 @@ class TestAbilityResolution:
             mgr.all_possible_tools = [{'function': {'name': 'func1'}}]
             mgr._enabled_tools = mgr.all_possible_tools.copy()
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.function_modules = {}
             mgr.current_toolset_name = "all"
             
@@ -84,6 +88,8 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "none"
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
@@ -109,6 +115,8 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "none"
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
@@ -134,6 +142,8 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "none"
 
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
@@ -183,6 +193,8 @@ class TestCustomSentinelReApply:
                 {'function': {'name': 'func_c'}},
             ]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "custom"
             return mgr
 
@@ -210,6 +222,8 @@ class TestCustomSentinelReApply:
             mgr.all_possible_tools = [{'function': {'name': 'func_a'}}]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "custom"
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
@@ -232,6 +246,8 @@ class TestNewToolAutoJoinsActiveSavedToolset:
             mgr.all_possible_tools = []
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._network_functions = set()
             mgr._is_local_map = {}
             mgr._function_module_map = {}
@@ -374,8 +390,12 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'test_func'}}]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.execution_map = {'test_func': mock_executor}
             mgr._is_local_map = {'test_func': True}
             mgr._function_module_map = {}
@@ -396,8 +416,12 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'allowed_func'}}]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.execution_map = {'disabled_func': MagicMock()}
             mgr._is_local_map = {}
             mgr._function_module_map = {}
@@ -424,8 +448,12 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'orphan_func'}}]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.execution_map = {}
             mgr._is_local_map = {'orphan_func': True}
             mgr._function_module_map = {}
@@ -448,8 +476,12 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'crashy_func'}}]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.execution_map = {'crashy_func': failing_executor}
             mgr._is_local_map = {'crashy_func': True}
             mgr._function_module_map = {}
@@ -480,8 +512,12 @@ class TestNetworkToolDetection:
                 {'function': {'name': 'web_search'}},
             ]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._network_functions = {'web_search', 'web_fetch'}
 
             assert mgr.has_network_tools_enabled() is True
@@ -496,8 +532,12 @@ class TestNetworkToolDetection:
                 {'function': {'name': 'another_local'}},
             ]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._network_functions = {'web_search', 'web_fetch'}
 
             assert mgr.has_network_tools_enabled() is False
@@ -539,6 +579,8 @@ class TestModeFiltering:
             }
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.function_modules = {
                 'test_module': {'available_functions': ['mono_only', 'assembled_only', 'both_modes']},
                 'other_module': {'available_functions': ['no_filter']},
@@ -571,6 +613,8 @@ class TestModeFiltering:
             }
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.function_modules = {
                 'test_module': {'available_functions': ['mono_only', 'assembled_only', 'both_modes']},
             }
@@ -593,8 +637,12 @@ class TestModeFiltering:
                 {'function': {'name': 'func_b'}},
             ]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.function_modules = {}
 
             filtered = mgr.enabled_tools
@@ -620,8 +668,12 @@ class TestEnabledFunctionNames:
                 {'function': {'name': 'func_c'}},
             ]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
 
             names = mgr.get_enabled_function_names()
 
@@ -634,8 +686,12 @@ class TestEnabledFunctionNames:
 
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
 
             names = mgr.get_enabled_function_names()
 
@@ -660,8 +716,12 @@ class TestAbilityInfo:
                 {'function': {'name': 'fetch'}},
             ]
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr._story_engine = None
             mgr._story_engine_enabled = False
+            mgr._settings_gates = {}
+            mgr._hidden_tools = set()
             mgr.function_modules = {
                 'web': {'available_functions': ['search', 'fetch']}
             }
@@ -711,6 +771,59 @@ class TestIntegration:
             getattr(FunctionManager, 'enabled_tools', None), 
             property
         ), "enabled_tools should be a property"
+
+
+class TestPrivateUnflaggedToggle:
+    """PRIVATE_ALLOW_UNFLAGGED_TOOLS (Settings > Privacy, 2026-08-15):
+    plugins that predate the per-tool is_local flag were blocked wholesale
+    in private chats (fail-closed). The opt-in treats a MISSING flag as
+    local; tools that explicitly declare non-local stay blocked either way."""
+
+    def _gate(self, is_local_map):
+        from core.chat.function_manager import FunctionManager
+        mgr = FunctionManager.__new__(FunctionManager)
+        mgr._is_local_map = is_local_map
+        return mgr
+
+    def _check(self, is_local_map, name, toggle, monkeypatch):
+        import config
+        from core.chat import function_manager as fm
+        monkeypatch.setattr(config, 'PRIVATE_ALLOW_UNFLAGGED_TOOLS', toggle,
+                            raising=False)
+        tok = fm.scope_private.set(True)
+        try:
+            return self._gate(is_local_map)._check_privacy_allowed(name)
+        finally:
+            fm.scope_private.reset(tok)
+
+    def test_unflagged_blocked_by_default(self, monkeypatch):
+        ok, msg = self._check({}, 'mystery_tool', False, monkeypatch)
+        assert not ok
+        assert 'no locality flag' in msg
+        assert 'Settings > Privacy' in msg   # the hint that the toggle exists
+
+    def test_unflagged_allowed_with_toggle(self, monkeypatch):
+        ok, msg = self._check({}, 'mystery_tool', True, monkeypatch)
+        assert ok and msg is None
+
+    def test_declared_nonlocal_blocked_despite_toggle(self, monkeypatch):
+        ok, _ = self._check({'web_tool': False}, 'web_tool', True, monkeypatch)
+        assert not ok
+        ok, _ = self._check({'ep_tool': 'endpoint'}, 'ep_tool', True, monkeypatch)
+        assert not ok
+
+    def test_declared_local_allowed_regardless(self, monkeypatch):
+        ok, _ = self._check({'local_tool': True}, 'local_tool', False, monkeypatch)
+        assert ok
+
+    def test_public_chat_never_gated(self, monkeypatch):
+        import config
+        from core.chat import function_manager as fm
+        monkeypatch.setattr(config, 'PRIVATE_ALLOW_UNFLAGGED_TOOLS', False,
+                            raising=False)
+        assert fm.scope_private.get() is False
+        ok, _ = self._gate({})._check_privacy_allowed('mystery_tool')
+        assert ok
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 {
   "name": "comfyui",
+  "short_display_name": "ComfyUI",
   "version": "1.0.0",
   "description": "ComfyUI — generate images using your local ComfyUI server and custom workflows",
   "author": "sapphire",

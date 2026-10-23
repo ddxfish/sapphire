@@ -81,7 +81,7 @@ export default {
                         <button id="dash-edit-widgets" title="Edit dashboard">✎ Edit</button>
                     </div>
                     <div class="dash-action-panels" id="dash-panels">
-                        <span class="dim" style="font-size:11px;padding:8px">Loading widgets...</span>
+                        <span class="dim" style="font-size:0.6875rem;padding:8px">Loading widgets...</span>
                     </div>
                 </div>
 
@@ -121,7 +121,7 @@ export default {
 
     attachListeners(ctx, el) {
         // ── Identity row ────────────────────────────────────────────
-        _wireEditableName(el);
+        _wireEditableName(el, ctx);
         _wireOrb(el);
         _startNpcStar(el);
 
@@ -164,7 +164,7 @@ export default {
         checkForUpdate(el);
         loadComponentStatus(el);
         loadPluginSpotlight(el);
-        loadMetrics(el);
+        loadMetrics(el, ctx);
         loadMissingDeps(el, ctx);
         checkLastUpdateResult();
     }
@@ -189,7 +189,7 @@ function _setMood(el, mood) {
     }
 }
 
-function _wireEditableName(el) {
+function _wireEditableName(el, ctx) {
     const node = el.querySelector('#dash-hero-name');
     if (!node) return;
     node.addEventListener('blur', async e => {
@@ -204,11 +204,12 @@ function _wireEditableName(el) {
         // cache still carries the change.
         try {
             const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-            await fetch('/api/settings/batch', {
+            const r = await fetch('/api/settings/batch', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
                 body: JSON.stringify({ settings: { DASHBOARD_DISPLAY_NAME: trimmed }, persist: true }),
             });
+            if (r.ok) ctx?.commit?.('DASHBOARD_DISPLAY_NAME', trimmed);   // U1 (b): confirmed write → snapshot
         } catch { /* offline / network — local cache still has it */ }
     });
     node.addEventListener('keydown', e => {
@@ -638,13 +639,13 @@ async function openWidgetSettings(el, instance_id) {
             case 'textarea': {
                 input = document.createElement('textarea');
                 input.rows = field.rows || 3;
-                input.style.cssText = 'width:100%;padding:8px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px;resize:vertical';
+                input.style.cssText = 'width:100%;padding:8px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem;resize:vertical';
                 input.value = (cur ?? '');
                 break;
             }
             case 'select': {
                 input = document.createElement('select');
-                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px';
+                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem';
                 for (const opt of (field.options || [])) {
                     const o = document.createElement('option');
                     o.value = opt.value;
@@ -657,7 +658,7 @@ async function openWidgetSettings(el, instance_id) {
             case 'number': {
                 input = document.createElement('input');
                 input.type = 'number';
-                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px';
+                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem';
                 if (typeof cur === 'number') input.value = cur;
                 if (field.min !== undefined) input.min = field.min;
                 if (field.max !== undefined) input.max = field.max;
@@ -682,7 +683,7 @@ async function openWidgetSettings(el, instance_id) {
             default: {
                 input = document.createElement('input');
                 input.type = 'text';
-                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px';
+                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem';
                 input.value = (cur ?? '');
                 break;
             }
@@ -770,7 +771,7 @@ async function mountPanels(el) {
 
     const panels = await _fetchUserPanels();
     if (panels.length === 0) {
-        container.innerHTML = `<span class="dim" style="font-size:13px;padding:14px">Your command center is empty. Click <strong>+ Add</strong> above to get started.</span>`;
+        container.innerHTML = `<span class="dim" style="font-size:0.8125rem;padding:14px">Your command center is empty. Click <strong>+ Add</strong> above to get started.</span>`;
         return;
     }
 
@@ -1147,7 +1148,9 @@ async function checkForUpdate(el, retry = 0) {
         const branchEl = el.querySelector('#dash-branch');
         if (branchEl && updateStatus.branch) {
             const tag = updateStatus.is_fork ? `${updateStatus.branch} · fork` : updateStatus.branch;
-            branchEl.textContent = `· ${_esc(tag)}`;
+            // textContent needs the RAW string — escaping here rendered
+            // literal &amp;/&quot; for branch names (scout, 2026-07-20).
+            branchEl.textContent = `· ${tag}`;
         }
         if (updateStatus.available) {
             window.dispatchEvent(new CustomEvent('update-available', { detail: updateStatus }));
@@ -1288,7 +1291,7 @@ const fmt = n => {
     return String(n);
 };
 
-async function loadMetrics(el) {
+async function loadMetrics(el, ctx) {
     const metricsEl = el.querySelector('#dash-metrics');
     const cb = el.querySelector('#metrics-enabled-cb');
     if (!metricsEl) return;
@@ -1304,11 +1307,13 @@ async function loadMetrics(el) {
     if (cb) {
         cb.addEventListener('change', async () => {
             try {
-                await fetch('/api/metrics/enabled', {
+                const r = await fetch('/api/metrics/enabled', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: cb.checked })
                 });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                ctx?.commit?.('METRICS_ENABLED', cb.checked);   // the route writes this settings key server-side
                 loadMetricsData(metricsEl, cb.checked);
             } catch { cb.checked = !cb.checked; }
         });

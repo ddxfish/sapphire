@@ -1,0 +1,52 @@
+{
+  "name": "coding-harness",
+  "short_display_name": "Coding Harness",
+  "version": "1.1.0",
+  "description": "Coding Harness — file read/write/edit, search, and shell commands, with file tools and command cwd scoped to a working directory",
+  "author": "sapphire",
+  "icon": "🧰",
+  "url": "https://sapphireblue.dev",
+  "priority": 50,
+  "managed_hide": true,
+  "capabilities": {
+    "tools": ["tools/harness.py"],
+    "settings": [
+      {
+        "key": "working_dir",
+        "type": "string",
+        "label": "Working Directory",
+        "default": "user/sapphire-workspace",
+        "help": "All tools open here. Relative paths resolve against the Sapphire root; absolute paths allowed. Created on first use."
+      },
+      {
+        "key": "sandbox",
+        "type": "boolean",
+        "label": "Sandbox to Working Directory",
+        "default": true,
+        "help": "Confines the file tools (read/write/edit) and each run_command's STARTING directory to the working dir. run_command still uses a shell, so a command can read/write outside it (e.g. 'cat ../file') — the blacklist below is the real guardrail for commands."
+      },
+      {
+        "key": "output_limit",
+        "type": "number",
+        "label": "Output Limit (chars)",
+        "default": 6000,
+        "help": "Maximum characters returned by file reads and command output"
+      },
+      {
+        "key": "max_timeout",
+        "type": "number",
+        "label": "Max Timeout (seconds)",
+        "default": 300,
+        "help": "Maximum allowed timeout for any command"
+      },
+      {
+        "key": "blacklist",
+        "type": "string",
+        "widget": "textarea",
+        "label": "Command Blacklist",
+        "default": "rm -rf /\n--no-preserve-root\nmkfs\ndd if=/dev\n:(){ :|:& };:\n> /dev/sda\nchmod -R 777 /\ninit 0\ninit 6\nrm -rf ~\nrm -rf $HOME\nrm -rf \"$HOME\"",
+        "help": "Blocked substrings for run_command, one per line"
+      }
+    ]
+  }
+}

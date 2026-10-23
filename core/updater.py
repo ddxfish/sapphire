@@ -21,21 +21,26 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from core import net
+
+from core.github_files import fetch_github_file
+from core.versions import is_newer
 
 logger = logging.getLogger(__name__)
 
 VERSION_FILE = Path(__file__).parent.parent / 'VERSION'
 REPO_DIR = VERSION_FILE.parent
 GITHUB_REPO = 'ddxfish/sapphire'
-GITHUB_RAW_URL = f'https://raw.githubusercontent.com/{GITHUB_REPO}'
 CHECK_INTERVAL = 86400  # 24 hours
 
 PENDING_UPDATE_FILE = REPO_DIR / 'user' / 'pending_update.json'
 UPDATE_RESULT_FILE = REPO_DIR / 'user' / 'last_update_result.json'
 
-# Branches that refuse the auto-update button. "dev" builds pull manually
-# because the UI shouldn't surface work-in-progress commits to users.
-_BLOCKED_BRANCHES = {'dev'}
+# Branches the auto-update button will pull. Allowlist, not blocklist —
+# the check compares against main's VERSION, so pulling any OTHER branch
+# would apply commits nobody advertised (2026-08-06 hunt, M5). Dev/feature
+# builds pull manually.
+_ALLOWED_BRANCHES = {'main'}
 
 # Minimum free disk for a safe update (backup + pull headroom).
 _MIN_FREE_MB = 200
@@ -84,22 +89,6 @@ def _clear_index_lock():
             lock.unlink()
     except Exception:
         pass
-
-
-# ─── Version parsing ────────────────────────────────────────────────────────
-
-def _parse_version(v):
-    """Parse version string to tuple, tolerant of suffixes like -rc1 / .dev."""
-    parts = []
-    for x in (v or '').split('.'):
-        num = ''
-        for ch in x:
-            if ch.isdigit():
-                num += ch
-            else:
-                break
-        parts.append(int(num) if num else 0)
-    return tuple(parts)
 
 
 # ─── Fork detection ─────────────────────────────────────────────────────────
@@ -196,28 +185,105 @@ def apply_pending_update():
 
     branch = data.get('branch') or 'main'
     from_version = data.get('from_version')
+    from_sha = data.get('from_sha')
+    target_sha = data.get('target_sha')
 
-    # Run pull. On Windows, timeouts can leave index.lock behind — clean up.
+    # Markers can be days old (crashed restart, manual boot much later). A
+    # stale marker fast-forwarding through releases nobody reviewed is worse
+    # than asking again — refuse and let the user re-run the check.
+    requested_at = data.get('requested_at') or 0
+    if requested_at and (time.time() - requested_at) > 86400:
+        _write_result(False, "Pending update expired (scheduled more than 24h ago). "
+                             "Kept previous version — run the update check again.")
+        _clear_pending()
+        return
+
+    # Slim re-preflight: the full check ran at schedule time, but the tree can
+    # change between then and this boot. A merge over local edits half-applies
+    # — the one outcome worse than not updating.
     try:
-        pull = _run_git(['pull', '--ff-only', 'origin', branch], timeout=180)
+        status = _run_git(['status', '--porcelain'], timeout=15)
+        if status.returncode == 0 and status.stdout.strip():
+            _write_result(False, "Working tree changed while the update was pending. "
+                                 "Kept previous version.")
+            _clear_pending()
+            return
+    except FileNotFoundError:
+        _write_result(False, "git is not installed. Update skipped.")
+        _clear_pending()
+        return
+    except Exception:
+        pass  # advisory probe — fetch/merge below still gate hard
+
+    # Fetch + ff-only merge to the EXACT SHA advertised at check time. A bare
+    # `git pull` lands whatever origin HEAD is at restart time — target_sha
+    # was written-but-never-read before the 2026-08-06 hunt (H5). No SHA in
+    # the marker (older format) → merge the fetched branch head instead.
+    try:
+        fetch = _run_git(['fetch', 'origin', branch], timeout=180)
     except subprocess.TimeoutExpired:
         _clear_index_lock()
-        _write_result(False, "git pull timed out after 180s. Kept previous version.")
+        _write_result(False, "git fetch timed out after 180s. Kept previous version.")
         _clear_pending()
         return
     except FileNotFoundError:
         _write_result(False, "git is not installed. Update skipped.")
         _clear_pending()
         return
+    if fetch.returncode != 0:
+        err = (fetch.stderr or '').strip() or (fetch.stdout or '').strip() or 'unknown error'
+        _write_result(False, f"git fetch failed: {err}. Kept previous version.")
+        _clear_pending()
+        return
 
-    if pull.returncode != 0:
-        err = (pull.stderr or '').strip() or (pull.stdout or '').strip() or 'unknown error'
-        _write_result(False, f"git pull failed: {err}")
+    merge_ref = target_sha or f'origin/{branch}'
+    try:
+        merge = _run_git(['merge', '--ff-only', merge_ref], timeout=120)
+    except subprocess.TimeoutExpired:
+        _clear_index_lock()
+        _write_result(False, "git merge timed out. Kept previous version.")
+        _clear_pending()
+        return
+    if merge.returncode != 0:
+        err = (merge.stderr or '').strip() or (merge.stdout or '').strip() or 'unknown error'
+        _write_result(False, f"Could not fast-forward to the advertised release: {err}. "
+                             "Kept previous version.")
         _clear_pending()
         return
 
     # Pip sync — new deps are a silent-brick risk if skipped.
     req_file = REPO_DIR / 'requirements.txt'
+
+    def _rollback_after_pip(reason):
+        """The merge landed but deps didn't — put the code back (C1). Without
+        this, new code + old deps died at import and systemd looped forever,
+        with the explanation in a file only the dead web UI rendered."""
+        if not from_sha:
+            _write_result(False, f"{reason} Code is updated but dependencies are not — "
+                                 "run pip install -r requirements.txt manually.")
+            return
+        try:
+            reset = _run_git(['reset', '--hard', from_sha], timeout=60)
+        except Exception:
+            reset = None
+        if reset is None or reset.returncode != 0:
+            _write_result(False, f"{reason} Automatic rollback ALSO failed — run "
+                                 f"`git reset --hard {from_sha}` then "
+                                 "pip install -r requirements.txt manually.")
+            return
+        # Old code restored. Best-effort re-sync in case pip half-upgraded
+        # packages before failing; the old env usually still satisfies it.
+        try:
+            subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '-r', str(req_file), '--quiet'],
+                cwd=str(REPO_DIR), capture_output=True, stdin=subprocess.DEVNULL,
+                timeout=120,
+            )
+        except Exception:
+            pass
+        _write_result(False, f"{reason} Rolled back to "
+                             f"{from_version or 'the previous version'} — old code intact and running.")
+
     if req_file.exists():
         try:
             pip_env = dict(os.environ)
@@ -235,17 +301,15 @@ def apply_pending_update():
             )
             if pip.returncode != 0:
                 err = (pip.stderr or '').strip() or (pip.stdout or '').strip() or 'unknown'
-                # Pull already landed, so the old code is gone. We surface the
-                # pip failure prominently; user may need to run pip manually.
-                _write_result(False, f"Code updated but pip install failed: {err}")
+                _rollback_after_pip(f"Update failed at dependency install: {err}.")
                 _clear_pending()
                 return
         except subprocess.TimeoutExpired:
-            _write_result(False, "pip install timed out after 300s. Dependencies may be stale.")
+            _rollback_after_pip("pip install timed out after 300s.")
             _clear_pending()
             return
         except Exception as e:
-            _write_result(False, f"pip install raised: {e}. Dependencies may be stale.")
+            _rollback_after_pip(f"pip install raised: {e}.")
             _clear_pending()
             return
 
@@ -383,28 +447,23 @@ class Updater:
             if self.branch != 'main':
                 candidate_branches.append('main')  # fall back if branch not on official
             for br in candidate_branches:
-                try:
-                    resp = requests.get(f'{GITHUB_RAW_URL}/{br}/VERSION', timeout=10)
-                except Exception as e:
-                    logger.warning(f"Version check failed for branch '{br}': {e}")
+                # Contents-API-first fetch — raw.githubusercontent lags pushes
+                # by ~5 min, which read as "no updates" right after a release.
+                text = fetch_github_file(GITHUB_REPO, br, 'VERSION')
+                if text is None or not text.strip():
+                    logger.warning(f"Version check failed for branch '{br}'")
                     continue
-                if resp.status_code == 200:
-                    self.latest_version = resp.text.strip()
-                    self.update_available = (
-                        _parse_version(self.latest_version) > _parse_version(self.current_version)
-                    )
-                    self.last_check = now
-                    # Record the target SHA at check time so pre-flight can
-                    # refuse if upstream moves before the user clicks Update.
-                    if self.update_available:
-                        self._target_sha = self._fetch_remote_sha(br)
-                        logger.info(f"Update available: {self.current_version} -> {self.latest_version}")
-                    else:
-                        self._target_sha = None
-                    break
-                elif resp.status_code != 404:
-                    logger.warning(f"Version check returned HTTP {resp.status_code} for branch '{br}'")
-                    break
+                self.latest_version = text.strip()
+                self.update_available = is_newer(self.latest_version, self.current_version)
+                self.last_check = now
+                # Record the target SHA at check time so pre-flight can
+                # refuse if upstream moves before the user clicks Update.
+                if self.update_available:
+                    self._target_sha = self._fetch_remote_sha(br)
+                    logger.info(f"Update available: {self.current_version} -> {self.latest_version}")
+                else:
+                    self._target_sha = None
+                break
         finally:
             self.checking = False
 
@@ -415,7 +474,7 @@ class Updater:
         the SHA string or None. Used by pre-flight to verify upstream hasn't
         force-pushed between check and click."""
         try:
-            resp = requests.get(
+            resp = net.get(
                 f'https://api.github.com/repos/{GITHUB_REPO}/commits/{branch}',
                 headers={'Accept': 'application/vnd.github.sha'},
                 timeout=10,
@@ -441,7 +500,7 @@ class Updater:
             'last_check': self.last_check,
             'branch': self.branch,
             'is_fork': self.is_fork,
-            'blocked_branch': self.branch in _BLOCKED_BRANCHES,
+            'blocked_branch': self.branch not in _ALLOWED_BRANCHES,
             'pending_update': PENDING_UPDATE_FILE.exists(),
         }
 
@@ -460,9 +519,9 @@ class Updater:
             return False, "This install isn't a git repository. Download the latest release from GitHub."
         if self.is_fork:
             return False, "Fork detected — pull updates from upstream manually."
-        if self.branch in _BLOCKED_BRANCHES:
-            return False, (f"You're on the '{self.branch}' branch. Dev-like branches don't "
-                           "auto-update; use `git pull` manually when you're ready.")
+        if self.branch not in _ALLOWED_BRANCHES:
+            return False, (f"Auto-update only runs on 'main' (you're on '{self.branch}'). "
+                           "Use `git pull` manually when you're ready.")
 
         # Working-tree state: uncommitted changes + mid-operation markers
         try:
@@ -569,14 +628,18 @@ class Updater:
             if not ok:
                 return False, msg
 
-            # Backup must succeed — if we can't back up, we don't update.
+            # Backup must succeed COMPLETELY — a pre-update snapshot that had
+            # to skip WAL-busy databases isn't insurance (H6). If we can't
+            # capture everything, we don't update.
             try:
                 from core.backup import backup_manager
-                result = backup_manager.create_backup('pre_update')
+                result = backup_manager.create_backup('pre_update', require_complete=True)
             except Exception as e:
                 return False, f"Pre-update backup raised: {e}. Refusing to update."
             if not result:
-                return False, "Pre-update backup failed. Refusing to update."
+                why = getattr(backup_manager, 'last_backup_error', None)
+                detail = f" ({why} — try again in a moment)" if isinstance(why, str) and why else ""
+                return False, f"Pre-update backup failed{detail}. Refusing to update."
 
             # Resolve target SHA once more, right before writing the marker, so
             # the deferred pull lands on the exact commit we advertised.
@@ -588,12 +651,23 @@ class Updater:
             except Exception:
                 pass
 
+            # Pre-update SHA — the rollback anchor if pip fails after the
+            # merge lands (C1, 2026-08-06 hunt).
+            from_sha = None
+            try:
+                head = _run_git(['rev-parse', 'HEAD'], timeout=5)
+                if head.returncode == 0:
+                    from_sha = head.stdout.strip().lower()
+            except Exception:
+                pass
+
             try:
                 PENDING_UPDATE_FILE.parent.mkdir(parents=True, exist_ok=True)
                 tmp = PENDING_UPDATE_FILE.with_suffix('.json.tmp')
                 tmp.write_text(json.dumps({
                     'branch': self.branch,
                     'target_sha': target_sha,
+                    'from_sha': from_sha,
                     'requested_at': time.time(),
                     'from_version': self.current_version,
                     'to_version': self.latest_version,
@@ -607,14 +681,29 @@ class Updater:
         finally:
             self._update_lock.release()
 
+    def cancel_pending_update(self):
+        """Clear a scheduled-but-not-applied update marker. Returns True if
+        one existed. (H4, 2026-08-06 hunt — a stranded marker used to lock
+        out updates forever with no recourse in the UI.)"""
+        if not PENDING_UPDATE_FILE.exists():
+            return False
+        _clear_pending()
+        return True
+
     # ─── Background checker ─────────────────────────────────────────────
 
     def start_background_checker(self):
         def _checker():
+            import config
             time.sleep(30)
             while True:
                 try:
-                    self.check_for_update()
+                    # Off switch (negspace N29, 2026-08-31): the privacy-
+                    # focused app had an unconditional daily GitHub poll with
+                    # no setting to disable it. Checked per-iteration so a
+                    # toggle takes effect without restart (within a day).
+                    if getattr(config, 'UPDATE_CHECK_ENABLED', True):
+                        self.check_for_update()
                 except Exception as e:
                     logger.warning(f"Background version check failed: {e}")
                 time.sleep(CHECK_INTERVAL)

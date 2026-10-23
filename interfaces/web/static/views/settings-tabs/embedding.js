@@ -1,5 +1,6 @@
 // settings-tabs/embedding.js - Embedding provider settings
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
+import { editableFocused } from '../../shared/dom-guard.js';
 import { on as onBusEvent, Events as BusEvents } from '../../core/event-bus.js';
 
 // Merged config cache — populated by attachListeners on first render so the
@@ -156,16 +157,19 @@ const tabConfig = {
         },
         local: {
             label: 'Local (Nomic ONNX)',
+            is_local: true,
             essentialKeys: [],
             advancedKeys: []
         },
         api: {
             label: 'Remote (Nomic API)',
+            is_local: false,
             essentialKeys: ['EMBEDDING_API_URL'],
             advancedKeys: ['EMBEDDING_API_KEY']
         },
         sapphire_router: {
             label: 'Sapphire Router',
+            is_local: false,
             essentialKeys: ['SAPPHIRE_ROUTER_URL', 'SAPPHIRE_ROUTER_TENANT_ID'],
             advancedKeys: []
         }
@@ -223,6 +227,18 @@ export default {
                             value="${ctx.getValue('MEMORY_DEDUP_THRESHOLD') ?? 0.92}" step="0.01" min="0.70" max="0.99">
                     </div>
                 </div>
+                <div class="setting-row" data-key="VISION_MATCH_THRESHOLD">
+                    <div class="setting-label">
+                        <div class="setting-label-row">
+                            <label>Vision Match Threshold</label>
+                            <span class="help-icon" title="Minimum similarity for a photo to match a text search (0.05–0.90). Cross-modal scores run lower than text-vs-text, so raise this gradually if photo results flood searches — too high and photos vanish from search entirely.">?</span>
+                        </div>
+                    </div>
+                    <div class="setting-input">
+                        <input type="number" id="setting-VISION_MATCH_THRESHOLD" data-key="VISION_MATCH_THRESHOLD"
+                            value="${ctx.getValue('VISION_MATCH_THRESHOLD') ?? 0.05}" step="0.01" min="0.05" max="0.90">
+                    </div>
+                </div>
             </div>`;
         return html;
     },
@@ -231,8 +247,15 @@ export default {
         // Re-fetch plugin providers each time (plugins may have been toggled
         // since last visit). If the merge pulls in new keys, re-render so the
         // dropdown reflects them before we attach any listeners.
+        const painted = Object.keys((_mergedConfig || tabConfig).providers).join();
         _mergedConfig = await mergeRegistryProviders(tabConfig);
-        if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length) {
+        // ...only if the merge CHANGED the set the first paint showed (D2#7),
+        // and never when the user switched tabs during the await (el is the
+        // persistent #settings-content) or is typing in the first paint
+        // (DOM-refresh hunt 2026-09-08).
+        if (ctx.isTabActive?.(this.id) === false) return;
+        if (Object.keys(_mergedConfig.providers).join() !== painted
+            && !editableFocused(el)) {
             const body = el.querySelector('.settings-tab-body') || el;
             body.innerHTML = this.render(ctx);
             if (ctx.attachAccordionListeners) ctx.attachAccordionListeners(el);

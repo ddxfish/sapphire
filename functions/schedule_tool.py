@@ -16,6 +16,7 @@ EMOJI = "\u23F0"
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "schedule_task",
             "description": (
@@ -157,7 +158,9 @@ def execute(function_name, arguments, config_obj=None):
                 when_label = "today"
                 target = target_today
 
-            time_label = target.strftime("%-I:%M %p").lstrip("0")
+            # %I (not %-I): the glibc-only %- modifier raises ValueError on
+            # Windows; lstrip already removes the leading zero.
+            time_label = target.strftime("%I:%M %p").lstrip("0")
             one_shot = True
         else:
             # Recurring: use the cron as-is
@@ -172,6 +175,17 @@ def execute(function_name, arguments, config_obj=None):
             croniter(cron, now)
         except Exception as e:
             return f"Invalid cron expression '{cron}': {e}", False
+
+        # Interval floor for recurring tasks: each fire is a full LLM+TTS
+        # turn, and nothing else clamps frequency ('* * * * *' would talk
+        # every minute forever, surviving restarts).
+        if not one_shot:
+            it = croniter(cron, now)
+            fires = [it.get_next(datetime) for _ in range(4)]
+            gap = min((b - a).total_seconds() for a, b in zip(fires, fires[1:]))
+            if gap < 300:
+                return (f"That schedule fires every {int(gap)}s — too frequent for a "
+                        "recurring task. Minimum interval is 5 minutes (*/5 or slower)."), False
 
         # Build a short name from description
         name = description[:50] + ("..." if len(description) > 50 else "")
@@ -189,6 +203,17 @@ def execute(function_name, arguments, config_obj=None):
             "max_runs": 1 if one_shot else 0,
             "delete_after_run": one_shot,
         }
+        # Privacy rolls downhill: a task authored inside a private chat is
+        # private-derived text, and fire-time otherwise derives privacy from
+        # the PROMPT alone \u2014 the deferred-execution hole (hunt 2026-08-17).
+        # The scheduler + ExecutionContext already honor this flag end to end.
+        try:
+            from core.api_fastapi import get_system
+            if bool((get_system().llm_chat.session_manager
+                     .get_chat_settings() or {}).get('private_chat')):
+                task_data["privacy_required"] = True
+        except Exception:
+            pass
 
         task = scheduler.create_task(task_data)
 

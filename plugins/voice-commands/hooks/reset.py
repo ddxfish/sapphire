@@ -14,7 +14,13 @@ def pre_chat(event):
 
     if system and hasattr(system, "llm_chat"):
         session = system.llm_chat.session_manager
-        chat_name = session.get_active_chat_name() or "chat"
+        # EFFECTIVE chat, not active: on a phone/background stream this
+        # command runs against ITS chat — reporting the operator's open web
+        # chat's name to a caller was a cross-surface leak (P3-T10; stop.py
+        # had this right already; session.clear() itself is stream-aware).
+        chat_name = (session._effective_chat_name()
+                     if hasattr(session, "_effective_chat_name")
+                     else session.get_active_chat_name()) or "chat"
         try:
             session.clear()
             logger.info(f"[RESET] Cleared history for '{chat_name}'")

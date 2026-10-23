@@ -1,0 +1,40 @@
+# =============================================================================
+# sd-server.service — systemd USER unit for the Z-Image sd-server side-service
+# =============================================================================
+# INSTALL (on the GPU box, as the user that runs sapphire):
+#
+#   1. Put this folder one dir outside sapphire (a sibling side-service dir),
+#      then:
+#        ./build.sh        # compile sd-server (once)
+#        ./run.sh          # by hand first — downloads models, confirms it serves
+#                          # test:  curl http://127.0.0.1:7861/sdcpp/v1/capabilities
+#   2. Once it works, Ctrl-C run.sh. Edit the two __SD_SERVER_DIR__ paths below
+#      to the ABSOLUTE path of THIS folder, then install (copy or symlink):
+#        mkdir -p ~/.config/systemd/user
+#        ln -s "$PWD/sd-server.service" ~/.config/systemd/user/sd-server.service
+#        systemctl --user daemon-reload
+#        systemctl --user enable --now sd-server
+#   3. Run without an active login (headless server):
+#        loginctl enable-linger "$USER"
+#   4. Check:  systemctl --user status sd-server  |  journalctl --user -u sd-server -f
+#
+# (GPU works in a user service as long as that user's nvidia-smi works.)
+# =============================================================================
+
+[Unit]
+Description=sd-server (stable-diffusion.cpp / Z-Image Turbo) — Sapphire image-gen backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__SD_SERVER_DIR__
+ExecStart=__SD_SERVER_DIR__/run.sh
+Restart=on-failure
+RestartSec=5
+# First start downloads models — don't let systemd call a slow first launch a
+# failure. (Or run ./run.sh by hand once first.)
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

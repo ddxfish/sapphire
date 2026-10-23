@@ -18,13 +18,41 @@
 import {
     getStoreStatus, listStorePlugins, getStorePlugin,
     getStoreCategories, installFromStore,
+    listStorePersonas, getStorePersona, getStorePersonaCategories,
+    installPersonaFromStore,
 } from '../shared/store-api.js';
 import { renderMarkdown } from '../shared/markdown.js';
+import { snapFocus, editableFocused } from '../shared/dom-guard.js';
 import { isSafeHref } from '../shared/url-safety.js';
+import { refreshInitData } from '../shared/init-data.js';
+import { confirmPersonaImport } from '../shared/persona-import-confirm.js';
 import * as ui from '../ui.js';
 
 const SUBMIT_URL = 'https://sapphireblue.dev/plugins/submit-your-plugin/';
 const HELP_PLUGINS_HASH = '#help/plugin-author/README';
+
+// Per-store config. The two tabs share all DOM/render scaffolding; only the
+// data source, labels, and the get-it action differ.
+const STORES = {
+    plugins: {
+        list: listStorePlugins,
+        detail: getStorePlugin,
+        categories: getStoreCategories,
+        allLabel: 'All Plugins',
+        searchPlaceholder: 'Search plugins...',
+        featuredBlurb: 'Community plugins backed by the Sapphire team — these authors have earned a spot.',
+        emptyNoun: 'plugins',
+    },
+    personas: {
+        list: listStorePersonas,
+        detail: getStorePersona,
+        categories: getStorePersonaCategories,
+        allLabel: 'All Personas',
+        searchPlaceholder: 'Search personas...',
+        featuredBlurb: 'Personas featured by the Sapphire team.',
+        emptyNoun: 'personas',
+    },
+};
 
 let container = null;
 let state = {
@@ -37,7 +65,10 @@ let state = {
     storeStatus: null,        // cached /status response
 };
 
-let categoriesCache = null;
+const store = () => STORES[state.tab] || STORES.plugins;
+
+// Categories cached per tab — plugin and persona namespaces are distinct.
+let categoriesCache = { plugins: null, personas: null };
 let listInflight = null;     // dedupe rapid clicks
 let searchTimeout = null;
 
@@ -55,8 +86,9 @@ function _esc(s) {
 
 
 function _categoryIcon(catSlug) {
-    if (!categoriesCache) return '';
-    const cat = categoriesCache.find(c => c.slug === catSlug);
+    const cache = categoriesCache[state.tab];
+    if (!cache) return '';
+    const cat = cache.find(c => c.slug === catSlug);
     return cat?.icon || '';
 }
 
@@ -102,7 +134,7 @@ function renderShell() {
         <div class="store-header">
             <div class="store-tabs">
                 <button class="store-tab ${state.tab === 'plugins' ? 'active' : ''}" data-tab="plugins">Plugins</button>
-                <button class="store-tab disabled" data-tab="personas" title="Coming soon" disabled>Personas <span class="store-soon">soon</span></button>
+                <button class="store-tab ${state.tab === 'personas' ? 'active' : ''}" data-tab="personas">Personas</button>
             </div>
             <div class="store-header-actions">
                 <a href="${SUBMIT_URL}" target="_blank" rel="noopener noreferrer" class="store-btn store-btn-secondary">Submit your plugin</a>
@@ -120,12 +152,13 @@ function renderShell() {
 function renderSidebar() {
     const sb = container.querySelector('.store-sidebar');
     if (!sb) return;
-    if (!categoriesCache) {
+    const cache = categoriesCache[state.tab];
+    if (!cache) {
         sb.innerHTML = '<div class="store-loading">Loading categories...</div>';
         return;
     }
-    const all = `<button class="store-cat ${state.category === null ? 'active' : ''}" data-cat="">All plugins</button>`;
-    const items = categoriesCache
+    const all = `<button class="store-cat ${state.category === null ? 'active' : ''}" data-cat="">${_esc(store().allLabel)}</button>`;
+    const items = cache
         .filter(c => (c.count || 0) > 0)
         .map(c => `
             <button class="store-cat ${state.category === c.slug ? 'active' : ''}" data-cat="${_esc(c.slug)}">
@@ -156,7 +189,7 @@ function _renderAuthorAvatar(item) {
     // synthesize a fallback inline (cleaner than embedding JS in onerror).
     const username = _githubUsernameFromUrl(item.author_url);
     if (username) {
-        return `<img class="store-card-avatar" loading="lazy"
+        return `<img class="store-card-avatar" loading="lazy" referrerpolicy="no-referrer"
             src="https://github.com/${_esc(username)}.png?size=64"
             alt="${_esc(item.author || username)}"
             onerror="this.remove()">`;
@@ -165,7 +198,68 @@ function _renderAuthorAvatar(item) {
     return `<div class="store-card-avatar store-card-avatar-fallback">${_esc(letter)}</div>`;
 }
 
+function _personaThumb(item) {
+    // Letter rendered behind; the avatar img covers it. If the img fails to
+    // load it removes itself, revealing the trim-colored letter block.
+    const url = item.avatar_url;
+    const color = item.trim_color || 'var(--trim)';
+    const letter = _esc((item.sapphire_name || item.name || '?').charAt(0).toUpperCase());
+    const img = (url && isSafeHref(url))
+        ? `<img src="${_esc(url)}" alt="" loading="lazy" onerror="this.remove()">`
+        : '';
+    return `<div class="store-persona-thumb" style="background:${_esc(color)}">
+        <span class="store-persona-thumb-letter">${letter}</span>${img}
+    </div>`;
+}
+
+
+function _personaMastheadImg(item) {
+    // Bigger version of the card thumb for the detail masthead; trim color
+    // doubles as the ring + fallback background.
+    const url = item.avatar_url;
+    const color = item.trim_color || 'var(--trim)';
+    const letter = _esc((item.sapphire_name || item.name || '?').charAt(0).toUpperCase());
+    const img = (url && isSafeHref(url))
+        ? `<img src="${_esc(url)}" alt="" loading="lazy" onerror="this.remove()">`
+        : '';
+    return `<div class="store-persona-masthead-img" style="background:${_esc(color)};box-shadow:0 0 0 3px ${_esc(color)}">
+        <span class="store-persona-thumb-letter">${letter}</span>${img}
+    </div>`;
+}
+
+
+function renderPersonaCard(item, showcase = false) {
+    const isFeatured = !!item.featured;
+    const featured = isFeatured ? '<span class="store-featured-tag">★ Featured</span>' : '';
+    const name = item.sapphire_name || item.name || 'Unnamed';
+    const author = (item.author_url && isSafeHref(item.author_url))
+        ? `<a href="${_esc(item.author_url)}" target="_blank" rel="noopener noreferrer">${_esc(item.author)}</a>`
+        : _esc(item.author || 'Unknown');
+    const catIcon = _categoryIcon(item.category);
+    const catLabel = _findCategoryLabel(item.category);
+    const color = item.trim_color || 'var(--trim)';
+    let cardClass = 'store-card store-persona-card';
+    if (showcase && isFeatured) cardClass += ' store-card-featured';
+    else if (isFeatured) cardClass += ' store-card-tagged';
+    return `
+    <article class="${cardClass}" data-slug="${_esc(item.slug)}">
+        ${_personaThumb(item)}
+        <div class="store-persona-body" style="border-left:3px solid ${_esc(color)}">
+            <h3 class="store-card-name">${_esc(name)} ${featured}</h3>
+            <span class="store-persona-by">by ${author}</span>
+            <p class="store-persona-motto">${_esc(item.tagline || item.description || '')}</p>
+            <span class="store-persona-cat">${_esc(catIcon)} ${_esc(catLabel)}</span>
+            <footer class="store-card-actions">
+                <button class="store-btn store-btn-install" data-action="install" data-slug="${_esc(item.slug)}">Get</button>
+                <button class="store-btn store-btn-secondary" data-action="details" data-slug="${_esc(item.slug)}">Details</button>
+            </footer>
+        </div>
+    </article>`;
+}
+
+
 function renderCard(item, showcase = false) {
+    if (state.tab === 'personas') return renderPersonaCard(item, showcase);
     // `showcase=true` is passed only by the top featured strip — that strip
     // gets the premium tile treatment (gradient bg, trim border, glow).
     // The same item appearing in the bottom "All Plugins" grid keeps its
@@ -218,22 +312,22 @@ function renderCard(item, showcase = false) {
 }
 
 
+// Focus + caret snapshot, taken by renderList BEFORE its 'Loading…' wipe. The
+// old inline capture lived in renderMain and ran AFTER that wipe, so it never
+// saw the search box — every 800 ms typing pause destroyed the field and the
+// next keystrokes went nowhere (DOM-refresh hunt 2026-09-08).
+let _focusStash = null;
+
 function renderMain(html) {
     const m = container.querySelector('.store-main');
     if (!m) return;
-    // Preserve search input focus + cursor across re-render so typing in the
-    // search box doesn't kick the user out after each debounce tick.
-    const oldSearch = m.querySelector('.store-search');
-    const wasFocused = oldSearch && document.activeElement === oldSearch;
-    const cursor = wasFocused ? oldSearch.selectionStart : null;
+    // If the search box survived the load (user still typing — see the wipe
+    // guard in renderList), a FRESH snapshot carries the current caret; the
+    // stash is for a box the Loading wipe destroyed.
+    const restore = (editableFocused(m) ? snapFocus(m) : _focusStash) || (() => {});
+    _focusStash = null;
     m.innerHTML = html;
-    if (wasFocused) {
-        const newSearch = m.querySelector('.store-search');
-        if (newSearch) {
-            newSearch.focus();
-            try { newSearch.setSelectionRange(cursor, cursor); } catch (_) {}
-        }
-    }
+    restore();
 }
 
 
@@ -262,7 +356,11 @@ async function renderList() {
     state.detailSlug = null;
     const main = container.querySelector('.store-main');
     if (!main) return;
-    main.innerHTML = '<div class="store-loading">Loading...</div>';
+    _focusStash = snapFocus(main);   // before the wipe; renderMain restores
+    // Keep the box while the user is typing through the debounce + RTT: the
+    // wipe left keystrokes with nowhere to land (D2#5, 2026-09-08). The old
+    // grid stays a beat longer instead of a spinner — cheap trade.
+    if (!editableFocused(main)) main.innerHTML = '<div class="store-loading">Loading...</div>';
 
     // Two parallel fetches when on landing tab + first page: featured strip + grid.
     // For category/search/page>1 pages, just the grid.
@@ -272,7 +370,7 @@ async function renderList() {
 
     try {
         const tasks = [
-            listStorePlugins({
+            store().list({
                 q: state.q || null,
                 category: state.category,
                 sort: state.sort,
@@ -282,7 +380,7 @@ async function renderList() {
         ];
         if (showFeaturedStrip) {
             tasks.push(
-                listStorePlugins({ featured: true, perPage: 6 })
+                store().list({ featured: true, perPage: 6 })
                     .then(r => { featuredItems = r?.items || []; })
                     .catch(() => { featuredItems = []; })
             );
@@ -309,25 +407,28 @@ async function renderList() {
         html += `
         <section class="store-featured">
             <h2 class="store-section-title">★ Featured</h2>
-            <p class="store-featured-blurb">Community plugins backed by the Sapphire team — these authors have earned a spot.</p>
+            <p class="store-featured-blurb">${_esc(store().featuredBlurb)}</p>
             <div class="store-grid store-grid-featured">
                 ${featuredItems.map(it => renderCard(it, true)).join('')}
             </div>
         </section>`;
     }
 
+    // The box repaints with what the user has typed SINCE the query fired
+    // (the results are for state.q; the pending debounce re-queries liveQ).
+    const liveQ = main.querySelector('.store-search')?.value ?? state.q;
     const heading = state.q
         ? `Search: "${_esc(state.q)}" — ${total} result${total === 1 ? '' : 's'}`
         : state.category
             ? `${_esc(_findCategoryLabel(state.category))} (${total})`
-            : `All Plugins (${total})`;
+            : `${_esc(store().allLabel)} (${total})`;
 
     html += `
     <section class="store-list">
         <div class="store-list-header">
             <h2 class="store-section-title">${heading}</h2>
             <div class="store-list-controls">
-                <input type="search" class="store-search" placeholder="Search plugins..." value="${_esc(state.q)}">
+                <input type="search" class="store-search" placeholder="${_esc(store().searchPlaceholder)}" value="${_esc(liveQ)}">
                 <select class="store-sort" ${state.q ? 'disabled' : ''}>
                     <option value="newest" ${state.sort === 'newest' ? 'selected' : ''}>Newest</option>
                     <option value="updated" ${state.sort === 'updated' ? 'selected' : ''}>Recently updated</option>
@@ -338,7 +439,7 @@ async function renderList() {
         </div>`;
 
     if (items.length === 0) {
-        html += `<div class="store-empty"><p>No plugins ${state.q ? 'match this search' : 'in this category'} yet.</p></div>`;
+        html += `<div class="store-empty"><p>No ${_esc(store().emptyNoun)} ${state.q ? 'match this search' : 'in this category'} yet.</p></div>`;
     } else {
         html += `<div class="store-grid">${items.map(renderCard).join('')}</div>`;
         if (pages > 1) {
@@ -368,12 +469,111 @@ function renderPagination(page, pages) {
 
 
 function _findCategoryLabel(slug) {
-    const c = (categoriesCache || []).find(x => x.slug === slug);
+    const c = (categoriesCache[state.tab] || []).find(x => x.slug === slug);
     return c?.label || slug;
 }
 
 
+function _renderPromptAccordions(item) {
+    // The full prompt is already in `export_content` (the bundle). No extra
+    // fetch. Monolith → one section; assembled → one accordion per component.
+    let bundle;
+    try { bundle = item.export_content ? JSON.parse(item.export_content) : null; }
+    catch (_) { bundle = null; }
+    if (!bundle) return '<p class="store-empty">No prompt details available.</p>';
+
+    const pdata = (bundle.prompt || {}).data || {};
+    const sections = [];
+    if (pdata.type === 'monolith' && pdata.content) {
+        sections.push({ title: 'Prompt', body: pdata.content });
+    } else {
+        const comps = bundle.components;
+        if (comps && typeof comps === 'object') {
+            for (const [type, defs] of Object.entries(comps)) {
+                if (!defs || typeof defs !== 'object') continue;
+                for (const [key, value] of Object.entries(defs)) {
+                    const text = (typeof value === 'string') ? value : (value?.content || '');
+                    if (!text || !text.trim()) continue;   // skip empty components
+                    sections.push({ title: `${type} · ${key}`, body: text });
+                }
+            }
+        }
+    }
+    if (!sections.length) return '<p class="store-empty">No prompt details available.</p>';
+
+    return `<h3 class="store-prompt-heading">Prompt</h3>` + sections.map(s => `
+        <details class="store-prompt-acc" open>
+            <summary>${_esc(s.title)}</summary>
+            <pre class="store-prompt-text">${_esc(s.body)}</pre>
+        </details>`).join('');
+}
+
+
+async function renderPersonaDetail(slug) {
+    state.detailSlug = slug;
+    const main = container.querySelector('.store-main');
+    if (!main) return;
+    main.innerHTML = '<div class="store-loading">Loading...</div>';
+
+    let item;
+    try {
+        item = await getStorePersona(slug);
+    } catch (e) {
+        console.warn('[Store] persona detail fetch failed:', e);
+        renderUnreachable();
+        return;
+    }
+    if (!item || item.unreachable) { renderUnreachable(); return; }
+
+    const name = item.sapphire_name || item.name || 'Unnamed';
+    const author = (item.author_url && isSafeHref(item.author_url))
+        ? `<a href="${_esc(item.author_url)}" target="_blank" rel="noopener noreferrer">${_esc(item.author)}</a>`
+        : _esc(item.author || 'Unknown');
+    let voiceName = '';
+    try {
+        const vc = item.voice_config ? JSON.parse(item.voice_config) : null;
+        if (vc?.voice) voiceName = vc.voice;
+    } catch (_) { /* voice_config is a string; ignore parse errors */ }
+    const catIcon = _categoryIcon(item.category);
+    const catLabel = _findCategoryLabel(item.category);
+    const screenshot = (item.screenshot_url && isSafeHref(item.screenshot_url))
+        ? `<img class="store-detail-screenshot" src="${_esc(item.screenshot_url)}" alt="">`
+        : '';
+    const featured = item.featured ? '<span class="store-featured-tag">★ Featured</span>' : '';
+
+    const rows = [`<div class="store-persona-info-row"><span class="lbl">By</span>${author}</div>`];
+    if (voiceName) rows.push(`<div class="store-persona-info-row"><span class="lbl">Voice</span>${_esc(voiceName)}</div>`);
+    if (item.prompt_type) rows.push(`<div class="store-persona-info-row"><span class="lbl">Type</span>${_esc(item.prompt_type)}</div>`);
+    rows.push(`<div class="store-persona-info-row"><span class="lbl">Category</span>${_esc(catIcon)} ${_esc(catLabel)}</div>`);
+    if (item.privacy_required) rows.push(`<div class="store-persona-info-row"><span class="lbl">Privacy</span>🔒 cloud disabled</div>`);
+
+    renderMain(`
+    <div class="store-detail">
+        <button class="store-back-btn" data-action="back">‹ Back</button>
+        <article>
+            <header class="store-persona-masthead">
+                ${_personaMastheadImg(item)}
+                <div class="store-persona-masthead-info">
+                    <h1 class="store-detail-name">${_esc(name)} ${featured}</h1>
+                    ${rows.join('')}
+                    ${item.tagline ? `<p class="store-persona-masthead-tagline">${_esc(item.tagline)}</p>` : ''}
+                    <div class="store-persona-masthead-actions">
+                        <button class="store-btn store-btn-install" data-action="install" data-slug="${_esc(item.slug)}">Get</button>
+                    </div>
+                </div>
+            </header>
+            ${screenshot}
+            <div class="store-detail-body">
+                ${_renderPromptAccordions(item)}
+            </div>
+        </article>
+    </div>
+    `);
+}
+
+
 async function renderDetail(slug) {
+    if (state.tab === 'personas') return renderPersonaDetail(slug);
     state.detailSlug = slug;
     const main = container.querySelector('.store-main');
     if (!main) return;
@@ -508,30 +708,76 @@ async function confirmAndInstall(slug, btn) {
 }
 
 
+async function confirmAndImportPersona(slug) {
+    let item;
+    try {
+        item = await getStorePersona(slug);
+    } catch (e) {
+        ui.showToast(`Couldn't load persona: ${e.message}`, 'error');
+        return;
+    }
+    if (!item || item.unreachable) {
+        ui.showToast('Store unreachable. Try again.', 'error');
+        return;
+    }
+
+    // The store's bundle is in export_content — use it for the collision +
+    // piece-preview; the actual import still pulls the PNG card server-side
+    // (export_content carries no avatar). Same shared confirm as the local import.
+    let bundle = null;
+    try { bundle = item.export_content ? JSON.parse(item.export_content) : null; } catch (_) {}
+    if (!bundle) {
+        const nm = item.sapphire_name || item.name;
+        bundle = { name: nm, prompt: { name: nm } };
+    }
+    await confirmPersonaImport({
+        bundle,
+        doImport: (flags) => installPersonaFromStore(slug, flags),
+        onDone: () => { refreshInitData(); },
+    });
+}
+
+
 /* ── Routing + state-update helpers ──────────────────────────────────────── */
 
-function navigateFromHash() {
-    const parts = _readHashParts();
-    if (parts.length === 0 || parts[0] === 'plugins') {
-        state.tab = 'plugins';
-        if (parts.length >= 2) {
-            renderDetail(parts[1]);
-        } else {
-            renderList();
-        }
-    } else if (parts[0] === 'personas') {
-        state.tab = 'personas';
-        renderMain(`
-            <div class="store-empty">
-                <h2>Personas store — coming soon</h2>
-                <p>The bazaar's framework already supports multiple stores. Personas drops in here when ready.</p>
-            </div>
-        `);
-    } else {
-        // Unknown sub-route, redirect to plugins
-        _writeHash(['plugins']);
-        navigateFromHash();
+async function ensureCategories() {
+    if (categoriesCache[state.tab]) return;
+    try {
+        categoriesCache[state.tab] = await store().categories();
+    } catch (e) {
+        categoriesCache[state.tab] = [];
     }
+}
+
+
+async function navigateFromHash() {
+    const parts = _readHashParts();
+    const tab = parts[0] === 'personas' ? 'personas'
+        : (parts.length === 0 || parts[0] === 'plugins') ? 'plugins'
+            : null;
+    if (tab === null) {
+        // Unknown sub-route — redirect to plugins.
+        _writeHash(['plugins']);
+        return navigateFromHash();
+    }
+    state.tab = tab;
+    container.querySelectorAll('.store-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tab));
+    await ensureCategories();
+    renderSidebar();
+    if (parts.length >= 2) renderDetail(parts[1]);
+    else renderList();
+}
+
+
+function switchTab(which) {
+    if (!STORES[which]) return;
+    state.category = null;
+    state.q = '';
+    state.page = 1;
+    state.detailSlug = null;
+    _writeHash([which]);
+    navigateFromHash();
 }
 
 
@@ -540,7 +786,7 @@ function setCategory(slug) {
     state.q = '';
     state.page = 1;
     renderSidebar();
-    _writeHash(['plugins']);
+    _writeHash([state.tab]);
     renderList();
 }
 
@@ -569,14 +815,14 @@ function setPage(p) {
 
 
 function openDetail(slug) {
-    _writeHash(['plugins', slug]);
+    _writeHash([state.tab, slug]);
     renderDetail(slug);
 }
 
 
 function backToList() {
     state.detailSlug = null;
-    _writeHash(['plugins']);
+    _writeHash([state.tab]);
     renderList();
 }
 
@@ -588,8 +834,7 @@ function bindEvents() {
         // Tabs
         const tab = e.target.closest('.store-tab');
         if (tab && !tab.classList.contains('disabled')) {
-            const which = tab.dataset.tab;
-            if (which === 'plugins') { _writeHash(['plugins']); navigateFromHash(); }
+            switchTab(tab.dataset.tab);
             return;
         }
 
@@ -609,7 +854,8 @@ function bindEvents() {
                 return;
             }
             if (a === 'install') {
-                confirmAndInstall(action.dataset.slug, action);
+                if (state.tab === 'personas') confirmAndImportPersona(action.dataset.slug);
+                else confirmAndInstall(action.dataset.slug, action);
                 return;
             }
             if (a === 'retry') {
@@ -638,7 +884,7 @@ function bindEvents() {
         if (e.target.classList.contains('store-search')) {
             clearTimeout(searchTimeout);
             const q = e.target.value;
-            searchTimeout = setTimeout(() => setSearch(q), 250);
+            searchTimeout = setTimeout(() => setSearch(q), 800);
         }
     });
 
@@ -683,15 +929,7 @@ export default {
             return;
         }
 
-        // Fetch categories once per session.
-        if (!categoriesCache) {
-            try {
-                categoriesCache = await getStoreCategories();
-            } catch (e) {
-                categoriesCache = [];
-            }
-        }
-        renderSidebar();
+        // navigateFromHash loads the active tab's categories + renders sidebar.
         navigateFromHash();
     },
 

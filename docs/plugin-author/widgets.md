@@ -477,8 +477,9 @@ Sapphire plugin distribution flow. See
 
 Tl;dr: push your `plugins/{name}/` directory to a GitHub repo. Users
 install via the in-app Store or by pasting your repo URL into
-**Settings > Plugins > Install from URL**. Featured plugins (Krem's
-curation) appear in the Plugin Spotlight widget on every dashboard.
+**Settings > Plugins > Install from URL**. Featured plugins (curated by
+the project maintainer) appear in the Plugin Spotlight widget on every
+dashboard.
 
 ---
 
@@ -495,3 +496,18 @@ The truest documentation is [`plugins/sample-widgets/`](../../plugins/sample-wid
   considerations, namespaced inline styles.
 
 Copy either as your starting point. Have fun.
+
+## Reference for AI
+
+DASHBOARD WIDGETS:
+- Manifest: `capabilities.widgets` = [{id (required, [a-z0-9_-]{1,64}, unique in plugin), name?, description?, icon?, render? (default widgets/{id}.js, path relative to plugin `web/`), sizes? (subset of 1x1|1x2|1x3|1x4, default ["1x1"]), default_size?, multi_instance? (default false), settings_schema? ([]), api_version? (1)}].
+- Render contract: `export async function render(container, ctx)` -> `{ title, actions?, cleanup }`. container = the panel body div (mutate innerHTML; host owns surrounding chrome). cleanup is REQUIRED and must cancel every timer/listener/EventSource started.
+- ctx: {plugin, widget_id, instance_id (UUID per placement), size, settings (merged defaults+user), pluginWebPath (/plugin-web/{plugin}/), api}.
+- ctx.api: fetch(url, init?) (session cookie on same-origin), toast(msg, kind: success|error|info), listStorePlugins(opts?), pollForRestart(), navigateSettingsTab(name), openWidgetSettings(instance_id), registerCleanup(fn) — register cleanups BEFORE any await that might throw; registered + returned cleanups all run.
+- actions: [{icon, label, onClick, kind?: 'danger'}] rendered in the Actions dropdown; a ⚙ Settings action is auto-appended when settings_schema is non-empty.
+- settings_schema field types: text, textarea (rows), number (min/max/step), select (options [{value,label}] required), boolean, color; all take key (required), label, default, help. ctx.settings is a snapshot — mutating it persists nothing; saving goes through the settings modal only (V1).
+- cleanup fires on: widget removed, resized (re-render new size), settings saved (re-render), dashboard tab left, plugin disabled/uninstalled/reloaded. Host try/catches a throwing cleanup.
+- Rules: no hardcoded element ids when multi_instance (scope by class/container), no inline onclick=, prefix CSS classes with the plugin name; host utility classes (.dash-action-panel-info-line, .dim) are stable.
+- Sizes are horizontal spans only (height is content-driven); mobile <=768px collapses to one column. api_version 1 promises: ctx only grows, api method signatures stable, render contract stable.
+- Hot-reload limitation: after POST /api/plugins/{name}/reload, already-rendered widgets keep running OLD code until the dashboard tab is reloaded.
+- Reference plugin: `plugins/sample-widgets/` (hello.js minimal, note.js full). Re-sign after edits: `python tools/sign_plugin.py plugins/{name}`.

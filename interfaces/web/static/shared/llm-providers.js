@@ -106,7 +106,7 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
   const useAsFallback = config.use_as_fallback !== false;
 
   return `
-    <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}" draggable="true">
+    <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}">
       <div class="provider-header" data-provider="${key}">
         <div class="provider-title">
           <span class="provider-drag-handle" title="Drag to reorder">⋮⋮</span>
@@ -150,6 +150,17 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
 export function renderProviderFields(key, config, meta) {
   const fields = [];
   const required = meta.required_fields || [];
+  const attr = v => String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+  // Friendly name — what the sidebar, trigger editor and this card's header
+  // show. Saved as display_name on the provider (core and custom alike).
+  fields.push(`
+    <div class="field-row">
+      <label>Name</label>
+      <input type="text" class="provider-field" data-provider="${key}" data-field="display_name"
+             value="${attr(config.display_name || meta.display_name || key)}" placeholder="${attr(meta.display_name || key)}" maxlength="60">
+    </div>
+  `);
 
   // Base URL
   if (required.includes('base_url') || config.base_url !== undefined) {
@@ -182,7 +193,10 @@ export function renderProviderFields(key, config, meta) {
   if (meta.model_options && typeof meta.model_options === 'object') {
     const currentModel = config.model || '';
     const modelKeys = Object.keys(meta.model_options);
-    const isCustom = currentModel && !modelKeys.includes(currentModel);
+    // No model, or one the roster doesn't list → "Other (custom)" with the raw
+    // value in the box. A bare <select> with nothing selected paints its first
+    // option as if chosen — the card lied about the model in use (scout U7).
+    const isCustom = !currentModel || !modelKeys.includes(currentModel);
 
     fields.push(`
       <div class="field-row">
@@ -196,8 +210,8 @@ export function renderProviderFields(key, config, meta) {
       </div>
       <div class="field-row model-custom-row ${isCustom ? '' : 'hidden'}" data-provider="${key}">
         <label>Custom Model</label>
-        <input type="text" class="provider-field model-custom" 
-               data-provider="${key}" data-field="model" 
+        <input type="text" class="model-custom"
+               data-provider="${key}" data-field="model"
                value="${isCustom ? currentModel : ''}" placeholder="Custom model name">
       </div>
     `);
@@ -256,22 +270,18 @@ export function renderProviderFields(key, config, meta) {
  * Render generation parameters section.
  */
 export function renderGenerationParams(providerKey, modelName, genProfiles = {}) {
+  // Penalties carry NO default: blank = never sent (the 2026-08-23 ruling).
+  // The old 0.1 seed here was harvested by collectGenParamsFromCard on any
+  // touch and rode every request from then on (scout S12, 2026-09-20).
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { 
-    temperature: 0.7, 
-    top_p: 0.9, 
-    max_tokens: 4096, 
-    presence_penalty: 0.1, 
-    frequency_penalty: 0.1, 
-    ...fallback 
-  };
+  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, ...fallback };
   const params = genProfiles[modelName] || defaults;
 
   const temp = params.temperature ?? defaults.temperature;
   const topP = params.top_p ?? defaults.top_p;
   const maxTokens = params.max_tokens ?? defaults.max_tokens;
-  const presencePen = params.presence_penalty ?? defaults.presence_penalty;
-  const freqPen = params.frequency_penalty ?? defaults.frequency_penalty;
+  const presencePen = params.presence_penalty ?? defaults.presence_penalty ?? '';
+  const freqPen = params.frequency_penalty ?? defaults.frequency_penalty ?? '';
 
   return `
     <div class="generation-params-section" data-provider="${providerKey}" data-model="${modelName}">
@@ -315,7 +325,7 @@ export function renderGenerationParams(providerKey, modelName, genProfiles = {})
 export function renderProviderToggles(key, config) {
   if (key === 'claude') {
     const thinkingEnabled = config.thinking_enabled !== false;
-    const thinkingBudget = config.thinking_budget || 10000;
+    const thinkingEffort = config.reasoning_effort || 'high';
     const cacheEnabled = config.cache_enabled || false;
     const cacheTtl = config.cache_ttl || '5m';
 
@@ -325,13 +335,17 @@ export function renderProviderToggles(key, config) {
           <label class="checkbox-inline toggle-label">
             <input type="checkbox" class="provider-field thinking-toggle" data-provider="${key}" data-field="thinking_enabled"
                    ${thinkingEnabled ? 'checked' : ''}>
-            <span>Extended Thinking</span>
+            <span>Adaptive Thinking</span>
           </label>
           <div class="toggle-value ${thinkingEnabled ? '' : 'hidden'}" data-toggle="thinking" data-provider="${key}">
-            <label>Budget</label>
-            <input type="number" class="provider-field thinking-budget" data-provider="${key}" data-field="thinking_budget"
-                   value="${thinkingBudget}" step="1000" min="1024" max="32000">
-            <span class="toggle-value-hint">tokens</span>
+            <label>Effort</label>
+            <select class="provider-field thinking-effort" data-provider="${key}" data-field="reasoning_effort">
+              <option value="low" ${thinkingEffort === 'low' ? 'selected' : ''}>Low</option>
+              <option value="medium" ${thinkingEffort === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="high" ${thinkingEffort === 'high' ? 'selected' : ''}>High</option>
+              <option value="xhigh" ${thinkingEffort === 'xhigh' ? 'selected' : ''}>X-High</option>
+              <option value="max" ${thinkingEffort === 'max' ? 'selected' : ''}>Max</option>
+            </select>
           </div>
         </div>
         <div class="toggle-row">
@@ -352,22 +366,23 @@ export function renderProviderToggles(key, config) {
     `;
   }
 
-  // OpenAI-compatible providers (LM Studio, generic openai-compat) get a
-  // Qwen-specific no-think toggle. Harmless on non-Qwen models — they
-  // ignore the /no_think token AND the chat_template_kwargs hint.
-  const isOpenAITemplate = (config.template === 'openai') || (config.provider === 'openai');
+  // OpenAI-compatible providers (LM Studio, generic openai-compat) get the
+  // universal best-effort disable-thinking toggle (family-gated in the backend,
+  // so it's harmless on models that don't support it). Advanced extra_body lives
+  // in the edit-provider modal.
+  const isOpenAITemplate = config.template === 'openai';   // custom cards only — core OpenAI ignores it (scout U15)
   if (isOpenAITemplate) {
-    const noThink = config.disable_thinking_qwen || false;
+    const noThink = (config.disable_thinking ?? config.disable_thinking_qwen) || false;
     return `
       <div class="provider-toggles">
         <div class="toggle-row">
           <label class="checkbox-inline toggle-label">
-            <input type="checkbox" class="provider-field" data-provider="${key}" data-field="disable_thinking_qwen"
+            <input type="checkbox" class="provider-field" data-provider="${key}" data-field="disable_thinking"
                    ${noThink ? 'checked' : ''}>
-            <span>Disable Qwen thinking (/no_think)</span>
+            <span>Disable thinking (best effort)</span>
           </label>
           <div class="toggle-value-hint" style="margin-left: 12px;">
-            For Qwen 3 models — skip the model's thinking stage. Other models ignore it.
+            Tries the right switch per model (GLM, Qwen, …). Cuts latency by skipping the reasoning phase.
           </div>
         </div>
       </div>
@@ -386,14 +401,7 @@ export function renderProviderToggles(key, config) {
  */
 export function getGenerationParams(modelName, genProfiles) {
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { 
-    temperature: 0.7, 
-    top_p: 0.9, 
-    max_tokens: 4096, 
-    presence_penalty: 0.1, 
-    frequency_penalty: 0.1, 
-    ...fallback 
-  };
+  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, ...fallback };
   return genProfiles[modelName] || defaults;
 }
 
@@ -420,8 +428,8 @@ export function loadModelGenParamsIntoCard(card, modelName, genProfiles) {
   setVal('temperature', params.temperature ?? defaults.temperature);
   setVal('top_p', params.top_p ?? defaults.top_p);
   setVal('max_tokens', params.max_tokens ?? defaults.max_tokens);
-  setVal('presence_penalty', params.presence_penalty ?? defaults.presence_penalty);
-  setVal('frequency_penalty', params.frequency_penalty ?? defaults.frequency_penalty);
+  setVal('presence_penalty', params.presence_penalty ?? defaults.presence_penalty ?? '');
+  setVal('frequency_penalty', params.frequency_penalty ?? defaults.frequency_penalty ?? '');
 }
 
 /**
@@ -431,7 +439,9 @@ export function collectGenParamsFromCard(card) {
   const params = {};
   card.querySelectorAll('.gen-param-input').forEach(input => {
     const p = input.dataset.param;
-    params[p] = p === 'max_tokens' ? parseInt(input.value) : parseFloat(input.value);
+    const raw = (input.value ?? '').trim();
+    const n = p === 'max_tokens' ? parseInt(raw) : parseFloat(raw);
+    if (raw !== '' && !isNaN(n)) params[p] = n;   // blank/NaN = absent, never a JSON null (S2/S12)
   });
   return params;
 }
@@ -487,6 +497,10 @@ export function initProviderDragDrop(listContainer, onReorder) {
     }, { offset: Number.NEGATIVE_INFINITY }).element;
   };
 
+  // Cards are NOT draggable by default — draggable arms only on handle
+  // mousedown and disarms after. A permanently-draggable card makes the
+  // browser treat tiny mouse wobbles as drag attempts, which swallows clicks
+  // (janky expand/collapse on the cards).
   listContainer.querySelectorAll('.provider-card').forEach(card => {
     const handle = card.querySelector('.provider-drag-handle');
 
@@ -495,10 +509,6 @@ export function initProviderDragDrop(listContainer, onReorder) {
     });
 
     card.addEventListener('dragstart', (e) => {
-      if (!e.target.closest('.provider-drag-handle') && e.target !== card) {
-        e.preventDefault();
-        return;
-      }
       dragCard = card;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -506,11 +516,12 @@ export function initProviderDragDrop(listContainer, onReorder) {
 
     card.addEventListener('dragend', () => {
       card.classList.remove('dragging');
-      
+      card.setAttribute('draggable', 'false');
+
       // Collect new order and update numbers
       const cards = [...listContainer.querySelectorAll('.provider-card')];
       const order = cards.map(c => c.dataset.provider);
-      
+
       cards.forEach((c, idx) => {
         const orderEl = c.querySelector('.provider-order');
         if (orderEl) orderEl.textContent = idx + 1;
@@ -533,10 +544,10 @@ export function initProviderDragDrop(listContainer, onReorder) {
 
   });
 
-  // Single mouseup handler on container (not document) — no stacking
+  // Disarm after any mouse release in the list (handle grabbed but not dragged)
   listContainer.addEventListener('mouseup', () => {
     listContainer.querySelectorAll('.provider-card').forEach(c =>
-      c.setAttribute('draggable', 'true')
+      c.setAttribute('draggable', 'false')
     );
   });
 }

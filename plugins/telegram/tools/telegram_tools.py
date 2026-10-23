@@ -15,6 +15,8 @@ EMOJI = '✈️'
 TOOLS = [
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_send",
             "description": "Send a Telegram message. Uses sidebar-scoped account.",
@@ -36,6 +38,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_get_chats",
             "description": "Recent Telegram chats with last-message preview + unread count.",
@@ -54,6 +58,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_read_messages",
             "description": "Read recent messages from a Telegram chat. Get chat_id from telegram_get_chats.",
@@ -76,9 +82,13 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_send_image",
-            "description": "Send the most recently generated image to a Telegram chat. You see it too and can comment.",
+            "description": ("Send an image to a Telegram chat. source = img:<id> (the '(image img:...)' handle "
+                            "a tool gave you), doc:<N>, an absolute path, or a URL; leave it out to send the "
+                            "newest image of this chat. You see it too and can comment."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -89,6 +99,10 @@ TOOLS = [
                     "caption": {
                         "type": "string",
                         "description": "Image caption"
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "img:<id>, doc:<N>, /absolute/path, or https://... (default: newest image of this chat)"
                     }
                 },
                 "required": ["chat_id"]
@@ -97,6 +111,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_send_voice",
             "description": "Send a TTS voice note to a Telegram chat (playable voice bubble).",
@@ -118,6 +134,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_add_contact",
             "description": "Add a Telegram contact (client mode only). Required to message someone new.",
@@ -148,8 +166,13 @@ AVAILABLE_FUNCTIONS = [t["function"]["name"] for t in TOOLS]
 
 
 def _get_account():
-    from core.chat.function_manager import scope_telegram
-    acct = scope_telegram.get()
+    try:
+        from core.chat.function_manager import scope_telegram
+        acct = scope_telegram.get()
+    except Exception:
+        # Scope unregistered (plugin toggled mid-flight) — treat as disabled,
+        # matching every other resolver in the fleet (negspace, 2026-08-31).
+        return None
     return acct if acct and acct != 'none' else None
 
 
@@ -263,18 +286,24 @@ def telegram_send_image(args, config):
         except (ValueError, TypeError):
             pass
 
-        # Grab most recent tool image
-        from pathlib import Path
-        import base64
-        img_dir = Path(__file__).parent.parent.parent.parent / "user" / "tool_images"
-        image_bytes = None
-        if img_dir.exists():
-            images = sorted(img_dir.glob("*.*"), key=lambda f: f.stat().st_mtime, reverse=True)
-            if images:
-                image_bytes = images[0].read_bytes()
-
-        if not image_bytes:
-            return "No recent images found — generate an image first with comfy_generate or flux_generate"
+        # Which image: an explicit handle/path/URL, else the newest tool image
+        # of THIS chat via core.images (the old scan of user/tool_images/ read
+        # the disk FALLBACK dir — stale or empty whenever history existed). 2026-09-09.
+        from core import images as ci
+        source = (args.get("source") or "").strip()
+        if not source:
+            last = ci.last_image_id()
+            if not last:
+                return ("No image to send — give source= (img:<id>, doc:<N>, a path, or a URL) "
+                        "or make one first")
+            source = f"img:{last}"
+        try:
+            resolved = ci.resolve(source)
+        except ci.ImageError as e:
+            return str(e)
+        # Telegram photos: jpg/png as-is, anything else re-encoded.
+        image_bytes = (resolved.data if resolved.media_type in ("image/jpeg", "image/png")
+                       else ci.for_chat(resolved.data))
 
         # Send to Telegram
         from plugins.telegram.daemon import send_photo
@@ -285,11 +314,8 @@ def telegram_send_image(args, config):
         future.result(timeout=30)
 
         # Return the image so Sapphire can see it and comment
-        b64 = base64.b64encode(image_bytes).decode()
-        return {
-            "text": f"Image sent to {chat_id}" + (f" — {caption}" if caption else ""),
-            "images": [{"data": b64, "media_type": "image/jpeg"}]
-        }
+        return ci.result(f"Image {resolved.label} sent to {chat_id}" + (f" — {caption}" if caption else ""),
+                         [ci.for_chat(image_bytes)])
     except Exception as e:
         logger.error(f"[TELEGRAM] Image send failed: {e}")
         return f"Failed to send image: {e}"
@@ -335,7 +361,7 @@ def telegram_get_chats(args, config):
         return ready
     client, loop = ready
 
-    limit = args.get("limit", 15)
+    limit = min(max(int(args.get("limit", 15) or 15), 1), 100)
 
     try:
         async def _get():
@@ -393,7 +419,9 @@ def telegram_read_messages(args, config):
     client, loop = ready
 
     chat_id = args.get("chat_id")
-    limit = args.get("limit", 20)
+    # Clamp: an uncapped limit goes straight into iter_messages — 100k pulls
+    # one unbounded tool result and risks a Telegram flood-wait.
+    limit = min(max(int(args.get("limit", 20) or 20), 1), 100)
     if not chat_id:
         return "chat_id is required"
 

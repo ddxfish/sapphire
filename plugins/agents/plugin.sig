@@ -2,9 +2,9 @@
   "plugin": "agents",
   "version": "2.0.0",
   "files": {
-    "plugin.json": "sha256:970154614994b4c4c534c2b7445d14e5b3203c02da3ba6a52b1f12ef345aa19e",
-    "tools/agent_tools.py": "sha256:7e6dfc9c3fe097e0d0fa1c56f4d67a23dcf0138dcbfc10d12c506903dabc79ce",
+    "plugin.json": "sha256:8d698bfae1b14bb2a874e15a5a4952e1eab2cf4968b0f9978e990dfdd149d555",
+    "tools/agent_tools.py": "sha256:ac4c27abc1f346fc4350500e66cb39709f0f55f9473fe968b75fe955da6b454d",
     "web/index.js": "sha256:8a66bddf01321637bc67827108a67c87ef732f7569f9f6a43e939014bedd070c"
   },
-  "signature": "pYLYO33jZDF9nuzGd6f8bdnggyOE0fl4AgvUJdyjk6tgwDF1q4PtI5oFcngadHdap4TqxRT85t9DZD3o93ZADQ=="
+  "signature": "Y7UfPk0cUmMydE2w56cV0colePZ1fIAopnf57VjJD1Kb+N5AHGVxut7tgAKSq4xDC6M5HMsq1cpoZiCCLUyXBQ=="
 }

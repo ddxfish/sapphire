@@ -45,7 +45,7 @@ class TestProviderRegistry:
         """Core providers should have curated model options."""
         meta = provider_registry.get_metadata('claude')
         assert meta.get('model_options')
-        assert 'claude-sonnet-4-6' in meta['model_options']
+        assert 'claude-opus-5' in meta['model_options']
 
     def test_templates_available(self):
         """Should have 3 built-in templates."""
@@ -53,7 +53,7 @@ class TestProviderRegistry:
         template_keys = [t['key'] for t in templates]
         assert 'openai' in template_keys
         assert 'anthropic' in template_keys
-        assert 'responses' in template_keys
+        assert 'openai_responses' in template_keys
 
     def test_presets_loaded(self):
         """Presets should load from JSON."""

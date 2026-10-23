@@ -4,7 +4,10 @@
   "identity": {
     "DEFAULT_USERNAME": "Human Protagonist",
     "AVATARS_IN_CHAT": true,
+    "ICON_COLOR": "",
+    "DEFAULT_BACKGROUND": "",
     "DEFAULT_PERSONA": "",
+    "PERSONA_FAVORITES": [],
     "USER_TIMEZONE": "UTC",
     "DASHBOARD_DISPLAY_NAME": "Sapphire",
     "DASHBOARD_FONTS_AUTOFETCH": true
@@ -14,20 +17,18 @@
     "SOCKS_ENABLED": false,
     "SOCKS_HOST": "",
     "SOCKS_PORT": 1080,
-    "SOCKS_TIMEOUT": 10.0
+    "SOCKS_TIMEOUT": 10.0,
+    "SOCKS_ROUTE_LLM": false,
+    "SOCKS_REMOTE_DNS": false,
+    "SOCKS_NO_PROXY_EXTRA": "",
+    "UPDATE_CHECK_ENABLED": true
   },
 
   "privacy": {
-    "_comment": "Privacy mode blocks all outbound connections except whitelisted local endpoints",
-    "START_IN_PRIVACY_MODE": false,
-    "PRIVACY_NETWORK_WHITELIST": [
-      "127.0.0.1",
-      "localhost",
-      "192.168.0.0/16",
-      "10.0.0.0/8",
-      "172.16.0.0/12"
-    ],
-    "METRICS_ENABLED": true
+    "_comment": "Private chats only reach providers/tools marked local (is_local)",
+    "METRICS_ENABLED": true,
+    "VAULT_IDLE_MINUTES": 30,
+    "PRIVATE_ALLOW_UNFLAGGED_TOOLS": false
   },
   
   "backups": {
@@ -36,7 +37,10 @@
     "BACKUPS_KEEP_DAILY": 7,
     "BACKUPS_KEEP_WEEKLY": 4,
     "BACKUPS_KEEP_MONTHLY": 3,
-    "BACKUPS_KEEP_MANUAL": 5
+    "BACKUPS_KEEP_MANUAL": 5,
+    "BACKUPS_KEEP_UPDATE": 3,
+    "BACKUPS_EXCLUDE_PATTERNS": [],
+    "BACKUPS_MAX_SIZE_WARN_MB": 2048
   },
   
   "audio": {
@@ -52,7 +56,6 @@
   "wakeword": {
     "WAKE_WORD_ENABLED": false,
     "CHUNK_SIZE": 1280,
-    "BUFFER_DURATION": 0.5,
     "WAKEWORD_MODEL": "hey_sapphire",
     "WAKEWORD_THRESHOLD": 0.60,
     "WAKEWORD_FRAMEWORK": "onnx",
@@ -76,7 +79,6 @@
   
   "recorder": {
     "RECORDER_CHUNK_SIZE": 1024,
-    "RECORDER_CHANNELS": 1,
     "STT_VAD_ENABLED": true,
     "STT_VAD_SPEECH_THRESHOLD": 0.5,
     "RECORDER_SILENCE_THRESHOLD": 0.0025,
@@ -87,6 +89,17 @@
     "RECORDER_BACKGROUND_PERCENTILE": 32,
     "RECORDER_NOISE_MULTIPLIER": 1.1,
     "RECORDER_MAX_SECONDS": 30,
+    "CONVERSATION_VAD_THRESHOLD": 0.5,
+    "CONVERSATION_BARGE_HOLD_MS": 90,
+    "CONVERSATION_MIN_SPEECH_MS": 200,
+    "CONVERSATION_ENDPOINT_SILENCE_MS": 700,
+    "CONVERSATION_DTLN": "none",
+    "CONVERSATION_START_WORD": "",
+    "CONVERSATION_START_WORD_FUZZY": 0.7,
+    "CONVERSATION_AEC_DELAY_MS": 0,
+    "CONVERSATION_BARGE_GUARD_MS": 300,
+    "CONVERSATION_BARGE_RMS_FLOOR": 0.03,
+    "CONVERSATION_EXTERNAL_SLOTS": 2,
     "RECORDER_BEEP_WAIT_TIME": 0.15,
     "RECORDER_SAMPLE_RATES": [44100, 48000, 16000, 8000],
     "RECORDER_BLOCKSIZE_FALLBACKS": [1024, 512, 2048, 4096],
@@ -131,7 +144,9 @@
     "WEB_UI_HOST": "0.0.0.0",
     "WEB_UI_PORT": 8073,
     "WEB_UI_SSL_ADHOC": true,
-    "LOG_LEVEL": "INFO"
+    "LOG_LEVEL": "INFO",
+    "MAX_DAEMON_TASKS": 10,
+    "MAX_TOTAL_TASKS": 25
   },
   
   "llm": {
@@ -143,12 +158,12 @@
         "provider": "claude",
         "display_name": "Claude",
         "api_key_env": "ANTHROPIC_API_KEY",
-        "model": "claude-sonnet-4-5",
+        "model": "claude-opus-5-5",
         "timeout": 10.0,
         "enabled": false,
         "use_as_fallback": true,
         "thinking_enabled": true,
-        "thinking_budget": 10000,
+        "reasoning_effort": "high",
         "cache_enabled": true,
         "cache_ttl": "5m"
       },
@@ -157,7 +172,7 @@
         "display_name": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "api_key_env": "OPENAI_API_KEY",
-        "model": "gpt-4o",
+        "model": "gpt-5.6-terra",
         "timeout": 10.0,
         "enabled": false,
         "use_as_fallback": true,
@@ -169,7 +184,7 @@
         "display_name": "Gemini",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "api_key_env": "GOOGLE_API_KEY",
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.8-flash",
         "timeout": 10.0,
         "enabled": false,
         "use_as_fallback": true,
@@ -189,68 +204,93 @@
         "use_as_fallback": true
       }
     },
-    "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "gemini"],
+    "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "gemini", "openai"],
     "MODEL_GENERATION_PROFILES": {
       "_comment": "Balanced generation params per model. Edit values here to tune.",
-      "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096 },
       
-      "claude-opus-4-8": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "claude-opus-4-7": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "claude-sonnet-4-6": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "claude-sonnet-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "claude-haiku-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      
+      "claude-fable-5-1": { "max_tokens": 16000 },
+      "claude-opus-5-5": { "max_tokens": 16000 },
+      "claude-opus-5": { "max_tokens": 16000 },
+      "claude-sonnet-5": { "max_tokens": 16000 },
+      "claude-haiku-4-5": { "max_tokens": 16000 },
+      "claude-fable-5": { "max_tokens": 16000 },
+      "claude-opus-4-8": { "max_tokens": 16000 },
+      "claude-sonnet-4-6": { "max_tokens": 16000 },
+
+      "gpt-6-astra": { "max_tokens": 16000 },
+      "gpt-5.6-sol": { "max_tokens": 16000 },
+      "gpt-5.6-terra": { "max_tokens": 16000 },
+      "gpt-5.6-luna": { "max_tokens": 16000 },
+      "gpt-5.5": { "max_tokens": 16000 },
+      "gpt-5.4": { "max_tokens": 16000 },
+      "gpt-5.4-mini": { "max_tokens": 16000 },
       "gpt-4o": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       "gpt-4o-mini": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "gpt-4-turbo": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "o1": { "temperature": 1.0, "top_p": 1.0, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "o1-mini": { "temperature": 1.0, "top_p": 1.0, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
 
+      "gemini-3.8-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.7-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.5-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.5-flash-lite": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.1-pro-preview": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "gemini-2.5-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "gemini-2.5-pro": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "gemini-2.0-flash": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "gemini-2.0-flash-lite": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
 
-      "accounts/fireworks/models/qwen3-235b-a22b-thinking-2507": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "accounts/fireworks/models/qwen3-vl-235b-a22b-thinking": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "accounts/fireworks/models/qwq-32b": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "accounts/fireworks/models/kimi-k2-thinking": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/deepseek-v4p1-flash": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "accounts/fireworks/models/deepseek-v4-pro-0813": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "accounts/fireworks/models/deepseek-v4-flash-0731": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "accounts/fireworks/models/qwen3p8-max": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/kimi-k3": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/kimi-k2p7-code": { "temperature": 0.3, "top_p": 0.7, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "accounts/fireworks/models/kimi-k2p6": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": { "temperature": 0.3, "top_p": 0.7, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "accounts/fireworks/models/qwen3p6-plus": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/glm-5p3": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/glm-5p3-flash": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/glm-5p2": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/minimax-m3": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "accounts/fireworks/models/gpt-oss-120b": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "accounts/fireworks/models/deepseek-v3p2": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "accounts/fireworks/models/deepseek-v4-pro": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "accounts/fireworks/models/gemma-4-31b-it": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "accounts/fireworks/models/glm-4p7": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "accounts/fireworks/models/minimax-m2p5": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
 
+      "MiniMax-M3": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "MiniMax-M2.7": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "MiniMax-M2.5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "MiniMax-M2.1": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
 
+      "deepseek-v4-pro": { "temperature": 0.7, "top_p": 0.95, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "deepseek-flash": { "temperature": 0.7, "top_p": 0.95, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+
+      "zai-org/GLM-5.3": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "zai-org/GLM-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "zai-org/GLM-4.7": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "deepseek-ai/DeepSeek-V4-Pro": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       "deepseek-ai/DeepSeek-V3.2": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       "deepseek-ai/DeepSeek-V3.2-Speciale": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "Qwen/Qwen3.6-27B": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "Qwen/Qwen3.5-397B-A17B": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "Qwen/Qwen3-32B": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "openai/gpt-oss-120b": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "moonshotai/Kimi-K3": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "moonshotai/Kimi-K2.5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "MiniMaxAI/MiniMax-M3": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "meta-llama/Llama-3.3-70B-Instruct": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 }
     },
-    "FORCE_THINKING": false,
-    "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that",
     "CLAUDE_THINKING_ENABLED": true,
-    "CLAUDE_THINKING_BUDGET": 10000,
+    "SPICE_DELIVERY": "ghost",
     "IMAGE_UPLOAD_MAX_WIDTH": 1920
+  },
+
+  "images": {
+    "IMAGE_MEMORY_TURNS": 3,
+    "WEB_IMAGES_SAFESEARCH": "off"
   },
   
   "tools": {
     "TOOL_HISTORY_MAX_ENTRIES": 0,
+    "TOOL_RESULT_MAX_CHARS": 200000,
     "MAX_TOOL_ITERATIONS": 7,
     "MAX_PARALLEL_TOOLS": 5,
-    "DEBUG_TOOL_CALLING": false
+    "AI_TOOLSET_SWITCH_ENABLED": false,
+    "AI_MODEL_SWITCH_ENABLED": false,
+    "AI_MODEL_SWITCH_ROSTER": [],
+    "AI_MODEL_SWITCH_RATCHET": false
   },
   
   "rag": {
@@ -270,7 +310,7 @@
     "STORE_ENABLED": true,
     "STORE_URL": "https://sapphireblue.dev",
     "STORE_NAMESPACE": "sapphire-store/v1",
-    "STORE_CACHE_TTL_SECONDS": 300
+    "STORE_CACHE_TTL_SECONDS": 3600
   },
 
   "video_guide": {

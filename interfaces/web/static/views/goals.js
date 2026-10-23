@@ -7,6 +7,7 @@ import { listScopes } from '../shared/scope-api.js';
 import { MIND_TABS, csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../shared/mind-common.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 const SCOPE_KEY = 'goal_scope';
 const DOMAIN = 'goal';
@@ -76,6 +77,7 @@ async function renderGoals() {
         return;
     }
 
+    const restoreScroll = snapScroll(el);   // DOM-refresh hunt 2026-09-08
     el.innerHTML = filterHtml + '<div class="mind-list">' + goals.map(g => {
         const priClass = `goal-pri-${g.priority}`;
         const statusIcon = g.status === 'completed' ? '&#x2705;' : g.status === 'abandoned' ? '&#x274C;' : '&#x1F7E2;';
@@ -139,6 +141,7 @@ async function renderGoals() {
             </details>
         `;
     }).join('') + '</div>';
+    restoreScroll();
 
     bindGoalToolbar(el);
     bindGoalActions(el);

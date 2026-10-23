@@ -1,5 +1,6 @@
 // settings-tabs/stt.js - Speech-to-text provider settings + VAD tuning
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
+import { editableFocused } from '../../shared/dom-guard.js';
 
 let _mergedConfig = null;
 
@@ -15,6 +16,7 @@ const tabConfig = {
         },
         faster_whisper: {
             label: 'Local (Faster Whisper)',
+            is_local: true,
             essentialKeys: ['STT_MODEL_SIZE'],
             advancedKeys: [
                 'FASTER_WHISPER_DEVICE', 'FASTER_WHISPER_CUDA_DEVICE', 'FASTER_WHISPER_COMPUTE_TYPE',
@@ -23,6 +25,7 @@ const tabConfig = {
         },
         fireworks_whisper: {
             label: 'Fireworks Whisper',
+            is_local: false,
             essentialKeys: ['STT_FIREWORKS_API_KEY', 'STT_FIREWORKS_MODEL'],
             advancedKeys: []
         }
@@ -163,27 +166,48 @@ export default {
 
     async attachListeners(ctx, el) {
         {
+            // What the first paint already showed: repaint only when the merge
+            // CHANGES the provider set. A dropdown-change re-entry re-awaited
+            // the merge and repainted an identical set one RTT later (D2#7).
+            const painted = Object.keys((_mergedConfig || tabConfig).providers).join();
             _mergedConfig = await mergeRegistryProviders(tabConfig);
-            if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length) {
+            // The await landed one RTT after the first paint (DOM-refresh hunt
+            // 2026-09-08): `el` is the PERSISTENT #settings-content, so if the
+            // user switched tabs meanwhile this painted STT over that tab; if
+            // they started typing an API key, the second paint ate it.
+            if (ctx.isTabActive?.(this.id) === false) return;
+            if (Object.keys(_mergedConfig.providers).join() !== painted
+                && !editableFocused(el)) {
                 const body = el.querySelector('.settings-tab-body') || el;
                 body.innerHTML = this.render(ctx);
                 if (ctx.attachAccordionListeners) ctx.attachAccordionListeners(el);
             }
         }
         const cfg = _mergedConfig || tabConfig;
-        attachProviderListeners(cfg, ctx, el);
+        // `this` = this module: without it a provider-dropdown change fell to
+        // the generic tab render and the VAD section, badge poll and test
+        // button vanished until the tab was re-entered (D2#2, 2026-09-08).
+        attachProviderListeners(cfg, ctx, el, this);
 
         // VAD wiring — badge polling + test button only. The checkbox is
         // bound by the generic data-key path, no manual handlers here.
         updateVadStatusBadge(el);
         attachVadTestListener(el);
-        const refreshInterval = setInterval(() => updateVadStatusBadge(el), 5000);
-        const observer = new MutationObserver(() => {
-            if (!document.body.contains(el)) {
-                clearInterval(refreshInterval);
-                observer.disconnect();
+        // Timer guard on el (the PERSISTENT #settings-content container): the
+        // old cleanup was a body-wide MutationObserver waiting for el to leave
+        // the DOM — but renderTabContent only ever innerHTML-refills el, so
+        // the guard could never fire and every render stacked one interval +
+        // one document-subtree observer (GC pressure scaling with chat churn).
+        // Same shape as attachGenericListeners' _genericBound guard.
+        // (negspace N19, 2026-08-31)
+        if (el._vadTimer) clearInterval(el._vadTimer);
+        el._vadTimer = setInterval(() => {
+            if (!el.querySelector('#vad-status-badge')) {
+                clearInterval(el._vadTimer);
+                el._vadTimer = null;
+                return;
             }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
+            updateVadStatusBadge(el);
+        }, 5000);
     }
 };

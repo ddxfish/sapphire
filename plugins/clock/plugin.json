@@ -1,5 +1,6 @@
 {
   "name": "clock",
+  "short_display_name": "Clock",
   "short_name": "Clock",
   "version": "1.0.0",
   "description": "Time tools — current time, countdown timers, stopwatches, one-shot alarms.",

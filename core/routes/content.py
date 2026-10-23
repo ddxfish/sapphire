@@ -47,7 +47,11 @@ def _build_spice_response():
 async def list_prompts(request: Request, _=Depends(require_login)):
     """List all prompts."""
     from core.chat.history import count_tokens
+    from core import prompt_packs
     prompt_names = prompts.list_prompts()
+    # Pack names shadowed by user entries carry NO source (the user copy wins)
+    pack_sources = prompt_packs.get_sources()
+    user_names = set(prompts.prompt_manager._monoliths) | set(prompts.prompt_manager._scenario_presets)
     prompt_list = []
     for name in prompt_names:
         pdata = prompts.get_prompt(name)
@@ -57,9 +61,75 @@ async def list_prompts(request: Request, _=Depends(require_login)):
             'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
             'char_count': len(content),
             'token_count': count_tokens(content),
-            'privacy_required': pdata.get('privacy_required', False) if isinstance(pdata, dict) else False
+            'privacy_required': pdata.get('privacy_required', False) if isinstance(pdata, dict) else False,
+            'source': pack_sources.get(name) if name not in user_names else None,
+            # Vault marker (only ever true while unlocked, by construction) —
+            # drives the 🗝 badge AND the editor's origin stamp (finding 6:
+            # a stale editor must send origin='vault' so the server can
+            # refuse the save after an idle-lock).
+            'vault': prompts.is_vault_prompt(name)
         })
-    return {"prompts": prompt_list, "current": prompts.get_active_preset_name()}
+    from core import prompt_vault
+    return {"prompts": prompt_list, "current": prompts.get_active_preset_name(),
+            "vault_state": prompt_vault.vault_status(),
+            "vault_refs": prompt_vault.refs_names(),
+            # Hidden pack prompts ({name: kind}) — not in the list, but a
+            # chat may still point at one (story costume); dropdown
+            # synthesizers use this to label the value instead of showing
+            # a bare mystery name.
+            "hidden": prompts.hidden_prompt_kinds(),
+            "stock": _stock_prompt_names()}
+
+
+_STOCK_PROMPT_NAMES = None
+
+
+def _stock_prompt_names():
+    """Names of prompts that ship with Sapphire (core/prompt_defaults) —
+    drives the roster's 'Core' bulk selector. Cached; the files are static
+    at runtime."""
+    global _STOCK_PROMPT_NAMES
+    if _STOCK_PROMPT_NAMES is None:
+        names = set()
+        base = Path(PROJECT_ROOT) / 'core' / 'prompt_defaults'
+        for fn, key in (('prompt_pieces.json', 'scenario_presets'),
+                        ('prompt_monoliths.json', None)):
+            try:
+                d = json.loads((base / fn).read_text(encoding='utf-8'))
+                src = d.get(key, {}) if key else d
+                names |= {k for k in src if isinstance(k, str)
+                          and not k.startswith('_')}
+            except Exception as e:
+                logger.warning(f"stock prompt names: {fn} unreadable ({e})")
+        _STOCK_PROMPT_NAMES = sorted(names)
+    return _STOCK_PROMPT_NAMES
+
+
+_STOCK_PIECE_KEYS = None
+
+
+def _stock_piece_keys():
+    """{type: [keys]} of pieces that ship with Sapphire (core/prompt_defaults/
+    prompt_pieces.json `components`). Shipped pieces are merged INTO the user
+    store at boot, so nothing at runtime can tell them from user-authored
+    ones — this is the only source. Drives the modals' 'Custom' quick-select
+    (same name-based rule as the roster's Core/Custom: an edited shipped
+    piece still counts as shipped). Cached; the file is static at runtime."""
+    global _STOCK_PIECE_KEYS
+    if _STOCK_PIECE_KEYS is None:
+        out = {}
+        path = Path(PROJECT_ROOT) / 'core' / 'prompt_defaults' / 'prompt_pieces.json'
+        try:
+            comps = json.loads(path.read_text(encoding='utf-8')).get('components', {}) or {}
+            for ctype, entries in comps.items():
+                if isinstance(ctype, str) and isinstance(entries, dict):
+                    keys = sorted(k for k in entries if isinstance(k, str) and not k.startswith('_'))
+                    if keys:
+                        out[ctype] = keys
+        except Exception as e:
+            logger.warning(f"stock piece keys: prompt_pieces.json unreadable ({e})")
+        _STOCK_PIECE_KEYS = out
+    return _STOCK_PIECE_KEYS
 
 
 @router.post("/api/prompts/reload")
@@ -71,8 +141,161 @@ async def reload_prompts(request: Request, _=Depends(require_login)):
 
 @router.get("/api/prompts/components")
 async def get_prompt_components(request: Request, _=Depends(require_login)):
-    """Get prompt components."""
-    return {"components": prompts.prompt_manager.components}
+    """Get prompt components (merged view) + plugin sources for pack pieces.
+    A user piece shadowing a pack key carries no source (the user copy wins)."""
+    from core import prompt_packs, prompt_vault
+    user_components = prompts.prompt_manager._components
+    # Visible view: hidden pack pieces (kind != 'user', unshadowed) are
+    # dropped — engine scaffolding never reaches the piece accordions. The
+    # renderer keeps reading the full prompt_manager.components merge.
+    visible = prompts.visible_components()
+    sources = {
+        ctype: {k: v for k, v in entries.items()
+                if k not in user_components.get(ctype, {})
+                and k in visible.get(ctype, {})}
+        for ctype, entries in prompt_packs.component_sources().items()
+    }
+    # Vault piece markers (unlocked only, unshadowed only) — 🗝 badge lane +
+    # the piece editor's origin stamp (finding 6).
+    vault_pieces = {
+        ctype: [k for k in entries if k not in user_components.get(ctype, {})]
+        for ctype, entries in prompt_vault.overlay_components().items()
+    }
+    # Hidden piece NAMES (no text) — membership checks only. A user prompt
+    # referencing engine scaffolding still renders (the merge is intact), so
+    # the ⚠ missing-ref badge must not flag it as dangling.
+    merged = prompts.prompt_manager.components
+    hidden_keys = {
+        ctype: [k for k in entries if k not in visible.get(ctype, {})]
+        for ctype, entries in merged.items()
+    }
+    return {"components": visible,
+            "sources": {k: v for k, v in sources.items() if v},
+            "vault_pieces": {k: v for k, v in vault_pieces.items() if v},
+            "hidden_keys": {k: v for k, v in hidden_keys.items() if v},
+            # Shipped piece keys — the modals' 'Custom' selector (2026-09-08).
+            "stock_pieces": _stock_piece_keys()}
+
+
+# Registered BEFORE /api/prompts/{name} — the path-param route swallows any
+# single-segment path defined after it (same reason /components sits above).
+
+@router.get("/api/prompts/piece-usage")
+async def get_piece_usage(request: Request, _=Depends(require_login)):
+    """Usage index for the delete/cleanup tools: which prompts use each piece.
+    While the vault is LOCKED its prompts are invisible to the index, so
+    `vault_referenced` carries the salted-hash answer per plaintext piece —
+    present only when locked AND the sidecar has piece-refs data."""
+    from core import prompt_crud, prompt_vault
+    status = prompt_vault.vault_status()
+    refs_ok = prompt_vault.piece_refs_available()
+    resp = {"usage": prompt_crud.piece_usage(),
+            "danglers": prompt_crud.dangling_refs(),
+            "vault": {**status, "piece_refs_available": refs_ok}}
+    if status.get('exists') and not status.get('unlocked') and refs_ok:
+        flagged = {}
+        for ctype, entries in prompts.prompt_manager._components.items():
+            hits = [k for k in entries
+                    if prompt_vault.piece_vault_referenced(ctype, k)]
+            if hits:
+                flagged[ctype] = hits
+        resp["vault_referenced"] = flagged
+    return resp
+
+
+def _piece_items(data, with_store=False):
+    raw = data.get('items') if isinstance(data, dict) else None
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=400,
+                            detail="items must be a non-empty list of {type, key}")
+    items = []
+    for it in raw:
+        if not isinstance(it, dict) or not it.get('type') or not it.get('key'):
+            raise HTTPException(status_code=400,
+                                detail="each item needs type and key")
+        if with_store:
+            items.append((str(it['type']), str(it['key']),
+                          str(it.get('store') or 'plain')))
+        else:
+            items.append((str(it['type']), str(it['key'])))
+    return items
+
+
+@router.get("/api/prompts/pieces/trash")
+async def get_piece_trash(request: Request, _=Depends(require_login)):
+    from core import prompt_crud
+    return {"items": prompt_crud.list_trash()}
+
+
+@router.post("/api/prompts/pieces/trash")
+async def trash_prompt_pieces(request: Request, _=Depends(require_login)):
+    """Soft-delete plaintext pieces into the trash store. Body: {items:
+    [{type, key}]}. Vault/pack pieces are skipped here by design."""
+    from core import prompt_crud
+    trashed, skipped = prompt_crud.trash_pieces(_piece_items(await request.json()))
+    return {"trashed": trashed, "skipped": skipped}
+
+
+@router.post("/api/prompts/pieces/trash/restore")
+async def restore_prompt_pieces(request: Request, _=Depends(require_login)):
+    """Restore trashed pieces (store 'vault' rides the vault's own trash).
+    Never overwrites a live key."""
+    from core import prompt_crud
+    restored, skipped = prompt_crud.restore_pieces(
+        _piece_items(await request.json(), with_store=True))
+    return {"restored": restored, "skipped": skipped}
+
+
+@router.post("/api/prompts/pieces/trash/purge")
+async def purge_prompt_pieces_trash(request: Request, _=Depends(require_login)):
+    """Empty the piece trash (final)."""
+    from core import prompt_crud
+    return {"purged": prompt_crud.purge_trash()}
+
+
+@router.post("/api/prompts/pieces/rename")
+async def rename_prompt_piece(request: Request, _=Depends(require_login)):
+    """Safe rename: moves the piece in its own store and repoints every
+    reference (user presets, unlocked vault, assembled state)."""
+    from core import prompt_crud
+    data = await request.json()
+    ctype, old, new = (data.get('type') or '', data.get('old') or '',
+                       data.get('new') or '')
+    if not ctype or not old:
+        raise HTTPException(status_code=400, detail="type and old are required")
+    ok, msg = prompt_crud.rename_piece(ctype, old, new)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"status": "success", "message": msg}
+
+
+@router.post("/api/prompts/pieces/strip-danglers")
+async def strip_dangling_refs(request: Request, _=Depends(require_login)):
+    """Strip every reference to a missing piece. Recomputed server-side at
+    call time (idempotent). REFUSED while a vault exists and is locked —
+    sealed pieces look missing, and stripping would destroy valid refs."""
+    from core import prompt_crud, prompt_vault
+    status = prompt_vault.vault_status()
+    if status.get('exists') and not status.get('unlocked'):
+        raise HTTPException(status_code=409,
+                            detail="Vault is locked — sealed pieces look "
+                                   "missing. Unlock it before stripping.")
+    d = prompt_crud.dangling_refs()
+    pairs = {(r['type'], r['key']) for refs in d.values() for r in refs}
+    # A piece sitting in the TRASH is restorable — stripping its refs would
+    # bring the text back unwired on restore (2026-08-21 hunt). Skip those;
+    # only refs to pieces that exist NOWHERE strip.
+    in_trash = {(it.get('type'), it.get('key')) for it in prompt_crud.list_trash()}
+    skipped = sorted(pairs & in_trash)
+    pairs -= in_trash
+    stripped = []
+    for ctype, key in sorted(pairs):
+        res = prompt_crud.rewrite_piece_refs(ctype, key, None,
+                                             reason="strip dangling refs")
+        stripped.append({'type': ctype, 'key': key,
+                         'prompts': res['changed'] + res['vault_changed']})
+    return {"stripped": stripped, "count": len(pairs),
+            "skipped_in_trash": [{'type': t, 'key': k} for t, k in skipped]}
 
 
 @router.get("/api/prompts/{name}")
@@ -90,67 +313,121 @@ async def get_prompt(name: str, request: Request, _=Depends(require_login)):
 
 @router.put("/api/prompts/{name}")
 async def save_prompt(name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Save a prompt."""
+    """Save a prompt. Optional 'reason' in the body rides the prompt ledger
+    (the mutation layer emits the audit event — prompt_manager saver diffs)."""
     data = await request.json()
-    success, msg = prompts.save_prompt(name, data)
+    reason = (data.pop('reason', None) or '').strip() or None
+    origin = (data.pop('origin', None) or '').strip() or None
+    success, msg = prompts.save_prompt(name, data, reason=reason, origin=origin)
     if success:
-        publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
+        if prompts.is_vault_prompt(name):
+            # Name-free on purpose: SSE replays recent events to every new
+            # tab — across a later vault lock.
+            publish(Events.PROMPT_CHANGED, {"name": "", "action": "vault_changed"})
+        else:
+            publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
+        if reason:
+            # Reason-only delivery: with no content diff the saver emits
+            # nothing, so a why typed after the last keystroke needs its own
+            # event. The sink is idempotent when the diff already carried it.
+            try:
+                from core.audit import emit
+                emit({'kind': 'reason', 'name': name, 'actor': 'user',
+                      'reason': reason})
+            except Exception:
+                pass
         reapply_if_active(system, 'prompt', name)
         return {"status": "success", "name": name}
     else:
+        if msg == prompts.VAULT_LOCKED_MSG:
+            raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=400, detail=msg or "Failed to save prompt")
 
 
 @router.delete("/api/prompts/{name}")
-async def delete_prompt(name: str, request: Request, _=Depends(require_login)):
-    """Delete a prompt."""
-    if prompts.delete_prompt(name):
-        publish(Events.PROMPT_DELETED, {"name": name})
+async def delete_prompt(name: str, request: Request, _=Depends(require_login),
+                        reason: str = None):
+    """Delete a prompt. Optional ?reason= lands in the prompt ledger."""
+    was_vault = prompts.is_vault_prompt(name)   # membership gone after delete
+    if prompts.delete_prompt(name, reason=(reason or '').strip() or None):
+        publish(Events.PROMPT_DELETED, {"name": "" if was_vault else name})
         return {"status": "success", "name": name}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to delete prompt")
+    # delete_prompt returns False for pack-shipped prompts (read-only) and
+    # for unknown names — surface the real reason instead of a generic 500.
+    from core import prompt_packs
+    owner = prompt_packs.get_sources().get(name)
+    if owner:
+        raise HTTPException(status_code=403,
+                            detail=f"'{name}' is shipped by plugin '{owner}' — read-only. "
+                                   f"Disable the plugin to remove it, or save a user prompt "
+                                   f"with the same name to shadow it.")
+    raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
 
 
 @router.put("/api/prompts/components/{comp_type}/{key}")
 async def save_prompt_component(comp_type: str, key: str, request: Request, _=Depends(require_login)):
-    """Save a prompt component."""
+    """Save a prompt component.
+
+    Writes the PRIVATE dict — the `.components` property returns a merged
+    copy when plugin prompt-packs are registered, so mutating it would be
+    silently lost. Saving a key that shadows a pack piece is the intended
+    edit path (user wins the merge)."""
     data = await request.json()
     value = data.get('value', '')
-    components = prompts.prompt_manager.components
-    if comp_type not in components:
-        components[comp_type] = {}
-    components[comp_type][key] = value
-    prompts.prompt_manager.save_components()
-    publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
-    return {"status": "success", "components": components}
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="Component value must be a string")
+    reason = (data.get('reason') or '').strip() or None
+    origin = (data.get('origin') or '').strip() or None
+    ok, msg = prompts.save_component(comp_type, key, value, reason=reason,
+                                     origin=origin)
+    if not ok:
+        if msg == prompts.VAULT_LOCKED_MSG:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=500, detail=msg)
+    if reason:
+        # Reason-only delivery — see save_prompt: no diff means no saver
+        # event, and the why must still reach the ledger.
+        try:
+            from core.audit import emit
+            emit({'kind': 'reason', 'comp_type': comp_type, 'key': key,
+                  'actor': 'user', 'reason': reason})
+        except Exception:
+            pass
+    # vault flag: tells the editor where the piece landed so it can badge
+    # 🗝 immediately (the SSE echo may be deferred while the user is typing).
+    return {"status": "success", "vault": msg.endswith("(vault)"),
+            "components": prompts.visible_components()}
 
 
 @router.delete("/api/prompts/components/{comp_type}/{key}")
-async def delete_prompt_component(comp_type: str, key: str, request: Request, _=Depends(require_login)):
-    """Delete a prompt component."""
-    components = prompts.prompt_manager.components
-    if comp_type in components and key in components[comp_type]:
-        del components[comp_type][key]
-        prompts.prompt_manager.save_components()
-        publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
-        return {"status": "success", "components": components}
-    else:
-        raise HTTPException(status_code=404, detail=f"Component '{comp_type}/{key}' not found")
+async def delete_prompt_component(comp_type: str, key: str, request: Request,
+                                  _=Depends(require_login), reason: str = None):
+    """Delete a prompt component (user entries only — pack pieces are
+    read-only; deleting a user shadow makes the pack piece show through).
+    Optional ?reason= lands in the prompt ledger."""
+    ok, code = prompts.delete_component(comp_type, key,
+                                        reason=(reason or '').strip() or None)
+    if ok:
+        return {"status": "success", "components": prompts.visible_components()}
+    if code == 'store_latch':
+        raise HTTPException(status_code=500,
+                            detail="Delete not persisted — the prompt store failed to "
+                                   "load earlier. Fix user/prompts/prompt_pieces.json and reload.")
+    if code == 'pack_owned':
+        from core import prompt_packs
+        owner = prompt_packs.piece_source(comp_type, key)
+        raise HTTPException(status_code=403,
+                            detail=f"'{comp_type}/{key}' is shipped by plugin '{owner}' — "
+                                   f"read-only. Disable the plugin to remove it.")
+    raise HTTPException(status_code=404, detail=f"Component '{comp_type}/{key}' not found")
 
 
 @router.post("/api/prompts/{name}/load")
 async def load_prompt(name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Load/activate a prompt."""
-    pdata = prompts.get_prompt(name)
-    if not pdata:
-        raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
-    content = pdata.get('content') if isinstance(pdata, dict) else str(pdata)
-    system.llm_chat.set_system_prompt(content)
-    prompts.set_active_preset_name(name)
-    if hasattr(prompts.prompt_manager, 'scenario_presets') and name in prompts.prompt_manager.scenario_presets:
-        prompts.apply_scenario(name)
-    # Persist to chat settings so it survives restart
-    system.llm_chat.session_manager.update_chat_settings({"prompt": name})
+    """Load/activate a prompt. Shared logic lives in prompts.activate_prompt."""
+    ok, msg = prompts.activate_prompt(name, system)
+    if not ok:
+        raise HTTPException(status_code=404, detail=msg)
     return {"status": "success", "name": name}
 
 
@@ -167,6 +444,8 @@ async def reset_prompts(request: Request, _=Depends(require_login)):
 async def merge_prompts(request: Request, _=Depends(require_login)):
     """Merge factory defaults into user prompts."""
     result = prompts.prompt_manager.merge_defaults()
+    if result and result.get("error"):
+        raise HTTPException(status_code=409, detail=result["error"])
     if result:
         return {"status": "success", **result}
     raise HTTPException(status_code=500, detail="Failed to merge prompts")
@@ -179,6 +458,8 @@ async def merge_updates(request: Request, _=Depends(require_login)):
     backup_dir = str(PROJECT_ROOT / "user" / "backups" / datetime.now().strftime("%Y%m%d_%H%M%S"))
 
     prompt_result = prompts.prompt_manager.merge_defaults(backup_dir)
+    if prompt_result and prompt_result.get("error"):
+        raise HTTPException(status_code=409, detail=prompt_result["error"])
     if not prompt_result:
         raise HTTPException(status_code=500, detail="Failed to merge prompt defaults")
 
@@ -214,11 +495,13 @@ async def list_toolsets(request: Request, _=Depends(require_login), system=Depen
     ts_set.update(function_manager.get_available_toolsets())
     ts_set.update(toolset_manager.get_toolset_names())
     network_functions = set(function_manager.get_network_functions())
+    hidden = function_manager.get_hidden_functions()
 
     toolsets = []
     for name in sorted(ts_set):
         if name == "all":
-            func_list = [t['function']['name'] for t in function_manager.all_possible_tools]
+            func_list = [t['function']['name'] for t in function_manager.all_possible_tools
+                         if t['function']['name'] not in hidden]
             ts_type = "builtin"
         elif name == "none":
             func_list = []
@@ -227,7 +510,8 @@ async def list_toolsets(request: Request, _=Depends(require_login), system=Depen
             # Pure module (no toolset override) — skip for sidebar
             if filter_mode == "sidebar":
                 continue
-            func_list = function_manager.function_modules[name]['available_functions']
+            func_list = [n for n in function_manager.function_modules[name]['available_functions']
+                         if n not in hidden]
             ts_type = "module"
         elif toolset_manager.toolset_exists(name):
             func_list = toolset_manager.get_toolset_functions(name)
@@ -256,11 +540,20 @@ async def get_current_toolset(request: Request, _=Depends(require_login), system
 
 @router.post("/api/toolsets/{toolset_name}/activate")
 async def activate_toolset(toolset_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Activate a toolset."""
-    system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+    """Activate a toolset. The active chat's extra_toolsets ride along —
+    a by-name-only re-apply strips them from the enabled set (2026-08-03)."""
+    sm = system.llm_chat.session_manager
+    # R5 intent, persist FIRST: if a vault eviction retargets the active
+    # chat between this request and the write, refuse before touching the
+    # runtime palette — a refusal leaves nothing half-applied.
+    _active = sm.get_active_chat_name()
+    extras = (sm.get_chat_settings() or {}).get('extra_toolsets') or None
+    if not sm.update_chat_settings({"toolset": toolset_name},
+                                   expected_active=_active):
+        raise HTTPException(status_code=409,
+                            detail="Active chat changed — toolset not applied")
+    system.llm_chat.function_manager.update_enabled_functions([toolset_name], extra_toolsets=extras)
     publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
-    # Persist to chat settings so it survives restart
-    system.llm_chat.session_manager.update_chat_settings({"toolset": toolset_name})
     return {"status": "success", "toolset": toolset_name}
 
 
@@ -270,18 +563,27 @@ async def list_functions(request: Request, _=Depends(require_login), system=Depe
     function_manager = system.llm_chat.function_manager
     enabled = set(function_manager.get_enabled_function_names())
     network = set(function_manager.get_network_functions())
+    hidden = function_manager.get_hidden_functions()
     modules = {}
     for module_name, module_info in function_manager.function_modules.items():
         funcs = []
         for tool in module_info['tools']:
             func_name = tool['function']['name']
+            if func_name in hidden:
+                continue
             funcs.append({
                 "name": func_name,
                 "description": tool['function'].get('description', ''),
                 "enabled": func_name in enabled,
                 "is_network": func_name in network
             })
-        modules[module_name] = {"functions": funcs, "count": len(funcs), "emoji": module_info.get('emoji', '')}
+        # Modules sharing a declared GROUP merge into one display group
+        # (e.g. the mindpalace tool files present as one "Mind Palace").
+        key = module_info.get('group') or module_name
+        slot = modules.setdefault(key, {"functions": [], "count": 0, "emoji": ""})
+        slot["functions"].extend(funcs)
+        slot["count"] += len(funcs)
+        slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
     return {"modules": modules}
 
 
@@ -290,7 +592,11 @@ async def enable_functions(request: Request, _=Depends(require_login), system=De
     """Enable specific functions."""
     data = await request.json()
     functions = data.get('functions', [])
-    system.llm_chat.function_manager.update_enabled_functions(functions)
+    # Custom picks replace the base set, but the chat's extra_toolsets are a
+    # separate union primitive (their own checkbox) — they ride along here
+    # too, or the checkbox state lies mid-story (2026-08-05).
+    extras = (system.llm_chat.session_manager.get_chat_settings() or {}).get('extra_toolsets') or None
+    system.llm_chat.function_manager.update_enabled_functions(functions, extra_toolsets=extras)
     publish(Events.TOOLSET_CHANGED, {"name": "custom", "functions": functions})
     return {"status": "success", "enabled": functions}
 
@@ -451,6 +757,10 @@ async def add_spice(request: Request, _=Depends(require_login)):
     content = data.get('content') or data.get('text')
     if not category or not content:
         raise HTTPException(status_code=400, detail="Category and content required")
+    if not isinstance(content, str):
+        # A non-string body value would persist into prompt_spices.json and
+        # detonate later in the ghost-message weave.
+        raise HTTPException(status_code=400, detail="Spice content must be a string")
     spices = prompts.prompt_manager._spices
     if category not in spices:
         raise HTTPException(status_code=404, detail=f"Category '{category}' not found")
@@ -465,6 +775,8 @@ async def update_spice(category: str, index: int, request: Request, _=Depends(re
     """Update a spice."""
     data = await request.json()
     content = data.get('content') or data.get('text')
+    if not isinstance(content, str) or not content:
+        raise HTTPException(status_code=400, detail="Spice content must be a non-empty string")
     spices = prompts.prompt_manager._spices
     if category not in spices or index < 0 or index >= len(spices[category]):
         raise HTTPException(status_code=404, detail="Spice not found")
@@ -550,7 +862,12 @@ async def update_persona(name: str, request: Request, _=Depends(require_login), 
     data = await request.json()
     if not persona_manager.update(name, data):
         raise HTTPException(status_code=500, detail="Failed to update persona")
-    reapply_if_active(system, 'persona', name)
+    # On rename, reapply must target the NEW name -- update() moved the
+    # record, so the old name resolves to None and the hot-reload silently
+    # no-op'd (S3 #1, hunt 2026-08-30).
+    final_name = name if persona_manager.exists(name) \
+        else persona_manager._sanitize_name(data.get("name", name))
+    reapply_if_active(system, 'persona', final_name)
     return {"status": "success"}
 
 
@@ -683,25 +1000,52 @@ async def load_persona(name: str, request: Request, _=Depends(require_login), sy
 
     settings = persona.get("settings", {}).copy()
     settings["persona"] = name
+    # Always stamp the scene explicitly (the persona's, or '' to clear) so activating a
+    # persona fully sets the chat's background — no read-time inheritance. 2026-06-15.
+    settings.setdefault("background", "")
+    # Motion is background's twin (hunt 2026-08-17): without the explicit
+    # stamp, update_chat_settings MERGES and the previous persona's motion
+    # kept running forever on this chat.
+    settings.setdefault("motion", "")
     # Reset scope keys to defaults if persona doesn't specify them,
     # otherwise old persona's scopes persist through dict merge
     from core.chat.function_manager import scope_setting_keys
     for key in scope_setting_keys():
         if key not in settings:
             settings[key] = "default"
-    # scope_setting_keys() excludes 'private_chat' (it's a bool scope, not
-    # in the dropdown-facing list). Reset it here so loading a persona that
-    # doesn't explicitly set private_chat turns it OFF — otherwise a chat
-    # that was marked private stays private silently after persona switch.
-    if "private_chat" not in settings:
-        settings["private_chat"] = False
+    # Privacy belongs to the CHAT, not the persona: carry the chat's current
+    # private_chat through the switch (the eyeball is the only thing that
+    # flips it). A persona's stored flag is ignored either direction.
     session_manager = system.llm_chat.session_manager
-    session_manager.update_chat_settings(settings)
+    from core.chat.history import sealed_prompt_name
+    if sealed_prompt_name(settings.get('prompt')):
+        raise HTTPException(status_code=409,
+                            detail="This persona's prompt is asleep in the locked "
+                                   "vault — unlock it first")
+    # R5 intent: a vault eviction between this request and the write must
+    # refuse — a persona payload must never merge into the landing chat.
+    _active = session_manager.get_active_chat_name()
+    current = session_manager.get_chat_settings() or {}
+    settings["private_chat"] = bool(current.get("private_chat", False))
+    if not session_manager.update_chat_settings(settings,
+                                                expected_active=_active):
+        raise HTTPException(status_code=409,
+                            detail="Active chat changed — persona not applied")
 
     # Apply all settings (prompt, toolset, voice, spice set, scopes, state engine)
     _apply_chat_settings(system, settings)
 
-    publish(Events.CHAT_SETTINGS_CHANGED, {"persona": name})
+    # chat + nested background/motion let the transcript view repaint the
+    # scene live instead of waiting for the next sidebar load.
+    publish(Events.CHAT_SETTINGS_CHANGED, {
+        "persona": name,
+        "chat": session_manager.active_chat_name,
+        "settings": {"background": settings.get("background", ""),
+                     "motion": settings.get("motion", ""),
+                     # The pin rides along so the other tab's send-button
+                     # badge and sidebar repaint (V15, 2026-09-21).
+                     **{k: settings[k] for k in ("llm_primary", "llm_model") if k in settings}},
+    })
     return {"status": "success", "persona": name, "settings": settings}
 
 
@@ -764,6 +1108,14 @@ async def export_persona_card(name: str, request: Request, _=Depends(require_log
     prompt_name = settings.get("prompt", "")
     if prompt_name and prompt_name != "__story__":
         prompt_data = get_prompt(prompt_name)
+        if isinstance(prompt_data, dict) and prompt_data.get('privacy_required'):
+            # The card embeds the full prompt text — a privacy_required
+            # prompt exporting byte-complete into a shareable PNG defeats
+            # the flag entirely.
+            raise HTTPException(
+                status_code=403,
+                detail=f"Prompt '{prompt_name}' is marked privacy-required — "
+                       f"persona export is blocked to keep it local")
         if prompt_data:
             prompt_export = dict(prompt_data)
             for k in ("content", "compiled", "char_count", "token_count"):
@@ -774,17 +1126,32 @@ async def export_persona_card(name: str, request: Request, _=Depends(require_log
             bundle["prompt"] = {"name": prompt_name, "data": prompt_export}
 
             if prompt_data.get("type") == "assembled" and prompt_data.get("components"):
+                # Vault piece gate (recon finding 8): the prompt-level gate
+                # above catches vault PROMPTS (privacy_required by
+                # construction), but a public preset can still harvest a
+                # VAULT PIECE's text into the shareable PNG. Refuse those.
+                from core import prompt_vault
+
+                def _vault_piece(ct, k):
+                    return (prompt_vault.vault_has_piece(ct, k)
+                            and k not in prompt_manager._components.get(ct, {}))
+
                 used = {}
                 for comp_type, comp_key in prompt_data["components"].items():
-                    if isinstance(comp_key, str) and comp_key:
+                    keys = [comp_key] if isinstance(comp_key, str) else \
+                        (comp_key if isinstance(comp_key, list) else [])
+                    for ck in keys:
+                        if not ck:
+                            continue
+                        if _vault_piece(comp_type, ck):
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"Piece '{comp_type}/{ck}' lives in the "
+                                       f"vault — persona export is blocked to "
+                                       f"keep it local")
                         pieces = prompt_manager.components.get(comp_type, {})
-                        if comp_key in pieces:
-                            used.setdefault(comp_type, {})[comp_key] = pieces[comp_key]
-                    elif isinstance(comp_key, list):
-                        for ck in comp_key:
-                            pieces = prompt_manager.components.get(comp_type, {})
-                            if ck in pieces:
-                                used.setdefault(comp_type, {})[ck] = pieces[ck]
+                        if ck in pieces:
+                            used.setdefault(comp_type, {})[ck] = pieces[ck]
                 if used:
                     bundle["components"] = used
 
@@ -818,8 +1185,7 @@ async def _import_persona_from_bundle(data):
     `avatar` (if present) is stored as the persona's avatar (→ webp)."""
     import base64
     from core.personas import persona_manager
-    from core.prompt_crud import get_prompt, save_prompt
-    from core.prompt_manager import prompt_manager
+    from core.prompt_crud import get_prompt, save_prompt, save_components_batch
 
     # Validate
     if not data.get("sapphire_export") or data.get("type") != "persona":
@@ -828,9 +1194,22 @@ async def _import_persona_from_bundle(data):
     name = data.get("name", "imported")
     overwrite_prompt = data.get("overwrite_prompt", False)
     overwrite_avatar = data.get("overwrite_avatar", False)
+    overwrite_persona = data.get("overwrite_persona", False)
 
-    # Check persona name collision (frontend handles rename prompt)
-    if persona_manager.exists(name):
+    # Per-piece keep-list ("type/key" strings the user unchecked) — even with
+    # overwrite_prompt, these specific components keep their local value.
+    _keep = set()
+    for kc in (data.get("keep_components") or []):
+        if isinstance(kc, str) and "/" in kc:
+            t, k = kc.split("/", 1)
+            _keep.add((t, k))
+
+    # Collision: a persona with this (sanitized) name already exists. Block with
+    # 409 unless the caller explicitly opted into overwrite — the import-confirm
+    # UI shows what will be replaced before setting this flag.
+    safe_name = persona_manager._sanitize_name(name)
+    persona_exists = persona_manager.exists(safe_name)
+    if persona_exists and not overwrite_persona:
         raise HTTPException(status_code=409, detail=f"Persona '{name}' already exists")
 
     # Import prompt + components first
@@ -854,24 +1233,31 @@ async def _import_persona_from_bundle(data):
             # Don't overwrite — use existing prompt by name
             logger.info(f"[IMPORT] Prompt '{prompt_name}' exists, keeping existing")
         else:
+            # Save the prompt FIRST (DR-8): it's the door most likely to
+            # refuse (reserved name, cross-type collision, store latch).
+            # Refusing before any component commit keeps a failed import
+            # side-effect-free — the old order persisted the pieces, then
+            # ignored save_prompt's return entirely.
+            # origin='regular': installing a shared card must never route by
+            # invisible vault lock state (and vaulted imports would break
+            # the card's own re-export).
+            ok, msg = save_prompt(prompt_name, prompt_data,
+                                  allow_overwrite=overwrite_prompt, origin='regular')
+            if not ok:
+                raise HTTPException(status_code=409,
+                                    detail=f"Prompt import refused: {msg}")
+            logger.info(f"[IMPORT] Saved prompt '{prompt_name}'")
+
             # Import components if present
             if data.get("components"):
                 components = data["components"]
                 if not isinstance(components, dict):
                     raise HTTPException(status_code=400, detail="Invalid components format")
-                for comp_type, defs in components.items():
-                    if not isinstance(defs, dict):
-                        continue
-                    for key, value in defs.items():
-                        existing_piece = prompt_manager.components.get(comp_type, {}).get(key)
-                        if existing_piece and not overwrite_prompt:
-                            continue
-                        prompt_manager.components.setdefault(comp_type, {})[key] = value
-                prompt_manager.save_components()
-
-            # Save prompt
-            save_prompt(prompt_name, prompt_data, allow_overwrite=overwrite_prompt)
-            logger.info(f"[IMPORT] Saved prompt '{prompt_name}'")
+                ok, msg = save_components_batch(components, keep=_keep,
+                                                overwrite=overwrite_prompt)
+                if not ok:
+                    raise HTTPException(status_code=409,
+                                        detail=f"Component save refused: {msg}")
 
     # Build persona settings
     voice_data = data.get("voice", {})
@@ -887,13 +1273,17 @@ async def _import_persona_from_bundle(data):
     if data.get("trim_color"):
         persona_settings["trim_color"] = data["trim_color"]
 
-    # Create persona
+    # Create or overwrite the persona record
     persona_data = {
         "name": name,
         "tagline": data.get("tagline", ""),
         "settings": persona_settings,
     }
-    if not persona_manager.create(name, persona_data):
+    if persona_exists:
+        # Update in place — no "name" key so update() doesn't trigger a rename.
+        if not persona_manager.update(safe_name, {"tagline": persona_data["tagline"], "settings": persona_settings}):
+            raise HTTPException(status_code=500, detail="Failed to overwrite persona")
+    elif not persona_manager.create(name, persona_data):
         raise HTTPException(status_code=500, detail="Failed to create persona")
 
     # Import avatar
@@ -921,19 +1311,18 @@ async def _import_persona_from_bundle(data):
     return {"status": "success", "name": sanitized}
 
 
-@router.post("/api/personas/import-card")
-async def import_persona_card(request: Request, file: UploadFile = File(...),
-                              overwrite_prompt: bool = Form(False),
-                              overwrite_avatar: bool = Form(False),
-                              _=Depends(require_login)):
-    """Import a persona from a PNG character card — reads the bundle from the
-    `sapphire_persona` chunk and uses the PNG's pixels as the avatar."""
+async def _import_persona_card_bytes(raw: bytes, overwrite_prompt: bool = False,
+                                     overwrite_avatar: bool = False,
+                                     overwrite_persona: bool = False,
+                                     keep_components: list = None):
+    """Import a persona from PNG card bytes — reads the bundle from the
+    `sapphire_persona` chunk and uses the PNG's pixels as the avatar. Shared by
+    the file-upload endpoint and the persona-store install route."""
     import base64
     import io
     import json
     from PIL import Image
 
-    raw = await file.read()
     if len(raw) > 6 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Card too large (max 6MB)")
     try:
@@ -956,7 +1345,22 @@ async def import_persona_card(request: Request, file: UploadFile = File(...),
     data["avatar"] = f"data:image/png;base64,{base64.b64encode(raw).decode('ascii')}"
     data["overwrite_prompt"] = overwrite_prompt
     data["overwrite_avatar"] = overwrite_avatar
+    data["overwrite_persona"] = overwrite_persona
+    data["keep_components"] = keep_components or []
     return await _import_persona_from_bundle(data)
+
+
+@router.post("/api/personas/import-card")
+async def import_persona_card(request: Request, file: UploadFile = File(...),
+                              overwrite_prompt: bool = Form(False),
+                              overwrite_avatar: bool = Form(False),
+                              overwrite_persona: bool = Form(False),
+                              keep_components: str = Form(""),
+                              _=Depends(require_login)):
+    """Import a persona from an uploaded PNG character card."""
+    raw = await file.read()
+    keep = [s for s in keep_components.split(",") if s]
+    return await _import_persona_card_bytes(raw, overwrite_prompt, overwrite_avatar, overwrite_persona, keep)
 
 
 # =============================================================================
@@ -995,6 +1399,17 @@ async def activate_spice_set(set_name: str, request: Request, _=Depends(require_
     if not spice_set_manager.set_exists(set_name):
         raise HTTPException(status_code=404, detail="Spice set not found")
 
+    # R5 intent, chat stamp FIRST: a refused write (vault eviction retargeted
+    # the active chat mid-request) aborts before the global spice state flips
+    # — nothing half-applied. Captured at entry, not inline — an inline
+    # capture makes the guard zero-width (hunt 2026-09-04 S5-12).
+    sm = system.llm_chat.session_manager
+    _active = sm.get_active_chat_name()
+    if not sm.update_chat_settings({"spice_set": set_name},
+                                   expected_active=_active):
+        raise HTTPException(status_code=409,
+                            detail="Active chat changed — spice set not applied")
+
     categories = spice_set_manager.get_categories(set_name)
     all_cats = set(prompts.prompt_manager.spices.keys())
     disabled = all_cats - set(categories)
@@ -1003,7 +1418,6 @@ async def activate_spice_set(set_name: str, request: Request, _=Depends(require_
     prompts.invalidate_spice_picks()
 
     spice_set_manager.active_name = set_name
-    system.llm_chat.session_manager.update_chat_settings({"spice_set": set_name})
     publish(Events.SPICE_CHANGED, {"spice_set": set_name})
     return {"status": "success", "spice_set": set_name}
 

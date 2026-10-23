@@ -70,7 +70,7 @@ def test_store_list_graceful_when_upstream_unreachable(client, monkeypatch):
     an error. Killing this guard would silently break the view on transient WP
     outages.
     """
-    async def _fail(path, params=None):
+    async def _fail(path, params=None, namespace=None):
         return store_mod._graceful_empty(path, params or {})
 
     monkeypatch.setattr(store_mod, "_proxy_get", _fail)
@@ -89,7 +89,7 @@ def test_store_list_annotates_installed_state(client, monkeypatch):
     Frontend Install/Installed/Update buttons branch on installed_state — if
     annotation regresses, every store card mislabels.
     """
-    async def _fake_fetch(path, params=None):
+    async def _fake_fetch(path, params=None, namespace=None):
         return {
             "items": [
                 {

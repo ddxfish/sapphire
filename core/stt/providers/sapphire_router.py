@@ -4,7 +4,9 @@ import os
 import logging
 from typing import Optional
 
-import httpx
+import requests
+
+from core import net
 
 from core.stt.providers.base import BaseSTTProvider
 
@@ -33,15 +35,21 @@ class SapphireRouterSTTProvider(BaseSTTProvider):
             if tenant_id:
                 headers['X-Tenant-ID'] = tenant_id
             with open(audio_path, 'rb') as f:
-                resp = httpx.post(
+                resp = net.request(
+                    'POST',
                     f'{url}/v1/stt/transcribe',
                     files={'file': ('audio.wav', f, 'audio/wav')},
                     headers=headers,
                     timeout=30.0,
                 )
+            if 300 <= resp.status_code < 400:
+                logger.error(f"Sapphire Router STT: router redirected ({resp.status_code}) — "
+                             f"LAN redirects are refused by policy; check SAPPHIRE_ROUTER_URL "
+                             f"for a trailing-slash/path mismatch")
+                return None
             resp.raise_for_status()
             return resp.json().get('text', '').strip() or None
-        except httpx.ConnectError:
+        except requests.exceptions.ConnectionError:
             logger.error(f"Sapphire Router STT: cannot reach router at {url}")
             raise RuntimeError("STT service unavailable — router is down")
         except Exception as e:

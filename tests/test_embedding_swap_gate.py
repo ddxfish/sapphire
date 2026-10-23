@@ -24,11 +24,12 @@ def test_swap_gate_fails_closed_on_integrity_exception():
     from pathlib import Path
     source = (Path(__file__).parent.parent / "core" / "routes" / "settings.py").read_text()
 
-    # Find the swap-gate try/except region
-    idx = source.find("EMBEDDING_PROVIDER' in settings_dict")
-    assert idx != -1, "Swap gate block not found — has the route been restructured?"
+    # The gate lives in one shared helper now (broadsword M-C9 folded the
+    # batch route and the single-key PUT onto it) — anchor there.
+    idx = source.find("async def _guard_embedding_swap")
+    assert idx != -1, "Swap gate helper not found — has the route been restructured?"
 
-    # Window of ~2000 chars around that region
+    # Window covering the helper body
     window = source[idx:idx + 3000]
 
     # Must have a raise HTTPException with status_code=503 inside the except block

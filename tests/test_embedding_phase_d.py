@@ -40,10 +40,12 @@ def test_windows_hf_home_override_logic_present():
     """[REGRESSION_GUARD] On Windows, HF_HOME must be redirected to a
     project-local path if not already set — MAX_PATH defeats the default
     HuggingFace cache layout. Source-level check since we can't simulate
-    Windows in a test runner."""
-    src = (Path(__file__).parent.parent / 'core/embeddings/__init__.py').read_text()
+    Windows in a test runner. The redirect lives in sapphire.py's env block
+    (moved 2026-09-20: it must precede the TTS server spawn, and the
+    embeddings module only loads with the memory plugin)."""
+    src = (Path(__file__).parent.parent / 'sapphire.py').read_text(encoding='utf-8')
     assert "sys.platform == 'win32'" in src
-    assert 'HF_HOME' in src
+    assert 'os.environ.setdefault("HF_HOME"' in src
     assert 'MAX_PATH' in src, "comment should reference the reason"
 
 
@@ -206,22 +208,17 @@ def test_memory_save_refuses_at_cap(tmp_path, monkeypatch):
 
 # ─── #20 Shared httpx client ─────────────────────────────────────────────
 
-def test_shared_httpx_client_cached():
-    """[REGRESSION_GUARD] _get_http_client returns the same client instance
-    on repeated calls — connection reuse for remote embedders."""
-    import core.embeddings as emb
-    # Reset the cached client so this test is deterministic
-    emb._shared_httpx_client = None
-    c1 = emb._get_http_client()
-    c2 = emb._get_http_client()
-    if c1 is not None:
-        assert c1 is c2, "httpx client must be singleton across calls"
-
-
-def test_remote_embedders_use_shared_client():
-    """[REGRESSION_GUARD] Both remote providers route through _get_http_client."""
+def test_remote_embedders_ride_net_facade():
+    """[REGRESSION_GUARD] Both remote embedders route through core.net —
+    NOT a raw shared httpx client. The old client was CIDR-blind (a LAN
+    embedder rode the proxy) and had no invalidator (SOCKS-flip left
+    real-IP egress until restart). net classifies LAN direct and its
+    pooled session drops on proxy change (net-facade wave 2)."""
     import core.embeddings as emb
     rem_src = inspect.getsource(emb.RemoteEmbedder.embed)
     rtr_src = inspect.getsource(emb.SapphireRouterEmbedder.embed)
-    assert '_get_http_client' in rem_src
-    assert '_get_http_client' in rtr_src
+    assert 'net.post' in rem_src and 'net.post' in rtr_src
+    # The CIDR-blind shared httpx apparatus must be gone.
+    assert not hasattr(emb, '_get_http_client')
+    assert not hasattr(emb, '_shared_httpx_client')
+    assert 'import httpx' not in inspect.getsource(emb)

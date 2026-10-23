@@ -178,8 +178,6 @@ export default {
             helpText: 'Manage GitHub accounts. Each scope is a separate identity — the AI uses the active scope’s PAT for repo / file / issue / search calls.',
             render: (c) => manager.renderList(c),
             load: async () => { await manager.loadItems(); return {}; },
-            save: async () => ({ success: true }),
-            getSettings: () => ({})
         });
     },
 

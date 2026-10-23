@@ -28,8 +28,7 @@ Design:
         - Runner attributes each contribution to the plugin name in the envelope
 
     Envelope (visible to the assistant, INVISIBLE to the user):
-        [Operator metadata for assistant — these are turn-only notes, not the
-        user's voice. Acknowledge or weave only if natural.]
+        [System context from Sapphire's own app — not written by the user]
         - Time: Tuesday, May 8, 8:55 PM
         - Spice: Speak more urgently in this reply.
         - weather: Light rain in user's area.
@@ -74,7 +73,13 @@ logger = logging.getLogger(__name__)
 # emits its own "System Note:" or context line inside its contribution so
 # the AI gets actionable per-plugin guidance instead of generic boilerplate.
 # 2026-05-14.
-_ENVELOPE_HEADER = "[Sapphire turn-context — operator-injected, not user voice]"
+#
+# Reworded 2026-08-03: the old header said "operator-injected" — the literal
+# vocabulary of a prompt-injection attack, self-asserting authority from
+# inside a user-role message. Models (correctly) flagged it as suspicious,
+# especially next to images. Plain words now: what it is, who wrote it.
+# Same consent design — attribution per line, nothing hidden.
+_ENVELOPE_HEADER = "[System context from Sapphire's own app — not written by the user]"
 
 
 def _datetime_contribution() -> Optional[str]:
@@ -133,8 +138,11 @@ def build_ghost_message(
         if dt_line:
             contributions.append(("(core)", dt_line))
 
-    # Built-in: spice
-    if chat_settings.get('spice_enabled', True):
+    # Built-in: spice — unless SPICE_DELIVERY routes it into the system prompt
+    # instead (unattributed there; here it's labeled app context, which some
+    # models narrate as "my app told me to"). See _get_system_prompt.
+    if (chat_settings.get('spice_enabled', True)
+            and getattr(config, 'SPICE_DELIVERY', 'ghost') != 'system'):
         sp_line = _spice_contribution()
         if sp_line:
             contributions.append(("(core)", sp_line))
@@ -149,9 +157,11 @@ def build_ghost_message(
 
     # Plugins via ghost_inject hook
     if hook_runner.has_handlers("ghost_inject"):
+        from core.hooks import surface_for as _surface_for
         ghost_event = HookEvent(
             input=user_input,
             metadata={"system": system},
+            surface=_surface_for(chat_settings),   # F1: derived from mode when unstamped
         )
         try:
             hook_runner.fire("ghost_inject", ghost_event)

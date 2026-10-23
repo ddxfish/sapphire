@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import sys
 import threading
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,12 @@ def start(plugin_loader, settings):
         return
 
     _stop_event.clear()
-    _loop = asyncio.new_event_loop()
+    # Windows: sapphire.py pins the Selector policy process-wide (Proactor's
+    # socket-cleanup noise), but Selector loops have NO asyncio subprocess
+    # support on Windows — stdio_client raised NotImplementedError for every
+    # npx/uvx server. A Proactor loop in this daemon's own thread needs no
+    # signal handling or child watcher; the global policy stays untouched.
+    _loop = asyncio.ProactorEventLoop() if sys.platform == 'win32' else asyncio.new_event_loop()
     _thread = threading.Thread(target=_run_loop, args=(server_configs,), daemon=True, name="mcp-daemon")
     _thread.start()
     logger.info("[MCP] Daemon thread started")

@@ -14,7 +14,7 @@ from typing import Optional, Tuple, List, Dict, Any
 from dataclasses import dataclass
 
 import numpy as np
-import sounddevice as sd
+from .backend import sd
 
 from .errors import classify_audio_error, DeviceNotFoundError, DeviceConfigError
 
@@ -139,6 +139,9 @@ class DeviceManager:
             List of DeviceInfo for all audio devices
         """
         import time
+        from . import backend as _backend
+        if not _backend.available():
+            _backend.ensure()   # detached at boot? rate-limited re-import; a late sound server attaches here
         
         now = time.time()
         if not force_refresh and self._devices_cache and (now - self._cache_time) < self._cache_ttl:

@@ -41,8 +41,14 @@ export async function fetchAIConfigData() {
         _ttsVoicesCache = ttsV;
     } catch (e) { console.warn('AI config: failed to fetch options', e); }
 
+    let vaultRefs = {};
+    try {
+        const init = await getInitData();
+        vaultRefs = init?.prompts?.vault_refs || {};
+    } catch { /* labels degrade to "(missing)" */ }
+
     return { prompts, toolsets, providers, metadata,
-             scopeDeclarations, scopeData,
+             scopeDeclarations, scopeData, vaultRefs,
              personas, voices: _ttsVoicesCache?.voices || [] };
 }
 
@@ -60,6 +66,15 @@ export function renderAIConfig(t, data, opts = {}) {
     // renderAIConfig just drops a placeholder <div id="ed-scope-dropdowns"></div>
     const { isHeartbeat } = opts;
 
+    // Synthetic option for a saved value that's no longer in its list (the
+    // prompt/toolset/persona was renamed or deleted elsewhere). Show it as
+    // "(missing)" instead of silently snapping to the first option — Save reads
+    // .value blind, so a snap would overwrite the task's real binding.
+    const missingOpt = (value, known) =>
+        (value && !known.includes(value))
+            ? `<option value="${_esc(value)}" selected>${_esc(value)} (missing)</option>`
+            : '';
+
     const enabledProviders = providers.filter(p => p.enabled);
     const coreProvs = enabledProviders.filter(p => p.is_core);
     const customProvs = enabledProviders.filter(p => !p.is_core);
@@ -74,6 +89,9 @@ export function renderAIConfig(t, data, opts = {}) {
             const model = p.model ? ` (${p.model.split('/').pop()})` : '';
             return `<option value="${p.key}" ${t.provider === p.key ? 'selected' : ''}>${p.display_name}${model}</option>`;
         }).join('');
+    if (t.provider && t.provider !== 'auto' && !enabledProviders.some(p => p.key === t.provider)) {
+        providerOpts = `<option value="${_esc(t.provider)}" selected>${_esc(t.provider)} (missing)</option>` + providerOpts;
+    }
 
     let voiceOpts = voices.map(v =>
         `<option value="${v.voice_id}" ${t.voice === v.voice_id ? 'selected' : ''}>${v.name}${v.category ? ' (' + v.category + ')' : ''}</option>`
@@ -89,6 +107,7 @@ export function renderAIConfig(t, data, opts = {}) {
             <label>\uD83D\uDC64 Persona <span class="help-tip" data-tip="Auto-fills prompt, voice, toolset, model, scopes, and more from a persona profile. You can still override individual settings below.">?</span></label>
             <select id="ed-persona">
                 <option value="">None (manual settings)</option>
+                ${missingOpt(t.persona, personas.map(p => p.name))}
                 ${personas.map(p => `<option value="${p.name}" ${t.persona === p.name ? 'selected' : ''}>${p.name}${p.tagline ? ' \u2014 ' + p.tagline : ''}</option>`).join('')}
             </select>
         </div>
@@ -103,7 +122,17 @@ export function renderAIConfig(t, data, opts = {}) {
                         <label>Prompt</label>
                         <select id="ed-prompt">
                             <option value="default">default</option>
-                            ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
+                            ${(() => {
+                                // Prompt-specific missing handler: a dangling
+                                // name that's a REFERENCED vault entry reads
+                                // "🗝 vault prompt (locked)" — asleep, not
+                                // broken; the name never renders sealed.
+                                if (!t.prompt || t.prompt === 'default' || prompts.some(p => p.name === t.prompt)) return '';
+                                const label = (data.vaultRefs || {})[t.prompt]
+                                    ? '\u{1F5DD} vault prompt (locked)' : `${_esc(t.prompt)} (missing)`;
+                                return `<option value="${_esc(t.prompt)}" selected>${label}</option>`;
+                            })()}
+                            ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}${p.vault ? ' \u{1F5DD}' : ''}</option>`).join('')}
                         </select>
                     </div>
                     <div class="sched-field">
@@ -111,6 +140,7 @@ export function renderAIConfig(t, data, opts = {}) {
                         <select id="ed-toolset">
                             <option value="none" ${t.toolset === 'none' ? 'selected' : ''}>none</option>
                             <option value="default" ${t.toolset === 'default' ? 'selected' : ''}>default</option>
+                            ${missingOpt(t.toolset, ['none', 'default', ...toolsets.map(ts => ts.name)])}
                             ${toolsets.map(ts => `<option value="${ts.name}" ${t.toolset === ts.name ? 'selected' : ''}>${ts.name}</option>`).join('')}
                         </select>
                     </div>
@@ -132,14 +162,17 @@ export function renderAIConfig(t, data, opts = {}) {
                         <input type="text" id="ed-model-custom" value="${_esc(t.model || '')}" placeholder="Model name">
                     </div>
                 </div>
+                <div class="sched-checkbox">
+                    <label><input type="checkbox" id="ed-privacy" ${t.privacy_required ? 'checked' : ''}> Private (local providers only) <span class="help-tip" data-tip="Force this task onto local providers only. Auto-checked when the pinned prompt requires privacy — the server keeps it on while the prompt demands it.">?</span></label>
+                </div>
             </div></div>
         </details>
 
         <details class="sched-accordion">
-            <summary class="sched-acc-header">Chat <span class="sched-preview" id="ed-chat-preview">${t.chat_target ? _esc(t.chat_target) : 'No history'}</span></summary>
+            <summary class="sched-acc-header">Chat <span class="sched-preview" id="ed-chat-preview">${t.chat_target === '__locked__' ? '🔒 locked vault' : (t.chat_target ? _esc(t.chat_target) : 'No history')}</span></summary>
             <div class="sched-acc-body"><div class="sched-acc-inner">
                 <div class="sched-field">
-                    <label>Chat Name <span class="help-tip" data-tip="Run in a named chat (conversation saved). Leave blank for ephemeral background execution.">?</span></label>
+                    <label>Chat Name <span class="help-tip" data-tip="Run in a named chat (conversation saved). Leave blank for ephemeral background execution. '__locked__' means the target is a private chat sealed in the locked vault — saving keeps the real target; type a name to retarget.">?</span></label>
                     <input type="text" id="ed-chat" value="${_esc(t.chat_target || '')}" placeholder="Leave blank for ephemeral">
                 </div>
                 <div class="sched-checkbox">
@@ -379,7 +412,14 @@ export async function wireAIConfig(modal, t, data) {
             modelCustomField.style.display = '';
         }
     };
-    providerSel.addEventListener('change', updateModels);
+    providerSel.addEventListener('change', () => {
+        // A provider change never keeps the old model (V2, 2026-09-21): the
+        // dropdown preselected t.model and the custom box kept it.
+        t.model = '';
+        const custom = modal.querySelector('#ed-model-custom');
+        if (custom) custom.value = '';
+        updateModels();
+    });
     updateModels();
 
     // AI preview chip
@@ -495,6 +535,7 @@ export function readAIConfig(modal) {
         prompt: modal.querySelector('#ed-prompt')?.value || 'default',
         toolset: modal.querySelector('#ed-toolset')?.value || 'none',
         provider: modal.querySelector('#ed-provider')?.value || 'auto',
+        privacy_required: modal.querySelector('#ed-privacy')?.checked || false,
         model: modelValue,
         chat_target: modal.querySelector('#ed-chat')?.value?.trim() || '',
         inject_datetime: modal.querySelector('#ed-datetime')?.checked || false,

@@ -29,9 +29,14 @@ export function setupModalClose(overlay, closeFn) {
 }
 
 export function escapeHtml(text) {
+  // The div/textContent trick escapes & < > but NOT quotes — and this output
+  // is interpolated into value="..." attributes. A title containing
+  // `" autofocus onfocus="..."` was a no-interaction XSS via the edit modal's
+  // auto-focus, and any quote-bearing title silently truncated on save
+  // (scout find, 2026-07-19). Quotes escape explicitly.
   const div = document.createElement('div');
   div.textContent = text;
-  return div.innerHTML;
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**
@@ -129,7 +134,7 @@ export function showModal(title, fields, onSave = null, options = {}) {
   } else {
     buttonsHTML = `
       <button class="btn btn-secondary modal-cancel">Cancel</button>
-      <button class="btn btn-primary modal-save">Save</button>
+      <button class="btn btn-primary modal-save">${escapeHtml(options.saveLabel || 'Save')}</button>
     `;
   }
   
@@ -149,7 +154,12 @@ export function showModal(title, fields, onSave = null, options = {}) {
   // Animate in
   requestAnimationFrame(() => overlay.classList.add('active'));
   
+  // While an async onSave runs, Cancel / ✕ / Esc / backdrop must not close:
+  // the work continues server-side either way, and a vanished modal only
+  // hid it (then a re-click ran a second batch) — E3#3, 2026-09-08.
+  let busy = false;
   const close = () => {
+    if (busy) return;
     overlay.classList.remove('active');
     setTimeout(() => overlay.remove(), 300);
   };
@@ -160,8 +170,13 @@ export function showModal(title, fields, onSave = null, options = {}) {
   overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
   setupModalClose(overlay, close);
   
-  // Save handler
-  overlay.querySelector('.modal-save')?.addEventListener('click', () => {
+  // Save handler. An onSave that returns a promise keeps the modal OPEN
+  // (save button disabled, "Working…") until it settles — a bulk vault
+  // move used to vanish the modal instantly and run five minutes blind
+  // (2026-09-08). Sync handlers close immediately as before.
+  overlay.querySelector('.modal-save')?.addEventListener('click', (ev) => {
+    const saveBtn = ev.currentTarget;
+    if (saveBtn.disabled) return;
     const data = {};
     fields.forEach(field => {
       if (field.type === 'html') return;
@@ -174,7 +189,15 @@ export function showModal(title, fields, onSave = null, options = {}) {
         if (el) data[field.id] = el.value;
       }
     });
-    onSave(data);
+    const r = onSave(data);
+    if (r && typeof r.then === 'function') {
+      const label = saveBtn.textContent;
+      busy = true;
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Working…';
+      r.finally(() => { busy = false; saveBtn.disabled = false; saveBtn.textContent = label; close(); });
+      return;
+    }
     close();
   });
   
@@ -187,11 +210,12 @@ export function showModal(title, fields, onSave = null, options = {}) {
 
 /**
  * Simple confirm dialog
+ * @param {Object} options - { title?, saveLabel? } — e.g. saveLabel: 'Delete'
  */
-export function showConfirm(message, onConfirm) {
-  return showModal('Confirm', [
+export function showConfirm(message, onConfirm, options = {}) {
+  return showModal(options.title || 'Confirm', [
     { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);">${escapeHtml(message)}</p>` }
-  ], () => onConfirm());
+  ], () => onConfirm(), { saveLabel: options.saveLabel || 'Confirm' });
 }
 
 /**

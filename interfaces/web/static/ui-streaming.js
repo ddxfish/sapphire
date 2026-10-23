@@ -1,6 +1,8 @@
 // ui-streaming.js - Real-time streaming with typed SSE events
 
-import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries, _createGalleryListing, _createCategoryGrid } from './ui-parsing.js';
+import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries } from './ui-parsing.js';
+import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
+import { openImageModal } from './ui-images.js';
 
 // Streaming state
 let streamMsg = null;
@@ -120,11 +122,24 @@ const processPendingToolEvents = (scrollCallback) => {
     }
 };
 
-export const startStreaming = (container, messageElement, scrollCallback) => {
+// `adopt` = { seed }: in-place Continue — the bubble is already on the page.
+// The old metrics footer goes (the continuation writes new ones) and, when
+// the reply ends in a plain paragraph, the new words keep writing INTO it:
+// paraBuf is seeded with that paragraph's source text so the sentence
+// carries on instead of restarting below.
+export const startStreaming = (container, messageElement, scrollCallback, adopt = null) => {
     _streamId++;  // new stream — invalidates any in-flight chunks from a previous one
     const contentDiv = messageElement.querySelector('.message-content');
-    const p = createElem('p');
-    contentDiv.appendChild(p);
+    let p = null, seeded = false;
+    if (adopt) {
+        contentDiv.querySelector('.message-metadata')?.remove();
+        const last = contentDiv.lastElementChild;
+        if (adopt.seed && last?.tagName === 'P' && !last.querySelector('img')) { p = last; seeded = true; }
+    }
+    if (!p) {
+        p = createElem('p');
+        contentDiv.appendChild(p);
+    }
 
     const existingThinks = container.querySelectorAll('details summary');
     const thinkCount = Array.from(existingThinks).filter(s => s.textContent.includes('Think')).length;
@@ -133,8 +148,9 @@ export const startStreaming = (container, messageElement, scrollCallback) => {
     streamContent = '';
     resetState(p);
     state.thinkCnt = thinkCount;
-    
-    container.appendChild(messageElement);
+    if (seeded) state.paraBuf = adopt.seed;
+
+    if (!adopt) container.appendChild(messageElement);
     if (scrollCallback) scrollCallback(true);
     
     // Process any tool events that arrived before streaming started
@@ -416,6 +432,7 @@ export const appendStream = (chunk, scrollCallback) => {
 
 // Internal function to actually create tool accordion
 const doStartTool = (toolId, toolName, args, scrollCallback) => {
+    if (state.toolAccordions[toolId]) return;   // replayed tool_start (reattach) — already on screen
     const isPending = toolId.startsWith('pending-');
 
     // Upgrade: real tool_start arrived for an existing pending accordion
@@ -506,6 +523,8 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
 // Internal function to actually update tool accordion
 const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     let toolData = state.toolAccordions[toolId];
+    // Tiles ride a UI marker; the accordion shows the text without it.
+    const { entries: galleryEntries, title: galleryTitle, text: shownResult } = parseGalleryMarker(result);
 
     if (!toolData) {
         // Fallback: create accordion now
@@ -517,7 +536,7 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
         acc.classList.remove('loading');
         if (isError) acc.classList.add('error');
         summary.innerHTML = `Tool Result: ${toolName}`;
-        content.textContent = 'Result:\n' + result;
+        content.textContent = 'Result:\n' + shownResult;
 
         if (state.curPara) {
             streamMsg.el.insertBefore(acc, state.curPara);
@@ -535,57 +554,19 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
 
         const existingContent = content.textContent;
         if (existingContent && existingContent !== 'Running...') {
-            content.textContent = existingContent + '\n\nResult:\n' + result;
+            content.textContent = existingContent + '\n\nResult:\n' + shownResult;
         } else {
-            content.textContent = 'Result:\n' + result;
+            content.textContent = 'Result:\n' + shownResult;
         }
     }
 
-    // Auto-inject from tool results (marker-based, works with any tool)
+    // Tiles under the accordion (shared renderer — the same one history uses).
     if (!isError && streamMsg) {
-        const galleryMatch = result.match(/<!--GALLERY:(\[.*\])-->/s);
-        if (galleryMatch) {
-            try {
-                const imgUrls = JSON.parse(galleryMatch[1]);
-                if (imgUrls.length > 0) {
-                    const gallery = document.createElement('div');
-                    gallery.className = 'image-gallery';
-                    for (const url of imgUrls) {
-                        const item = document.createElement('div');
-                        item.className = 'gallery-item';
-                        const img = document.createElement('img');
-                        img.src = url;
-                        img.className = 'chat-img';
-                        item.appendChild(img);
-                        gallery.appendChild(item);
-                    }
-                    toolData.acc.after(gallery);
-                }
-            } catch (e) {
-                console.warn('[Gallery] Failed to parse gallery data:', e);
-            }
+        const gallery = buildGallery(galleryEntries, openImageModal, galleryTitle);
+        if (gallery) {
+            toolData.acc.dataset.gallery = '1';    // the row shows the set; no inline clone
+            toolData.acc.after(gallery);
         }
-
-        const listMatch = result.match(/<!--GALLERIES:(\[.*\])-->/s);
-        if (listMatch) {
-            try {
-                const listing = _createGalleryListing(JSON.parse(listMatch[1]));
-                if (listing) toolData.acc.after(listing);
-            } catch (e) {
-                console.warn('[Gallery] Failed to parse gallery listing:', e);
-            }
-        }
-
-        const catMatch = result.match(/<!--CATEGORIES:(\[.*\])-->/s);
-        if (catMatch) {
-            try {
-                const grid = _createCategoryGrid(JSON.parse(catMatch[1]));
-                if (grid) toolData.acc.after(grid);
-            } catch (e) {
-                console.warn('[Gallery] Failed to parse category data:', e);
-            }
-        }
-
     }
 
     if (scrollCallback) scrollCallback();
@@ -670,6 +651,29 @@ export const cancelStreaming = () => {
         }
     }
 
+    streamMsg = null;
+    streamContent = '';
+    resetState();
+};
+
+// The turn goes on server-side but THIS bubble stops being live — the tab
+// lost its feed and either reattached past the ring horizon (resync) or the
+// typing mirror is finalizing for it. Finalize what's rendered, no
+// "cancelled" marker (nothing was cancelled); the end-of-turn refresh paints
+// the saved row. 2026-09-15.
+export const detachStreaming = () => {
+    _streamId++;
+    const msg = document.getElementById('streaming-message');
+    if (msg) {
+        msg.removeAttribute('id');
+        delete msg.dataset.streaming;
+        const contentDiv = msg.querySelector('.message-content');
+        if (contentDiv) {
+            contentDiv.querySelectorAll('.accordion-think.streaming').forEach(acc => acc.classList.remove('streaming'));
+            contentDiv.querySelectorAll('.accordion-tool.loading').forEach(acc => acc.remove());
+            wrapImageGalleries(contentDiv);
+        }
+    }
     streamMsg = null;
     streamContent = '';
     resetState();

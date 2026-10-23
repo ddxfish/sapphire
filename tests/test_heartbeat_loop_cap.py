@@ -421,3 +421,148 @@ def test_scheduler_default_max_tool_rounds_is_zero_sentinel():
         "None — verify ExecutionContext still treats the new default as "
         "'use config.MAX_TOOL_ITERATIONS'."
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Context-trim must not corrupt the persisted slice (2026-06-13)
+#    The in-loop context trim deletes front messages but historically did NOT
+#    adjust msg_start_idx, so new_messages (= messages[msg_start_idx:]) went
+#    stale and dropped the user turn (and assistant). Fixed by anchoring the
+#    user message by object identity. These tests drive a real trim.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_context_trim_preserves_user_turn_in_new_messages():
+    """After the in-loop trim deletes oldest messages, the persisted slice must
+    still START at the user turn. Pre-fix, msg_start_idx was stale and the slice
+    came back empty (turn silently lost) or corrupt."""
+    ctx, te = _build_ctx(
+        {"max_tool_rounds": 3, "context_limit": 1300},
+        [_text_response("Final answer.")],
+    )
+    # 10 prior messages → non_system=11 (>4, trim has material). count_tokens=100
+    # each: pre-trim 12 msgs + 1 schema = 1300 > 0.9*1300=1170 → trim drops 2 →
+    # 1100 < 1170 → loop proceeds to the LLM and gets a real assistant reply.
+    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"}
+               for i in range(10)]
+    with patch("core.chat.history.count_tokens", return_value=100):
+        ctx.run("look at the latest", history_messages=history)
+    new = ctx.new_messages
+    assert new, "new_messages empty after trim — user turn was silently dropped"
+    assert new[0]["role"] == "user", f"slice must start at the user turn, got {new[0]['role']}"
+    assert "look at the latest" in str(new[0]["content"]), "user content lost in the slice"
+    assert any(m["role"] == "assistant" for m in new), "assistant reply missing from slice"
+
+
+def test_no_trim_unaffected_baseline():
+    """Sanity: with tokens well under the limit (no trim), the slice is correct.
+    Guards against the anchor fix breaking the common no-trim path."""
+    ctx, te = _build_ctx(
+        {"max_tool_rounds": 3, "context_limit": 100000},
+        [_text_response("Hi back.")],
+    )
+    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"}
+               for i in range(4)]
+    with patch("core.chat.history.count_tokens", return_value=10):
+        ctx.run("hello", history_messages=history)
+    new = ctx.new_messages
+    assert new and new[0]["role"] == "user" and "hello" in str(new[0]["content"])
+    assert any(m["role"] == "assistant" for m in new)
+
+
+def test_inline_tool_image_base64_scrubbed_from_new_messages():
+    """Tool-returned images are injected as base64 for the LLM THIS turn, but must
+    NOT persist inline (replay bloat). new_messages must carry no type:image block
+    — the image lives in the DB behind its tool-result marker. The injected text
+    note survives. 2026-06-13."""
+    ctx, te = _build_ctx(
+        {"max_tool_rounds": 3, "context_limit": 100000},
+        [_tool_call_response(), _text_response("Looked at it.")],
+    )
+    # Tool returns an image → _inject_tool_images appends a base64 user message.
+    te.execute_tool_calls.return_value = (1, [{"data": "aGVsbG8=", "media_type": "image/png"}])
+    with patch("core.chat.history.count_tokens", return_value=10):
+        ctx.run("see this", history_messages=[{"role": "user", "content": "prior"}])
+    new = ctx.new_messages
+    assert new, "new_messages should not be empty"
+    for m in new:
+        content = m.get("content")
+        if isinstance(content, list):
+            assert not any(isinstance(b, dict) and b.get("type") == "image" for b in content), \
+                f"inline base64 image leaked into persisted {m.get('role')} message"
+    assert any("shown to the user" in str(m.get("content", "")) for m in new), \
+        "injected image note should survive the scrub as text"
+
+
+def test_trim_never_deletes_current_user_turn_short_history():
+    """When history is short/empty, the trim's front-delete range can reach the
+    CURRENT turn's user message. Pre-fix, deleting it triggered the anchor
+    fallback and the user turn vanished from persisted history (#4 reopened).
+    The trim must structurally protect the live user_msg. 2026-06-13.
+
+    Empty history → user_msg sits right after system. count_tokens=100/msg,
+    0.9*800=720: tokens stay under until ~6 msgs accumulate across tool rounds,
+    then the trim fires with drop=1 → del messages[1:2] which (pre-fix) deleted
+    the user_msg at index 1."""
+    ctx, te = _build_ctx(
+        {"max_tool_rounds": 10, "context_limit": 800},
+        [_tool_call_response() for _ in range(5)] + [_text_response("done")],
+    )
+    with patch("core.chat.history.count_tokens", return_value=100):
+        ctx.run("LOOK AT THIS SPECIFIC THING", history_messages=[])
+    new = ctx.new_messages
+    assert new, "new_messages empty — current turn lost entirely"
+    assert any("LOOK AT THIS SPECIFIC THING" in str(m.get("content", "")) for m in new), \
+        "the current user turn was deleted by the trim and lost from persisted history"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. _scrub_inline_images unit coverage (the chaos-scout edge shapes, 2026-06-13)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_scrub_unit_text_plus_image_collapses_to_string():
+    from core.continuity.execution_context import _scrub_inline_images
+    img = {"type": "image", "data": "x", "media_type": "image/png"}
+    out = _scrub_inline_images({"role": "user", "content": [{"type": "text", "text": "hi"}, img]})
+    assert out == {"role": "user", "content": "hi"}
+
+
+def test_scrub_unit_preserves_tool_result_drops_image():
+    from core.continuity.execution_context import _scrub_inline_images
+    img = {"type": "image", "data": "x", "media_type": "image/png"}
+    tr = {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+    out = _scrub_inline_images({"role": "user", "content": [tr, img]})
+    assert out == {"role": "user", "content": [tr]}  # tool_result kept, image gone
+
+
+def test_scrub_unit_all_image_becomes_placeholder_not_empty():
+    from core.continuity.execution_context import _scrub_inline_images
+    img = {"type": "image", "data": "x", "media_type": "image/png"}
+    out = _scrub_inline_images({"role": "user", "content": [img]})
+    assert out["content"] == "[image]"  # never an empty-string user bubble
+
+
+def test_scrub_unit_non_string_text_does_not_crash():
+    from core.continuity.execution_context import _scrub_inline_images
+    img = {"type": "image", "data": "x", "media_type": "image/png"}
+    out = _scrub_inline_images({"role": "user", "content": [{"type": "text", "text": None}, img]})
+    assert isinstance(out["content"], str)  # coerced, no TypeError
+
+
+def test_scrub_unit_leaves_non_user_and_string_untouched():
+    from core.continuity.execution_context import _scrub_inline_images
+    img = {"type": "image", "data": "x", "media_type": "image/png"}
+    asst = {"role": "assistant", "content": [img]}
+    assert _scrub_inline_images(asst) is asst              # non-user untouched
+    s = {"role": "user", "content": "plain text"}
+    assert _scrub_inline_images(s) is s                    # string content untouched
+
+
+def test_scrub_unit_is_pure_does_not_mutate_input():
+    from core.continuity.execution_context import _scrub_inline_images
+    img = {"type": "image", "data": "x", "media_type": "image/png"}
+    orig_content = [{"type": "text", "text": "hi"}, img]
+    orig = {"role": "user", "content": orig_content}
+    _scrub_inline_images(orig)
+    assert orig["content"] == [{"type": "text", "text": "hi"}, img]  # input intact

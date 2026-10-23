@@ -1,5 +1,6 @@
 {
   "name": "elevenlabs",
+  "short_display_name": "ElevenLabs",
   "version": "1.0.0",
   "description": "ElevenLabs \u2014 cloud text-to-speech with premium voices",
   "author": "sapphire",
@@ -15,6 +16,7 @@
         "display_name": "ElevenLabs (Cloud)",
         "entry": "provider.py",
         "class_name": "ElevenLabsTTSProvider",
+        "is_local": false,
         "requires_api_key": true,
         "api_key_env": "TTS_ELEVENLABS_API_KEY"
       }

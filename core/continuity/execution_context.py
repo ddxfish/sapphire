@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 
 import config
-from core.chat.llm_providers import get_provider_by_key, get_first_available_provider, get_generation_params
+from core.chat.llm_providers import get_generation_params
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,69 @@ logger = logging.getLogger(__name__)
 # from the spawning agent, NOT from the user's foreground chat. Scout #7.
 current_task_persona: ContextVar[Optional[str]] = ContextVar('current_task_persona', default=None)
 
+# Warn once per process about a loop-guard version skew (see helper below).
+_loop_guard_skew_warned = False
+
+
+def _exec_with_loop_counts(fn, *args, loop_counts=None, **kwargs):
+    """Call fn(*args, loop_counts=..., **kwargs), degrading gracefully if the tool
+    engine predates the loop guard.
+
+    The loop guard is a cosmetic warning feature. On a partial update where
+    core/chat/chat_tool_calling.py is older than this file, fn won't accept the
+    loop_counts kwarg and Python raises TypeError AT BIND TIME - before any tool
+    runs - so it is safe to retry without it (no double execution). We drop the
+    loop guard for this call and keep the trigger running. Warn once per process so
+    the skew shows up in logs without spamming every trigger. A TypeError that is
+    NOT about loop_counts is a real error, re-raised untouched."""
+    global _loop_guard_skew_warned
+    try:
+        return fn(*args, loop_counts=loop_counts, **kwargs)
+    except TypeError as e:
+        if "loop_counts" not in str(e):
+            raise
+        if not _loop_guard_skew_warned:
+            _loop_guard_skew_warned = True
+            logger.warning(
+                "[CONTINUITY] tool engine does not accept 'loop_counts' - core/chat/"
+                "chat_tool_calling.py is older than execution_context.py (partial update). "
+                "Loop guard disabled for triggers; continuing DEGRADED. Re-run the update so "
+                "that file matches, then restart to re-enable."
+            )
+        return fn(*args, **kwargs)
+
+
+def _scrub_inline_images(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip inline base64 image blocks from a user message before persistence.
+
+    Tool-returned images are injected mid-loop as a base64 user message (for the
+    LLM to see THIS turn) by `_inject_tool_images`, and are separately saved to
+    the chat DB with a `<<IMG::tool:id>>` marker in the tool-result message. So
+    the base64 copy is turn-only — persisting it inline would replay the image
+    every turn and bloat the chat (the same hazard the event-image dual-form swap
+    guards). This drops only `type:image` blocks; `tool_result` and `text` blocks
+    are preserved untouched (so wire_to_canonical's tool-result handling is safe).
+    A text-only remainder collapses to a plain string — the safest persisted shape.
+    Pure function; returns the message unchanged when there's nothing to scrub.
+    2026-06-13.
+    """
+    if msg.get("role") != "user" or not isinstance(msg.get("content"), list):
+        return msg
+    kept = [b for b in msg["content"]
+            if not (isinstance(b, dict) and b.get("type") == "image")]
+    if len(kept) == len(msg["content"]):
+        return msg  # no image blocks — untouched (e.g. tool_result messages)
+    if not kept:
+        # Content was image(s) only — never persist an empty-content user message
+        # (invisible-bubble hazard). Unreachable from current producers (they all
+        # prepend a text block) but guarded so a future one can't trip it.
+        return {**msg, "content": "[image]"}
+    if all(isinstance(b, dict) and b.get("type") == "text" for b in kept):
+        # str()-coerce defensively — a malformed text block (text=None/int) must
+        # collapse cleanly, never crash the persist with a join TypeError.
+        return {**msg, "content": " ".join(str(b.get("text") or "") for b in kept).strip()}
+    return {**msg, "content": kept}
+
 
 class ExecutionContext:
     """Self-contained execution environment for a single task run.
@@ -31,17 +94,35 @@ class ExecutionContext:
     Runs LLM + tool loop without touching any singleton state.
     """
 
-    def __init__(self, function_manager, tool_engine, task_settings: Dict[str, Any]):
+    def __init__(self, function_manager, tool_engine, task_settings: Dict[str, Any],
+                 session_manager=None, cancel_check=None):
         self.fm = function_manager
+        # Zero-arg callable polled by run(): True = stop. Checked at the top
+        # of every tool round AND between the LLM's reply and its tool batch,
+        # so a cancel never executes another tool. The LLM HTTP call itself
+        # is blocking — a cancel lands when it returns (bounded by the LLM
+        # timeout). Wired by the scheduler's per-run cancel Event. 2026-09-08.
+        self.cancel_check = cancel_check
+        self.cancelled = False
         self.tool_engine = tool_engine
         self.task_settings = task_settings
+        # Image sink only — tool images from this lane went to a dead-end disk
+        # fallback (user/tool_images, unserved, no GC) because execute_tool_calls
+        # got history=None. With a sink + an active stream-brain override the
+        # image lands in the chat DB keyed to the run's own chat. NEVER used
+        # for transcript writes (see execute_tool_calls docstring). 2026-08-17.
+        self.session_manager = session_manager
 
-        # Resolve everything upfront — all read-only operations
+        # Resolve everything upfront — all read-only operations.
+        # Provider BEFORE scopes: _build_scopes stamps tool provenance
+        # (set_tool_context) with the RESOLVED provider/model — the old
+        # order left provider always-None and model stale in every
+        # continuity run's mindpalace metadata.
         self.system_prompt = self._build_prompt()
         self.tools = self._resolve_tools()
         self._allowed_tool_names = {t["function"]["name"] for t in self.tools if "function" in t} if self.tools else None
-        self.scopes = self._build_scopes()
         self.provider_key, self.provider, self.model_override = self._resolve_provider()
+        self.scopes = self._build_scopes()
         self.gen_params = self._build_gen_params()
         self.tool_log = []  # List of tool names called during run()
         # Populated by run() when the LLM loop didn't produce a real reply
@@ -51,6 +132,16 @@ class ExecutionContext:
         # success for a no-op run. Scout #15 — 2026-04-20. None = clean run.
         self.degraded_reason: Optional[str] = None
 
+    def _is_cancelled(self) -> bool:
+        if self.cancelled:
+            return True
+        try:
+            if self.cancel_check is not None and self.cancel_check():
+                self.cancelled = True
+        except Exception:
+            pass
+        return self.cancelled
+
     # ── Construction (read-only) ──
 
     def _build_prompt(self) -> str:
@@ -59,9 +150,27 @@ class ExecutionContext:
         from core import prompts
 
         prompt_data = prompts.get_prompt(prompt_name)
+        # Stashed for _build_scopes/_resolve_provider: a privacy_required
+        # prompt must not run on a non-local provider in this lane (there is
+        # no private_chat toggle here — local-only IS the guarantee).
+        # OR of the task's persisted carrier and the live prompt-derived flag
+        # (vault phase 0c): the live half catches prompts that BECAME private
+        # after the task was saved; the carrier half survives the prompt not
+        # resolving at all (deleted, or asleep in a locked vault) — before
+        # this, an unresolvable prompt silently dropped privacy and the task
+        # ran on whatever provider it was pinned to, cloud included.
+        self._prompt_privacy_required = (
+            bool(self.task_settings.get("privacy_required"))
+            or bool(isinstance(prompt_data, dict)
+                    and prompt_data.get('privacy_required')))
         if prompt_data:
             system_prompt = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
         else:
+            logger.warning(
+                f"[ExecCtx] Prompt '{prompt_name}' not found — running as "
+                f"generic assistant"
+                + (" (task carries privacy_required — local-only still enforced)"
+                   if self._prompt_privacy_required else ""))
             system_prompt = "You are a helpful assistant."
 
         # Name substitutions
@@ -69,8 +178,13 @@ class ExecutionContext:
         ai_name = 'Sapphire'
         system_prompt = system_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
 
-        # Datetime injection
-        if self.task_settings.get("inject_datetime"):
+        # Datetime injection. inject_datetime='date' stamps the DAY only —
+        # for multi-run sessions (librarian nights) a minute stamp would
+        # change the system prompt every run and torch the provider's
+        # prompt cache across the whole session. True keeps the classic
+        # minute form.
+        inject_dt = self.task_settings.get("inject_datetime")
+        if inject_dt:
             try:
                 from zoneinfo import ZoneInfo
                 tz_name = getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
@@ -79,42 +193,32 @@ class ExecutionContext:
             except Exception:
                 now = datetime.now()
                 tz_label = ""
-            system_prompt = f"{system_prompt}\n\nCurrent date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}{tz_label}"
+            if inject_dt == 'date':
+                system_prompt = f"{system_prompt}\n\nCurrent date: {now.strftime('%A, %B %d, %Y')}{tz_label}"
+            else:
+                system_prompt = f"{system_prompt}\n\nCurrent date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}{tz_label}"
+
+        # Task-supplied append (e.g. the librarian's session-start self
+        # snapshot) — ambient identity context, not a message. Rides every
+        # round; stable within a session so the prompt cache holds.
+        extra = self.task_settings.get("system_append")
+        if extra:
+            system_prompt = f"{system_prompt}\n\n{extra}"
 
         return system_prompt
 
     def _resolve_tools(self) -> Optional[List[Dict]]:
-        """Resolve toolset to tool list. READ-ONLY — no mutation of FunctionManager."""
+        """Resolve toolset to tool list. READ-ONLY — no mutation of FunctionManager.
+        `extra_toolsets` in task settings unions module/toolset sets on top,
+        same semantics as update_enabled_functions."""
         toolset_name = self.task_settings.get("toolset", "none")
-
-        if not toolset_name or toolset_name == "none":
-            return None
-
-        if toolset_name == "all":
-            tools = self.fm.all_possible_tools.copy()
-        else:
-            # Resolve toolset name to function names — same logic as update_enabled_functions
-            # but without mutating _enabled_tools or current_toolset_name
-            from core.toolsets import toolset_manager
-
-            if toolset_name in self.fm.function_modules:
-                fn_names = self.fm.function_modules[toolset_name]['available_functions']
-            elif toolset_manager.toolset_exists(toolset_name):
-                fn_names = toolset_manager.get_toolset_functions(toolset_name)
-            else:
-                fn_names = [toolset_name]
-
-            fn_set = set(fn_names)
-            tools = [t for t in self.fm.all_possible_tools
-                     if t['function']['name'] in fn_set]
-
-            if not tools:
-                logger.warning(f"[ExecCtx] Toolset '{toolset_name}' resolved to 0 tools")
-
-        # Apply mode filter (read-only)
-        tools = self.fm._apply_mode_filter(tools)
-        logger.info(f"[ExecCtx] Toolset '{toolset_name}': {len(tools)} tools")
-        return tools if tools else None
+        extra_toolsets = self.task_settings.get("extra_toolsets") or []
+        # ONE rule, in the manager (broadsword H12) — same names the live
+        # setter enables (hidden tools included in the rule), then the mode
+        # filter + settings gate, no mutation.
+        tools = self.fm.resolve_tools(toolset_name, extra_toolsets)
+        logger.info(f"[ExecCtx] Toolset '{toolset_name}': {len(tools or [])} tools")
+        return tools
 
     def _build_scopes(self) -> Optional[Dict]:
         """Build scopes from task settings. Sets ContextVars for this thread only.
@@ -151,7 +255,7 @@ class ExecutionContext:
         # that personal bucket.
         #
         # The previous narrower fix gated this force-None only on
-        # `prompt == 'agent'`, but tasks can resolve to sapphire/rook/custom
+        # `prompt == 'agent'`, but tasks can resolve to sapphire/falcon/custom
         # personas (and spawn_agent(prompt='self') inherits non-agent
         # personas routinely). Three scouts converged on this exact gap.
         # Drop the gate — apply the stronger invariant universally. Any task
@@ -171,39 +275,58 @@ class ExecutionContext:
                     reg['var'].set(disabled_val)
                 except Exception as e:
                     logger.warning(f"[ExecCtx] Could not force-disable scope {name}: {e}")
-        # Also clear rag/private since tasks don't use those
+        # Also clear rag since tasks don't use it. private_chat follows the
+        # prompt: a privacy_required prompt keeps its network-tool gating even
+        # in this lane (the old unconditional False actively STRIPPED privacy
+        # from cron/heartbeat/agent runs).
         self.fm.set_rag_scope(None)
-        self.fm.set_private_chat(False)
+        self.fm.set_private_chat(getattr(self, '_prompt_privacy_required', False))
+
+        # Provenance for tool executors (mindpalace metadata, get_self_info).
+        # Set before the snapshot so it rides along. provider/model are the
+        # RESOLVED values — the constructor already ran _resolve_provider,
+        # including the event-payload override — so tools report what this
+        # run actually executes on, not the task's pre-override fields.
+        from core.chat.function_manager import set_tool_context
+        set_tool_context(None, chat=self.task_settings.get('chat_target'),
+                         persona=self.task_settings.get('prompt'),
+                         model=(getattr(self, 'model_override', None)
+                                or getattr(getattr(self, 'provider', None), 'model', '')
+                                or self.task_settings.get('model')),
+                         provider=getattr(self, 'provider_key', None),
+                         toolset=self.task_settings.get('toolset'),
+                         channel='continuity')
 
         return snapshot_all_scopes()
 
     def _resolve_provider(self) -> Tuple:
-        """Select LLM provider from task settings. Returns (key, provider, model_override)."""
+        """Select LLM provider from task settings. Returns (key, provider, model_override).
+
+        Thin door onto core.chat.llm_providers.resolve — the ONE resolver
+        (2026-09-21). Privacy is settled HERE (task carrier ∨ live prompt flag
+        ∨ target chat's private_chat — see _build_prompt / executor) and handed
+        in as `private`; there is no private_chat toggle in this lane, so
+        local-only IS the guarantee. Before 2026-08-09 this lane had NO
+        privacy check at all."""
         provider_key = self.task_settings.get("provider", "auto")
         model_override = self.task_settings.get("model", "")
 
-        providers_config = {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
+        # The task's provider IS the brain. The event-payload override
+        # (llm_primary/llm_model riding a daemon event — Discord's Reply LLM
+        # silently beating the task's dropdown) retired 2026-09-21, S0 doors.
 
-        if provider_key and provider_key not in ("auto", ""):
-            provider = get_provider_by_key(
-                provider_key, providers_config,
-                config.LLM_REQUEST_TIMEOUT,
-                model_override=model_override
-            )
-            if not provider:
-                raise ConnectionError(f"Provider '{provider_key}' not available")
-            return provider_key, provider, model_override
-
-        # Auto mode — fallback order
-        fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
-        result = get_first_available_provider(
-            providers_config, fallback_order, config.LLM_REQUEST_TIMEOUT
-        )
-        if result:
-            pk, prov = result
-            return pk, prov, model_override
-
-        raise ConnectionError("No LLM providers available")
+        from core.chat.llm_providers.resolve import resolve, PrivacyRefused
+        requires_privacy = bool(getattr(self, '_prompt_privacy_required', False))
+        try:
+            sel = resolve(provider_key, model_override, private=requires_privacy,
+                          timeout=self.task_settings.get("llm_request_timeout"))
+        except PrivacyRefused as e:
+            raise PrivacyRefused(
+                f"Task requires privacy (private target chat, or prompt "
+                f"'{self.task_settings.get('prompt')}' is privacy_required); {e}") from e
+        # Auto mode returns model='' — a pin for another provider never rides
+        # to the one auto picked (scout V4, 2026-09-21).
+        return sel.as_tuple()
 
     def _build_gen_params(self) -> Dict:
         """Build generation parameters for the resolved provider/model."""
@@ -218,7 +341,8 @@ class ExecutionContext:
 
     # ── Execution ──
 
-    def run(self, user_input: str, history_messages: List[Dict] = None) -> str:
+    def run(self, user_input: str, history_messages: List[Dict] = None,
+            images: List[Dict] = None) -> str:
         """Run LLM + tool loop in complete isolation. Returns response text.
 
         After run() completes, self.new_messages contains all messages generated
@@ -227,11 +351,20 @@ class ExecutionContext:
         tool calls — not just the final response.
 
         Args:
-            user_input: The user/event message
+            user_input: The user/event message. When images are passed, this is
+                        the PERSISTED form (text + <<IMG::...>> markers) — the
+                        marker is what lands in chat history, never base64.
             history_messages: Optional prior messages for foreground chat continuity.
                               If None, runs ephemeral (system + user only).
+            images: Optional plugin-supplied images [{"data": b64, "media_type": str}].
+                    Shown to the LLM as base64 blocks THIS turn only, gated on
+                    provider vision support; non-vision falls back to a CLIP vibe
+                    description. new_messages always persists the marker form.
         """
-        from core.chat.chat import filter_to_thinking_only, _inject_tool_images
+        # filter_to_thinking_only from its real home — chat.py stopped
+        # re-exporting it when the blocking engine died (merge 2026-08-17).
+        from core.chat.chat import _inject_tool_images
+        from core.chat.chat_tool_calling import filter_to_thinking_only
 
         # Stamp this thread's ContextVar with the running task's persona so
         # tools invoked during the loop (spawn_agent, etc.) can inherit the
@@ -240,25 +373,69 @@ class ExecutionContext:
         _persona_token = current_task_persona.set(self.task_settings.get("prompt"))
         try:
             return self._run_inner(user_input, history_messages,
-                                   filter_to_thinking_only, _inject_tool_images)
+                                   filter_to_thinking_only, _inject_tool_images,
+                                   images)
         finally:
             current_task_persona.reset(_persona_token)
 
-    def _run_inner(self, user_input, history_messages, filter_to_thinking_only, _inject_tool_images):
-        # Build messages
+    def _build_user_message(self, user_input, images):
+        """Build the user message content the LLM sees this turn.
+
+        Returns (llm_content, persist_content). llm_content carries base64 image
+        blocks for vision models (or vibe-augmented text otherwise); persist_content
+        is always the marker-string `user_input` so chat history never stores base64.
+        """
+        if not images:
+            return user_input, user_input
+        from core.chat.chat_tool_calling import strip_ui_markers
+        clean_text = strip_ui_markers(user_input) if "<<" in user_input else user_input
+        if getattr(self.provider, "supports_images", False):
+            content = [{"type": "text", "text": clean_text}]
+            for img in images:
+                content.append({
+                    "type": "image",
+                    "data": img.get("data", ""),
+                    "media_type": img.get("media_type", "image/jpeg"),
+                })
+            return content, user_input
+        # No vision: describe the image(s) so the model gets the vibe, not a drop.
+        import base64
+        vibe_parts = []
+        for img in images:
+            try:
+                from core import vibes as _vibes
+                vibe_parts.append(_vibes.describe(base64.b64decode(img["data"])))
+            except Exception as e:
+                logger.warning(f"[EVENT-IMG] vibe describe failed: {e}")
+        augmented = user_input
+        if vibe_parts:
+            augmented = (user_input + "\n\n" + "\n\n".join(p for p in vibe_parts if p)).strip()
+        # Persist the marker form (user_input), but the LLM this turn sees the
+        # vibe-augmented text. Persisting the marker keeps replay clean.
+        return augmented, user_input
+
+    def _run_inner(self, user_input, history_messages, filter_to_thinking_only, _inject_tool_images,
+                   images=None):
+        # Build the user message. llm_content is what the model sees (may carry
+        # base64 image blocks); persist_content is the marker form for history.
+        llm_content, persist_content = self._build_user_message(user_input, images)
+        # Build messages. Hold a reference to the user-message OBJECT so its index
+        # can be re-derived by identity after the loop — the in-loop context trim
+        # deletes front messages, which would make a frozen msg_start_idx stale and
+        # silently drop the user turn from the persisted slice. 2026-06-13.
+        user_msg = {"role": "user", "content": llm_content}
         if history_messages is not None:
             # Foreground mode — use existing chat history
             messages = [{"role": "system", "content": self.system_prompt}] + history_messages
-            # Track where new messages start BEFORE adding the user message
-            msg_start_idx = len(messages)
-            messages.append({"role": "user", "content": user_input})
+            msg_start_idx = len(messages)  # initial position + fallback anchor
+            messages.append(user_msg)
         else:
             # Ephemeral — no history
             messages = [
                 {"role": "system", "content": self.system_prompt},
             ]
             msg_start_idx = len(messages)
-            messages.append({"role": "user", "content": user_input})
+            messages.append(user_msg)
 
         # The scheduler stores 0 as the "unset / use default" sentinel for
         # max_tool_rounds and max_parallel_tools (scheduler.py:320-321,
@@ -273,6 +450,13 @@ class ExecutionContext:
         # the safety here by falling through to config defaults instead.
         # context_limit IS different: 0 there legitimately means "unlimited"
         # and the downstream `if context_limit > 0` check expects that.
+        # Tool-image sink: only when the caller set a stream-brain override is
+        # the effective chat genuinely this run's chat — without one, the sink
+        # would key images to the OPERATOR'S open chat (P3-T4 mis-cascade), so
+        # fall back to the old disk path instead.
+        from core.chat import stream_brain
+        _image_sink = self.session_manager if stream_brain.get_override() else None
+
         _rounds = self.task_settings.get("max_tool_rounds") or config.MAX_TOOL_ITERATIONS
         max_iterations = max(1, _rounds)
         _parallel = self.task_settings.get("max_parallel_tools") or config.MAX_PARALLEL_TOOLS
@@ -306,9 +490,14 @@ class ExecutionContext:
                      f"(~{tool_schema_tokens} schema tokens), "
                      f"history={len(history_messages) if history_messages else 0} msgs")
         final_content = None
+        llm_retries = 0  # one rescue decode per run — shared by both garbage shapes below
 
         overflow_reason = None
+        loop_counts = {}  # per-turn per-tool call counts (loop guard); turn-local by design
         for i in range(max_iterations):
+            if self._is_cancelled():
+                logger.info(f"[ExecCtx] cancelled before round {i+1}")
+                break
             # Context limit check — auto-trim oldest messages rather than bail.
             # Previously this break fired before we ever called the LLM whenever
             # loaded history was already >90% of the task's context_limit,
@@ -324,23 +513,33 @@ class ExecutionContext:
                     non_system = len(messages) - sys_idx
                     if non_system > 4:
                         drop = max(1, non_system // 4)
-                        del messages[sys_idx:sys_idx + drop]
-                        # Strip any orphaned tool-result messages now at the front
-                        while len(messages) > sys_idx and messages[sys_idx].get("role") == "tool":
-                            messages.pop(sys_idx)
-                        # Also strip an assistant that had tool_calls whose results
-                        # just got dropped (would become orphan at LLM call time)
-                        if len(messages) > sys_idx and messages[sys_idx].get("role") == "assistant" and messages[sys_idx].get("tool_calls"):
-                            messages.pop(sys_idx)
-                        new_msg_tokens = sum(count_tokens(str(m.get("content", ""))) for m in messages)
-                        new_total = new_msg_tokens + tool_schema_tokens
-                        logger.warning(
-                            f"[ExecCtx] Context trim: dropped ~{drop} oldest msgs "
-                            f"({total_tokens} → {new_total} tokens, "
-                            f"limit {context_limit}; tool schemas {tool_schema_tokens})"
-                        )
-                        total_tokens = new_total
-                        msg_tokens = new_msg_tokens
+                        # Trim is for OLD history ONLY — never delete the current
+                        # turn's user message or anything after it. On a short/empty
+                        # chat user_msg sits near the front and the raw drop range
+                        # would delete it, which loses the LLM's actual prompt AND
+                        # reopens the stale-anchor bug via the identity fallback
+                        # (next(...) misses → falls back to a stale msg_start_idx).
+                        # Clamp so the delete never reaches user_msg. 2026-06-13.
+                        protect_idx = next((i for i, m in enumerate(messages) if m is user_msg), len(messages))
+                        drop = min(drop, max(0, protect_idx - sys_idx))
+                        if drop > 0:
+                            del messages[sys_idx:sys_idx + drop]
+                            # Strip any orphaned tool-result messages now at the front
+                            while len(messages) > sys_idx and messages[sys_idx].get("role") == "tool":
+                                messages.pop(sys_idx)
+                            # Also strip an assistant that had tool_calls whose results
+                            # just got dropped (would become orphan at LLM call time)
+                            if len(messages) > sys_idx and messages[sys_idx].get("role") == "assistant" and messages[sys_idx].get("tool_calls"):
+                                messages.pop(sys_idx)
+                            new_msg_tokens = sum(count_tokens(str(m.get("content", ""))) for m in messages)
+                            new_total = new_msg_tokens + tool_schema_tokens
+                            logger.warning(
+                                f"[ExecCtx] Context trim: dropped ~{drop} oldest msgs "
+                                f"({total_tokens} → {new_total} tokens, "
+                                f"limit {context_limit}; tool schemas {tool_schema_tokens})"
+                            )
+                            total_tokens = new_total
+                            msg_tokens = new_msg_tokens
                     if total_tokens > context_limit * 0.9:
                         # Trim couldn't rescue this turn — give a specific reason
                         # that points at the actual lever to pull. With heavy
@@ -369,6 +568,13 @@ class ExecutionContext:
                 self.provider, messages, self.gen_params, tools=self.tools
             )
 
+            # A cancel that landed during the LLM call: nothing from this
+            # reply is appended or executed — no tool side effects after the
+            # user said stop, no half-turn in history.
+            if self._is_cancelled():
+                logger.info(f"[ExecCtx] cancelled after round {i+1}'s LLM reply — dropping it")
+                break
+
             if response_msg.has_tool_calls:
                 filtered = filter_to_thinking_only(response_msg.content or "")
                 tool_calls = response_msg.get_tool_calls_as_dicts()[:max_parallel]
@@ -386,9 +592,11 @@ class ExecutionContext:
                 # is the actual bound. Keep the last 500. Scout longevity #3.
                 if len(self.tool_log) > 500:
                     del self.tool_log[:-500]
-                tools_executed, tool_images = self.tool_engine.execute_tool_calls(
+                tools_executed, tool_images = _exec_with_loop_counts(
+                    self.tool_engine.execute_tool_calls,
                     tool_calls, messages, None, self.provider, scopes=self.scopes,
-                    allowed_tools=self._allowed_tool_names
+                    allowed_tools=self._allowed_tool_names, loop_counts=loop_counts,
+                    image_sink=_image_sink
                 )
                 if tool_images:
                     _inject_tool_images(messages, tool_images, self.provider)
@@ -415,13 +623,45 @@ class ExecutionContext:
                     if len(self.tool_log) > 500:
                         del self.tool_log[:-500]
                     filtered = filter_to_thinking_only(response_msg.content)
-                    _, tool_images = self.tool_engine.execute_text_based_tool_call(
+                    _, tool_images = _exec_with_loop_counts(
+                        self.tool_engine.execute_text_based_tool_call,
                         fn_data, filtered, messages, None, self.provider, scopes=self.scopes,
-                        allowed_tools=self._allowed_tool_names
+                        allowed_tools=self._allowed_tool_names, loop_counts=loop_counts,
+                        image_sink=_image_sink
                     )
                     if tool_images:
                         _inject_tool_images(messages, tool_images, self.provider)
                     continue
+
+                # A tool task whose reply hit max_tokens WITHOUT a tool call is
+                # a failed generation, not an answer (librarian b12 2026-07-19:
+                # 35K chars of looping thinking, finish=length, the call never
+                # came — one more sentence of budget and it would have landed).
+                # Retry once with identical messages: nothing is appended, so
+                # the garbage never poisons the fresh decode. A second length-
+                # death keeps the text (the chat is the audit surface) but
+                # flags degraded so workers don't count the message as ok.
+                # Provider dialects for "hit the token ceiling": openai-compat
+                # says 'length', Claude/anthropic-compat pass raw 'max_tokens',
+                # openai_responses says 'incomplete' (fixer-scout, 2026-07-19 —
+                # matching only 'length' left the b12 class live elsewhere).
+                _finish = getattr(response_msg, 'finish_reason', None)
+                if _finish in ('length', 'max_tokens', 'incomplete') and self.tools:
+                    if llm_retries < 1 and i + 1 < max_iterations:
+                        # (last-iteration length-deaths skip the retry — the
+                        # continue would exit the loop and DROP the text the
+                        # audit contract promises to keep.)
+                        llm_retries += 1
+                        logger.warning(
+                            f"[ExecCtx] finish={_finish} with no tool call "
+                            f"({len(response_msg.content)} chars) — retrying "
+                            f"turn once with a fresh decode.")
+                        continue
+                    self.degraded_reason = (
+                        "LLM hit max_tokens without completing a tool call "
+                        "(truncated text kept for audit)."
+                    )
+                    logger.warning(f"[ExecCtx] {self.degraded_reason}")
 
                 final_content = response_msg.content
                 messages.append({"role": "assistant", "content": final_content})
@@ -430,9 +670,15 @@ class ExecutionContext:
                 # Provider returned no content AND no tool_calls. This is
                 # rare but happens with some smaller / quantized models or
                 # when a provider trims to fit its own input cap and has
-                # no budget left for output. Without setting degraded_reason
-                # the empty assistant message hits the chat with no signal
-                # to the user — surface the cause via metadata. Scout 2 #3.
+                # no budget left for output. Same rescue as the length-death
+                # above: empty is never a legitimate answer, so spend the
+                # run's one retry before breaking degraded. Scout 2 #3.
+                if llm_retries < 1 and i + 1 < max_iterations:
+                    llm_retries += 1
+                    logger.warning(
+                        "[ExecCtx] LLM returned empty content with no tool "
+                        "calls — retrying turn once.")
+                    continue
                 self.degraded_reason = (
                     "LLM returned empty content with no tool calls "
                     "(provider may have hit its own input cap or model "
@@ -524,7 +770,12 @@ class ExecutionContext:
                 # by keeping final_content empty here so caller truthy-checks
                 # (`if response:`) drop the output cleanly. Scout #15 / Krem
                 # 2026-04-24.
-                if overflow_reason:
+                if self.cancelled:
+                    self.degraded_reason = (
+                        f"Cancelled by user. Tools called before the stop: "
+                        f"{', '.join(self.tool_log) or '(none)'}."
+                    )
+                elif overflow_reason:
                     self.degraded_reason = overflow_reason
                 else:
                     self.degraded_reason = (
@@ -538,9 +789,33 @@ class ExecutionContext:
                 # of users.
                 messages.append({"role": "assistant", "content": ""})
 
-        # Expose messages generated during this run. Only include if we got a response —
+        # ANCHOR BY IDENTITY: re-derive the user message's CURRENT index — the
+        # in-loop context trim may have deleted messages before it, shifting it
+        # down. A frozen index would point past the real turn and drop it from
+        # the persisted slice. Derive ONCE here: the swap below replaces the
+        # object (so it can't be re-found afterward), but the swap doesn't change
+        # list length, so cur_idx stays valid for the slice. Multiple trims are
+        # handled for free — this reflects the final position. 2026-06-13.
+        cur_idx = next((i for i, m in enumerate(messages) if m is user_msg), msg_start_idx)
+
+        # DUAL-FORM SWAP: the LLM saw the image as base64 across this turn's
+        # rounds, but history must persist the MARKER form (text + <<IMG::...>>),
+        # never inline base64 — otherwise every replay re-sends the image and
+        # bloats the chat. Swap the anchored user message's content to the marker
+        # form. No-op when no images were passed (persist_content == llm_content).
+        if images and len(messages) > cur_idx:
+            _um = messages[cur_idx]
+            if _um.get("role") == "user":
+                messages[cur_idx] = {**_um, "content": persist_content}
+
+        # Expose messages generated during this run. Scrub inline base64 image
+        # blocks (appended mid-loop by _inject_tool_images for tool-returned
+        # images) down to text — those images are referenced by their own
+        # <<IMG::tool:id>> markers in the tool-result messages, so the base64 is
+        # turn-only and must not persist (same replay-bloat hazard the swap
+        # guards for event images). 2026-06-13. Only include if we got a response —
         # an orphaned user message with no assistant reply corrupts chat history.
-        new = messages[msg_start_idx:]
+        new = [_scrub_inline_images(m) for m in messages[cur_idx:]]
         has_assistant = any(m.get("role") == "assistant" for m in new)
         self.new_messages = new if has_assistant else []
 

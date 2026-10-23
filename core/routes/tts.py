@@ -92,7 +92,24 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         system.tts.speak(text)
         return {"status": "success", "message": "Playback started."}
     elif output_mode == 'file':
-        audio_data = await asyncio.to_thread(system.tts.generate_audio_data, text)
+        # Voice privacy gate (vault v1.1): play-mode self-gates inside
+        # speak(), but file-mode calls generate_audio_data directly — and the
+        # browser's non-streaming TTS path ships chat response text through
+        # here. Same posture as the vault routes: 403, never 401.
+        from core.voice_privacy import tts_gate_reason
+        _gate = tts_gate_reason()
+        if _gate:
+            raise HTTPException(status_code=403, detail=_gate)
+        # Optional per-request voice/pitch/speed (browser task-TTS): the
+        # TTS_SPEAK payload carries the TASK's values because by the time this
+        # request lands, the executor's finally has already restored the
+        # operator's voice — reading global state here loses the race, always.
+        _voice = data.get('voice') or None
+        if _voice:
+            _voice = _validate_tts_voice(_voice)
+        audio_data = await asyncio.to_thread(
+            system.tts.generate_audio_data, text,
+            voice=_voice, speed=data.get('speed'), pitch=data.get('pitch'))
         if not audio_data:
             raise HTTPException(status_code=503, detail="TTS generation failed")
 
@@ -136,6 +153,20 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
 
 
 @router.post("/api/tts/stream")
+def _gate_settings_for(system, chat):
+    """Settings the TTS privacy gate should judge: the named chat's when the
+    caller says which chat produced the text, else None (= the effective
+    chat, resolved inside the gate). A named chat that can't be read
+    (unknown, sealed) fails CLOSED. Broadsword H3."""
+    chat = (str(chat or '')).strip()
+    if not chat:
+        return None
+    try:
+        return system.llm_chat.session_manager.get_settings_for(chat) or {'private_chat': True}
+    except Exception:
+        return {'private_chat': True}
+
+
 async def handle_tts_stream(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Streaming TTS for known text (Replay button, future re-synth flows).
 
@@ -166,10 +197,16 @@ async def handle_tts_stream(request: Request, _=Depends(require_login), system=D
         raise HTTPException(status_code=400, detail="No text provided")
     if len(text) > _TTS_MAX_CHARS:
         raise HTTPException(status_code=413, detail=f"Text too long (max {_TTS_MAX_CHARS:,})")
+    voice = (data.get('voice') or '').strip() or None
+    if voice:
+        voice = _validate_tts_voice(voice)
+    # The producing chat, when the caller names one (a room's bound session)
+    # — the pump's privacy gate judges it instead of the active chat (H3).
+    gate_settings = _gate_settings_for(system, data.get('chat'))
 
     def generate():
         from core.tts.stream_pump import StreamingTTSPump
-        pump = StreamingTTSPump(system=system)
+        pump = StreamingTTSPump(system=system, voice_override=voice, chat_settings=gate_settings)
         try:
             # Whole text in one push — chunker splits at sentence boundaries.
             # The final sentence (no trailing uppercase) emerges from flush.
@@ -209,6 +246,17 @@ async def tts_preview(request: Request, _=Depends(require_login), system=Depends
     if not config.TTS_ENABLED:
         raise HTTPException(status_code=503, detail="TTS disabled")
 
+    # Voice privacy gate — same posture as /api/tts file-mode above. Preview
+    # takes arbitrary user text and hands it straight to the provider; with
+    # the active chat private + a cloud TTS provider that's text egress the
+    # main lane refuses. 403, never 401. `chat` names the chat that produced
+    # the text (a room's bound session speaking a cadence turn) — the gate
+    # judges THAT chat, not the operator's active one (broadsword H3).
+    from core.voice_privacy import tts_gate_reason
+    _gate = tts_gate_reason(_gate_settings_for(system, data.get('chat')))
+    if _gate:
+        raise HTTPException(status_code=403, detail=_gate)
+
     if voice:
         voice = _validate_tts_voice(voice)
     audio_data = await asyncio.to_thread(
@@ -230,15 +278,85 @@ async def tts_preview(request: Request, _=Depends(require_login), system=Depends
 
 @router.get("/api/tts/status")
 async def tts_status(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Get TTS playback status."""
+    """Get TTS playback status (tts_client OR the conversation-mode sink)."""
     playing = getattr(system.tts, '_is_playing', False)
-    return {"playing": playing}
+    if not playing and getattr(system, "conversation_mode_enabled", False):
+        mgr = getattr(system, "_conversation_manager", None)
+        drv = getattr(mgr, "driver", None)
+        # Phase I isolation: only the OPERATOR's conversation (local/browser:
+        # _chat_name None) counts as "playing" to the web UI. A phone call's
+        # sink (explicit chat) must not light the browser's TTS state.
+        if drv is not None and getattr(drv, "_chat_name", None) is None:
+            sink = getattr(drv, "_active_sink", None)
+            if sink is not None and getattr(sink, "_is_playing", False):
+                playing = True
+    return {"playing": playing, "tts_playing": playing}
 
 
 @router.post("/api/tts/stop")
 async def tts_stop(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Stop TTS playback."""
+    """Stop TTS playback (tts_client + the conversation-mode sink).
+
+    Optional body {"stream_id"}: the streaming-TTS pump the browser is
+    hearing — mutes exactly that one. Without it the mute is chat-scoped but
+    reaches only pumps that have started (LLMChat.stop_tts_streams)."""
+    try:
+        _body = await request.json()
+    except Exception:
+        _body = {}
+    _sid = _body.get("stream_id") if isinstance(_body, dict) else None
+    _sid = str(_sid) if _sid else None
     system.tts.stop()
+    # Phase I isolation: this button belongs to the WEB UI — everything it stops
+    # must be scoped to the operator's surface. Unscoped, it muted ALL streams,
+    # cancelled ALL generation, and flushed the singleton driver's sink — which
+    # during a phone call cut the caller off mid-sentence (2026-07-04, twice:
+    # the second time because a git revert resurrected this unscoped version).
+    try:
+        _active = system.llm_chat.session_manager.get_active_chat_name()
+    except Exception:
+        _active = None
+    # Mute the ACTIVE chat's TTS pump only — a phone call's stream (side chat)
+    # keeps talking. Without cancelling the LLM (that's the separate Stop button).
+    # Phase II follow-up (2026-07-05): when the operator is VIEWING a live call's
+    # chat, that chat IS the active chat — but its stream feeds the PHONE surface.
+    # Chat-scoping can't tell the surfaces apart, so check ownership explicitly:
+    # web stop must never mute a caller mid-sentence.
+    try:
+        _mgr = getattr(system, "_conversation_manager", None)
+        _ext = _mgr.external_chats() if _mgr else set()
+    except Exception:
+        _ext = set()
+    try:
+        if _sid:
+            # Precise: the browser named the pump it's hearing. Phone-call
+            # chats stay excluded — their pumps never reach a browser.
+            system.llm_chat.stop_tts_streams(stream_id=_sid, exclude_chats=_ext)
+        elif _active and _active in _ext:
+            logger.info(f"[TTS-STOP] '{_active}' belongs to a live phone call — web stop leaves it alone")
+        else:
+            # Mirror /api/cancel: an unscoped stop (_active None) must still
+            # skip live-call chats, or it mutes callers on the None-active edge.
+            system.llm_chat.stop_tts_streams(chat_name=_active, exclude_chats=(None if _active else _ext))
+    except Exception:
+        pass
+    # Conversation mode plays through a separate sink and the LLM may still be
+    # streaming — but ONLY when the conversation is the operator's own
+    # (local/browser: driver._chat_name None). A phone call's driver is off-limits.
+    if getattr(system, "conversation_mode_enabled", False):
+        mgr = getattr(system, "_conversation_manager", None)
+        drv = getattr(mgr, "driver", None)
+        if drv is not None and getattr(drv, "_chat_name", None) is None:
+            try:
+                system.cancel_generation(chat_name=_active)
+            except Exception:
+                pass
+            sink = getattr(drv, "_active_sink", None)
+            if sink is not None:
+                try:
+                    sink.stop()
+                except Exception:
+                    pass
     return {"status": "success"}
 
 
@@ -315,8 +433,19 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
     if not ok:
         raise HTTPException(status_code=400, detail=reason)
 
-    system.web_active_inc()
+    # Voice privacy gate (vault v1.1): private chat + cloud STT = the mic
+    # audio would leave the machine. 403 with the reason — the mic button
+    # surfaces it as a toast.
+    from core.voice_privacy import stt_gate_reason
+    gate = stt_gate_reason(system.llm_chat.session_manager.get_chat_settings())
+    if gate:
+        raise HTTPException(status_code=403, detail=gate)
+
+    # mkstemp BEFORE the inc: a raise between inc and try stranded a permanent
+    # +1 on the wakeword-suppression counter -- she stops answering to her name
+    # until restart (negspace N3, 2026-08-31).
     fd, temp_path = tempfile.mkstemp(suffix=".wav")
+    system.web_active_inc()
     try:
         os.close(fd)
         contents = await audio.read()

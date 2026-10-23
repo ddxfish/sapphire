@@ -36,6 +36,11 @@ export async function runTask(taskId) {
   return fetchWithTimeout(`${API_BASE}/tasks/${taskId}/run`, { method: 'POST' });
 }
 
+// Stop a task's in-flight run (⏹). Lands between LLM rounds server-side.
+export async function cancelTask(taskId) {
+  return fetchWithTimeout(`${API_BASE}/tasks/${taskId}/cancel`, { method: 'POST' });
+}
+
 export async function fetchStatus() {
   return fetchWithTimeout(`${API_BASE}/status`);
 }
@@ -97,6 +102,13 @@ export async function fetchTasksByType(type) {
 export async function fetchEventSources() {
   try { const data = await fetchWithTimeout('/api/events/sources'); return data.sources || []; }
   catch { return []; }
+}
+
+// Names of event sources flagged realtime:true — used to split daemon tasks
+// between the Daemons tab (event→task) and the Realtime tab (live sessions).
+export async function fetchRealtimeSourceNames() {
+  const sources = await fetchEventSources();
+  return new Set(sources.filter(s => s && s.realtime).map(s => s.name));
 }
 
 // Fetch personas (list with summary)

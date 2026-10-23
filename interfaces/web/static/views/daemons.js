@@ -4,7 +4,7 @@
 import { renderSectionHeader, bindSectionHeader } from '../shared/section-header.js';
 import { helpPills } from '../features/video-link.js';
 import * as TR from '../shared/trigger-common.js';
-import { fetchTasksByType, fetchStatus } from '../shared/continuity-api.js';
+import { fetchTasksByType, fetchStatus, fetchRealtimeSourceNames } from '../shared/continuity-api.js';
 
 let container = null;
 let daemons = [];
@@ -22,8 +22,12 @@ function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = nul
 
 async function load() {
     try {
-        const [d, s] = await Promise.all([fetchTasksByType('daemon'), fetchStatus()]);
-        daemons = d; status = s;
+        const [d, s, rt] = await Promise.all([
+            fetchTasksByType('daemon'), fetchStatus(), fetchRealtimeSourceNames()
+        ]);
+        // Realtime-source tasks (live sessions, e.g. phone) live in the Realtime tab.
+        daemons = d.filter(t => !rt.has(t.trigger_config?.source));
+        status = s;
     } catch (e) { console.warn('Daemons load failed:', e); }
 }
 

@@ -4,12 +4,22 @@ import * as Images from './ui-images.js';
 import * as Parsing from './ui-parsing.js';
 import * as Streaming from './ui-streaming.js';
 import * as api from './api.js';
+import { dismissLater } from './shared/toast.js';
 
-// DOM references
-const chat = document.getElementById('chat-container');
-const chatbgOverlay = document.getElementById('chatbg-overlay');
+// DOM references. The chat surface is JS-rendered at boot (surface/surface.js)
+// so #chat-container / #chatbg-overlay don't exist at module-eval time —
+// main.js calls bindChatDom() right after renderSurface(), before any paint.
+// The <template> elements live in static HTML and are safe to grab here.
+let chat = document.getElementById('chat-container');
+let chatbgOverlay = document.getElementById('chatbg-overlay');
 const msgTpl = document.getElementById('message-template');
 const statusTpl = document.getElementById('status-template');
+
+export function bindChatDom() {
+    chat = document.getElementById('chat-container');
+    chatbgOverlay = document.getElementById('chatbg-overlay');
+    bindScrollIntent();
+}
 
 // Avatar display setting (loaded from /api/init)
 let avatarsInChat = true;
@@ -67,26 +77,82 @@ export const refreshAvatarPaths = async () => {
 };
 
 // =============================================================================
-// SCROLL MANAGEMENT
+// SCROLL MANAGEMENT — intent-based sticky bottom (2026-09-08)
+//
+// The old rule was pure position: every streamed chunk snapped to the bottom
+// if you were within 100px of it. Chunks land every few ms, so scrolling up
+// meant out-running the snap — the "scroll of god" on phones and laptops.
+// Stickiness is a STATE now. It turns OFF the moment the user scrolls up by
+// any means (wheel, touch, scrollbar, keys) and back ON when they return to
+// the bottom, tap the ↓ pill, send a message, or a chat loads. Content growth
+// never flips it: our own snaps only ever move DOWN, so a scroll event that
+// moved UP while the content didn't shrink can only be the user.
 // =============================================================================
 
-const SCROLL_THRESHOLD = 100;
+const RESTICK_PX = 40;       // returning this close to the bottom re-engages
+let sticky = true;
+let _prevTop = 0, _prevHeight = 0;
+let jumpBtn = null;
 
-const isNearBottom = () => {
-    if (!chatbgOverlay) return true;
-    const scrollableHeight = chatbgOverlay.scrollHeight - chatbgOverlay.clientHeight;
-    const currentScroll = chatbgOverlay.scrollTop;
-    return (scrollableHeight - currentScroll) <= SCROLL_THRESHOLD;
+const distanceFromBottom = () => chatbgOverlay
+    ? chatbgOverlay.scrollHeight - chatbgOverlay.clientHeight - chatbgOverlay.scrollTop
+    : 0;
+
+const setSticky = (on) => {
+    sticky = on;
+    jumpBtn?.classList.toggle('show', !on);
 };
 
+// force = the user asked for the bottom (send, chat load, regen start):
+// re-engage and go. Otherwise content grew — follow it only while stuck.
 const scrollToBottomIfSticky = (force = false) => {
     if (!chatbgOverlay) return;
-    if (force || isNearBottom()) {
-        chatbgOverlay.scrollTop = chatbgOverlay.scrollHeight;
-    }
+    if (force) setSticky(true);
+    if (!sticky) return;
+    chatbgOverlay.scrollTop = chatbgOverlay.scrollHeight;
+    _prevTop = chatbgOverlay.scrollTop;
+    _prevHeight = chatbgOverlay.scrollHeight;
 };
 
 export const forceScrollToBottom = () => scrollToBottomIfSticky(true);
+// For other scroll owners (image loads): follow the bottom only while stuck.
+export const followIfSticky = () => scrollToBottomIfSticky();
+export const isStickyToBottom = () => sticky;
+
+function bindScrollIntent() {
+    const el = chatbgOverlay;
+    if (!el || el.dataset.scrollIntent) return;   // organs.js may hand us the same node again
+    el.dataset.scrollIntent = '1';
+    jumpBtn = document.getElementById('scroll-jump');
+    jumpBtn?.addEventListener('click', () => scrollToBottomIfSticky(true));
+    const unstick = () => { if (sticky) setSticky(false); };
+    // A short chat has nowhere to scroll: a reflex wheel-up there would
+    // unstick with no scroll event ever able to re-stick (D3-B6).
+    const scrollable = () => el.scrollHeight > el.clientHeight + 1;
+    // Explicit intent — these only ever come from a human, and they fire
+    // before the first pixel moves (the touch one is what makes phones work).
+    el.addEventListener('wheel', e => { if (e.deltaY < 0 && scrollable()) unstick(); }, { passive: true });
+    let touchY = null;
+    el.addEventListener('touchstart', e => { touchY = e.touches[0]?.clientY ?? null; }, { passive: true });
+    el.addEventListener('touchmove', e => {
+        const y = e.touches[0]?.clientY;
+        if (touchY != null && y != null && y > touchY + 4 && scrollable()) unstick();   // finger down = content up
+        if (y != null) touchY = y;
+    }, { passive: true });
+    // Everything else (scrollbar drag, keyboard) + the re-engage on return.
+    _prevTop = el.scrollTop; _prevHeight = el.scrollHeight;
+    el.addEventListener('scroll', () => {
+        const top = el.scrollTop, h = el.scrollHeight;
+        const max = h - el.clientHeight;
+        // An up-move our own snaps can't explain = the user. "The previous
+        // position is still reachable" (_prevTop <= max) rules out the clamps
+        // that also move scrollTop up: content shrink, viewport GROWTH (devtools
+        // closing, rotate) and iOS over-scroll bounce (D3-B4/B5, 2026-09-08).
+        if (top < _prevTop - 1 && h >= _prevHeight && _prevTop <= max + 1) unstick();
+        else if (!sticky && distanceFromBottom() <= RESTICK_PX) setSticky(true);
+        _prevTop = top; _prevHeight = h;
+    }, { passive: true });
+}
 
 // =============================================================================
 // SIMPLE UTILITIES
@@ -176,6 +242,8 @@ const createToolbar = (idx, total, role = 'user') => {
     ];
 
     buttons.forEach(([cls, act, icon, title]) => {
+        // Continue resumes the chat's LAST reply in place — offered only there.
+        if (act === 'continue' && !(role === 'assistant' && idx === total - 1)) return;
         const btn = createElem('button', { class: cls, 'data-action': act, 'data-message-index': idx }, icon);
         btn.title = title;
         tb.appendChild(btn);
@@ -196,6 +264,12 @@ const updateToolbars = () => {
             const newToolbar = createToolbar(i, msgs.length, role);
             toolbar.replaceWith(newToolbar);
         } else {
+            // The Continue button follows the last reply as messages land.
+            const wantCont = role === 'assistant' && i === msgs.length - 1;
+            if (!!toolbar.querySelector('.continue-btn') !== wantCont) {
+                toolbar.replaceWith(createToolbar(i, msgs.length, role));
+                return;
+            }
             btns.forEach(btn => {
                 btn.dataset.messageIndex = i;
                 if (btn.classList.contains('trash-btn')) {
@@ -213,6 +287,19 @@ export const forceUpdateToolbars = updateToolbars;
 // =============================================================================
 // MESSAGE CREATION
 // =============================================================================
+
+// Identity of a history row for renderHistory's reconcile (broadsword H15):
+// role + server timestamp + content length + part count. Cheap, computed on
+// the RAW server object (before the avatar strip mutates content) on both
+// sides. An edit changes the length; a regen changes the timestamp; the
+// streaming bubble and the optimistic user row carry no key at all.
+const historyKey = (m) => {
+    if (!m || typeof m !== 'object') return '';
+    const c = typeof m.content === 'string' ? m.content.length
+        : (Array.isArray(m.content) ? m.content.length : 0);
+    const p = Array.isArray(m.parts) ? m.parts.length : 0;
+    return `${m.role || 'user'}|${m.timestamp || ''}|${c}|${p}`;
+};
 
 const createMessage = (msg, idx = null, total = null, isHistoryRender = false) => {
     const clone = msgTpl.content.cloneNode(true);
@@ -251,12 +338,25 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
         contentDiv.appendChild(note);
     }
 
-    // Add metadata footer for assistant messages
+    // Add metadata footer for assistant messages — compact line + click-to-
+    // expand detail accordion (metrics v2, 2026-08-08).
     if (role === 'assistant' && msg.metadata) {
         const meta = msg.metadata;
         const parts = [];
         const tok = meta.tokens || {};
         const cumTok = meta.cumulative_tokens || null;
+        const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : n;
+
+        // Timestamp — the message's own DB time (every message has one, so
+        // this works retroactively on pre-metrics history). Time-only today,
+        // "Aug 7 14:32" otherwise.
+        const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const ts = msg.timestamp ? new Date(msg.timestamp) : null;
+        if (ts && !isNaN(ts)) {
+            const hm = ts.toTimeString().slice(0, 5);
+            parts.push(ts.toDateString() === new Date().toDateString()
+                ? hm : `${MONTHS[ts.getMonth()]} ${ts.getDate()} ${hm}`);
+        }
 
         if (meta.duration_seconds) {
             parts.push(`${meta.duration_seconds}s`);
@@ -266,47 +366,64 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
             parts.push(`${meta.tokens_per_second} ${label}`);
         }
         if (meta.model) {
-            const provider = meta.provider || '';
-            const model = meta.model;
-            const modelLower = model.toLowerCase();
-            const providerInModel = provider && (
-                modelLower.startsWith(provider.toLowerCase()) ||
-                modelLower.includes(provider.toLowerCase())
-            );
-            parts.push(provider && !providerInModel ? `${provider} / ${model}` : model);
+            // Basename only — fireworks models are full paths
+            // (accounts/fireworks/models/x). Full string lives in the detail.
+            parts.push(String(meta.model).split('/').pop());
         }
 
-        // Token counts: in / out
+        // "in" = TOTAL input: uncached prompt + cache reads. The raw provider
+        // `prompt` field is NON-cached input only (both providers normalize
+        // to that convention) — displaying it raw made "in" collapse on cache
+        // hits and balloon after edits invalidated the prefix (2026-08-08).
+        // "out" = cumulative completion across the tool loop when >1 call.
         const prompt = tok.prompt || 0;
-        const content = tok.content || 0;
-        if (prompt || content) {
-            const fmt = n => n >= 1000 ? `${(n/1000).toFixed(1)}k` : n;
-            parts.push(`${fmt(prompt)} in / ${fmt(content)} out`);
-        }
-
-        // Cache indicator. Anthropic reports `prompt` as the NON-cached
-        // input tokens, with cached tokens reported separately. Total
-        // input = prompt + cache_read. Old formula divided cache_read
-        // by the leftover non-cached portion and gave 5000%+ readings
-        // on near-full cache hits. Fixed 2026-04-30.
         const cacheRead = tok.cache_read_tokens || 0;
         const cacheWrite = tok.cache_write_tokens || 0;
+        const totalIn = prompt + cacheRead;
+        const out = (cumTok && cumTok.iterations > 1) ? (cumTok.completion || 0) : (tok.content || 0);
+        if (totalIn || out) {
+            parts.push(`${fmt(totalIn)} in / ${fmt(out)} out`);
+        }
         if (cacheRead > 0) {
-            const totalPrompt = prompt + cacheRead;
-            const pct = totalPrompt > 0 ? Math.round((cacheRead / totalPrompt) * 100) : 0;
+            const pct = totalIn > 0 ? Math.round((cacheRead / totalIn) * 100) : 0;
             parts.push(`cache ${pct}%`);
         } else if (cacheWrite > 0) {
             parts.push('cache miss');
         }
-
-        // Cumulative (multi-tool) summary
         if (cumTok && cumTok.iterations > 1) {
-            const fmt = n => n >= 1000 ? `${(n/1000).toFixed(1)}k` : n;
-            parts.push(`${cumTok.iterations} calls · ${fmt(cumTok.total)} total`);
+            parts.push(`${cumTok.iterations} calls`);
         }
 
         if (parts.length > 0) {
-            const metaDiv = createElem('div', { class: 'message-metadata' }, parts.join(' · '));
+            const metaDiv = createElem('div', { class: 'message-metadata' });
+            const line = createElem('div', { class: 'message-metadata-line' });
+            line.appendChild(createElem('span', { class: 'mm-chev' }, '▸'));
+            line.appendChild(document.createTextNode(parts.join(' · ')));
+            metaDiv.appendChild(line);
+
+            // Detail accordion — raw numbers, full identifiers. Thinking is
+            // always a chars/4 approximation (providers fold it into
+            // completion), hence the tilde.
+            const rows = [];
+            rows.push(`${meta.provider || '?'} · ${meta.model || '?'}`);
+            if (meta.start_time && meta.end_time) {
+                rows.push(`${String(meta.start_time).slice(0, 10)} ${String(meta.start_time).slice(11, 19)} → ${String(meta.end_time).slice(11, 19)}`);
+            }
+            rows.push(`in: ${totalIn} total (${prompt} prompt + ${cacheRead} cached)`
+                + (cacheWrite ? ` · ${cacheWrite} cache-written` : ''));
+            rows.push(`out: ${tok.content || 0} content`
+                + (tok.thinking ? ` · ~${tok.thinking} thinking` : ''));
+            if (cumTok && cumTok.iterations > 1) {
+                rows.push(`${cumTok.iterations} calls · Σ ${fmt(cumTok.prompt + (cumTok.cache_read || 0))} in / ${fmt(cumTok.completion || 0)} out / ${fmt(cumTok.total || 0)} total`);
+            }
+            if (tok.estimated) {
+                rows.push('counts estimated — provider sent no usage');
+            }
+            const detail = createElem('div', { class: 'message-metadata-detail' });
+            rows.forEach(r => detail.appendChild(createElem('div', {}, r)));
+            metaDiv.appendChild(detail);
+
+            line.addEventListener('click', () => metaDiv.classList.toggle('open'));
             contentDiv.appendChild(metaDiv);
         }
     }
@@ -345,12 +462,40 @@ export const addUserMessage = (txt, images = null, files = null) => {
 
 export const renderHistory = (hist) => {
     Images.clearPendingImages();
-    chat.querySelectorAll('.message:not(.status):not(.error)').forEach(msg => msg.remove());
+    // Background refreshes (turn end, edit save, trim, a remote message) used
+    // to FORCE-snap here and re-arm sticky — the surviving "scroll of god"
+    // path after sticky v2, and saving a message edit mid-transcript jumped
+    // to the bottom. Now: sticky follows to the bottom, a reader who scrolled
+    // up keeps their place. Chat load / switch / clear / import call
+    // forceScrollToBottom() themselves — there the user asked for the bottom.
+    const keepTop = sticky ? null : (chatbgOverlay?.scrollTop ?? null);
+    if (!hist || !Array.isArray(hist)) hist = [];
 
-    if (!hist || !Array.isArray(hist)) return;
+    // RECONCILE, don't rebuild (broadsword H15): this ran on every turn and
+    // removed + re-created DOM for EVERY row (markdown, highlight, toolbar,
+    // metadata, listeners) — thousands of rows = seconds per reply and an
+    // empty transcript at boot once the 20 s bound tripped. Now: keep the
+    // longest prefix whose rows still match the server (historyKey), drop
+    // from the first mismatch, append the rest. The streaming bubble and
+    // the optimistic user row have no key → they are the first mismatch →
+    // replaced by the server's rows. Edits/regens/deletes mismatch at their
+    // row and rebuild from there. Every caller stays as it was.
+    const existing = Array.from(chat.querySelectorAll('.message:not(.status):not(.error)'));
+    let keep = 0;
+    while (keep < existing.length && keep < hist.length) {
+        const key = existing[keep].dataset.key;
+        if (!key || key !== historyKey(hist[keep])) break;
+        keep++;
+    }
+    // INVARIANT: no layout reads between this removal and the re-append below.
+    // A forced layout here would clamp scrollTop to 0 → the scroll listener
+    // reads it as a user scroll-up → sticky reader stranded at the top (D1#11).
+    for (let i = keep; i < existing.length; i++) existing[i].remove();
 
-    hist.forEach((msg, i) => {
-        if (!msg || typeof msg !== 'object') return;
+    for (let i = keep; i < hist.length; i++) {
+        const msg = hist[i];
+        if (!msg || typeof msg !== 'object') continue;
+        const key = historyKey(msg);
         // Strip avatar tags from history if setting is enabled
         if (window._avatarStripTags) {
             if (msg.content) msg.content = msg.content.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '');
@@ -358,21 +503,30 @@ export const renderHistory = (hist) => {
                 ? { ...p, text: p.text.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '') } : p);
         }
         const { clone } = createMessage(msg, i, hist.length, true);
+        const el = clone.querySelector('.message');
+        if (el) el.dataset.key = key;
         chat.appendChild(clone);
-    });
+    }
 
-    updateToolbars();
-    
+    updateToolbars();   // re-derives index / Continue / trash counts on the kept rows too
+
+    // Restore the reader's place NOW — the removal above clamped scrollTop to
+    // 0. (Restoring inside the image wait below could land up to 5 s later,
+    // over a position the user had since moved away from.)
+    if (keepTop !== null && chatbgOverlay) chatbgOverlay.scrollTop = keepTop;
+
+    // Sticky readers follow the bottom once images have sized; non-forced, so
+    // a reader who scrolled up is never touched here.
     const waitForImages = () => {
         if (!Images.hasPendingImages()) {
-            scrollToBottomIfSticky(true);
+            scrollToBottomIfSticky();
         } else {
             setTimeout(() => {
                 if (Images.hasPendingImages()) {
                     console.log(`Timeout: images still pending, scrolling anyway`);
                     Images.clearPendingImages();
                 }
-                scrollToBottomIfSticky(true);
+                scrollToBottomIfSticky();
             }, 5000);
         }
     };
@@ -425,6 +579,15 @@ export const startStreaming = () => {
     msg.id = 'streaming-message';
     msg.dataset.streaming = 'true';
     return Streaming.startStreaming(chat, clone, scrollToBottomIfSticky);
+};
+
+// In-place Continue: adopt the reply's existing bubble as the streaming
+// message — nothing leaves the page, the new words land in it. `seed` is
+// the source text of its last paragraph (see ui-streaming startStreaming).
+export const continueStreaming = (msgEl, seed = '') => {
+    msgEl.id = 'streaming-message';
+    msgEl.dataset.streaming = 'true';
+    return Streaming.startStreaming(chat, msgEl, scrollToBottomIfSticky, { seed });
 };
 
 export const appendStream = (chunk) => {
@@ -500,7 +663,7 @@ export const finishStreaming = async (ephemeral = false) => {
         if (streamingMsg) {
             streamingMsg.remove();
         }
-        scrollToBottomIfSticky(true);
+        scrollToBottomIfSticky();   // end of turn follows the reader, never yanks
         return;
     }
     
@@ -536,14 +699,18 @@ export const finishStreaming = async (ephemeral = false) => {
         }
     }
     
-    scrollToBottomIfSticky(true);
-    
+    scrollToBottomIfSticky();   // a reader who scrolled up mid-reply stays put
+
     // Update scene state (spice tooltip, etc.) after generation completes
     import('./features/scene.js').then(scene => scene.updateScene());
 };
 
 export const cancelStreaming = () => {
     Streaming.cancelStreaming();
+};
+
+export const detachStreaming = () => {
+    Streaming.detachStreaming();
 };
 
 export const hasVisibleContent = () => {
@@ -554,47 +721,111 @@ export const hasVisibleContent = () => {
 // CHAT MANAGEMENT
 // =============================================================================
 
-export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], privateChats = []) => {
+export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], privateChats = [], { adopt = true } = {}) => {
     // Combine all chats for the hidden select (needs all chats for switching)
     const allChats = [...chats, ...privateChats];
 
-    // Update hidden select (state holder used throughout the app)
+    // Mode-tagged chats (game/story sessions — plugin surfaces own them) stay
+    // out of the VISIBLE picker entirely — no active-chat exception (Krem's
+    // isolation ruling 2026-08-03: games/stories are totally separate from
+    // Chats; chat-manage stays the one admin surface that lists everything).
+    // The hidden select above keeps all chats — it's switching infrastructure.
+    const _visible = c => {
+        const m = c.mode ?? c.settings?.mode;
+        return !m || m === 'chat';
+    };
+    chats = chats.filter(_visible);
+    privateChats = privateChats.filter(_visible);
+
+    // Update hidden select (state holder used throughout the app).
+    // `adopt=false` means this render rides a chat-list response that is
+    // stale truth (a switch started while it was in flight) — rebuild the
+    // option list but keep the user's selection.
     const select = document.getElementById('chat-select');
+    const prev = select?.value || '';
     if (select) {
         select.innerHTML = '';
         allChats.forEach(chat => {
             const opt = document.createElement('option');
             opt.value = chat.name;
             opt.textContent = chat.display_name;
-            if (chat.name === activeChat) opt.selected = true;
+            if (adopt ? chat.name === activeChat : chat.name === prev) opt.selected = true;
             select.appendChild(opt);
         });
+        // INVARIANT (vaulted-chats Phase 0, 2026-08-13): the select always
+        // contains its intended selection, under EITHER adopt mode. The
+        // innerHTML wipe is itself a writer — with no selected option a
+        // single-line select snaps to index 0, loadSidebar follows the new
+        // value, and the sidebar paints (then debounce-SAVES onto) a chat the
+        // transcript isn't on. The synthesizer used to cover only !adopt
+        // (stale-response rollback); a chat legitimately missing from the
+        // list (fresh create mid-flight, archived race, vault lock) hit the
+        // index-0 snap with the sidebar following it.
+        const intended = adopt ? activeChat : prev;
+        if (intended && ![...select.options].some(o => o.value === intended)) {
+            const known = allChats.find(c => c.name === intended);
+            const opt = document.createElement('option');
+            opt.value = intended;
+            opt.textContent = known?.display_name || intended;
+            opt.selected = true;
+            select.appendChild(opt);
+        }
     }
 
+    // All display surfaces below (picker checks, cap survival, header/sidebar
+    // names) key off the EFFECTIVE selection, never raw activeChat — under a
+    // suppressed adoption they must agree with the select, not the stale list.
+    const effectiveActive = (adopt || !prev) ? activeChat : prev;
+
     // Build picker items — regular chats, then private
-    let itemsHtml = chats.map(c => `
-        <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
-                data-chat="${c.name}">
-            <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
+    // Cap the visible picker at 10 — the list arrives updated_at DESC, so
+    // the cap keeps the freshest. The active chat always survives the cut.
+    // Everything else lives one click away in Chat Manager (the "See more"
+    // item below). The hidden select above stays uncapped on purpose.
+    const MAX_PICKER = 10;
+    // Reserve up to 3 picker slots for the private section — with 10+
+    // regular chats the old math sliced private to ZERO, leaving 🗝 chats
+    // reachable only via active-rescue (dropdown hunt #4, 2026-08-13).
+    const privReserve = Math.min(privateChats.length, 3);
+    let regShow = chats.slice(0, MAX_PICKER - privReserve);
+    let privShow = privateChats.slice(0, Math.max(0, MAX_PICKER - regShow.length));
+    if (effectiveActive && ![...regShow, ...privShow].some(c => c.name === effectiveActive)) {
+        const a = chats.find(c => c.name === effectiveActive);
+        const p = a ? null : privateChats.find(c => c.name === effectiveActive);
+        if (a) regShow = [...regShow.slice(0, MAX_PICKER - 1), a];
+        else if (p) privShow = [...privShow, p].slice(-Math.max(1, MAX_PICKER - regShow.length));
+    }
+    const hiddenCount = (chats.length + privateChats.length) - (regShow.length + privShow.length);
+
+    let itemsHtml = regShow.map(c => `
+        <button class="chat-picker-item ${c.name === effectiveActive ? 'active' : ''}"
+                data-chat="${escapeAttr(c.name)}">
+            <span class="chat-picker-item-check">${c.name === effectiveActive ? '\u2713' : ''}</span>
             <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
         </button>
     `).join('');
 
-    if (privateChats.length > 0) {
+    if (privShow.length > 0) {
         itemsHtml += '<div class="chat-picker-divider"></div>';
-        itemsHtml += privateChats.map(c => `
-            <button class="chat-picker-item chat-picker-private ${c.name === activeChat ? 'active' : ''}"
-                    data-chat="${c.name}">
-                <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
-                <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
+        // \ud83d\udddd = the vault glyph (matches vault-backed prompts in the sidebar);
+        // \ud83d\udd12 is taken \u2014 it means privacy_required on prompts.
+        itemsHtml += privShow.map(c => `
+            <button class="chat-picker-item chat-picker-private ${c.name === effectiveActive ? 'active' : ''}"
+                    data-chat="${escapeAttr(c.name)}">
+                <span class="chat-picker-item-check">${c.name === effectiveActive ? '\u2713' : ''}</span>
+                <span class="chat-picker-item-name">\u{1F5DD} ${escapeHtml(c.display_name)}</span>
             </button>
         `).join('');
     }
 
-    // Action buttons at the bottom
-    itemsHtml += '<div class="chat-picker-divider"></div>';
-    if (!window.__managed) {
-        itemsHtml += '<button class="chat-picker-story-btn" data-action="new-private">&#x1F512; New Private...</button>';
+    if (hiddenCount > 0) {
+        // No data-chat: the chat-switch path ignores it; chat.js routes it
+        // to Chat Manager. Empty check span keeps the active-update loop safe.
+        itemsHtml += `<div class="chat-picker-divider"></div>
+            <button class="chat-picker-item chat-picker-more">
+                <span class="chat-picker-item-check"></span>
+                <span class="chat-picker-item-name">See more \u2014 ${hiddenCount} older chat${hiddenCount === 1 ? '' : 's'}\u2026</span>
+            </button>`;
     }
 
     // Update sidebar chat picker dropdown
@@ -602,8 +833,8 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     if (sbDropdown) sbDropdown.innerHTML = itemsHtml;
 
     // Update header names (check all chats)
-    const active = allChats.find(c => c.name === activeChat);
-    const displayName = active?.display_name || activeChat || 'Chat';
+    const active = allChats.find(c => c.name === effectiveActive);
+    const displayName = active?.display_name || effectiveActive || 'Chat';
 
     const headerName = document.getElementById('chat-header-name');
     if (headerName) headerName.textContent = displayName;
@@ -611,8 +842,10 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     const sbName = document.getElementById('sb-chat-name');
     if (sbName) sbName.textContent = displayName;
 
-    // Notify sidebar to reload with correct chat settings
-    if (select) select.dispatchEvent(new Event('chat-list-ready'));
+    // Notify sidebar to reload — ONLY when the selection actually moved.
+    // Every render used to fire this, dragging a full sidebar reload behind
+    // any list refresh (archive, create, privacy toggle, reconnect resync).
+    if (select && select.value !== prev) select.dispatchEvent(new Event('chat-list-ready'));
 };
 
 const escapeHtml = (str) => {
@@ -620,6 +853,14 @@ const escapeHtml = (str) => {
     div.textContent = str;
     return div.innerHTML;
 };
+
+// Attribute-context escape: escapeHtml (textContent→innerHTML) does NOT
+// escape quotes, so a name in data-attr position could break out of the
+// attribute. All creation paths sanitize names today — belt-and-suspenders
+// (dropdown hunt #9).
+const escapeAttr = (str) => String(str)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // =============================================================================
 // TEXT EXTRACTION
@@ -629,48 +870,64 @@ export const extractProseText = (el) => {
     return Parsing.extractProseText(el);
 };
 
-export const extractEditableContent = (contentEl, timestamp) => {
-    const details = [...contentEl.querySelectorAll('details')];
-    const lastThink = details.filter(d => d.querySelector('summary').textContent.includes('Think')).pop();
-    
-    let text = '';
-    if (lastThink) text = `<think>${lastThink.querySelector('div')?.textContent || ''}</think>\n\n`;
-    text += [...contentEl.querySelectorAll('p')].map(p => p.textContent).join('\n\n');
-    return { text: text.trim(), timestamp };
-};
-
 // =============================================================================
 // EDIT MODE
 // =============================================================================
 
-export const enterEditMode = (msgEl, idx, timestamp) => {
+// Edit wave (2026-09-10). `text` is the stored markdown source of the prose
+// being edited (the caller pulls it from the history payload, thinking
+// stripped). The bubble is NOT gutted: everything past the last tool
+// accordion / gallery row — the prose of the turn's last row, the part the
+// server overwrites — is hidden and the editor box goes in its place, so a
+// tool turn keeps its tool half on screen. Exit = replaceMessage() from
+// history; the old innerHTML save/restore dropped every gallery and
+// accordion click handler. Esc cancels, Ctrl/Cmd+Enter saves.
+export const enterEditMode = (msgEl, text, { onSave, onCancel }) => {
     const content = msgEl.querySelector('.message-content');
     const toolbar = msgEl.querySelector('.toolbar');
-    const { text } = extractEditableContent(content, timestamp);
-    
-    content.dataset.original = content.innerHTML;
-    content.dataset.editTimestamp = timestamp;
-    msgEl.dataset.editTimestamp = timestamp;
-    
-    content.innerHTML = `
-        <textarea id="edit-textarea" class="edit-textarea" rows="10">${text}</textarea>
+    const kids = Array.from(content.children);
+    let cut = 0;
+    for (let i = kids.length - 1; i >= 0; i--) {
+        if (kids[i].matches('details.accordion-tool, .gallery-row')) { cut = i + 1; break; }
+    }
+    kids.slice(cut).forEach(k => { k.style.display = 'none'; });
+
+    const box = createElem('div', { class: 'edit-box' });
+    box.innerHTML = `
+        <textarea id="edit-textarea" class="edit-textarea" rows="3"></textarea>
         <div class="edit-actions">
-            <button id="save-edit" class="btn btn-primary" data-index="${idx}">Save</button>
-            <button id="cancel-edit" class="btn btn-secondary">Cancel</button>
+            <button id="save-edit" class="btn btn-primary" title="Ctrl+Enter">Save</button>
+            <button id="cancel-edit" class="btn btn-secondary" title="Esc">Cancel</button>
         </div>
     `;
-    toolbar.style.display = 'none';
+    content.appendChild(box);
+    const ta = box.querySelector('textarea');
+    ta.value = text;
+    const fit = () => {
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight + 2, Math.round(window.innerHeight * 0.6)) + 'px';
+    };
+    ta.addEventListener('input', fit);
+    ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onSave(ta.value); }
+    });
+    box.querySelector('#save-edit').onclick = () => onSave(ta.value);
+    box.querySelector('#cancel-edit').onclick = () => onCancel();
+    if (toolbar) toolbar.style.display = 'none';
     msgEl.classList.add('editing');
-    document.getElementById('edit-textarea').focus();
+    fit();
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
 };
 
-export const exitEditMode = (msgEl, restore = true) => {
-    const content = msgEl.querySelector('.message-content');
-    const toolbar = msgEl.querySelector('.toolbar');
-    if (restore) content.innerHTML = content.dataset.original;
-    toolbar.style.display = '';
-    msgEl.classList.remove('editing');
-    delete content.dataset.original;
+// Re-render ONE message from its history payload, in place — the swap the
+// end-of-turn path uses. Never the whole transcript.
+export const replaceMessage = (msgEl, msg, idx, total) => {
+    const { clone, msg: fresh } = createMessage(msg, idx, total, true);
+    msgEl.replaceWith(clone);
+    updateToolbars();
+    return fresh;
 };
 
 // =============================================================================
@@ -683,7 +940,12 @@ export const showToast = (msg, type = 'error', duration = 4000) => {
 
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    toast.innerHTML = `<span class="toast-text">${msg.replace(/</g, '&lt;')}</span><button class="toast-close">\u00d7</button>`;
+    // Full HTML-escape (& first) + length clamp + String() coercion \u2014 toasts are
+    // plain text, and PLUGIN_NOTICE lets any plugin supply the message.
+    const safe = String(msg).slice(0, 500)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    toast.innerHTML = `<span class="toast-text">${safe}</span><button class="toast-close">\u00d7</button>`;
     toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
     container.appendChild(toast);
 
@@ -696,5 +958,9 @@ export const showToast = (msg, type = 'error', duration = 4000) => {
         }
     }
 
-    setTimeout(() => toast.remove(), duration);
+    // duration <= 0 = persistent (close-button only). Previously the timer
+    // ran unconditionally, so duration 0 removed the toast on the next tick —
+    // the privacy-mode-removal notice was never seen by anyone (scout find,
+    // 2026-07-19; same bug killed the 1h env-build-cap message).
+    dismissLater(toast, duration);
 };

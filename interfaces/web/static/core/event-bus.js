@@ -197,7 +197,12 @@ export const Events = {
     CHAT_SWITCHED: 'chat_switched',
     CHAT_CREATED: 'chat_created',
     CHAT_CLEARED: 'chat_cleared',
-    
+    CHAT_TRIMMED: 'chat_trimmed',
+    CHAT_COMPRESSED: 'chat_compressed',
+    CHAT_ARCHIVED: 'chat_archived',
+    CHAT_DELETED: 'chat_deleted',
+    CHAT_RENAMED: 'chat_renamed',
+
     // TTS events
     TTS_PLAYING: 'tts_playing',
     TTS_STOPPED: 'tts_stopped',
@@ -242,6 +247,7 @@ export const Events = {
     // Plugin events
     PLUGIN_RELOADED: 'plugin_reloaded',
     PLUGIN_LOAD_ERROR: 'plugin_load_error',
+    PLUGIN_NOTICE: 'plugin_notice',   // generic plugin->UI toast: {plugin, message, severity}
 
     // Mind data changed — tool or UI wrote to memory/goal/knowledge/people.
     // Payload: {domain, scope, action}. Mind view uses it to live-refresh.

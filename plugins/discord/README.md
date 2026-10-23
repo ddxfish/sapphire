@@ -1,128 +1,164 @@
-# Discord
+# Discord Plugin
 
-Connect Sapphire to your Discord server. She can read messages, reply in channels, and react to mentions or keywords automatically via daemons.
+Connect Sapphire to Discord. The host plugin is the bot itself: accounts, the reply pipeline
+(mentions, name match, organic replies, batching, typing), images in and out, GIFs, silent
+reactions, and voice channels running on Sapphire's own conversation engine. **What she does on
+Discord is configured in Continuity**: chat and greetings are daemon tasks, voice is a Realtime
+rule, and each task's persona, provider, model and toolset are the brain behind it. Personality
+modules (people memory, birthdays, reminders, typos, presence) live in the separate
+`discord-personality` plugin.
 
-## Setup
+When the plugin is enabled it starts its own background daemon. You never add a daemon entry for
+the runtime itself — only Continuity tasks for what she should do.
 
-1. **Create a Discord Bot:**
-   - Go to [Discord Developer Portal](https://discord.com/developers/applications)
-   - Click "New Application", give it a name
-   - Go to **Bot** tab → click "Add Bot"
-   - Under **Privileged Gateway Intents**, enable **Message Content Intent**
-   - Copy the bot token
+Meticulously crafted by ddxfish and zeebie-the-zebra
 
-2. **Invite the Bot to Your Server:**
-   - Go to **OAuth2 → URL Generator**
-   - Select scopes: `bot`
-   - Select permissions: `Send Messages`, `Read Message History`, `View Channels`
-   - Open the generated URL and add the bot to your server
+## Requirements
 
-3. **Configure in Sapphire:**
-   - Open Settings → Plugins → Discord
-   - Click "Add Account"
-   - Paste your bot token
-   - Test the connection
+The plugin needs a few Python packages, and they are **not** installed for you. When you enable it,
+**Settings → Plugins → Discord** shows a **Missing: …** strip with an **Install** button (works in a
+conda env or venv; on plain system Python it shows the pip command). Restart Sapphire after installing.
 
-## Available Tools
+- **py-cord** (with voice support) — installs from a **pinned git commit**, so **Git must be on your PATH**.
+- **davey** + **PyNaCl** — encrypted voice receive (DAVE).
 
-The AI can use these when Discord tools are in the active toolset:
+> **If you ever installed `discord.py`, remove it first:** `pip uninstall discord.py`. It claims the
+> same `discord` import name as py-cord and the two cannot live in one environment.
 
-| Tool | What it does |
-|------|--------------|
-| `discord_get_servers` | List servers the bot is in and their text channels |
-| `discord_read_messages` | Read recent messages from a channel (up to 50) |
-| `discord_send_message` | Send a message to a channel (max 2000 chars) |
+**ffmpeg is not required.** Her speech is decoded in-process. For voice channels you also need
+**TTS streaming enabled** in Sapphire Settings.
 
-If you don't specify a channel, the tools use the current scope's default.
+## Upgrading
 
-## Multi-Account
+**From 1.x to 2.0:** on first boot your **bot accounts (tokens) are moved into Sapphire's credentials
+manager**, where every other plugin keeps its secrets, and the old plugin database is renamed aside as
+`discord.sqlite3.imported`. The plugin keeps no database of its own any more. Everything else the old
+versions stored (profiles, memories, channel messages, traces, transcripts, per-server overlays)
+belongs to features that left the host; delete the `.imported` file once your bots are online. Your
+Continuity tasks keep working. See [CHANGELOG.md](CHANGELOG.md).
 
-You can connect multiple Discord bots (one per server, or different bots for different purposes). Each gets its own scope in the sidebar dropdown.
+**A hand-installed copy in `user/plugins/discord`** always wins over the shipped one (the log says
+`[PLUGINS] 'discord' (user band) shadows the system copy`). Delete that folder and restart.
 
-1. Add accounts in Settings → Plugins → Discord
-2. Switch between them using the Discord scope dropdown in Chat Settings
+## Quick Start
 
-## Daemon (Auto-React to Messages)
+### 1. Create a Discord bot
 
-The real power is the daemon — Sapphire listens for Discord messages in the background and can respond automatically.
+1. [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**
+2. **Bot** tab → **Add Bot**
+3. Under **Privileged Gateway Intents** enable **Message Content Intent** (required) and
+   **Server Members Intent** (recommended — it fills the bot allowlist picker)
+4. Copy the bot token
 
-### Quick Setup
+### 2. Invite the bot to your server
 
-1. Go to **Schedule** → **+ New Task** → choose **Daemon**
-2. Set source to **Discord Message**
-3. Configure filters (see below)
-4. Enable **Auto-reply in channel** if you want the AI to respond in Discord
-5. Set a prompt, toolset, and optionally a named chat
+**OAuth2 → URL Generator**: scope `bot`; permissions `View Channels`, `Read Message History`,
+`Send Messages`, plus `Add Reactions` (silent reactions) and `Connect`, `Speak`,
+`Use Voice Activity` (voice). Open the generated URL and add the bot.
 
-### Filters
+### 3. Enable and add the account
 
-All filters are AND'd — every condition must match.
+1. **Settings → Plugins → Discord** → enable (install the missing packages if prompted)
+2. The settings page shows **Daemon is running** when healthy
+3. **Bot Accounts** → name + token → **Add Bot**
 
-| Filter | What it matches |
-|--------|----------------|
-| `mentioned` | `"true"` or `"false"` — was the bot @mentioned |
-| `guild_name` | Server name |
-| `guild_id` | Server ID (exact match, advanced) |
-| `channel_name` | Channel name |
-| `channel_id` | Channel ID (exact match, advanced) |
-| `username` | Message author |
-| `content_contains` | Substring in message text |
-| `channel_name_not` | Exclude a channel |
-| `guild_name_not` | Exclude a server |
-| `username_not` | Exclude a user (handy for ignoring other bots) |
+A saved bot stays offline until an enabled Continuity task selects it — that is the switch that
+decides which bots log in.
 
-### Example: Respond to Mentions
+### 4. Give her a job in Continuity
 
-```json
-{"mentioned": "true", "channel_name_not": "rules"}
-```
-Auto-reply on, prompt set to a helpful assistant. Bot replies when @mentioned anywhere except #rules.
+**Settings → Continuity → Daemon → + New** with source **Discord: Chat**, pick the bot, set
+filters (start with `mentioned = true`), leave **Auto-reply** on, set the persona / provider /
+toolset. She answers in that channel from the next message.
 
-### Example: Watch a Channel Silently
+Optional: **Realtime → + New → Discord: Voice channel** for voice (see [Voice](#voice)).
 
-```json
-{"channel_name": "announcements"}
-```
-Auto-reply off. AI reads announcements and saves them to memory.
+## Continuity sources
 
-## Example Commands
+| Source | Kind | What it does | Task fields |
+|---|---|---|---|
+| **Discord: Chat** | daemon | replies to messages that pass the filter | account, auto_reply |
+| **Discord: Greetings** | daemon | posts a good-morning / goodnight at set times, no replies | account, channels, greeting_time, goodnight_time |
+| **Discord: Voice channel** | realtime | turns voice ON for the channels its filter covers | account, auto_join, keep_chat_history |
 
-- "What's happening in the general channel?"
-- "Send a message to #dev saying the deploy is done"
-- "Read the last 30 messages in #support"
-- "What servers are you in?"
+Chat filters: `mentioned`, `guild_name`, `channel_name`, `username`, `content_contains` and the
+`_not` twins, plus `guild_id` / `channel_id`. Voice filters: server / channel name, their `_not`
+twins, and the ids. Filters match case-insensitively; a comma list is an allowlist. A task with no
+filter hears everything the bot can see.
+
+A bot that should reply and greet gets one task of each; either task keeps it online.
+
+## Settings (Settings → Plugins → Discord)
+
+| Tab | What it controls |
+|---|---|
+| **Conversation** | reply mode, human/bot organic chance, name match, batching window, **how many channel messages the AI sees** (fetched live when she replies), natural delay (read, type, pause like a person), ignored channels, **answer any bot** or the bot allowlist |
+| **Reactions** | the `[react:]` tag and silent reactions (chance, cooldown) |
+| **Safety** | DMs (off by default) and the per-person daily DM budget, tools stay in server, reply cooldown |
+| **Media** | images in (the task's model sees attachments), GIFs (provider, key, filter) |
+| **Voice** | turn cues, silence, addressing mode + aliases, follow-up window, barge-in hold, the voice prompt |
+| **Debug** | recent decisions — why she answered or stayed quiet, ids only |
+
+## Tools
+
+`discord_get_servers`, `discord_list_channels`, `discord_read_messages`, `discord_send_message`,
+`discord_send_image`, `discord_send_gif`, `discord_add_reaction`, `discord_join_voice`,
+`discord_leave_voice`. Add them to the task's toolset. Inside a server event her tools reach only
+that server (Safety → tools stay in server).
+
+Reply tags she may use in a normal reply: `[react:🔥]` and `[gif:search words]`.
+
+## Voice
+
+Voice is a **Realtime** rule: **Discord: Voice channel** names the bot; its filter says which voice
+channels it covers (no filter = all of them); its persona, provider, model and toolset run the
+voice chat. She joins on `/voice join` or her join tool, and leaves on `<<HANG UP>>` in her reply,
+`/voice leave`, or when the channel empties.
+
+**Auto-join** is opt-in per rule (off by default). On, she walks into a covered channel when a
+human is there. A channel she left on purpose is not auto-rejoined until it has emptied once.
+
+Slash commands (registered per bot): `/voice join` (defaults to the channel you are in) and
+`/voice leave`.
+
+Voice needs TTS streaming on in Sapphire and a working DAVE stack; the log line
+`[DISCORD] Voice stack:` at boot and `GET /api/plugin/discord/voice/status` say what applied.
+
+## Add-ons
+
+Other plugins extend the host through six hooks fired via core's hook runner —
+`discord_message_observed`, `discord_prompt_context`, `discord_reply_planned`,
+`discord_reply_sent`, `discord_voice_utterance`, `discord_tick` — each carrying
+`metadata['api']`, a small facade (send, react, image, presence, join / leave voice, recent
+messages). `hooks_out.py` documents the payloads. The `discord-personality` plugin is the
+reference add-on.
+
+## Operator & Diagnostics
+
+Routes under `/api/plugin/discord/`:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET health` | daemon state + connected accounts |
+| `GET/POST accounts`, `POST accounts/test`, `DELETE accounts/{name}`, `POST accounts/{name}/test` | bot accounts |
+| `GET settings` | daemon state + the built-in voice prompt default |
+| `GET channels/text`, `GET voice/targets`, `GET bots/allowlist` | what the connected bots can see (pickers) |
+| `GET voice/status` | live sessions, connections, the auto-join view, the voice stack |
+| `GET debug/decisions`, `POST debug/clear` | the last 20 decisions (ids, stage, reason, chunks) |
+
+See [OPERATIONS.md](OPERATIONS.md) for the runtime, storage, runbooks and recovery.
 
 ## Troubleshooting
 
-- **Bot offline** — Check token is valid, Message Content Intent is enabled
-- **Can't see messages** — Bot needs `Read Message History` and `View Channels` permissions in Discord
-- **Tools not available** — Add Discord tools to your active toolset
-- **Daemon not firing** — Check filter JSON, try empty `{}` first to confirm events arrive
-
-## Reference for AI
-
-Discord integration for server messaging and monitoring.
-
-SETUP:
-- Settings → Plugins → Discord
-- Add bot token, test connection
-- Multi-account via scopes
-
-AVAILABLE TOOLS:
-- discord_get_servers() - list servers and channels
-- discord_read_messages(channel?, count?) - read recent messages (1-50, default 20)
-- discord_send_message(channel?, text) - send message (max 2000 chars)
-
-DAEMON:
-- Source: discord_message
-- Filters: mentioned, guild_name, channel_name, username, content_contains, *_not variants
-- Task field: auto_reply (boolean) - post AI response back to channel
-
-SCOPES:
-- scope_discord ContextVar for multi-account routing
-- Sidebar dropdown to switch accounts
-
-TROUBLESHOOTING:
-- Bot offline: check token, check Message Content Intent enabled
-- No messages: check Discord permissions (Read Message History, View Channels)
-- Tools missing: add discord tools to active toolset
+| Problem | Things to check |
+|---|---|
+| **"Missing: py-cord…"** | click **Install**, or run the command shown; Git on PATH; `discord.py` not installed |
+| **Settings changes do nothing** | an older copy in `user/plugins/discord` shadows the shipped plugin |
+| **Bot shows disconnected** | no enabled Continuity task selects it; invalid token; missing portal intents (the account row shows `last_error`) |
+| **She never replies** | task exists for that bot; filters match; Reply mode allows it; Debug → Recent decisions names the stage that refused it |
+| **She ignores DMs** | Safety → Allow DMs is off by default |
+| **Voice join fails / "no rule covers it"** | a **Discord: Voice channel** rule for that bot whose filter covers the channel; Connect/Speak permissions |
+| **Voice transcribes but silent** | TTS streaming on; addressing mode may require saying her name |
+| **Bot allowlist empty** | Server Members Intent; refresh with the daemon running |
+| **Reactions not working** | Add Reactions permission; Reactions → silent reactions on |
+| **GIFs fail** | Media → GIF enabled + API key |

@@ -1,0 +1,8 @@
+{
+  "id": 3,
+  "title": "The Cellar",
+  "template": "A dry cellar. Nothing leads here by default — exits-editor tests add the ways in.",
+  "player_desc": "A dry cellar.",
+  "exits": [],
+  "objects": {}
+}

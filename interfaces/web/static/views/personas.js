@@ -3,11 +3,24 @@ import { listPersonas, getPersona, createPersona, updatePersona, deletePersona,
          duplicatePersona, loadPersona, createFromChat, uploadAvatar, deleteAvatar,
          importPersona, importPersonaCard,
          avatarUrl, avatarImg, avatarFallback } from '../shared/persona-api.js';
+import { confirmPersonaImport, extractBundleFromPng } from '../shared/persona-import-confirm.js';
 import { PERSONA_TABS } from '../shared/persona-tabs.js';
+import { deferWhileEditing, snapScroll } from '../shared/dom-guard.js';
+
+// Rename's roster repaint, held while the user is typing elsewhere in the
+// editor (DOM-refresh hunt 2026-09-08) — AND while a save is pending or in
+// flight (pre-push hunt, D2#1): a drain that rebuilt the fields from
+// selectedData while the 600 ms debounce was still armed made that save read
+// the rebuilt DOM and persist reverted text. Same hold as chat.js's sidebar.
+let _saveInFlight = 0;
+const softRender = deferWhileEditing(() => container, () => render(),
+    { busy: () => !!saveTimer || _saveInFlight > 0 });
+import { mountScenePicker } from '../shared/scene-picker.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
 import { helpPills } from '../features/video-link.js';
-import { getInitData } from '../shared/init-data.js';
+import { getInitData, refreshInitData } from '../shared/init-data.js';
+import { updateSettingsBatch } from '../shared/settings-api.js';
 import {
     renderScopeDropdowns,
     fetchScopeData,
@@ -87,6 +100,28 @@ export default {
     }
 };
 
+let favorites = [];   // PERSONA_FAVORITES — ordered; curates the chat sidebar strip
+
+async function toggleFavorite(name) {
+    const i = favorites.indexOf(name);
+    if (i >= 0) favorites.splice(i, 1); else favorites.push(name);
+    // In-place star flip — a full render() rebuilt the roster and reset its
+    // scroll position to the top (Krem repro 2026-08-30)
+    const star = container?.querySelector(`.panel-list-item[data-pl-id="${CSS.escape(name)}"] .pa-fav-star`);
+    if (star) {
+        const on = i < 0;
+        star.classList.toggle('faved', on);
+        star.textContent = on ? '\u2605' : '\u2606';
+        star.title = on ? 'Unfavorite' : 'Favorite — shows in the chat sidebar strip';
+    }
+    try {
+        await updateSettingsBatch({ PERSONA_FAVORITES: favorites });
+        await refreshInitData();   // chat strip reads init cache
+    } catch (e) {
+        ui.showToast('Favorite not saved', 'error');
+    }
+}
+
 async function loadData() {
     try {
         // Fetch init data first so we know which scope_declarations to drive from
@@ -105,6 +140,7 @@ async function loadData() {
         personas.sort((a, b) => a.name.localeCompare(b.name));
         initData = init.status === 'fulfilled' ? init.value : null;
         defaultPersona = initData?.personas?.default || '';
+        favorites = (initData?.settings?.PERSONA_FAVORITES || []).slice();
         const llmData = llmResp.status === 'fulfilled' ? llmResp.value : null;
         if (llmData) {
             llmProviders = llmData.providers || [];
@@ -130,20 +166,26 @@ function render() {
     const s = selectedData?.settings || {};
     const isActive = selectedData?.name === getCurrentPersona();
 
+    // Picking a persona re-renders the whole view — carry the roster's and
+    // the editor's scroll (both are inner scrollers) so a long list doesn't
+    // snap to the top on every click. DOM-refresh hunt 2026-09-08.
+    const restoreScroll = snapScroll(container, ['.panel-list-items', '.view-body']);
     container.innerHTML = `
         ${renderSectionTabs(PERSONA_TABS, 'personas', helpPills('Personas', { video: '5kqW-o35OU4', doc: 'PERSONAS.md', inline: true }))}
         <div class="two-panel">
             ${renderPanelList({
                 title: 'Personas',
+                listClass: 'pl-stacked',
                 items: personas,
                 selectedId: selectedName,
                 idKey: 'name',
                 renderItem: p => `
                     ${avatarImg(p.name, p.trim_color, 'pa-list-avatar', p.avatar)}
                     <div class="pa-list-info">
-                        <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}</span>
+                        <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}${_refsVaultPrompt(p) ? ` <span title="References vault prompt '${esc(p.settings?.prompt || '')}'">\u{1F5DD}</span>` : ''}</span>
                         ${p.tagline ? `<span class="pa-list-tagline">${esc(p.tagline)}</span>` : ''}
-                    </div>`,
+                    </div>
+                    <span class="pa-fav-star${favorites.includes(p.name) ? ' faved' : ''}" title="${favorites.includes(p.name) ? 'Unfavorite' : 'Favorite — shows in the chat sidebar strip'}">${favorites.includes(p.name) ? '\u2605' : '\u2606'}</span>`,
                 emptyHTML: '<div class="text-muted" style="padding:16px;font-size:var(--font-sm)">No personas yet. Click + to create one from your current chat settings.</div>',
                 addTitle: 'New from current chat',
                 extraHeader: '<button class="btn-sm" id="pa-import" title="Import persona">\u2B07</button>',
@@ -156,6 +198,7 @@ function render() {
             </div>
         </div>
     `;
+    restoreScroll();
 
     bindSectionTabs(container);
 
@@ -313,6 +356,16 @@ function renderDetail(p, isActive) {
                 </div>
 
                 <div class="pa-fence-group pa-fence-group-wide">
+                    <div class="pa-fence-heading"><span>Scene</span> <span class="pa-fence-heading-right" style="font-weight:400;color:var(--text-muted);font-size:0.6875rem;">default chat background for this persona</span></div>
+                    <div class="pa-fence">
+                        <div class="pa-fence-body">
+                            <input type="hidden" id="pa-s-background" data-key="background" value="${esc(s.background || '')}">
+                            <div id="pa-scene-mount"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pa-fence-group pa-fence-group-wide">
                     <div class="pa-fence-heading pa-fence-collapse-trigger">
                         <span class="accordion-arrow">&#x25B6;</span>
                         <span>Advanced</span>
@@ -348,25 +401,64 @@ function renderSettingField(key, label, settings, optionsHtml, opts = {}) {
     `;
 }
 
+// Safety net (shared by the three builders below): if the persona's saved
+// Does this persona reference a vault prompt? Unlocked: the roster carries
+// a vault flag; locked: the refs index (referenced names only) still knows.
+function _refsVaultPrompt(p) {
+    const name = p?.settings?.prompt;
+    if (!name) return false;
+    const list = initData?.prompts?.list || [];
+    if (list.some(x => x.name === name && x.vault)) return true;
+    return name in (initData?.prompts?.vault_refs || {});
+}
+
+// value isn't in the (possibly stale) list, show it as a synthetic selected
+// option rather than letting the <select> silently fall to the first option.
+function _withMissing(opts, list, current, keyFn) {
+    if (current && !list.some(keyFn)) {
+        opts.unshift(`<option value="${current}" selected>${current}</option>`);
+    }
+    return opts;
+}
+
 function renderPromptOptions(current) {
     const list = initData?.prompts?.list || [];
-    return list.map(p =>
-        `<option value="${p.name}"${p.name === current ? ' selected' : ''}>${p.name}</option>`
-    ).join('') || `<option value="${current || 'default'}">${current || 'default'}</option>`;
+    const opts = list.map(p =>
+        `<option value="${p.name}"${p.name === current ? ' selected' : ''}>${p.name}${p.vault ? ' \u{1F5DD}' : ''}</option>`
+    );
+    // Dangling vault name (locked): label the synthesized option so the
+    // reference reads as asleep, not broken — and stays removable here.
+    // The name itself never renders while sealed (ruling 2026-09-15).
+    // Hidden pack names (story costumes) get a 📖 label the same way.
+    if (current && !list.some(p => p.name === current)) {
+        const vrefs = initData?.prompts?.vault_refs || {};
+        const hidden = initData?.prompts?.hidden || {};
+        const label = current in vrefs ? '\u{1F5DD} vault prompt (locked)'
+            : hidden[current] === 'story' ? `${current} \u{1F4D6} (story)`
+            : current;
+        opts.unshift(`<option value="${current}" selected>${label}</option>`);
+        return opts.join('');
+    }
+    return opts.join('')
+        || `<option value="${current || 'default'}">${current || 'default'}</option>`;
 }
 
 function renderToolsetOptions(current) {
     const list = (initData?.toolsets?.list || []).filter(t => t.type !== 'module');
-    return list.map(t =>
+    const opts = list.map(t =>
         `<option value="${t.name}"${t.name === current ? ' selected' : ''}>${t.name} (${t.function_count})</option>`
-    ).join('') || `<option value="${current || 'all'}">${current || 'all'}</option>`;
+    );
+    return _withMissing(opts, list, current, t => t.name === current).join('')
+        || `<option value="${current || 'all'}">${current || 'all'}</option>`;
 }
 
 function renderSpiceSetOptions(current) {
     const list = initData?.spice_sets?.list || [];
-    return list.map(s =>
+    const opts = list.map(s =>
         `<option value="${s.name}"${s.name === current ? ' selected' : ''}>${s.emoji ? s.emoji + ' ' : ''}${s.name}</option>`
-    ).join('') || `<option value="${current || 'default'}">${current || 'default'}</option>`;
+    );
+    return _withMissing(opts, list, current, s => s.name === current).join('')
+        || `<option value="${current || 'default'}">${current || 'default'}</option>`;
 }
 
 function renderVoiceOptions(current) {
@@ -489,7 +581,8 @@ function bindEvents() {
 
     // Roster select / add / delete via the shared panel-list
     bindPanelList(container, {
-        onSelect: async (name) => {
+        onSelect: async (name, e) => {
+            if (e?.target?.closest('.pa-fav-star')) { await toggleFavorite(name); return; }
             selectedName = name;
             try { selectedData = await getPersona(selectedName); } catch { selectedData = null; }
             render();
@@ -582,63 +675,57 @@ function bindEvents() {
 
     // Import (accepts both persona bundles and plain prompt exports)
     container.querySelector('#pa-import')?.addEventListener('click', () => {
+        // Collision + overwrite (with the piece-preview) is handled by
+        // confirmPersonaImport — the dialog is just the file picker now.
+        // onImport/onImportFile return false so the dialog skips its own toast.
         showImportDialog({
             type: 'Persona or Prompt',
             fileAccept: '.json,.png',
-            overwrites: [
-                { key: 'prompt', label: 'Overwrite prompt if it already exists' },
-                { key: 'avatar', label: 'Overwrite avatar if it already exists' },
-            ],
-            existingNames: personas.map(p => p.name),
+            existingNames: [],
             validate: (d) => {
-                // Full persona bundle
                 if (d.sapphire_export && d.type === 'persona') return null;
-                // Prompt export (sapphire_export format)
                 if (d.sapphire_export && d.type === 'prompt' && d.prompt) return null;
-                // Legacy prompt export (just {name, prompt, components})
                 if (d.prompt && (d.prompt.type || d.prompt.content)) return null;
                 return 'Not a valid Sapphire persona or prompt export';
             },
             getName: (d) => d.name || 'imported',
-            onImport: async (parsed, { name, overwrites }) => {
+            onImport: async (parsed, { name }) => {
                 let bundle;
                 if (parsed.sapphire_export && parsed.type === 'persona') {
-                    // Full persona — pass through
                     bundle = parsed;
                 } else {
                     // Prompt-only — wrap into a persona bundle with defaults
                     const promptData = parsed.prompt || {};
                     const promptName = parsed.name || name;
                     bundle = {
-                        sapphire_export: true,
-                        type: 'persona',
-                        version: 1,
-                        name,
-                        tagline: '',
-                        trim_color: '',
-                        voice: {},
-                        avatar: null,
+                        sapphire_export: true, type: 'persona', version: 1,
+                        name, tagline: '', trim_color: '', voice: {}, avatar: null,
                         prompt: { name: promptName, data: promptData },
                     };
                     if (parsed.components) bundle.components = parsed.components;
                 }
                 bundle.name = name;
-                bundle.overwrite_prompt = overwrites.prompt || false;
-                bundle.overwrite_avatar = overwrites.avatar || false;
-                await importPersona(bundle);
-                selectedName = name.replace(/\s+/g, '_').toLowerCase();
-            },
-            onImportFile: async (file, { overwrites }) => {
-                const r = await importPersonaCard(file, {
-                    overwrite_prompt: overwrites.prompt,
-                    overwrite_avatar: overwrites.avatar,
+                await confirmPersonaImport({
+                    bundle,
+                    doImport: (flags) => importPersona({ ...bundle, ...flags }),
+                    onDone: async () => {
+                        selectedName = name.replace(/\s+/g, '_').toLowerCase();
+                        await loadData(); render();
+                    },
                 });
-                selectedName = r.name;
-                return r.name;
+                return false;
             },
-            onDone: async () => {
-                await loadData();
-                render();
+            onImportFile: async (file) => {
+                const bundle = (await extractBundleFromPng(file)) || { name: file.name.replace(/\.png$/i, '') };
+                await confirmPersonaImport({
+                    bundle,
+                    doImport: (flags) => importPersonaCard(file, flags),
+                    onDone: async () => {
+                        selectedName = (bundle.name || '').replace(/\s+/g, '_').toLowerCase();
+                        await loadData(); render();
+                    },
+                });
+                return false;
             },
         });
     });
@@ -697,6 +784,7 @@ function bindEvents() {
             const blob = await resp.blob();
             const audio = new Audio(URL.createObjectURL(blob));
             audio.onended = () => URL.revokeObjectURL(audio.src);
+            audio.onerror = () => URL.revokeObjectURL(audio.src);
             audio.play();
         } catch (err) {
             ui.showToast(err.message || 'TTS preview failed', 'error');
@@ -747,6 +835,20 @@ function bindEvents() {
     if (selectedData?.settings) {
         updateModelSelector(selectedData.settings.llm_primary || 'auto', selectedData.settings.llm_model || '');
     }
+
+    // Scene picker — the SAME shared component as the chat sidebar modal. Selecting a
+    // scene updates the hidden #pa-s-background (read by collectSettings) and saves.
+    const sceneMount = container.querySelector('#pa-scene-mount');
+    if (sceneMount) {
+        mountScenePicker(sceneMount, {
+            current: selectedData?.settings?.background || '',
+            onSelect: (name) => {
+                const hidden = container.querySelector('#pa-s-background');
+                if (hidden) hidden.value = name;
+                debouncedSave();
+            }
+        });
+    }
 }
 
 function collectSettings() {
@@ -773,6 +875,7 @@ function collectSettings() {
         llm_primary: get('llm_primary') || 'auto',
         llm_model: getSelectedModel(),
         trim_color: get('trim_color') || '#4a9eff',
+        background: get('background'),
         ...scopeFields,
     };
 }
@@ -780,6 +883,7 @@ function collectSettings() {
 function debouncedSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
+        saveTimer = null;   // the softRender hold reads this — never nulled before = held forever
         if (!selectedName || !selectedData) return;
         const data = {
             tagline: container.querySelector('#pa-tagline')?.value || '',
@@ -790,19 +894,26 @@ function debouncedSave() {
         if (nameInput && nameInput.value.trim() && nameInput.value.trim() !== selectedName) {
             data.name = nameInput.value.trim();
         }
+        _saveInFlight++;
         try {
             await updatePersona(selectedName, data);
             // Update local state
             if (data.name && data.name !== selectedName) {
                 selectedName = data.name.replace(/\s+/g, '_').toLowerCase();
                 await loadData();
-                render();
+                // Rename repaints the roster — but the user has usually tabbed on
+                // to the tagline by now; a full render() here yanked the cursor.
+                // Deferred until they leave the field (DOM-refresh hunt 2026-09-08).
+                softRender();
             } else {
                 selectedData.tagline = data.tagline;
                 selectedData.settings = data.settings;
             }
         } catch (e) {
             console.warn('Persona save failed:', e);
+        } finally {
+            _saveInFlight--;
+            softRender.kick();   // a repaint held by this save catches up now
         }
     }, 600);
 }

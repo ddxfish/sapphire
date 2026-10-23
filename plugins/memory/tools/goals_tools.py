@@ -281,6 +281,26 @@ def get_scopes():
         return [{"name": "default", "count": 0}]
 
 
+def status_summary(scope=None):
+    """Open top-level goal counts for the status plugin — answered here
+    because goals.db is ours (2026-09-11). Counts only; never creates the DB."""
+    out = {'goals_active': 0, 'goals_by_scope': {}, 'current': None}
+    try:
+        if not _get_db_path().exists():
+            return out
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT scope, COUNT(*) FROM goals WHERE parent_id IS NULL "
+                           "AND status = 'active' GROUP BY scope")
+            out['goals_by_scope'] = {row[0]: row[1] for row in cursor.fetchall()}
+        out['goals_active'] = sum(out['goals_by_scope'].values())
+        if scope:
+            out['current'] = {'goals_active': out['goals_by_scope'].get(scope, 0)}
+    except Exception as e:
+        logger.warning(f"goals status_summary failed: {e}")
+    return out
+
+
 def create_scope(name: str) -> bool:
     try:
         with _get_connection() as conn:

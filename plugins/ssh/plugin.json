@@ -1,5 +1,6 @@
 {
   "name": "ssh",
+  "short_display_name": "SSH",
   "version": "1.0.0",
   "description": "SSH — remote command execution on configured servers",
   "author": "sapphire",

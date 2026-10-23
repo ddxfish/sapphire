@@ -1,5 +1,6 @@
 {
     "name": "agents",
+    "short_display_name": "Agents",
     "version": "2.0.0",
     "description": "Spawn Agents \u2014 background AI workers that report back when done",
     "author": "sapphire",

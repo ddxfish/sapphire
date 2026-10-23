@@ -1,0 +1,831 @@
+"""Send messages and reactions on the daemon asyncio loop."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from plugins.discord.transport.voice_occupancy import voice_channel_occupancy
+
+logger = logging.getLogger(__name__)
+
+MESSAGE_LIMIT = 1900
+
+
+def _event_guild_id() -> str:
+    try:
+        from core.continuity.executor import current_event_data
+        event = current_event_data.get() or {}
+        if isinstance(event, dict):
+            return str(event.get('guild_id') or '').strip()
+    except ImportError:
+        return ''
+    return ''
+
+
+def _stop_playback_only(voice_client) -> None:
+    """Stop the audio player WITHOUT touching recording.
+
+    py-cord's VoiceClient.stop() also destroys the recording reader
+    (client.py: self._reader.stop()) despite its "stops playing audio"
+    docstring — one call from any playback path leaves the bot deaf for the
+    rest of the session (every "first reply works, then silence" failure,
+    2026-08-01). Recording teardown belongs to stop_recording()/disconnect.
+    """
+    player = getattr(voice_client, '_player', None)
+    if player:
+        try:
+            player.stop()
+        except Exception:
+            logger.debug('Playback-only stop: player stop failed', exc_info=True)
+    future = getattr(voice_client, '_player_future', None)
+    if future:
+        try:
+            voice_client.loop.call_soon_threadsafe(
+                voice_client._set_future_result_if_pending, future, None,
+            )
+        except Exception:
+            pass
+    voice_client._player = None
+    voice_client._player_future = None
+
+
+def _build_reference(channel_id: int, message_id: str | int):
+    import discord
+    try:
+        message_id = int(message_id)
+    except (TypeError, ValueError):
+        return None
+    if message_id <= 0:
+        return None
+    if hasattr(discord, 'MessageReference'):
+        return discord.MessageReference(message_id=message_id, channel_id=int(channel_id), fail_if_not_exists=False)
+    return discord.Object(id=message_id)
+
+
+def _split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
+    if not text:
+        return []
+    chunks = []
+    remaining = text.strip()
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            return chunks
+        split_at = remaining.rfind('\n', 0, limit)
+        if split_at <= 0:
+            split_at = remaining.rfind(' ', 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].strip()
+    return chunks
+
+
+class DiscordExecution:
+    def __init__(self, transport):
+        self.transport = transport
+        self._voice_listeners = {}
+        self._streaming_playback = {}
+
+    def _state_for_account(self, account_name: str | None) -> tuple[str, dict]:
+        account_name = str(account_name or '').strip()
+        if account_name and account_name in self.transport._accounts:
+            return account_name, self.transport._accounts[account_name]
+        if account_name:
+            # Never substitute: a renamed/typo'd account used to post as the
+            # first connected bot with no warning (hunt 2.13.0, row 27).
+            raise RuntimeError(f"Discord account '{account_name}' is not connected or not configured")
+        connected = self.transport.list_connected()
+        if connected:
+            name = connected[0]
+            return name, self.transport._accounts[name]
+        if self.transport._accounts:
+            name = next(iter(self.transport._accounts))
+            return name, self.transport._accounts[name]
+        raise RuntimeError('No Discord account is connected')
+
+    async def _resolve_channel(self, account_name: str | None, channel_ref: str | int):
+        name, state = self._state_for_account(account_name)
+        client = state.get('client')
+        if not client:
+            raise RuntimeError(f"Account '{name}' has no Discord client")
+        channel_ref = str(channel_ref or '').strip().lstrip('#')
+        if not channel_ref:
+            raise RuntimeError('Channel is required')
+        if channel_ref.isdigit():
+            channel_id = int(channel_ref)
+            channel = client.get_channel(channel_id)
+            if channel is None:
+                channel = await client.fetch_channel(channel_id)
+            if channel is None:
+                raise RuntimeError(f'Channel {channel_id} not found')
+            return name, channel
+        target = channel_ref.lower()
+        preferred_guild_id = str(_event_guild_id() or '').strip()
+        guilds = list(getattr(client, 'guilds', []) or [])
+        if preferred_guild_id:
+            guild = client.get_guild(int(preferred_guild_id))
+            if guild:
+                guilds = [guild] + [g for g in guilds if g.id != guild.id]
+        for guild in guilds:
+            for ch in getattr(guild, 'text_channels', []) or []:
+                if getattr(ch, 'name', '').lower() == target:
+                    return name, ch
+        raise RuntimeError(f"Channel '{channel_ref}' not found")
+
+    async def resolve_channel_id(self, account_name: str | None, channel_ref: str | int) -> str:
+        _, channel = await self._resolve_channel(account_name, channel_ref)
+        return str(channel.id)
+
+    async def resolve_voice_channel(self, account_name: str | None, channel_ref: str | int) -> dict:
+        """Resolve a voice channel by id or name (_resolve_channel is text-only)."""
+        name, state = self._state_for_account(account_name)
+        client = state.get('client')
+        if not client:
+            raise RuntimeError(f"Account '{name}' has no Discord client")
+        ref = str(channel_ref or '').strip().lstrip('#')
+        if not ref:
+            raise RuntimeError('Voice channel is required')
+
+        def _payload(ch):
+            return {
+                'channel_id': str(ch.id),
+                'guild_id': str(getattr(getattr(ch, 'guild', None), 'id', '') or ''),
+                'channel_name': getattr(ch, 'name', '') or '',
+            }
+
+        if ref.isdigit():
+            channel = client.get_channel(int(ref))
+            if channel is None:
+                channel = await client.fetch_channel(int(ref))
+            if channel is None:
+                raise RuntimeError(f'Voice channel {ref} not found')
+            if not hasattr(channel, 'connect'):
+                raise RuntimeError(f"Channel '{getattr(channel, 'name', ref)}' is not a voice channel")
+            return _payload(channel)
+
+        def _squash(text: str) -> str:
+            return ''.join(c for c in str(text).lower() if c.isalnum())
+
+        target = ref.lower()
+        squashed = _squash(ref)
+        preferred_guild_id = str(_event_guild_id() or '').strip()
+        guilds = list(getattr(client, 'guilds', []) or [])
+        if preferred_guild_id:
+            guild = client.get_guild(int(preferred_guild_id))
+            if guild:
+                guilds = [guild] + [g for g in guilds if g.id != guild.id]
+        fallback = None
+        for guild in guilds:
+            for ch in getattr(guild, 'voice_channels', []) or []:
+                ch_name = getattr(ch, 'name', '') or ''
+                if ch_name.lower() == target:
+                    return _payload(ch)
+                if fallback is None and squashed and _squash(ch_name) == squashed:
+                    fallback = ch
+        if fallback is not None:
+            return _payload(fallback)
+        raise RuntimeError(f"Voice channel '{channel_ref}' not found")
+
+    async def trigger_typing(self, account_name: str | None, channel_id: str | int) -> None:
+        try:
+            _, channel = await self._resolve_channel(account_name, channel_id)
+            await channel.trigger_typing()
+        except Exception as exc:
+            logger.debug('Typing indicator failed for channel %s: %s', channel_id, exc)
+
+    async def hold_typing(self, account_name: str | None, channel_id: str | int, duration: float) -> None:
+        """Pulse Discord typing indicator for a realistic duration."""
+        try:
+            _, channel = await self._resolve_channel(account_name, channel_id)
+        except Exception as exc:
+            logger.debug('Typing hold skipped for channel %s: %s', channel_id, exc)
+            return
+        duration = max(0.0, float(duration))
+        if duration <= 0:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            end_time = loop.time() + duration
+            async with channel.typing():
+                while loop.time() < end_time:
+                    await asyncio.sleep(min(4, end_time - loop.time()))
+        except Exception as exc:
+            logger.debug('Typing hold failed for channel %s: %s', channel_id, exc)
+
+    async def send_message(
+        self,
+        channel_id: str | int,
+        text: str,
+        *,
+        account_name: str | None = None,
+        reply_to_message_id: str | int | None = None,
+    ) -> list[dict]:
+        name, channel = await self._resolve_channel(account_name, channel_id)
+        reference = None
+        if reply_to_message_id:
+            reference = _build_reference(int(channel.id), reply_to_message_id)
+        sent = []
+        for chunk in _split_message(text):
+            message = await channel.send(chunk, reference=reference)
+            sent.append({'message_id': str(message.id), 'channel_id': str(channel.id), 'account': name})
+            reference = None
+        return sent
+
+    async def read_messages(
+        self,
+        channel_id: str | int,
+        *,
+        count: int = 20,
+        account_name: str | None = None,
+    ) -> list[dict]:
+        """The last `count` messages in a channel, OLDEST first.
+
+        This was a stub returning [] — the tool reported success on an empty
+        channel and she had no way to learn a message id (hunt 2026-09-12, C4).
+        """
+        name, channel = await self._resolve_channel(account_name, channel_id)
+        count = max(1, min(50, int(count or 20)))
+        rows: list[dict] = []
+        async for message in channel.history(limit=count):
+            author = getattr(message, 'author', None)
+            created = getattr(message, 'created_at', None)
+            rows.append({
+                'message_id': str(message.id),
+                'author_id': str(getattr(author, 'id', '') or ''),
+                'author': str(getattr(author, 'display_name', '') or getattr(author, 'name', '') or ''),
+                'content': str(getattr(message, 'clean_content', '') or getattr(message, 'content', '') or ''),
+                'created_at': created.isoformat(timespec='minutes') if created else '',
+                'attachments': len(getattr(message, 'attachments', []) or []),
+                'channel_id': str(channel.id),
+                'account': name,
+            })
+        rows.reverse()
+        return rows
+
+    async def edit_message(
+        self,
+        channel_id: str | int,
+        message_id: str | int,
+        text: str,
+        *,
+        account_name: str | None = None,
+    ) -> dict:
+        _, channel = await self._resolve_channel(account_name, channel_id)
+        message = await channel.fetch_message(int(message_id))
+        edited = await message.edit(content=text)
+        return {
+            'status': 'edited',
+            'message_id': str(edited.id),
+            'channel_id': str(channel.id),
+        }
+
+    async def add_reaction(
+        self,
+        channel_id: str | int,
+        message_id: str | int,
+        emoji: str,
+        *,
+        account_name: str | None = None,
+    ) -> dict:
+        _, channel = await self._resolve_channel(account_name, channel_id)
+        message = await channel.fetch_message(int(message_id))
+        await message.add_reaction(emoji)
+        return {'status': 'reacted', 'message_id': str(message_id), 'emoji': emoji}
+
+    async def _voice_channel_for_connect(self, account_name: str | None, channel_id: str | int):
+        import discord
+        name, state = self._state_for_account(account_name)
+        client = state.get('client')
+        if not client:
+            raise RuntimeError(f"Account '{name}' has no Discord client")
+        channel_id = int(channel_id)
+        channel = client.get_channel(channel_id)
+        if channel is None:
+            channel = await client.fetch_channel(channel_id)
+        if channel is None:
+            raise RuntimeError(f'Voice channel {channel_id} not found')
+        if not isinstance(channel, discord.VoiceChannel):
+            stage = getattr(discord, 'StageChannel', None)
+            if not stage or not isinstance(channel, stage):
+                if getattr(channel, 'type', None) not in (2, 13):
+                    raise RuntimeError(f'Channel {channel_id} is not a voice channel')
+        if not hasattr(channel, 'connect'):
+            raise RuntimeError(f'Channel {channel_id} does not support voice connect')
+        return name, state, channel
+
+    async def get_voice_channel_state(self, account_name: str | None, channel_id: str | int) -> dict:
+        name, state, channel = await self._voice_channel_for_connect(account_name, channel_id)
+        bot_id = str(state.get('bot_id') or getattr(getattr(state.get('client'), 'user', None), 'id', '') or '')
+        occupancy = voice_channel_occupancy(channel, bot_id)
+        guild = getattr(channel, 'guild', None)
+        return {
+            'status': 'ok',
+            'account_name': name,
+            'channel_id': str(channel.id),
+            'guild_id': str(getattr(guild, 'id', '') or ''),
+            'channel_name': str(getattr(channel, 'name', '') or ''),
+            **occupancy,
+        }
+
+    async def connect_voice(self, account_name: str | None, channel_id: str | int) -> dict:
+        name, _state, channel = await self._voice_channel_for_connect(account_name, channel_id)
+        guild = channel.guild
+        existing = getattr(guild, 'voice_client', None) if guild else None
+        if existing and getattr(existing, 'channel', None) and str(existing.channel.id) == str(channel.id):
+            return {
+                'status': 'connected',
+                'account_name': name,
+                'channel_id': str(channel.id),
+                'guild_id': str(getattr(guild, 'id', '') or ''),
+            }
+        if existing:
+            await existing.disconnect(force=True)
+        try:
+            await channel.connect(reconnect=True, timeout=30)
+        except Exception as exc:
+            message = str(exc)
+            if 'PyNaCl' in message or 'pynacl' in message.lower():
+                message = f'{message} — install PyNaCl in the Sapphire environment (pip install PyNaCl) and reload the plugin'
+            raise RuntimeError(message) from exc
+        voice_client = getattr(guild, 'voice_client', None) if guild else None
+        dave_state = {}
+        if voice_client:
+            from plugins.discord.voice.dave_session import log_voice_dave_state, wait_for_dave_ready
+            dave_state = await wait_for_dave_ready(voice_client)
+            log_voice_dave_state(voice_client, context='after_connect')
+        return {
+            'status': 'connected',
+            'account_name': name,
+            'channel_id': str(channel.id),
+            'guild_id': str(getattr(guild, 'id', '') or ''),
+            'dave': dave_state,
+        }
+
+    async def _voice_client_for_channel(self, account_name: str | None, channel_id: str | int):
+        _name, _state, channel = await self._voice_channel_for_connect(account_name, channel_id)
+        guild = channel.guild
+        voice_client = getattr(guild, 'voice_client', None) if guild else None
+        if not voice_client or not getattr(voice_client, 'channel', None):
+            raise RuntimeError('Bot is not connected to a voice channel')
+        if str(voice_client.channel.id) != str(channel_id):
+            raise RuntimeError('Bot voice client is connected to a different channel')
+        return _name, voice_client
+
+    async def start_voice_listener(
+        self,
+        account_name: str | None,
+        channel_id: str | int,
+        *,
+        on_utterance,
+        loop=None,
+        silence_seconds: float = 1.2,
+        min_duration_seconds: float = 0.5,
+        on_pcm_frame=None,
+    ) -> dict:
+        from plugins.discord.transport.discord_voice_sink import UtteranceVoiceSink
+        from plugins.discord.voice.voice_deps import voice_receive_error
+        hint = voice_receive_error()
+        if hint:
+            raise RuntimeError(hint)
+        name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        key = (name, str(channel_id))
+        if key in self._voice_listeners:
+            entry = self._voice_listeners[key]
+            cached_client = entry.get('voice_client')
+            sink = entry.get('sink')
+            if sink is not None:
+                if on_utterance is not None:
+                    sink.on_utterance = on_utterance
+                if on_pcm_frame is not None:
+                    sink.on_pcm_frame = on_pcm_frame
+            if cached_client and getattr(cached_client, 'is_recording', lambda: False)():
+                return {'status': 'already_listening', 'account_name': name, 'channel_id': str(channel_id)}
+            if cached_client and sink is not None:
+                try:
+                    if hasattr(sink, 'init'):
+                        sink.init(cached_client)
+                    elif hasattr(sink, 'vc'):
+                        sink.vc = cached_client
+                    cached_client.start_recording(sink, lambda *args, **kwargs: None)
+                    self._voice_listeners[key] = {'sink': sink, 'voice_client': cached_client}
+                    logger.info('Resumed voice recording for %s:%s', name, channel_id)
+                    return {'status': 'already_listening', 'account_name': name, 'channel_id': str(channel_id)}
+                except Exception as exc:
+                    logger.debug('Voice recording resume failed for %s:%s: %s', name, channel_id, exc)
+            stale_sink = entry.get('sink')
+            self._voice_listeners.pop(key, None)
+            if stale_sink and hasattr(stale_sink, 'cleanup'):
+                stale_sink.cleanup()
+            logger.info('Restarting stale voice listener for %s:%s', name, channel_id)
+        from plugins.discord.voice.dave_session import log_voice_dave_state, wait_for_dave_ready
+        dave_state = await wait_for_dave_ready(voice_client)
+        if dave_state.get('is_dave') and not dave_state.get('dave_ready'):
+            raise RuntimeError('DAVE voice encryption is not ready yet — STT would hear corrupted audio. Retry in a few seconds or check davey/py-cord install.')
+        log_voice_dave_state(voice_client, context='before_recording')
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        sink = UtteranceVoiceSink(
+            on_utterance=on_utterance,
+            loop=loop,
+            silence_seconds=silence_seconds,
+            min_duration_seconds=min_duration_seconds,
+            on_pcm_frame=on_pcm_frame,
+        )
+        if hasattr(sink, 'init'):
+            sink.init(voice_client)
+        elif hasattr(sink, 'vc'):
+            sink.vc = voice_client
+        try:
+            voice_client.start_recording(sink, lambda *args, **kwargs: None)
+        except Exception as exc:
+            sink.cleanup()
+            raise RuntimeError(f'Voice recording failed: {exc}') from exc
+        logger.info(
+            'Voice recording started for %s:%s',
+            name,
+            channel_id,
+        )
+        self._voice_listeners[key] = {'sink': sink, 'voice_client': voice_client}
+        return {'status': 'listening', 'account_name': name, 'channel_id': str(channel_id)}
+
+    async def stop_voice_listener(self, account_name: str | None, channel_id: str | int) -> dict:
+        name, _voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        key = (name, str(channel_id))
+        entry = self._voice_listeners.pop(key, None)
+        if not entry:
+            return {'status': 'not_listening', 'account_name': name, 'channel_id': str(channel_id)}
+        voice_client = entry.get('voice_client')
+        sink = entry.get('sink')
+        try:
+            if voice_client and getattr(voice_client, 'is_recording', lambda: False)():
+                voice_client.stop_recording()
+        except Exception as exc:
+            logger.debug('Voice stop_recording failed for %s:%s: %s', name, channel_id, exc)
+        if sink and hasattr(sink, 'cleanup'):
+            sink.cleanup()
+        return {'status': 'stopped', 'account_name': name, 'channel_id': str(channel_id)}
+
+    async def play_voice_audio(
+        self,
+        account_name: str | None,
+        channel_id: str | int,
+        audio_bytes: bytes,
+        *,
+        audio_format: str = 'wav',
+    ) -> dict:
+        """Play one whole TTS blob (batch lane: speak tools, the streaming-TTS
+        fallback, the hang-up chime).
+
+        Decoded IN-PROCESS to 48 kHz stereo PCM and fed through the same
+        QueuedPCMSource the conversational lane streams into. This was the
+        plugin's only ffmpeg site (H17, hunt 2026-09-12): blob → temp file →
+        FFmpegPCMAudio subprocess, plus a per-key temp path the Windows unlink
+        could leak. No subprocess, no file, one playback path.
+        """
+        from plugins.discord.transport.discord_streaming_playback import (
+            StreamingVoicePlayback,
+            build_pcm_audio_source,
+        )
+        from plugins.discord.transport.discord_tts_chunks import decode_tts_audio
+        name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        if not audio_bytes:
+            return {'status': 'empty', 'account_name': name, 'channel_id': str(channel_id)}
+        label = str(audio_format or 'audio').lstrip('.')
+        pcm = await asyncio.to_thread(decode_tts_audio, audio_bytes, label=label)
+        if not pcm:
+            return {
+                'status': 'error',
+                'error': f'could not decode {label} audio for playback',
+                'account_name': name,
+                'channel_id': str(channel_id),
+            }
+        from plugins.discord.voice.dave_session import wait_for_dave_ready
+        dave_state = await wait_for_dave_ready(voice_client)
+        if dave_state.get('is_dave') and not dave_state.get('dave_ready'):
+            return {
+                'status': 'error',
+                'error': 'DAVE voice encryption not ready — playback would sound garbled',
+                'account_name': name,
+                'channel_id': str(channel_id),
+                'dave': dave_state,
+            }
+        if voice_client.is_playing():
+            _stop_playback_only(voice_client)
+        await self._stop_streaming_session(name, str(channel_id), voice_client=voice_client)
+        playback = StreamingVoicePlayback()
+        playback.start()
+        playback.feed(pcm)
+        playback.finish()
+
+        def _after_playback(error):
+            if error:
+                logger.warning('Voice playback error for %s:%s: %s', name, channel_id, error)
+
+        voice_client.play(build_pcm_audio_source(playback), after=_after_playback)
+        return {
+            'status': 'playing',
+            'account_name': name,
+            'channel_id': str(channel_id),
+            'bytes': len(audio_bytes),
+            'pcm_bytes': len(pcm),
+        }
+
+    def _streaming_key(self, account_name: str, channel_id: str) -> tuple[str, str]:
+        return (str(account_name), str(channel_id))
+
+    async def _stop_streaming_session(
+        self,
+        account_name: str,
+        channel_id: str,
+        *,
+        voice_client=None,
+    ) -> None:
+        key = self._streaming_key(account_name, channel_id)
+        playback = self._streaming_playback.pop(key, None)
+        if playback is not None:
+            playback.stop()
+        if voice_client is None:
+            try:
+                _name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
+            except Exception:
+                return
+        if voice_client and voice_client.is_playing():
+            _stop_playback_only(voice_client)
+
+    async def start_streaming_playback(self, account_name: str | None, channel_id: str | int) -> dict:
+        from plugins.discord.transport.discord_streaming_playback import (
+            StreamingVoicePlayback,
+            build_pcm_audio_source,
+        )
+
+        name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        from plugins.discord.voice.dave_session import wait_for_dave_ready
+
+        dave_state = await wait_for_dave_ready(voice_client)
+        if dave_state.get('is_dave') and not dave_state.get('dave_ready'):
+            return {
+                'status': 'error',
+                'error': 'DAVE voice encryption not ready — playback would sound garbled',
+                'account_name': name,
+                'channel_id': str(channel_id),
+                'dave': dave_state,
+            }
+        key = self._streaming_key(name, str(channel_id))
+        existing = self._streaming_playback.get(key)
+        if existing is not None and not existing._stopped:
+            existing.begin_turn()
+            if not voice_client.is_playing():
+                source = build_pcm_audio_source(existing)
+                current = existing
+
+                def _after_playback(error):
+                    if error:
+                        logger.warning(
+                            'Streaming voice playback error for %s:%s: %s',
+                            name,
+                            channel_id,
+                            error,
+                        )
+                    if self._streaming_playback.get(key) is current:
+                        self._streaming_playback.pop(key, None)
+
+                voice_client.play(source, after=_after_playback)
+            return {
+                'status': 'streaming',
+                'account_name': name,
+                'channel_id': str(channel_id),
+                'reused': True,
+            }
+
+        await self._stop_streaming_session(name, str(channel_id), voice_client=voice_client)
+        playback = StreamingVoicePlayback()
+        playback.start()
+        source = build_pcm_audio_source(playback)
+        self._streaming_playback[key] = playback
+        current = playback
+
+        def _after_playback(error):
+            if error:
+                logger.warning(
+                    'Streaming voice playback error for %s:%s: %s',
+                    name,
+                    channel_id,
+                    error,
+                )
+            if self._streaming_playback.get(key) is current:
+                self._streaming_playback.pop(key, None)
+
+        voice_client.play(source, after=_after_playback)
+        return {'status': 'streaming', 'account_name': name, 'channel_id': str(channel_id)}
+
+    async def feed_streaming_chunk(
+        self,
+        account_name: str | None,
+        channel_id: str | int,
+        chunk: dict,
+    ) -> dict:
+        name, _voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        key = self._streaming_key(name, str(channel_id))
+        playback = self._streaming_playback.get(key)
+        if playback is None:
+            return {'status': 'not_streaming', 'account_name': name, 'channel_id': str(channel_id)}
+        playback.feed_chunk(chunk)
+        return {
+            'status': 'fed',
+            'account_name': name,
+            'channel_id': str(channel_id),
+            'pending_bytes': playback.pending_bytes(),
+        }
+
+    async def finish_streaming_playback(self, account_name: str | None, channel_id: str | int) -> dict:
+        name, _voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        key = self._streaming_key(name, str(channel_id))
+        playback = self._streaming_playback.get(key)
+        if playback is None:
+            return {'status': 'not_streaming', 'account_name': name, 'channel_id': str(channel_id)}
+        playback.finish()
+        return {'status': 'finishing', 'account_name': name, 'channel_id': str(channel_id)}
+
+    async def stop_streaming_playback(self, account_name: str | None, channel_id: str | int) -> dict:
+        name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        await self._stop_streaming_session(name, str(channel_id), voice_client=voice_client)
+        return {'status': 'stopped', 'account_name': name, 'channel_id': str(channel_id)}
+
+    async def wait_streaming_playback(
+        self,
+        account_name: str | None,
+        channel_id: str | int,
+        *,
+        timeout: float = 180.0,
+    ) -> dict:
+        import asyncio
+
+        name, voice_client = await self._voice_client_for_channel(account_name, channel_id)
+        key = self._streaming_key(name, str(channel_id))
+        playback = self._streaming_playback.get(key)
+        if playback is None:
+            return {'status': 'not_streaming', 'account_name': name, 'channel_id': str(channel_id)}
+
+        def _wait() -> str:
+            # Frames drain only while py-cord's player pulls them. If the player
+            # is gone (never started, stopped underneath us) the queue can never
+            # empty — waiting the full timeout would hold the turn open for 3 min.
+            import time
+            deadline = time.monotonic() + max(0.0, float(timeout))
+            idle_polls = 0
+            while not playback.is_drained():
+                if time.monotonic() >= deadline:
+                    return 'timeout'
+                try:
+                    playing = bool(voice_client.is_playing())
+                except Exception:
+                    playing = True
+                idle_polls = 0 if playing else idle_polls + 1
+                if idle_polls >= 3:
+                    return 'not_playing'
+                playback.wait(timeout=0.25)
+            return 'drained'
+
+        status = await asyncio.to_thread(_wait)
+        if status != 'drained':
+            logger.warning('Streaming playback wait ended early for %s:%s: %s', name, channel_id, status)
+        return {'status': status, 'account_name': name, 'channel_id': str(channel_id)}
+
+    async def disconnect_voice(self, account_name: str | None, channel_id: str | int | None = None) -> dict:
+        name, state = self._state_for_account(account_name)
+        client = state.get('client')
+        if not client:
+            raise RuntimeError(f"Account '{name}' has no Discord client")
+        for key in list(self._voice_listeners):
+            if key[0] == name and (not channel_id or key[1] == str(channel_id)):
+                # Clean the sink here: leave() disconnects first, so the later
+                # stop_voice_listener raised on "not connected" before it could
+                # (row 37) — timers, buffers and the playback entry leaked.
+                entry = self._voice_listeners.pop(key, None) or {}
+                try:
+                    vc = entry.get('voice_client')
+                    if vc and getattr(vc, 'is_recording', lambda: False)():
+                        vc.stop_recording()
+                except Exception:
+                    logger.debug('stop_recording on leave failed for %s', key, exc_info=True)
+                try:
+                    sink = entry.get('sink')
+                    if sink and hasattr(sink, 'cleanup'):
+                        sink.cleanup()
+                except Exception:
+                    logger.debug('sink cleanup on leave failed for %s', key, exc_info=True)
+        disconnected = False
+        left_channel = None
+        for guild in getattr(client, 'guilds', []) or []:
+            voice_client = getattr(guild, 'voice_client', None)
+            if not voice_client or not getattr(voice_client, 'channel', None):
+                continue
+            if channel_id and str(voice_client.channel.id) != str(channel_id):
+                continue
+            left_channel = voice_client.channel
+            try:
+                from plugins.discord.voice.dave_voice_patches import forget_ssrcs
+                forget_ssrcs(list(getattr(voice_client, '_ssrc_to_id', {}) or {})
+                             + list((getattr(voice_client, '_id_to_ssrc', {}) or {}).values()))
+            except Exception:
+                logger.debug('DAVE ssrc eviction skipped', exc_info=True)
+            await voice_client.disconnect(force=True)
+            disconnected = True
+            break
+        if not disconnected:
+            return {'status': 'not_connected', 'account_name': name, 'channel_id': str(channel_id or '')}
+        return {
+            'status': 'disconnected',
+            'account_name': name,
+            'channel_id': str(getattr(left_channel, 'id', '') or channel_id or ''),
+            'guild_id': str(getattr(getattr(left_channel, 'guild', None), 'id', '') or ''),
+        }
+
+    async def change_presence(
+        self,
+        account_name: str | None,
+        *,
+        status: str = 'online',
+        activity: str | None = None,
+    ) -> dict:
+        import discord
+        from plugins.discord.transport.activity_parser import parse_activity_entry
+        name, state = self._state_for_account(account_name)
+        client = state.get('client')
+        if not client:
+            raise RuntimeError(f"Account '{name}' has no Discord client")
+        status_map = {
+            'online': discord.Status.online,
+            'idle': discord.Status.idle,
+            'dnd': discord.Status.dnd,
+            'invisible': discord.Status.invisible,
+        }
+        discord_status = status_map.get(str(status or 'online').lower(), discord.Status.online)
+        discord_activity = None
+        activity_text = str(activity or '').strip()
+        if activity_text:
+            kind, label = parse_activity_entry(activity_text)
+            if kind == 'playing':
+                discord_activity = discord.Game(name=label or activity_text)
+            elif kind == 'watching':
+                discord_activity = discord.Activity(type=discord.ActivityType.watching, name=label or activity_text)
+            elif kind == 'competing':
+                discord_activity = discord.Activity(type=discord.ActivityType.competing, name=label or activity_text)
+            elif kind == 'custom':
+                discord_activity = discord.CustomActivity(name=label or activity_text)
+            elif kind == 'listening':
+                discord_activity = discord.Activity(type=discord.ActivityType.listening, name=label or activity_text)
+        await client.change_presence(status=discord_status, activity=discord_activity)
+        return {
+            'status': 'updated',
+            'account_name': name,
+            'presence': {
+                'status': status,
+                'activity': activity_text,
+            },
+        }
+
+    async def send_file(
+        self,
+        channel_id: str | int,
+        data: bytes,
+        filename: str,
+        *,
+        caption: str = '',
+        account_name: str | None = None,
+    ) -> dict:
+        """Post bytes as an attachment (the image lane: core.images resolved
+        the bytes, nothing here ever reads a path)."""
+        import io
+
+        import discord
+
+        _, channel = await self._resolve_channel(account_name, channel_id)
+        attachment = discord.File(io.BytesIO(data), filename=str(filename or 'image.png'))
+        message = await channel.send(content=(caption or None), file=attachment)
+        return {'message_id': str(message.id), 'channel_id': str(channel.id)}
+
+    async def channel_reach(self, account_name: str | None, channel_ref: str | int) -> dict:
+        """Where a channel lives: its guild id ('' for a DM). The tools' reach
+        rule (H3): inside a server event she may only act in that server."""
+        _, channel = await self._resolve_channel(account_name, channel_ref)
+        guild = getattr(channel, 'guild', None)
+        return {
+            'channel_id': str(channel.id),
+            'guild_id': str(getattr(guild, 'id', '') or ''),
+            'is_dm': guild is None,
+        }
+
+    async def send_url(
+        self,
+        channel_id: str | int,
+        url: str,
+        *,
+        account_name: str | None = None,
+    ) -> dict:
+        _, channel = await self._resolve_channel(account_name, channel_id)
+        message = await channel.send(url)
+        return {'message_id': str(message.id), 'channel_id': str(channel.id)}

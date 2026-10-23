@@ -30,13 +30,35 @@ logger = logging.getLogger(__name__)
 scope_rag:       ContextVar       = ContextVar('scope_rag',       default=None)
 scope_private:   ContextVar[bool] = ContextVar('scope_private',   default=False)
 
+# Save-time provenance context for tool executors ({chat, persona, model,
+# channel} dict or None). Not a scope — setting=None keeps it out of
+# apply_scopes, sidebar dropdowns, persona inheritance, continuity task
+# fields, and the force-None closure. Registry membership is what buys it
+# snapshot/restore, so it survives Starlette's per-yield context resets on
+# the same rail scopes do. Consumers read it via set at chat setup →
+# snapshot → restore in execute_function. First consumer: mindpalace metadata.
+tool_context:    ContextVar       = ContextVar('tool_context',    default=None)
+
 # Scope registry — single source of truth for all scope operations.
 # Only rag + private at module load; everything else added by plugin_loader.
 # 'setting' is the key in chat_settings dict (None = not user-settable via sidebar).
 SCOPE_REGISTRY = {
     'rag':       {'var': scope_rag,       'default': None,      'setting': None},
     'private':   {'var': scope_private,   'default': False,     'setting': 'private_chat'},
+    'tool_context': {'var': tool_context, 'default': None,      'setting': None},
 }
+
+
+def set_tool_context(scopes: dict = None, **fields):
+    """Set provenance fields for tool executors, dropping falsy values.
+    When `scopes` (a snapshot dict from snapshot_scopes) is given, updates it
+    in place — call sites snapshot scopes before provider selection resolves
+    the model, so the snapshot needs patching after the fact."""
+    ctx = {k: v for k, v in fields.items() if v} or None
+    tool_context.set(ctx)
+    if scopes is not None:
+        scopes['tool_context'] = ctx
+    return ctx
 
 
 def __getattr__(name):
@@ -77,14 +99,25 @@ def register_plugin_scope(key: str, plugin_name: str = "", default='default'):
     return var
 
 
-def unregister_plugin_scope(key: str):
+def unregister_plugin_scope(key: str, plugin_name: str = None):
     """Remove a scope from the registry. Called by plugin_loader on unload so
     the next register_plugin_scope for the same key picks up manifest changes
     (different default, etc.) instead of hitting the idempotent early-return
-    and silently keeping the stale registration."""
-    if key in SCOPE_REGISTRY:
-        SCOPE_REGISTRY.pop(key, None)
-        logger.info(f"Unregistered scope '{key}'")
+    and silently keeping the stale registration.
+
+    plugin_name: when given, unregister only if this plugin is the recorded
+    OWNER. Shared keys (memory + mindpalace both declare 'memory'/'people')
+    used to be stripped from the LIVE owner when the OTHER plugin was
+    unloaded/removed (negspace N16, 2026-08-31)."""
+    entry = SCOPE_REGISTRY.get(key)
+    if not entry:
+        return
+    if plugin_name is not None and entry.get('plugin') != plugin_name:
+        logger.info(f"Scope '{key}' owned by '{entry.get('plugin')}', "
+                    f"not '{plugin_name}' — leaving registered")
+        return
+    SCOPE_REGISTRY.pop(key, None)
+    logger.info(f"Unregistered scope '{key}'")
 
 
 def apply_scopes_from_settings(fm, settings: dict):
@@ -159,6 +192,75 @@ def scope_defaults_dict() -> dict:
     return result
 
 
+def _coerce_num(val, target):
+    """Coerce a string to int/number. Returns (value, ok). Non-strings pass
+    through untouched (already numeric / not our problem). Never raises."""
+    if not isinstance(val, str):
+        return val, True
+    try:
+        f = float(val.strip())
+    except (ValueError, TypeError):
+        return val, False
+    if target == "integer":
+        return (int(f), True) if f.is_integer() else (val, False)
+    return f, True
+
+
+def _coerce_args(arguments, parameters):
+    """Best-effort coerce LLM-supplied string args to their schema-declared
+    types. Returns (arguments, error). `error` is an LLM-actionable message when
+    a declared-typed arg is present but can't be coerced (e.g. "abc" for an
+    integer), else None. Never raises.
+
+    Only coerces TOWARD a declared non-string type — string params (zip codes,
+    ids) are left untouched. Models, especially local ones (Qwen/GLM), routinely
+    stringify numbers ("2", "1,2,3"); without this they reach the tool as str and
+    crash on numeric comparisons."""
+    props = (parameters or {}).get("properties", {})
+    bad = []
+    for key, val in list(arguments.items()):
+        spec = props.get(key)
+        if not isinstance(spec, dict):
+            continue
+        t = spec.get("type")
+        if t in ("integer", "number"):
+            new, ok = _coerce_num(val, t)
+            if ok:
+                arguments[key] = new
+            elif isinstance(val, str):
+                bad.append((key, t, val))
+        elif t == "boolean" and isinstance(val, str):
+            low = val.strip().lower()
+            if low in ("true", "1", "yes"):
+                arguments[key] = True
+            elif low in ("false", "0", "no"):
+                arguments[key] = False
+        elif t == "array":
+            item_t = (spec.get("items") or {}).get("type")
+            # A string for a numeric array is a comma-list ("1,2,3"); splitting is
+            # safe only because numeric elements never contain commas.
+            seq = [s.strip() for s in val.split(",")] if isinstance(val, str) else val
+            if isinstance(seq, list) and item_t in ("integer", "number"):
+                coerced, failed = [], False
+                for x in seq:
+                    new, ok = _coerce_num(x, item_t)
+                    if not ok:
+                        failed = True
+                        break
+                    coerced.append(new)
+                if failed:
+                    bad.append((key, f"array of {item_t}", val))
+                else:
+                    arguments[key] = coerced
+    if bad:
+        parts = "; ".join(f"'{k}' expects {ty}, got {v!r}" for k, ty, v in bad)
+        return arguments, (
+            f"Error: invalid argument type(s) — {parts}. "
+            f"Re-call the tool with the correct types."
+        )
+    return arguments, None
+
+
 class FunctionManager:
     
     def __init__(self):
@@ -174,9 +276,16 @@ class FunctionManager:
         self.all_possible_tools = []
         self._enabled_tools = []  # Internal storage (ability-filtered)
         self._mode_filters = {}   # module_name -> MODE_FILTER dict
+        self._settings_gates = {}  # module_name -> {func_name: settings_key} (SETTINGS_GATED)
         self._network_functions = set()  # Function names that require network access
         self._is_local_map = {}  # function_name -> is_local value (True, False, or "endpoint")
         self._function_module_map = {}  # function_name -> module_name (for endpoint lookups)
+        self._loop_warn_map = {}  # function_name -> (threshold:int, message:str) — loop guard
+        # Tools with top-level 'hidden': true — excluded from 'all'/module/
+        # custom selection and UI enumeration, but resolvable by NAME through
+        # a saved toolset (that's how the librarian's system toolset reaches
+        # its verbs). Never filter the named-toolset path against this set.
+        self._hidden_tools = set()
         # Track what was REQUESTED, not reverse-engineered
         self.current_toolset_name = "none"
         # Set when update_enabled_functions() is called with a dangling toolset
@@ -225,10 +334,24 @@ class FunctionManager:
                         continue
                     
                     available_functions = getattr(module, 'AVAILABLE_FUNCTIONS', None)
-                    tools = getattr(module, 'TOOLS', [])
+                    # Door-B: settings/library-aware schema. If the module exposes
+                    # get_tools(), use it (dynamic description, e.g. the scene tool's
+                    # live menu) and stash the callable so refresh can rebuild it.
+                    get_tools_fn = getattr(module, 'get_tools', None)
+                    if callable(get_tools_fn):
+                        try:
+                            tools = get_tools_fn() or []
+                        except Exception as e:
+                            logger.warning(f"Module '{module_name}' get_tools() failed, using TOOLS: {e}")
+                            tools = getattr(module, 'TOOLS', [])
+                    else:
+                        get_tools_fn = None
+                        tools = getattr(module, 'TOOLS', [])
                     executor = getattr(module, 'execute', None)
                     mode_filter = getattr(module, 'MODE_FILTER', None)
+                    settings_gate = getattr(module, 'SETTINGS_GATED', None)
                     emoji = getattr(module, 'EMOJI', '')
+                    group = getattr(module, 'GROUP', None)
 
                     if not tools or not executor:
                         logger.warning(f"Module '{module_name}' missing TOOLS or execute()")
@@ -242,7 +365,9 @@ class FunctionManager:
                         'tools': tools,
                         'executor': executor,
                         'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools],
-                        'emoji': emoji
+                        'emoji': emoji,
+                        'group': group,  # optional display-group (Toolsets UI merges)
+                        'get_tools': get_tools_fn,  # settings/library-aware rebuilder, or None
                     }
 
                     # Register tool-declared settings
@@ -259,12 +384,21 @@ class FunctionManager:
                             self._network_functions.add(func_name)
                         if 'is_local' in tool:
                             self._is_local_map[func_name] = tool['is_local']
+                        if tool.get('hidden', False):
+                            self._hidden_tools.add(func_name)
+                        lw = self._parse_loop_warn(tool)
+                        if lw:
+                            self._loop_warn_map[func_name] = lw
                         self._function_module_map[func_name] = module_name
                     
                     # Store mode filter if present
                     if mode_filter:
                         self._mode_filters[module_name] = mode_filter
                         logger.info(f"Module '{module_name}' has mode filtering: {list(mode_filter.keys())}")
+
+                    if settings_gate:
+                        self._settings_gates[module_name] = settings_gate
+                        logger.info(f"Module '{module_name}' has settings-gated tools: {list(settings_gate.keys())}")
                     
                     # Dedup: warn and skip tools with names already registered
                     existing_names = {t['function']['name'] for t in self.all_possible_tools}
@@ -291,6 +425,13 @@ class FunctionManager:
             plugin_name: Plugin name for tracking
             plugin_dir: Path to plugin root directory
             tool_paths: List of relative paths to tool files (e.g., ["tools/ha.py"])
+
+        Returns:
+            None on success (including per-module non-fatal errors, which are
+            logged and skipped as before). On a tool-NAME collision with an
+            already-registered tool, returns a refusal dict {plugin, error,
+            hint} — mutual exclusivity: the caller must unwind this plugin and
+            not load it. First-loaded plugin wins.
 
         Phase 4 sys.modules idempotency: for each plugin tool file, we compute a
         canonical module name (e.g., ``plugins.memory.tools.memory_tools``). If
@@ -344,21 +485,43 @@ class FunctionManager:
                         namespace = existing_mod.__dict__
                     else:
                         source = tool_path.read_text(encoding="utf-8")
-                        namespace = {"__file__": str(tool_path), "__name__": canonical_name}
-                        exec(compile(source, str(tool_path), "exec"), namespace)
-                        # Install the exec'd namespace as a real module in sys.modules
-                        # so future `from plugins.memory.tools import memory_tools` calls
-                        # resolve to the SAME module object (no split state).
+                        # Exec DIRECTLY into the module stub's __dict__. The old
+                        # copy (`mod_stub.__dict__.update(namespace)`) left the
+                        # exec'd functions closing over ONE dict while
+                        # sys.modules held ANOTHER: external rebinds like
+                        # `mem._backfill_done = False` (the embedding-swap
+                        # re-arm) silently wrote the dead copy, so NULL vectors
+                        # stayed invisible until restart (negspace N5,
+                        # 2026-08-31). One dict = reads AND writes coherent.
                         mod_stub = types.ModuleType(canonical_name)
-                        mod_stub.__dict__.update(namespace)
                         mod_stub.__file__ = str(tool_path)
+                        namespace = mod_stub.__dict__
+                        namespace["__file__"] = str(tool_path)
+                        exec(compile(source, str(tool_path), "exec"), namespace)
+                        # Install as a real module in sys.modules so future
+                        # `from plugins.memory.tools import memory_tools` calls
+                        # resolve to the SAME module object (no split state).
                         sys.modules[canonical_name] = mod_stub
 
                     if not namespace.get('ENABLED', True):
                         logger.info(f"Plugin tool '{module_name}' is disabled")
                         continue
 
-                    tools = namespace.get('TOOLS', [])
+                    # Settings-aware schema: if the module exposes get_tools(),
+                    # use it so the tool schema (e.g. a dynamic description built
+                    # from plugin settings) is correct from first load. The same
+                    # callable is stored below so refresh_plugin_tools() can rebuild
+                    # in place when settings change. Falls back to static TOOLS.
+                    get_tools_fn = namespace.get('get_tools')
+                    if callable(get_tools_fn):
+                        try:
+                            tools = get_tools_fn() or []
+                        except Exception as e:
+                            logger.warning(f"Plugin '{plugin_name}' get_tools() failed, using static TOOLS: {e}")
+                            tools = namespace.get('TOOLS', [])
+                    else:
+                        get_tools_fn = None
+                        tools = namespace.get('TOOLS', [])
                     executor = namespace.get('execute')
 
                     if not tools or not executor:
@@ -370,16 +533,34 @@ class FunctionManager:
                         tools = [t for t in tools if t['function']['name'] in available_functions]
 
                     emoji = namespace.get('EMOJI', '')
+                    group = namespace.get('GROUP')
                     mode_filter = namespace.get('MODE_FILTER')
+                    settings_gate = namespace.get('SETTINGS_GATED')
 
-                    # Check for function name conflicts BEFORE mutating state
+                    # Check for function name conflicts BEFORE mutating state.
+                    # A collision means mutual exclusivity by design (e.g. the
+                    # memory and mindpalace plugins share tool names on purpose):
+                    # refuse THIS plugin cleanly, first-loaded wins. Return the
+                    # refusal so _load_plugin unwinds and reports it — before
+                    # 2026-07-06 the ValueError raised here was swallowed by the
+                    # generic except below and the plugin half-loaded with its
+                    # tools silently missing.
                     existing_names = {t['function']['name'] for t in self.all_possible_tools}
                     for tool in tools:
                         fname = tool['function']['name']
                         if fname in existing_names:
-                            owner = self._function_module_map.get(fname, 'unknown')
-                            logger.error(f"\033[91mPlugin '{plugin_name}' tool '{fname}' conflicts with existing tool from '{owner}' — plugin NOT loaded\033[0m")
-                            raise ValueError(f"Tool name '{fname}' already registered by '{owner}'")
+                            owner_mod = self._function_module_map.get(fname, '')
+                            owner = self.function_modules.get(owner_mod, {}).get('_plugin') or owner_mod or 'core'
+                            logger.warning(
+                                f"Plugin '{plugin_name}' tool '{fname}' is already provided by "
+                                f"'{owner}' — refusing '{plugin_name}' (mutually exclusive)")
+                            return {
+                                "plugin": plugin_name,
+                                "error": (f"Tool '{fname}' is already active from '{owner}'. "
+                                          f"'{plugin_name}' and '{owner}' are mutually exclusive — "
+                                          f"enable one, not both."),
+                                "hint": f"Disable plugin '{owner}' to use '{plugin_name}'.",
+                            }
 
                     self.function_modules[module_name] = {
                         'module': None,
@@ -387,7 +568,9 @@ class FunctionManager:
                         'executor': executor,
                         'available_functions': available_functions or [t['function']['name'] for t in tools],
                         'emoji': emoji,
+                        'group': group,  # optional display-group (Toolsets UI merges)
                         '_plugin': plugin_name,
+                        'get_tools': get_tools_fn,  # settings-aware rebuilder, or None
                     }
 
                     # Track per-tool flags (safe — conflict check passed)
@@ -397,20 +580,30 @@ class FunctionManager:
                             self._network_functions.add(func_name)
                         if 'is_local' in tool:
                             self._is_local_map[func_name] = tool['is_local']
+                        if tool.get('hidden', False):
+                            self._hidden_tools.add(func_name)
+                        lw = self._parse_loop_warn(tool)
+                        if lw:
+                            self._loop_warn_map[func_name] = lw
                         self._function_module_map[func_name] = module_name
 
                     if mode_filter:
                         self._mode_filters[module_name] = mode_filter
+
+                    if settings_gate:
+                        self._settings_gates[module_name] = settings_gate
 
                     for tool in tools:
                         self.all_possible_tools.append(tool)
                         self.execution_map[tool['function']['name']] = executor
 
                     # If "all" toolset is active, add new tools to _enabled_tools too
+                    # (hidden tools excluded — 'all' never includes them)
                     if self.current_toolset_name == "all":
                         enabled_names = {t['function']['name'] for t in self._enabled_tools}
                         for tool in tools:
-                            if tool['function']['name'] not in enabled_names:
+                            fname = tool['function']['name']
+                            if fname not in enabled_names and fname not in self._hidden_tools:
                                 self._enabled_tools.append(tool)
                     # If a SAVED toolset is active and it references one of
                     # these new tools by name, auto-add it too. Without this,
@@ -479,13 +672,16 @@ class FunctionManager:
                     self.execution_map.pop(fname, None)
                     self._network_functions.discard(fname)
                     self._is_local_map.pop(fname, None)
+                    self._loop_warn_map.pop(fname, None)
                     self._function_module_map.pop(fname, None)
+                    self._hidden_tools.discard(fname)
 
                 self.all_possible_tools = [t for t in self.all_possible_tools
                                            if t['function']['name'] not in func_names]
                 self._enabled_tools = [t for t in self._enabled_tools
                                        if t['function']['name'] not in func_names]
                 self._mode_filters.pop(module_name, None)
+                self._settings_gates.pop(module_name, None)
 
             # Purge sys.modules entries for this plugin's canonical module names
             # so the next register_plugin_tools() call freshly re-execs the source.
@@ -500,6 +696,154 @@ class FunctionManager:
 
         if to_remove:
             logger.info(f"Plugin '{plugin_name}' tools unregistered: {to_remove}")
+
+    def refresh_plugin_tools(self, plugin_name: str) -> int:
+        """Rebuild a plugin's tool SCHEMAS from its current settings, in place.
+
+        For plugins whose tool module defines ``get_tools()`` (a settings-aware
+        schema builder), re-invoke it and copy the fresh description/parameters
+        onto the EXISTING tool dict objects. Because ``all_possible_tools`` and
+        ``_enabled_tools`` hold the same dict references the LLM reads each turn,
+        the update is seen on the next chat turn — no re-register, no module
+        re-exec (so module-level state is preserved), and no toolset/membership
+        change (tool NAMES are stable). Lets a plugin's tool description react to
+        a settings save without a reload.
+
+        No-op for plugins without ``get_tools()``. Only matching tool names are
+        updated; adding/removing tools still requires a full reload.
+
+        NOTE: this only refreshes description/parameters. The registration-time
+        side-maps (``_loop_warn_map``, ``_network_functions``, ``_is_local_map``)
+        are NOT re-read here — so a flag like ``loop_warn_after`` must stay static
+        (not settings-derived) or it would go stale on a settings save until a full
+        reload. Today all such flags are static, so this is safe.
+        """
+        updated = 0
+        with self._tools_lock:
+            for module_name, info in self.function_modules.items():
+                if info.get('_plugin') != plugin_name:
+                    continue
+                get_tools_fn = info.get('get_tools')
+                if not callable(get_tools_fn):
+                    continue
+                try:
+                    fresh = get_tools_fn() or []
+                except Exception as e:
+                    logger.warning(f"refresh_plugin_tools: '{plugin_name}' get_tools() failed: {e}")
+                    continue
+                fresh_by_name = {t['function']['name']: t for t in fresh
+                                 if isinstance(t, dict) and isinstance(t.get('function'), dict)
+                                 and 'name' in t['function']}
+                for tool in info['tools']:
+                    new = fresh_by_name.get(tool['function']['name'])
+                    if not new:
+                        continue
+                    # Update schema fields in place; never touch 'name' (membership
+                    # and execution_map are keyed on it).
+                    for key in ('description', 'parameters'):
+                        if key in new['function']:
+                            tool['function'][key] = new['function'][key]
+                    updated += 1
+        if updated:
+            logger.info(f"Plugin '{plugin_name}' tool schemas refreshed ({updated} tool(s))")
+        return updated
+
+    # ── Loop guard (per-tool, per-turn) ──────────────────────────────────────
+    # A tool schema may declare a top-level `loop_warn_after: N` (+ optional
+    # `loop_warn_message`). When that tool is called >= N times in ONE user turn,
+    # the chat loop appends the message to the tool-result text the LLM reads, to
+    # discourage runaway repeat calls (e.g. image-gen spirals). The flag is read
+    # into `_loop_warn_map` at registration and stripped from the wire by the
+    # provider denylist (base.py), so it never reaches the LLM API.
+
+    DEFAULT_LOOP_WARN_MESSAGE = (
+        "You have now called this tool {count} times this turn, and each call has a "
+        "real cost. If the results are not matching your intent, stop and reconsider - "
+        "the request may be impossible to satisfy, or you may need to ask the user. "
+        "Do not keep retrying the same thing."
+    )
+
+    @staticmethod
+    def _parse_loop_warn(tool):
+        """Read (threshold:int, message:str) from a tool dict, or None. Never raises.
+        A malformed flag must NOT break registration (it would silently drop the
+        whole module's tools), so all parsing is defensive."""
+        try:
+            raw = tool.get('loop_warn_after')
+            if raw is None:
+                return None
+            threshold = int(raw)
+            if threshold < 1:
+                return None
+            msg = tool.get('loop_warn_message')
+            if not isinstance(msg, str) or not msg.strip():
+                msg = FunctionManager.DEFAULT_LOOP_WARN_MESSAGE
+            return (threshold, msg)
+        except Exception:
+            return None
+
+    def bump_loop_count(self, loop_counts, function_name):
+        """Increment the per-turn call count for function_name. Never raises.
+        `loop_counts` is a per-turn dict owned by the caller's turn frame (NEVER
+        stored on self — that would bleed across concurrent turns/chats)."""
+        try:
+            if loop_counts is not None:
+                loop_counts[function_name] = loop_counts.get(function_name, 0) + 1
+        except Exception:
+            pass
+
+    def loop_warn_suffix(self, function_name, loop_counts):
+        """Return '\\n\\n<message>' if function_name hit its loop-warn threshold this
+        turn, else ''. Never raises, never mutates. Uses str.replace (NOT .format) so
+        literal braces in a (settings-derived) message can't crash the turn."""
+        try:
+            if loop_counts is None:
+                return ""
+            entry = self._loop_warn_map.get(function_name)
+            if not entry:
+                return ""
+            threshold, message = entry
+            n = loop_counts.get(function_name, 0)
+            if n >= threshold:
+                logger.info(f"[LOOP-WARN] '{function_name}' hit {n}/{threshold} call(s) this turn - warning appended to tool result")
+                return "\n\n" + message.replace("{count}", str(n))
+            return ""
+        except Exception:
+            return ""
+
+    def refresh_core_tool_descriptions(self) -> int:
+        """Re-run get_tools() for every loaded tool module that defines one (the
+        scene tool's live menu, etc.) and copy the fresh description/parameters onto
+        the EXISTING tool dicts in place — so a core tool's description can react to
+        external state (a scene upload/delete) without a restart. Never raises."""
+        updated = 0
+        try:
+            with self._tools_lock:
+                for module_name, info in self.function_modules.items():
+                    get_tools_fn = info.get('get_tools')
+                    if not callable(get_tools_fn):
+                        continue
+                    try:
+                        fresh = get_tools_fn() or []
+                    except Exception as e:
+                        logger.warning(f"refresh_core_tool_descriptions: '{module_name}' get_tools() failed: {e}")
+                        continue
+                    fresh_by_name = {t['function']['name']: t for t in fresh
+                                     if isinstance(t, dict) and isinstance(t.get('function'), dict)
+                                     and 'name' in t['function']}
+                    for tool in info.get('tools', []):
+                        new = fresh_by_name.get(tool['function']['name'])
+                        if not new:
+                            continue
+                        for key in ('description', 'parameters'):
+                            if key in new['function']:
+                                tool['function'][key] = new['function'][key]
+                        updated += 1
+        except Exception as e:
+            logger.warning(f"refresh_core_tool_descriptions failed: {e}")
+        if updated:
+            logger.info(f"Tool descriptions refreshed ({updated} tool(s))")
+        return updated
 
     def register_dynamic_tools(self, module_name: str, tools: list, executor, plugin_name: str = '', emoji: str = ''):
         """Register tools from a dynamic source (MCP servers, runtime generators, etc.).
@@ -543,13 +887,19 @@ class FunctionManager:
                 fname = tool['function']['name']
                 self.execution_map[fname] = executor
                 self._function_module_map[fname] = module_name
+                if tool.get('hidden', False):
+                    self._hidden_tools.add(fname)
+                lw = self._parse_loop_warn(tool)
+                if lw:
+                    self._loop_warn_map[fname] = lw
                 self.all_possible_tools.append(tool)
 
-            # If "all" toolset is active, add to enabled too
+            # If "all" toolset is active, add to enabled too (hidden excluded)
             if self.current_toolset_name == "all":
                 enabled_names = {t['function']['name'] for t in self._enabled_tools}
                 for tool in tools:
-                    if tool['function']['name'] not in enabled_names:
+                    fname = tool['function']['name']
+                    if fname not in enabled_names and fname not in self._hidden_tools:
                         self._enabled_tools.append(tool)
             # Same auto-add for saved toolsets that reference these tools
             # (mirrors register_plugin_tools fix). 2026-05-16.
@@ -585,6 +935,8 @@ class FunctionManager:
             for fname in func_names:
                 self.execution_map.pop(fname, None)
                 self._function_module_map.pop(fname, None)
+                self._loop_warn_map.pop(fname, None)
+                self._hidden_tools.discard(fname)
 
             self.all_possible_tools = [t for t in self.all_possible_tools
                                        if t['function']['name'] not in func_names]
@@ -644,10 +996,26 @@ class FunctionManager:
         
         return filtered
 
+    def _apply_settings_gate(self, tools: list) -> list:
+        """Hide tools whose gating setting is off (module SETTINGS_GATED attr:
+        {func_name: settings_key}). Gated tools are INVISIBLE when disabled,
+        not just refused — a fresh install's AI never sees them, so it can't
+        surprise a new user. Settings are hot keys, read per-request."""
+        if not self._settings_gates:
+            return tools
+        blocked = set()
+        for gates in self._settings_gates.values():
+            for func_name, setting_key in gates.items():
+                if not getattr(config, setting_key, False):
+                    blocked.add(func_name)
+        if not blocked:
+            return tools
+        return [t for t in tools if t['function']['name'] not in blocked]
+
     @property
     def enabled_tools(self) -> list:
         """Get enabled tools filtered by current prompt mode."""
-        tools = self._apply_mode_filter(self._enabled_tools)
+        tools = self._apply_settings_gate(self._apply_mode_filter(self._enabled_tools))
 
         # Final dedup — Claude API requires unique tool names
         seen = set()
@@ -666,7 +1034,99 @@ class FunctionManager:
         with self._tools_lock:
             return dict(self.execution_map)
 
-    def update_enabled_functions(self, enabled_names: list):
+    def update_enabled_functions(self, enabled_names: list, extra_toolsets: list = None):
+        """Update enabled tools from a toolset/ability name, optionally
+        unioning extra module/toolset function sets on top WITHOUT changing
+        current_toolset_name — the "toolset + extras" primitive. Driven by
+        the per-chat `extra_toolsets` settings list (first customer: the
+        story engine's "include story tools" checkbox; 'none' + extras is
+        the story default). Read-only mirrors (_resolve_toolset_tools,
+        ExecutionContext._resolve_tools) implement the same union."""
+        self._update_enabled_base(enabled_names)
+        if extra_toolsets:
+            self._union_extra_toolsets(extra_toolsets)
+
+    def _union_extra_toolsets(self, extras: list):
+        with self._tools_lock:
+            have = {t['function']['name'] for t in self._enabled_tools}
+            fn_set = self._extra_names(extras, have)
+            if fn_set:
+                self._enabled_tools.extend(
+                    t for t in self.all_possible_tools
+                    if t['function']['name'] in fn_set)
+
+    def resolve_tool_names(self, enabled_names: list) -> tuple:
+        """THE toolset name rule — pure, no state touched (broadsword H12).
+
+        `enabled_names` is what a chat/task setting carries: ["all"], ["none"],
+        [<module>], [<saved toolset>], [<unknown>] or an ad-hoc function list.
+        Returns (names, label, dangling):
+          names    — function names the selection resolves to
+          label    — what current_toolset_name would become
+                     ("all"/"none"/module/toolset/"custom"; "none" for dangling)
+          dangling — the unknown single name, else None
+        Hidden tools (`_hidden_tools`: librarian ritual verbs, elevate_toolset)
+        drop out of "all", a module, and an ad-hoc list; ONLY a saved toolset
+        naming them resolves them — that is intent, the others are stale state.
+        The live setter and every read-only lane (stream-brain chats, cron,
+        Discord/Telegram/email auto-replies) share this; the two mirrors that
+        skipped the hidden rule offered `run_librarian` to a phone call."""
+        names = list(enabled_names or [])
+        if len(names) == 1:
+            one = names[0]
+            if one == "all":
+                return ([t['function']['name'] for t in self.all_possible_tools
+                         if t['function']['name'] not in self._hidden_tools], "all", None)
+            if one == "none":
+                return ([], "none", None)
+            if one in self.function_modules:
+                return ([n for n in self.function_modules[one]['available_functions']
+                         if n not in self._hidden_tools], one, None)
+            if toolset_manager.toolset_exists(one):
+                return (list(toolset_manager.get_toolset_functions(one)), one, None)
+            # Single-name input that's NOT a known toolset / module → a dangling
+            # reference (deleted toolset, plugin removed, stale chat settings).
+            # "none" is safe-by-default; the caller surfaces the bad name.
+            return ([], "none", one)
+        return ([n for n in names if n not in self._hidden_tools], "custom", None)
+
+    def _extra_names(self, extras: list, have: set) -> set:
+        """Function names an `extra_toolsets` list unions on top (module or
+        saved toolset each; unknown names skipped with a warning)."""
+        out = set()
+        for name in extras or []:
+            try:
+                if name in self.function_modules:
+                    # same hidden rule as a module named as THE toolset
+                    fn_names = [n for n in self.function_modules[name]['available_functions']
+                                if n not in self._hidden_tools]
+                elif toolset_manager.toolset_exists(name):
+                    fn_names = toolset_manager.get_toolset_functions(name)
+                else:
+                    logger.warning(f"extra_toolsets: '{name}' is no known module/toolset — skipped")
+                    continue
+                out |= set(fn_names) - have - out
+            except Exception as e:
+                logger.warning(f"extra_toolsets '{name}' union failed: {e}")
+        return out
+
+    def resolve_tools(self, toolset_name, extra_toolsets=None):
+        """READ-ONLY tool schemas for a toolset setting + extras: the same
+        names as the live setter would enable, then the mode filter and the
+        settings gate. None when nothing resolves. Used by every lane that
+        must not mutate the manager (stream-brain chats, ExecutionContext)."""
+        if (not toolset_name or toolset_name == "none") and not extra_toolsets:
+            return None
+        names, _label, dangling = self.resolve_tool_names([toolset_name] if toolset_name else ["none"])
+        if dangling:
+            logger.warning(f"resolve_tools: toolset '{dangling}' does not exist — no tools")
+        want = set(names)
+        want |= self._extra_names(extra_toolsets, want)
+        tools = [t for t in self.all_possible_tools if t['function']['name'] in want]
+        tools = self._apply_settings_gate(self._apply_mode_filter(tools))
+        return tools or None
+
+    def _update_enabled_base(self, enabled_names: list):
         """Update enabled tools based on function names from config or ability name."""
         with self._tools_lock:
             # "custom" is a sentinel for "ad-hoc selection", not a real
@@ -683,61 +1143,26 @@ class FunctionManager:
                     logger.info("Re-apply 'custom' with empty selection — no tools enabled")
                     return
 
-            # Determine what ability name was requested
-            requested_ability = enabled_names[0] if len(enabled_names) == 1 else "custom"
-
-            # Special case: "all" loads every function from every module
-            if len(enabled_names) == 1 and enabled_names[0] == "all":
-                self.current_toolset_name = "all"
-                self._enabled_tools = self.all_possible_tools.copy()
-                logger.info(f"Ability 'all' - LOADED ALL {len(self._enabled_tools)} FUNCTIONS")
-                return
-
-            # Special case: "none" disables all functions
-            if len(enabled_names) == 1 and enabled_names[0] == "none":
-                self.current_toolset_name = "none"
-                self._enabled_tools = []
-                logger.info(f"Ability 'none' - all functions disabled")
-                return
-
-            # Check if this is a module ability name
-            if len(enabled_names) == 1 and enabled_names[0] in self.function_modules:
-                ability_name = enabled_names[0]
-                self.current_toolset_name = ability_name
-                module_info = self.function_modules[ability_name]
-                enabled_names = module_info['available_functions']
-                logger.info(f"Ability '{ability_name}' (module) requesting {len(enabled_names)} functions")
-
-            # Check if this is a toolset name
-            elif len(enabled_names) == 1 and toolset_manager.toolset_exists(enabled_names[0]):
-                toolset_name = enabled_names[0]
-                self.current_toolset_name = toolset_name
-                enabled_names = toolset_manager.get_toolset_functions(toolset_name)
-                logger.info(f"Ability '{toolset_name}' (toolset) requesting {len(enabled_names)} functions")
-
-            # Single-name input that's NOT a known toolset / module → it's a
-            # dangling reference (deleted toolset, plugin removed, stale chat
-            # settings). Fall back to "none" (safe-by-default) and record the
-            # bad name so the API layer can surface a toast to the user. The
-            # subsequent chat will demonstrate the failure (no tools available)
-            # if the user ignores the toast. Old behavior silently fell through
-            # to "custom" → zero tools with no signal. 2026-05-16.
-            elif len(enabled_names) == 1:
-                bad = enabled_names[0]
+            enabled_names, label, dangling = self.resolve_tool_names(enabled_names)
+            self.current_toolset_name = label
+            if dangling:
+                # Record the bad name so the API layer can surface a toast;
+                # the next chat demonstrates the failure (no tools) if the
+                # user ignores it. Old behaviour silently fell through to
+                # "custom" → zero tools with no signal. 2026-05-16.
                 logger.warning(
-                    f"Toolset/ability '{bad}' does not exist (likely deleted or "
+                    f"Toolset/ability '{dangling}' does not exist (likely deleted or "
                     f"a stale chat setting). Falling back to 'none' — fix the "
                     f"chat's toolset setting to restore tool access."
                 )
-                self.last_dangling_toolset = bad
-                self.current_toolset_name = "none"
+                self.last_dangling_toolset = dangling
                 self._enabled_tools = []
-                logger.info(f"Fallback applied: zero tools enabled (dangling reference: {bad!r})")
+                logger.info(f"Fallback applied: zero tools enabled (dangling reference: {dangling!r})")
                 return
-
-            # Otherwise treat as direct function name list (custom)
-            else:
-                self.current_toolset_name = "custom"
+            if label == "none":
+                self._enabled_tools = []
+                logger.debug("Ability 'none' - all functions disabled")
+                return
 
             # Store expected count before filtering
             expected_count = len(enabled_names)
@@ -747,7 +1172,7 @@ class FunctionManager:
                 tool for tool in self.all_possible_tools
                 if tool['function']['name'] in enabled_names
             ]
-        
+
             actual_names = [tool['function']['name'] for tool in self._enabled_tools]
             missing = set(enabled_names) - set(actual_names)
 
@@ -762,7 +1187,7 @@ class FunctionManager:
                     f"removed/disabled plugin tool): {missing}"
                 )
 
-            logger.info(f"Toolset '{self.current_toolset_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
+            logger.debug(f"Toolset '{self.current_toolset_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
             logger.debug(f"Enabled: {actual_names}")
 
     def is_valid_toolset(self, ability_name: str) -> bool:
@@ -786,6 +1211,17 @@ class FunctionManager:
         """Get list of currently enabled function names (mode-filtered)."""
         return [tool['function']['name'] for tool in self.enabled_tools]
 
+    def _get_tool_parameters(self, function_name):
+        """Return a tool's JSON-Schema `parameters` dict, or None if unavailable.
+        Used by execute_function() to coerce arg types. Reads the internal
+        (pre-mode-filter) list so the schema is found even when the executing
+        tool isn't in the current mode-filtered view."""
+        for tool in self._enabled_tools:
+            fn = tool.get('function', {})
+            if fn.get('name') == function_name:
+                return fn.get('parameters')
+        return None
+
     def has_network_tools_enabled(self) -> bool:
         """Check if any currently enabled tools require network access."""
         enabled_names = set(self.get_enabled_function_names())
@@ -795,6 +1231,11 @@ class FunctionManager:
         """Get list of all functions that require network access."""
         return list(self._network_functions)
 
+    def get_hidden_functions(self) -> set:
+        """Names of tools flagged 'hidden': true — kept out of UI enumeration
+        and 'all'/module/custom selection; saved toolsets resolve them by name."""
+        return set(self._hidden_tools)
+
     def get_current_toolset_info(self):
         """Get info about current toolset configuration."""
         actual_count = len(self.enabled_tools)  # Uses property, so mode-filtered
@@ -802,11 +1243,13 @@ class FunctionManager:
         expected_count = base_count
         
         if self.current_toolset_name == "all":
-            expected_count = len(self.all_possible_tools)
+            expected_count = len([t for t in self.all_possible_tools
+                                  if t['function']['name'] not in self._hidden_tools])
         elif self.current_toolset_name == "none":
             expected_count = 0
         elif self.current_toolset_name in self.function_modules:
-            expected_count = len(self.function_modules[self.current_toolset_name]['available_functions'])
+            expected_count = len([n for n in self.function_modules[self.current_toolset_name]['available_functions']
+                                  if n not in self._hidden_tools])
         elif toolset_manager.toolset_exists(self.current_toolset_name):
             expected_count = len(toolset_manager.get_toolset_functions(self.current_toolset_name))
         
@@ -849,50 +1292,35 @@ class FunctionManager:
 
     def _check_privacy_allowed(self, function_name: str) -> tuple:
         """
-        Check if function is allowed under current privacy mode.
+        Check if function is allowed in the current private chat.
 
         Returns:
             (allowed: bool, error_message: str or None)
         """
-        from core.privacy import is_privacy_mode, is_allowed_endpoint
-
-        if not is_privacy_mode() and not scope_private.get():
+        if not scope_private.get():
             return True, None
 
         is_local = self._is_local_map.get(function_name)
-
-        # No is_local flag = assume non-local for safety
-        if is_local is None:
-            logger.warning(f"Tool '{function_name}' has no is_local flag, blocking in privacy mode")
-            return False, f"Tool '{function_name}' is blocked in privacy mode (no locality flag)."
 
         # Explicitly local tools are always allowed
         if is_local is True:
             return True, None
 
-        # Explicitly non-local tools are blocked
-        if is_local is False:
-            return False, f"Tool '{function_name}' requires external network access and is blocked in privacy mode. Inform the user that privacy mode is active."
-
-        # Conditional tools ("endpoint") - check their configured endpoint
-        if is_local == "endpoint":
-            endpoint = self._get_tool_endpoint(function_name)
-            if not endpoint:
-                logger.warning(f"Tool '{function_name}' has no configured endpoint")
-                return False, f"Tool '{function_name}' has no configured endpoint."
-
-            if is_allowed_endpoint(endpoint):
-                logger.info(f"Tool '{function_name}' endpoint '{endpoint}' allowed in privacy mode")
+        # No flag = assume non-local for safety — unless the user opted in
+        # (Settings > Privacy). The opt-out covers ONLY unflagged tools:
+        # a tool that DECLARES is_local False/"endpoint" stays blocked, or
+        # "private" stops meaning anything. ALLOW_UNSIGNED_PLUGINS pattern —
+        # safe default, sovereign override (Krem's ruling 2026-08-15).
+        if is_local is None:
+            if getattr(config, 'PRIVATE_ALLOW_UNFLAGGED_TOOLS', False):
                 return True, None
-            else:
-                return False, f"Tool '{function_name}' endpoint '{endpoint}' is not in privacy whitelist. Inform the user."
+            logger.warning(f"Tool '{function_name}' has no is_local flag, blocking in private chat")
+            return False, (f"Tool '{function_name}' is blocked in this private chat "
+                           f"(no locality flag). If this plugin only talks to local "
+                           f"hardware, Settings > Privacy can allow unflagged tools.")
 
-        # Unknown is_local value - block for safety
-        return False, f"Tool '{function_name}' has unknown locality setting."
-
-    def _get_tool_endpoint(self, function_name: str) -> str:
-        """Get the configured endpoint URL for conditional tools."""
-        return ''
+        # False, "endpoint", or anything else — network access, blocked
+        return False, f"Tool '{function_name}' requires network access and is blocked in this private chat. Inform the user."
 
     def _get_plugin_settings_for(self, function_name: str):
         """Get plugin settings for a function, or None if it's not a plugin tool."""
@@ -955,6 +1383,17 @@ class FunctionManager:
             return error_msg
 
         logger.info(f"Executing function: {function_name}")
+
+        # Coerce arg types against the tool schema BEFORE the pre_execute hook,
+        # so plugins and the executor both see typed args. Fixes the common
+        # local-model failure where numbers arrive stringified ("2", "1,2,3").
+        params = self._get_tool_parameters(function_name)
+        if params and isinstance(arguments, dict):
+            arguments, type_err = _coerce_args(arguments, params)
+            if type_err:
+                logger.warning(f"Arg type coercion failed for '{function_name}': {type_err}")
+                self._log_tool_call(function_name, arguments, type_err, time.time() - start_time, False)
+                return type_err
 
         # pre_execute hook — plugins can mutate arguments or skip execution
         from core.hooks import hook_runner, HookEvent

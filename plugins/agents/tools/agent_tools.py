@@ -147,11 +147,16 @@ def _create_llm_worker():
 
         def __init__(self, agent_id, name, mission, chat_name='', on_complete=None,
                      model='', toolset='default', prompt='agent',
-                     _inherit_scopes=True, **kwargs):
+                     _inherit_scopes=True, _privacy_required=False, **kwargs):
             super().__init__(agent_id, name, mission, chat_name, on_complete)
             self._model = model
             self._toolset = toolset
             self._prompt = prompt
+            # Snapshotted from the SPAWNING chat's scope_private (P3-T2/F4):
+            # the worker thread can't read the caller's ContextVar, and
+            # without this carrier a private chat's mission ran on a cloud
+            # provider with network tools unblocked.
+            self._privacy_required = _privacy_required
             # When spawn_agent was called with prompt='self' (not an explicit
             # persona name), this is False. `self` means "inherit identity
             # (voice/prompt/toolset) but NOT data access (scopes)." The
@@ -246,13 +251,54 @@ def _create_llm_worker():
                 'inject_datetime': True,
                 **scope_settings,
             }
+            if self._privacy_required:
+                # Same carrier the continuity executor uses (Phase 0):
+                # ExecutionContext gates provider selection AND network
+                # tools off it. Ruling F4: inherit, fail loudly at use.
+                task_settings['privacy_required'] = True
 
             system = get_system()
             fm = system.llm_chat.function_manager
             te = system.llm_chat.tool_engine
 
-            ctx = ExecutionContext(fm, te, task_settings)
-            raw = ctx.run(self.mission)
+            # cancel_check: a dismissed agent stops at its next round instead
+            # of burning to max_rounds with the result voided after (E2#4).
+            ctx = ExecutionContext(fm, te, task_settings,
+                                   session_manager=system.llm_chat.session_manager,
+                                   cancel_check=self._cancelled.is_set)
+            # Vault hunt H2 (2026-08-15): hooks fired on this agent thread
+            # (pre/post_execute via function_manager) resolve privacy through
+            # the stream-brain override — without one they read the
+            # OPERATOR'S active chat and under-withhold when this agent was
+            # spawned from a private chat. Same primitive as the continuity
+            # executor; the privacy bit is the F4 snapshot, not a live read
+            # (the spawning chat may be hidden by the time we run).
+            from core.chat import stream_brain
+            # Full carrier via core's factory (2026-08-17): a chat-name-only
+            # override made _effective_chat()/_effective_chat_name() disagree
+            # (cross-chat clobber class) and starved every settings reader on
+            # this thread with a 1-key stub (privacy-ratchet bypass). With no
+            # chat name, ship settings ONLY — a 'history' without a 'chat'
+            # diverts the object but not the name, the same asymmetry
+            # reversed.
+            sm = system.llm_chat.session_manager
+            if self.chat_name:
+                _override = sm.make_agent_override(
+                    self.chat_name,
+                    privacy_required=bool(self._privacy_required))
+            else:
+                # Chatless agent: full ephemeral carrier (2026-09-03). The
+                # old settings-only stub was HALF a fix — _effective_chat_
+                # name() still fell through to the operator's active chat,
+                # so a chatless agent's reset_chat/switch_toolset landed on
+                # whatever the user had open (M11 through the front door).
+                _override = sm.make_ephemeral_override(
+                    privacy_required=bool(self._privacy_required))
+            _brain_token = stream_brain.set_override(_override)
+            try:
+                raw = ctx.run(self.mission)
+            finally:
+                stream_brain.reset_override(_brain_token)
             self.result = re.sub(r'<think>[\s\S]*?</think>\s*', '', raw).strip() if raw else ''
             self.tool_log = ctx.tool_log
             # If the run degraded to a placeholder (tool loop exhausted, context
@@ -348,10 +394,14 @@ def _get_manager():
 
 
 def _get_active_chat():
-    """Get the current active chat name."""
+    """The chat THIS turn runs in — the stream override's chat when spawned
+    from a background lane (phone/cron/continuity), else the active chat.
+    The global name alone delivered agent results to whatever chat the
+    operator had open, private→public included (hunt 2026-08-17)."""
     from core.api_fastapi import get_system
     try:
-        return get_system().llm_chat.get_active_chat() or ''
+        sm = get_system().llm_chat.session_manager
+        return sm._effective_chat_name() or ''
     except Exception:
         return ''
 
@@ -533,16 +583,38 @@ def _spawn_agent(manager, arguments, ps):
         mission = arguments.get('context', '') or arguments.get('plugin_name', '')
     if not mission:
         return "Mission is required.", False
+    # A dict/list mission (LLMs structure these sometimes) would poison
+    # check_agents for EVERY agent — the listing slices mission[:100].
+    if not isinstance(mission, str):
+        mission = json.dumps(mission, ensure_ascii=False)
 
     agent_type = arguments.get('agent_type', 'llm')
     chat_name = _get_active_chat()
 
+    # P3-T2 (ruling F4): snapshot the SPAWNING chat's privacy while still in
+    # the caller's context — the worker runs on a bare thread and can't see
+    # this ContextVar. Private chat → LLM agents inherit local-only +
+    # network-tool blocking; Claude Code agents ARE a cloud service, refuse.
+    try:
+        from core.chat.function_manager import scope_private
+        _privacy = bool(scope_private.get())
+    except Exception:
+        _privacy = True   # unreadable = fail closed
+    if _privacy and agent_type != 'llm':
+        return ("This chat is private — Claude Code agents run through a "
+                "cloud service and can't be dispatched from here.", False)
+
     # Build kwargs based on agent type
     kwargs = {}
+    if _privacy:
+        kwargs['_privacy_required'] = True
 
     if agent_type == 'llm':
         model_arg = arguments.get('model', '')
-        kwargs['toolset'] = arguments.get('toolset', ps.get('default_toolset', 'default'))
+        # `or` (not default=) for the same reason as `prompt` below: an
+        # explicit toolset='' would resolve to zero tools and the agent
+        # would run a silent, useless job.
+        kwargs['toolset'] = arguments.get('toolset') or ps.get('default_toolset') or 'default'
 
         # Phase 5: `prompt` resolution.
         # Default is 'agent' (lean background-worker persona with minimal scopes,
@@ -611,7 +683,7 @@ def _check_agents(manager):
     for a in agents:
         status_icon = {'running': '\U0001f7e1', 'done': '\U0001f7e2', 'failed': '\U0001f534', 'cancelled': '\u26aa'}.get(a['status'], '\u2753')
         lines.append(f"  {status_icon} {a['name']} [{a['id']}] \u2014 {a['status']} ({a['elapsed']}s)")
-        lines.append(f"      Mission: {a['mission'][:100]}")
+        lines.append(f"      Mission: {str(a['mission'])[:100]}")
         tools = a.get('tool_log', [])
         if tools:
             lines.append(f"      Tools called: {', '.join(tools)}")

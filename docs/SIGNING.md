@@ -50,11 +50,11 @@ print('Private key saved to: my_signing_key.pem')
 
 This creates two things:
 - `my_signing_key.pem` — your **private key**. Keep this safe. Never share it.
-- A 64-character hex string — your **public key**. Send this to Krem.
+- A 64-character hex string — your **public key**. Send this to the Sapphire maintainer.
 
 ### 2. Send Your Public Key
 
-Send your public key hex string to Krem (the Sapphire maintainer). He'll add it to the [authorized keys list](https://github.com/ddxfish/sapphire-plugin-keys). Once added, any plugin you sign will be recognized as `verified_author` by all Sapphire instances.
+Send your public key hex string to the Sapphire maintainer, who will add it to the [authorized keys list](https://github.com/ddxfish/sapphire-plugin-keys). Once added, any plugin you sign will be recognized as `verified_author` by all Sapphire instances.
 
 Include with your key:
 - Your name or handle (displayed in the UI as the verified author)
@@ -119,3 +119,12 @@ Authorized keys are fetched from a remote URL (`PLUGIN_KEYS_URL` in settings), c
 ```
 
 The signature covers the JSON-serialized `plugin`, `version`, and `files` fields (sorted keys, compact separators). The `signature` field itself is excluded from the signed payload.
+
+## Reference for AI
+
+Plugin signing = Ed25519 signature over plugin.json's serialized plugin/version/files fields (sorted keys, compact separators; signature field excluded). Files hashed individually; editing ANY hashed file invalidates the signature.
+
+STATES: official (Sapphire key) / verified_author (authorized third-party key) / unsigned / failed. Tampered (failed) is ALWAYS blocked at boot — no override. Unsigned is blocked unless ALLOW_UNSIGNED_PLUGINS=true (default false). Managed installs add 'validated'.
+KEYS: authorized third-party keys distributed via the central key list (PLUGIN_KEYS_URL, fetched with a 24h disk-cache-first policy; user/authorized_plugin_keys.json is only the fetch cache — there is no user-local key-add mechanism).
+SIGNING: python tools/sign_plugin.py plugins/<name> [--key /path/to/private_key.pem] [--all] [--include-user]. Default key path user/plugin_signing_key.pem.
+SYMPTOM: plugin silently missing after an edit = signature stale — re-sign, restart. Check Settings > Plugins for the trust badge.

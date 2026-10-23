@@ -62,10 +62,10 @@ plugins/my-theme-pack/
 Theme CSS files override Sapphire's CSS variables. **Two runtime behaviors you must account for:**
 
 1. **Paths are relative to your plugin's `web/` directory.** Manifest `css`/`scripts` values are served from `/plugin-web/{plugin}/`, which already points at `web/` — so write `themes/cyberpunk/cyberpunk.css`, NOT `web/themes/...` (the latter resolves to `web/web/...` and 404s).
-2. **Your theme id is namespaced.** The runtime sets `data-theme="plugin-{plugin-name}-{theme-id}"`, not your bare `id`. Wrap your CSS in that prefixed selector — a bare `[data-theme="cyberpunk"]` will never match. For id `cyberpunk` in a plugin named `neon-pack`:
+2. **Your theme id is namespaced.** The runtime sets `data-theme="plugin:{plugin-name}:{theme-id}"` (colon-separated — colons can't appear in either part, so names with dashes never collide), not your bare `id`. Wrap your CSS in that prefixed selector — a bare `[data-theme="cyberpunk"]` will never match. For id `cyberpunk` in a plugin named `neon-pack`:
 
 ```css
-[data-theme="plugin-neon-pack-cyberpunk"] {
+[data-theme="plugin:neon-pack:cyberpunk"] {
     --bg: #0a0a1a;
     --bg-secondary: #12122a;
     --text: #e0e0ff;
@@ -93,9 +93,76 @@ The `preview` object controls the color swatch shown in the theme picker card:
 }
 ```
 
-## Animated Backgrounds (JS)
+## Bundle Defaults (font / bg / motion)
 
-Theme scripts are loaded as `<script>` tags when the theme is activated and removed when switching away. Use an IIFE to avoid polluting the global scope:
+A theme can ship look-and-feel defaults beyond CSS. Each is a *default*: an explicit user pick in Settings > Visual always wins.
+
+```json
+{
+  "id": "cyberpunk",
+  "font": "mono",
+  "bg": "themes/cyberpunk/city.webp",
+  "motion": "rain",
+  ...
+}
+```
+
+- `font` — a font preset id (`system`, `rounded`, `serif`, `mono`, `handwriting`). Webfont presets download on first use.
+- `bg` — a background image, path relative to your `web/` dir. It sits at the BOTTOM of the background chain: a chat's own scene and the global underlay both cover it.
+- `motion` — a motion id to run by default (see Motions below). Use your own motion's **bare** id here — the runtime resolves it against your plugin's namespace first, or name a core motion (`snow`, `stars`, `fireflies`, `nibblers`, `triangles`, `coder`). An unknown id is a silent no-op.
+
+## Motions (`capabilities.motions`)
+
+Motions are the supported way to ship animated backgrounds. A motion is an ES module with a mount/unmount contract — the runtime imports it, mounts it into a dedicated layer behind the chat transcript, and **calls `unmount()` before any switch**, so teardown is guaranteed (the old scripts[] lane had none).
+
+### plugin.json
+
+```json
+{
+  "capabilities": {
+    "motions": [
+      { "id": "rain", "name": "Neon Rain", "description": "Falling neon streaks",
+        "script": "motions/rain.js" }
+    ]
+  }
+}
+```
+
+`script` is relative to your `web/` dir. Your motion id is namespaced at runtime to `plugin:{plugin-name}:{id}`, same as themes.
+
+### motion module contract
+
+```js
+let canvas, raf = 0, ro;
+
+export default {
+    id: 'rain', name: 'Neon Rain',
+    mount(host, settings) {
+        // host = the #motion-layer div (pointer-events:none, behind chat).
+        // Create your canvas here; size it to the host (use a ResizeObserver —
+        // the layer lives inside a flexing, sometimes re-parented container).
+        canvas = document.createElement('canvas');
+        host.appendChild(canvas);
+        // ... start your requestAnimationFrame loop, keep the id in `raf`
+    },
+    unmount() {
+        // MUST cancel rAF, disconnect observers, remove your nodes.
+        cancelAnimationFrame(raf);
+        ro?.disconnect();
+        canvas?.remove();
+    },
+};
+```
+
+The runtime handles the hard parts for you — your motion is automatically unmounted while another view owns the chat surface (e.g. game-room story backdrops), while the tab is hidden, and while the chat surface is off-screen. Background images do NOT suppress motion — your canvas paints above the bg image and below the readability scrim. When the OS requests `prefers-reduced-motion`, theme-default motions never auto-start — but an explicit user pick in the picker still runs (a pick is consent).
+
+`settings` passed to `mount()` includes two global user multipliers: `speed` (0.5 slow / 1 normal / 1.75 fast — multiply your velocities and cadences by it) and `intensity` (0.5 low / 1 normal / 1.75 high — multiply your particle/element counts by it). Any other keys you declare in your motion's `settings` object in the manifest are passed through alongside them. It is **remounted on theme switch**, so sample theme colors (e.g. `--trim`) at mount time and they will always be current. Don't add your own visibility handling.
+
+Users pick motions in Settings > Visual > Background & Motion; the choice persists in localStorage (`sapphire-motion`). That pick is the **master default** — each chat can override it from the chat-scene modal (or the AI's `set_motion` tool), stored per-chat in chat settings. Resolution: per-chat motion > global pick > theme bundle default > none. Plugin motions are selectable in both pickers automatically; a per-chat pick also runs under `prefers-reduced-motion` (a pick is consent).
+
+## Animated Backgrounds (JS) — DEPRECATED
+
+**Deprecated in favor of Motions (above).** The `scripts` array still works — scripts are loaded as `<script>` tags when the theme is activated and removed when switching away — but script-tag removal cannot stop a running animation loop; you must self-terminate. New themes should ship a motion instead. Use an IIFE to avoid polluting the global scope:
 
 ```js
 (function() {
@@ -114,26 +181,37 @@ Theme scripts are loaded as `<script>` tags when the theme is activated and remo
         canvas.height = window.innerHeight;
     }
 
+    const selfScript = document.currentScript;
+
+    function teardown() {
+        cancelAnimationFrame(animId);
+        window.removeEventListener('resize', resize);
+        window.removeEventListener('sapphire-theme-unload', teardown);
+        canvas.remove();
+    }
+
     function draw() {
+        // Backstop: a boot re-assert of the SAME theme replaces this script
+        // tag WITHOUT firing the unload event (it only fires on a switch to
+        // a different theme) — catch the orphaned copy here.
+        if (selfScript && !selfScript.isConnected) { teardown(); return; }
         // Your animation logic here
         animId = requestAnimationFrame(draw);
     }
 
+    // Designed teardown signal: the runtime dispatches `sapphire-theme-unload`
+    // on window BEFORE removing theme script tags when the user switches to a
+    // different theme. detail.id is the outgoing NAMESPACED theme id
+    // (`plugin:<your-plugin-name>:<theme-id>`).
+    window.addEventListener('sapphire-theme-unload', teardown);
+
     resize();
     window.addEventListener('resize', resize);
     draw();
-
-    // Cleanup when theme changes — check periodically
-    const cleanup = setInterval(() => {
-        if (!document.querySelector(`script[data-theme-script="cyberpunk"]`)) {
-            cancelAnimationFrame(animId);
-            window.removeEventListener('resize', resize);
-            canvas.remove();
-            clearInterval(cleanup);
-        }
-    }, 1000);
 })();
 ```
+
+The `sapphire-theme-unload` event is the supported teardown path: it fires while your script is still alive, so `cancelAnimationFrame` and node removal actually run — the old advice of polling `isConnected` on an interval survives only as the in-loop backstop shown above.
 
 ### Reacting to theme-setting changes
 
@@ -210,10 +288,33 @@ Options can also be simple strings: `"options": ["low", "medium", "high"]`
 
 ### How Settings Work
 
-- All settings are stored in **localStorage** with the key you specify
-- Your theme JS reads them via `localStorage.getItem('cyberpunk-rain-mode')`
-- The Sapphire settings panel reads/writes the same keys — zero bridging needed
-- Changes fire a custom event for instant reactivity:
+Settings live in **localStorage**, but under a per-theme namespaced key — never the bare key you declared:
+
+```
+theme:{runtime-theme-id}:{key}
+```
+
+The runtime theme id for a plugin theme is the namespaced `plugin:{plugin-name}:{theme-id}` (same namespacing as the CSS note above), so for theme id `cyberpunk` in plugin `neon-pack`, the setting `cyberpunk-rain-mode` is stored at:
+
+```
+theme:plugin:neon-pack:cyberpunk:cyberpunk-rain-mode
+```
+
+A bare `localStorage.getItem('cyberpunk-rain-mode')` returns `null` — always. Read initial state through the namespaced key, and fall back to your manifest default yourself (nothing is written to storage until the user actually touches the control):
+
+```js
+const THEME_ID = 'plugin:neon-pack:cyberpunk';   // plugin:{plugin-name}:{theme-id}
+const setting = (key, dflt) =>
+    localStorage.getItem(`theme:${THEME_ID}:${key}`) ?? dflt;
+
+let rainMode = setting('cyberpunk-rain-mode', 'ambient');
+```
+
+Rules and behaviors:
+
+- Values are stored as **strings** — a boolean setting reads back as `'true'` / `'false'`.
+- Setting keys must match `[A-Za-z0-9_-]` (up to 64 chars) and must **not** start with `sapphire` — that namespace is reserved for app state, and the server drops reserved or malformed keys from the panel.
+- Live changes fire a custom event, and its `detail` carries the **bare** declared key (not the namespaced storage key):
 
 ```js
 window.addEventListener('sapphire-theme-setting', e => {
@@ -242,12 +343,6 @@ Then in your CSS:
 }
 ```
 
-## Legacy Theme Plugins
-
-If your theme plugin exposes themes via `window.sapphireThemes.getAll()` instead of the manifest format, Sapphire will still discover and display them. Settings are supported if each theme object includes a `settings` array.
-
-This is the backwards-compatible path — new themes should use the manifest format.
-
 ## Tips
 
 - Use Sapphire's CSS variables (`var(--bg)`, `var(--text)`, etc.) in your theme CSS so elements inherit properly
@@ -256,3 +351,29 @@ This is the backwards-compatible path — new themes should use the manifest for
 - Always provide a cleanup mechanism in your JS (canvas removal, interval clearing)
 - Keep performance in mind — offer a performance tier setting so users on slow machines can dial it down
 - Test with both light and dark base themes to ensure your variables cover everything
+
+## Reference for AI
+
+REGISTRATION (plugin.json):
+- capabilities.themes[]: {id, name, icon, description, css, preview{bg,bg2,text,accent,border}, font?, bg?, motion?, settings[], scripts[] (deprecated)}. Paths relative to plugin web/ dir, served from /plugin-web/{plugin}/.
+- capabilities.motions[]: {id, name, description, script, settings?}. Motion module default-exports {id, name, mount(host, settings), unmount()}; unmount() MUST cancel rAF, disconnect observers, remove nodes.
+- Runtime ids are namespaced: theme and motion id become plugin:{plugin-name}:{id}. Theme CSS must target [data-theme="plugin:{plugin-name}:{id}"] — a bare id never matches.
+
+STORAGE:
+- Theme settings persist at localStorage key theme:{runtime-theme-id}:{key} (for plugin themes: theme:plugin:{plugin-name}:{theme-id}:{key}). Values are strings; unset until the user touches the control — fall back to the manifest default.
+- Setting key shape [A-Za-z0-9_-]{1,64}; keys starting with 'sapphire' are refused server-side (reserved namespace).
+
+EVENTS (on window):
+- sapphire-theme-setting: detail {key, value} — key is the BARE declared key; fired on every live settings-panel change.
+- sapphire-theme-unload: detail {id} — outgoing namespaced theme id; fired BEFORE theme script tags are removed on a switch to a DIFFERENT theme. Not fired on a same-theme boot re-assert (keep an isConnected backstop in the animation loop).
+- *-chat-style setting keys additionally set data-{prefix}-chat on the document element.
+
+MOTION CONTRACT:
+- mount(host, settings): host = #motion-layer div behind chat; settings merges manifest settings with user multipliers speed and intensity (0.5|1|1.75) — scale velocities by speed, element counts by intensity.
+- Runtime auto-unmounts when: another view owns the chat surface, tab hidden, layer off-screen, plugin disabled. Remounted on theme switch — sample theme colors (e.g. --trim) at mount time. Background images never suppress motion (paints above bg, under scrim).
+- prefers-reduced-motion gates THEME-DEFAULT motions only; an explicit or per-chat user pick still runs.
+- Resolution: per-chat motion > global user pick (localStorage sapphire-motion, 'none' = off) > theme bundle default > none.
+
+BUNDLE DEFAULTS: theme font/bg/motion are defaults only — explicit user picks always win. Theme bg sits at the bottom of the background chain (chat scene > global underlay > theme bg).
+
+DEPRECATED: scripts[] lane (script tags removed on switch; use motions instead). window.sapphireThemes legacy discovery is REMOVED — manifest format only.

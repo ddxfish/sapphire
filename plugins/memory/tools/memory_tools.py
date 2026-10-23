@@ -1,6 +1,7 @@
 # plugins/memory/tools/memory_tools.py
 # Long-term memory with FTS5 full-text search, semantic embeddings, and labels
 
+import os
 import sqlite3
 import logging
 import re
@@ -38,7 +39,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
-            "description": f"Save information to long-term memory. Keep under 450 chars. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge.",
+            "description": f"Save information to long-term memory. 450 chars max or it gets trimmed. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge. Never add today's date; add anniversary dates or other important events. Use first person wording when memories talk about yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -192,8 +193,10 @@ def _safe_rename_corrupted(db_path):
     try:
         db_path.rename(target)
         logger.info(f"[REPAIR] Original preserved at {target}")
+        return True
     except Exception as e:
         logger.error(f"[REPAIR] Could not preserve corrupted DB at {target}: {e}")
+        return False
 
 
 def _repair_db(db_path):
@@ -259,6 +262,7 @@ def _repair_db(db_path):
 
     # Build fresh DB at TMP path. Do NOT touch the original yet.
     tmp_path = db_path.with_suffix('.db.new')
+    in_swap = False
     if tmp_path.exists():
         try:
             tmp_path.unlink()
@@ -327,12 +331,22 @@ def _repair_db(db_path):
         # db_path doesn't exist — _ensure_db would create a fresh empty DB on
         # next boot if we crashed here, but the .corrupted sibling holds the
         # verified salvage + original user data.
-        _safe_rename_corrupted(db_path)
-        tmp_path.rename(db_path)
+        # On Windows the rename-away can fail (open handle) and rename-over
+        # raises FileExistsError — the old flow then deleted the verified
+        # salvage and kept the corrupt DB live. Never destroy the salvage.
+        if not _safe_rename_corrupted(db_path):
+            logger.error(f"[REPAIR] Could not move corrupt DB aside — verified "
+                         f"salvage kept at {tmp_path} for manual recovery")
+            return
+        in_swap = True
+        os.replace(tmp_path, db_path)
         logger.info(f"[REPAIR] Swap complete — fresh DB active at {db_path}")
 
     except Exception as e:
         logger.error(f"[REPAIR] Fresh DB build failed: {e}")
+        if in_swap:
+            logger.error(f"[REPAIR] Failure during swap — verified salvage kept at {tmp_path}")
+            return
         # Clean up tmp. Original is UNTOUCHED.
         try:
             if tmp_path.exists():
@@ -653,6 +667,31 @@ def get_scopes():
         return [{"name": "default", "count": 0}]
 
 
+def status_summary(scope=None):
+    """Memory-at-a-glance for the status plugin (get_self_info + the Status
+    app) — answered here because memory.db is ours (the status plugin used to
+    run this SQL itself, 2026-09-11). Counts only. Never creates the DB: a
+    status poll on a box that hasn't saved a memory yet leaves no file."""
+    out = {'memories': 0, 'memory_scopes': {}, 'scopes': {}, 'current': None}
+    try:
+        if not _get_db_path().exists():
+            return out
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM memories GROUP BY scope')
+            out['memory_scopes'] = {row[0]: row[1] for row in cursor.fetchall()}
+            out['memories'] = sum(out['memory_scopes'].values())
+            cursor.execute('SELECT name FROM memory_scopes')
+            out['scopes'] = {row[0]: 0 for row in cursor.fetchall()}
+        for name, n in out['memory_scopes'].items():
+            out['scopes'][name] = out['scopes'].get(name, 0) + n
+        if scope:
+            out['current'] = {'scope': scope, 'memories': out['memory_scopes'].get(scope, 0)}
+    except Exception as e:
+        logger.warning(f"status_summary failed: {e}")
+    return out
+
+
 def create_scope(name: str) -> bool:
     try:
         with _get_connection() as conn:
@@ -759,6 +798,24 @@ def _sanitize_fts_query(query: str, use_or=False, use_prefix=False) -> str:
 
 MAX_MEMORY_LENGTH = 512
 
+
+def _trim_to_cap(content: str, cap: int = MAX_MEMORY_LENGTH) -> tuple:
+    """Over-cap content → (kept, dropped), cut at the last whitespace at or
+    before the cap so no word splits (hard cut only if there is none).
+    Refusing over-cap saves sent her into a rewrite loop — 5 tool calls for
+    one memory. Now it saves and the receipt carries what was cut."""
+    content = content.strip()
+    if len(content) <= cap:
+        return content, ''
+    head = content[:cap + 1]
+    idx = max(head.rfind(ch) for ch in (' ', '\n', '\t'))
+    if idx < cap // 2:
+        # Whitespace missing or only near the start (label + unbroken CJK/
+        # base64/URL run): a break there would save a tiny stub as the whole
+        # memory. Hard-cut at the cap instead.
+        idx = cap
+    return content[:idx].rstrip(), content[idx:].strip()
+
 # Per-scope row cap. Prevents a runaway AI (or import) from ballooning a
 # single scope to millions of rows — vector search scales poorly past this.
 # Knowledge entries already have a 50k cap; memories/people get the same
@@ -771,8 +828,9 @@ def _save_memory(content: str, label: str = None, scope: str = 'default',
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
-        if len(content) > MAX_MEMORY_LENGTH:
-            return f"Memory too long ({len(content)} chars). Max is {MAX_MEMORY_LENGTH}. Write a shorter, more concise memory.", False
+        # Over-cap content is trimmed at a word boundary and saved anyway;
+        # the receipt says what was cut.
+        content, dropped = _trim_to_cap(content)
         # Cap check — count rows in scope before writing.
         with _get_connection() as conn:
             count = conn.execute(
@@ -842,7 +900,15 @@ def _save_memory(content: str, label: str = None, scope: str = 'default',
             publish_mind_changed('memory', scope, 'save')
         except Exception:
             pass
-        return f"Memory saved (ID: {memory_id}{label_str}{priv_str})", True
+        msg = f"Memory saved (ID: {memory_id}{label_str}{priv_str})"
+        if dropped:
+            logger.info(f"[MEMORY] save trimmed {len(dropped)} chars over cap (ID {memory_id})")
+            # Saved-first, no pre-filled tool call (mirrors the Mind Palace
+            # receipt, 2026-09-08): the old "delete_memory(42) and re-save"
+            # menu read as an instruction and defeated the trim.
+            msg += (f". {len(dropped)} chars TRIMMED at the {MAX_MEMORY_LENGTH} cap: "
+                    f"\"{dropped}\". Skip a re-save unless it's critical.")
+        return msg, True
 
     except Exception as e:
         logger.error(f"Error saving memory: {e}")
@@ -1120,11 +1186,15 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             return _save_memory(arguments.get("content", ""), arguments.get("label"),
                                 scope, private_key=arguments.get("private_key"))
         elif function_name == "search_memory":
-            return _search_memory(arguments.get("query", ""), arguments.get("limit", 10),
+            # Clamp: LIMIT -1 = unlimited in SQLite — a stray negative would
+            # dump the whole scope into one permanent history row.
+            limit = min(max(int(arguments.get("limit", 10) or 10), 1), 50)
+            return _search_memory(arguments.get("query", ""), limit,
                                   arguments.get("label"), scope,
                                   private_key=arguments.get("private_key"))
         elif function_name == "get_recent_memories":
-            return _get_recent_memories(arguments.get("count", 10), arguments.get("label"),
+            count = min(max(int(arguments.get("count", 10) or 10), 1), 50)
+            return _get_recent_memories(count, arguments.get("label"),
                                         scope, private_key=arguments.get("private_key"))
         elif function_name == "delete_memory":
             memory_id = arguments.get("memory_id")

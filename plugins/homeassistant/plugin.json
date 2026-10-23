@@ -1,5 +1,6 @@
 {
   "name": "homeassistant",
+  "short_display_name": "Home Assistant",
   "version": "1.0.0",
   "description": "Home Assistant — lights, switches, scenes, thermostat, notifications",
   "author": "sapphire",

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
@@ -24,7 +25,7 @@ AVAILABLE_FUNCTIONS = [
     'get_wikipedia',
     'research_topic',
     'get_site_links',
-    'get_images',
+    'web_view_images',
 ]
 
 TOOLS = [
@@ -50,11 +51,15 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_website",
-            "description": "Fetch full content of a webpage.",
+            "description": ("Fetch full content of a webpage. show_image_urls='true' appends the page's image "
+                            "URLs (alt, size); 'only' returns just that list — hand one to web_view_images(url=) "
+                            "to look at it."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL"}
+                    "url": {"type": "string", "description": "URL"},
+                    "show_image_urls": {"type": "string", "enum": ["false", "true", "only"],
+                                        "description": "false (default) = text only; true = text + image URLs; only = image URLs alone"}
                 },
                 "required": ["url"]
             }
@@ -98,7 +103,7 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_site_links",
-            "description": "Internal text links from a webpage (anchor + URL). Explore structure before get_images.",
+            "description": "Internal text links from a webpage (anchor + URL). Explore a site's structure.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -114,15 +119,24 @@ TOOLS = [
         "network": True,
         "is_local": False,
         "function": {
-            "name": "get_images",
-            "description": "Image URLs + descriptions from a webpage. Display with markdown: ![desc](url).",
+            "name": "web_view_images",
+            "description": ("Search the web for images, or look at one image URL. query + count (default 6, "
+                            "max 12) + page (default 1) → the user gets numbered tiles and you get the same "
+                            "pictures as a numbered contact sheet (view=true, the default; count=1 = the one "
+                            "image). Every hit carries an img: handle = its thumbnail, kept in this chat: "
+                            "memory_view_image(image_id=img:...) to look again, memory_save_image(img:...) to keep it. "
+                            "'full' is the original on its host (bigger, may refuse). url= views one image. "
+                            "Bing answers well-known subjects best — lead with the famous part."),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL"},
-                    "show_to_user": {"type": "boolean", "description": "Auto-display in chat gallery (default false)"}
+                    "query": {"type": "string", "description": "What to search for"},
+                    "url": {"type": "string", "description": "An image URL to view instead of searching"},
+                    "count": {"type": "integer", "description": "Results per page, 1-12 (default 6)"},
+                    "page": {"type": "integer", "description": "Page of results, from 1 (default 1) — the next page has new pictures"},
+                    "view": {"type": "boolean", "description": "Look at them yourself (default true; false = tiles for the user only)"}
                 },
-                "required": ["url"]
+                "required": []
             }
         }
     }
@@ -170,7 +184,12 @@ def search_ddg_html(query: str, max_results: int = 15) -> list:
     except (SocksAuthError, requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
         # Stale session or transient failure — clear cache and retry once
         logger.warning(f"[WEB] DDG request failed ({type(e).__name__}), retrying with fresh session...")
-        clear_session_cache()
+        # Drop only net's pooled sessions (fresh connection pool) — NOT
+        # clear_session_cache(), which also re-derives proxy env and drops the
+        # LLM httpx pool mid-conversation for one flaky search (longevity/
+        # day-ruiner blast-radius finding, net-facade wave 2).
+        from core import net as _net
+        _net._invalidate()
         try:
             resp = get_session().get(url, timeout=12)
         except (SocksAuthError, ValueError) as e2:
@@ -233,101 +252,191 @@ def extract_content(html: str) -> str:
     logger.info(f"[WEB] Extracted {len(result)} chars")
     return result
 
-def _best_srcset_url(srcset: str) -> str:
-    """Pick best URL from srcset, preferring ~1920w."""
-    if not srcset:
-        return None
-    candidates = []
-    for part in srcset.split(','):
-        part = part.strip()
-        if not part:
-            continue
-        pieces = part.split()
-        if len(pieces) >= 2:
-            url, descriptor = pieces[0], pieces[1]
-            if descriptor.endswith('w'):
-                try:
-                    candidates.append((url, int(descriptor[:-1])))
-                except ValueError:
-                    candidates.append((url, 0))
-            elif descriptor.endswith('x'):
-                try:
-                    candidates.append((url, int(float(descriptor[:-1]) * 1000)))
-                except ValueError:
-                    candidates.append((url, 0))
-        elif len(pieces) == 1:
-            candidates.append((pieces[0], 0))
-    if not candidates:
-        return None
-    # Prefer closest to 1920w, fall back to largest
-    best = min(candidates, key=lambda c: abs(c[1] - 1920) if c[1] > 0 else float('inf'))
-    return best[0]
+def _px(v):
+    """'600', '600px', ' 600 ' → 600; anything else → None."""
+    digits = ''.join(ch for ch in str(v or '') if ch.isdigit())
+    return int(digits) if digits else None
 
 
-_JUNK_PATTERNS = ['logo', 'icon', 'sprite', 'pixel', 'badge', 'emoji', 'favicon',
-                  'avatar', '1x1', 'spacer', 'blank', 'tracking', 'spinner', 'loader']
-
-
-def extract_images(html: str, base_url: str) -> list:
-    """Extract content images from HTML, stripping nav/header/footer."""
+def extract_image_urls(html: str, base_url: str, limit: int = 40) -> list:
+    """Content images on a page (get_website show_image_urls): og:image first,
+    then every <img src|data-src> resolved absolute with its alt and declared
+    WxH. Skips data: URIs, SVGs and declared tracking pixels (≤ 32px)."""
     soup = BeautifulSoup(html, 'html.parser')
-    for tag in soup(WORK_WEBSITE_STRIP_ELEMENTS + ['form']):
-        tag.decompose()
-
-    images = []
-    seen_urls = set()
-
+    out, seen = [], set()
+    og = soup.find('meta', property='og:image')
+    if og and og.get('content'):
+        u = urllib.parse.urljoin(base_url, og['content'].strip())
+        seen.add(u)
+        out.append({'url': u, 'alt': 'og:image', 'dims': ''})
     for img in soup.find_all('img'):
-        src = (img.get('data-src') or img.get('data-lazy-src') or
-               _best_srcset_url(img.get('srcset')) or img.get('src'))
-        if not src:
+        src = (img.get('src') or img.get('data-src') or img.get('data-lazy-src') or '').strip()
+        if not src or src.startswith('data:') or src.split('?')[0].lower().endswith('.svg'):
             continue
-        if src.startswith('data:') or src.endswith('.svg'):
+        u = urllib.parse.urljoin(base_url, src)
+        if u in seen:
             continue
-
-        full_src = urllib.parse.urljoin(base_url, src)
-
-        if full_src in seen_urls:
+        w, h = _px(img.get('width')), _px(img.get('height'))
+        if (w and w <= 32) or (h and h <= 32):
             continue
-        seen_urls.add(full_src)
+        seen.add(u)
+        out.append({'url': u, 'alt': (img.get('alt') or '').strip()[:120],
+                    'dims': f"{w}x{h}" if w and h else ''})
+        if len(out) >= limit:
+            break
+    return out
 
-        src_lower = full_src.lower()
-        if any(p in src_lower for p in _JUNK_PATTERNS):
-            continue
 
-        # Skip tiny images
-        width, height = img.get('width', ''), img.get('height', '')
+def image_urls_text(imgs: list) -> str:
+    if not imgs:
+        return "No content images found on the page."
+    return "\n".join(f"{i}. {im['alt'] or '(no alt)'}{' — ' + im['dims'] if im['dims'] else ''} — {im['url']}"
+                     for i, im in enumerate(imgs, 1))
+
+
+_BING_IMAGES = "https://www.bing.com/images/search"
+_SAFESEARCH = ('off', 'moderate', 'strict')
+
+
+def _parse_bing_images(html: str, limit: int) -> list:
+    """Bing's results ride <a class="iusc" m="{json}">: murl (full), turl (thumb),
+    purl (source page), t (title); dims sit in the card's .img_info span.
+    Deduped by full URL; broken anchors skipped."""
+    soup = BeautifulSoup(html, 'html.parser')
+    out, seen = [], set()
+    for a in soup.find_all('a', class_='iusc'):
         try:
-            if width and height and (int(width) < 80 or int(height) < 80):
-                continue
-        except (ValueError, TypeError):
-            pass
+            m = json.loads(a.get('m') or '')
+        except ValueError:
+            continue
+        full, thumb = m.get('murl'), m.get('turl')
+        if not full or not thumb or full in seen:
+            continue
+        seen.add(full)
+        dims = ''
+        card = a.find_parent(class_='iuscp')
+        info = card.select_one('.img_info') if card else None
+        if info:
+            first = info.get_text(' ', strip=True).split(' ')[0]
+            if '×' in first or 'x' in first:
+                dims = first.replace('×', 'x')
+        out.append({'full': full, 'thumb': thumb, 'page': m.get('purl') or '',
+                    'title': (m.get('t') or '').strip(), 'dims': dims})
+        if len(out) >= limit:
+            break
+    return out
 
-        alt = img.get('alt', '').strip()
-        title = img.get('title', '').strip()
 
-        # Check for figcaption
-        caption = ''
-        figure = img.find_parent('figure')
-        if figure:
-            figcaption = figure.find('figcaption')
-            if figcaption:
-                caption = figcaption.get_text(strip=True)
+_STOP = {'the', 'and', 'for', 'with', 'from', 'that', 'this', 'photo', 'photos', 'image', 'images',
+         'picture', 'pictures', 'pic', 'pics', 'wallpaper', 'closeup', 'close', 'shot', 'shots'}
 
-        # Parent link
-        parent_link = ''
-        parent_a = img.find_parent('a')
-        if parent_a and parent_a.get('href'):
-            parent_link = urllib.parse.urljoin(base_url, parent_a['href'])
 
-        images.append({
-            'url': full_src,
-            'name': caption or alt or title or '',
-            'link': parent_link
-        })
+def _content_words(query: str) -> list:
+    return [w for w in re.findall(r'[a-z0-9]+', (query or '').lower()) if len(w) >= 3 and w not in _STOP]
 
-    logger.info(f"[WEB] Extracted {len(images)} images from {base_url}")
-    return images[:30]
+
+def looks_answered(query: str, results: list) -> bool:
+    """The junk guard (2026-09-10, 'Plumbus rick and morty' → Mahindra Thar).
+    Bing's no-JS path answers only subjects it knows well; for anything else it
+    hands back a random cached page for some OTHER query, sometimes keyed on a
+    single word ('great horned owl' → Great Value bread). A real answer carries
+    the query's words in its titles/pages/URLs; filler doesn't. Accept when at
+    least half the query's content words appear anywhere in the results."""
+    words = _content_words(query)
+    if not words or not results:
+        return True
+    hay = ' '.join(f"{r.get('title', '')} {r.get('page', '')} {r.get('full', '')}" for r in results).lower()
+    hits = sum(1 for w in words if w in hay)
+    return hits * 2 >= len(words)
+
+
+def search_bing_images(query: str, count: int, page: int = 1, safesearch: str = 'off') -> list:
+    """Bing's image results page, server side, through core.net. (DDG's own
+    image endpoint is walled — 403 for every non-browser client, verified
+    2026-09-09 — and DDG's images ARE Bing's.) The user's browser never
+    touches Bing: tiles are our stashed thumbs; the lightbox rides DDG's image
+    proxy (core.images.proxied). page = offset of count; safesearch = Bing's
+    adlt (the WEB_IMAGES_SAFESEARCH setting, default off)."""
+    from core import net
+    first = (max(1, int(page or 1)) - 1) * count + 1
+    adlt = safesearch if safesearch in _SAFESEARCH else 'off'
+    url = (f"{_BING_IMAGES}?q={urllib.parse.quote_plus(query)}&form=HDRSC2"
+           f"&first={first}&adlt={adlt}")
+    logger.info(f"[WEB] Bing image search requested (page {page}, adlt={adlt})")
+    resp = net.wan_session().get(url, timeout=15)
+    if resp.status_code != 200 or not resp.text:
+        logger.warning(f"[WEB] Bing images bad status: {resp.status_code}")
+        return []
+    results = _parse_bing_images(resp.text, count)
+    if not results:
+        preview = resp.text[:200].replace('\n', ' ')
+        logger.warning(f"[WEB] Bing images: 0 parsed (markup drift?): {preview}")
+    logger.info(f"[WEB] Bing images: {len(results)} results")
+    return results
+
+
+def _fetch_any(*urls):
+    """First URL that resolves to image bytes, else None (logged, never raised)."""
+    from core import images as ci
+    for u in urls:
+        try:
+            return ci.resolve(u).data
+        except ci.ImageError as e:
+            logger.warning(f"[WEB] image fetch skipped: {e}")
+    return None
+
+
+def image_search_result(query: str, results: list, view: bool = True, page: int = 1):
+    """Her numbered list + the user's row (core.images.gallery). Every hit's
+    thumbnail is fetched through the facade and STASHED as an img: handle —
+    ours: vault-aware, offline, saveable even when the host refuses hotlinks —
+    and the same bytes make her contact sheet, so her #3 is the user's #3.
+    view=true adds the pixels (the full image for one result, else the sheet).
+    Returns str, or the images contract dict."""
+    from core import images as ci
+    entries = [{'raw': _fetch_any(r['thumb']), 'thumb': ci.proxied(r['thumb']), 'full': ci.proxied(r['full']),
+                'title': r['title'], 'page': r['page']} for r in results]
+    if view and len(results) == 1:
+        entries[0]['show'] = _fetch_any(results[0]['full'])
+    where = f" (page {page})" if page and page > 1 else ''
+    images, tail = ci.gallery(f"{query}{where}", entries, view=view)
+    lines = []
+    for i, (r, e) in enumerate(zip(results, entries), 1):
+        host = urllib.parse.urlsplit(r['page'] or r['full']).hostname or ''
+        dims = f" — {r['dims']}" if r.get('dims') else ''
+        tag = f" — {e['handle']}" if e['handle'] else " — (thumbnail unavailable)"
+        lines.append(f"{i}. {r['title'] or '(untitled)'} — {host}{dims}{tag}\n   full: {r['full']}")
+    text = (f"Top {len(results)} images for '{query}'{where} — the user sees them as numbered tiles. "
+            f"img: = the thumbnail kept in this chat (view or save it); full = the original on its host.\n"
+            + "\n".join(lines) + "\n" + tail)
+    return ci.result(text, images) if images else text
+
+
+def view_image_url(url: str):
+    """web_view_images(url=): one image from the web, for both of you."""
+    from core import images as ci
+    try:
+        r = ci.resolve(url)
+        w, h = r.size
+        shaped = ci.for_chat(r.data)
+    except ci.ImageError as e:
+        return str(e), False
+    return ci.result(f"{r.label} — {w}x{h} — from the web. You're looking at it now.", [shaped]), True
+
+
+def _safesearch() -> str:
+    """The WEB_IMAGES_SAFESEARCH setting (Settings › Images), read per call —
+    `config` inside execute() is the call's settings arg, not the module."""
+    from core.settings_manager import settings
+    return str(settings.get('WEB_IMAGES_SAFESEARCH', 'off') or 'off').lower()
+
+
+def _clamp(v, default, lo, hi):
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(n, hi)) if n else default
 
 
 def extract_site_links(html: str, base_url: str, strip_nav: bool = True) -> list:
@@ -439,6 +548,12 @@ def execute(function_name, arguments, config):
                     logger.warning(f"[WEB] get_website: Non-200 status {resp.status_code}")
                     return f"Couldn't access website. HTTP {resp.status_code}", False
                 
+                mode = str(arguments.get('show_image_urls') or 'false').lower()
+                imgs = extract_image_urls(resp.text, url) if mode in ('true', 'only') else []
+                if mode == 'only':
+                    return (f"Images on {url} ({len(imgs)}) — web_view_images(url=...) shows one:\n"
+                            f"{image_urls_text(imgs)}"), True
+
                 content = extract_content(resp.text)
                 if not content:
                     logger.warning(f"[WEB] get_website: No content extracted from {url}")
@@ -447,6 +562,8 @@ def execute(function_name, arguments, config):
                 if len(content) > WORK_WEBSITE_MAX_CONTENT:
                     logger.info(f"[WEB] get_website: Truncating from {len(content)} to {WORK_WEBSITE_MAX_CONTENT}")
                     content = content[:WORK_WEBSITE_MAX_CONTENT] + f"\n\n[Truncated to {WORK_WEBSITE_MAX_CONTENT} chars]"
+                if mode == 'true':
+                    content += f"\n\nImages on the page ({len(imgs)}):\n{image_urls_text(imgs)}"
                 
                 logger.info(f"[WEB] get_website: Success, {len(content)} chars")
                 return content, True
@@ -655,51 +772,40 @@ def execute(function_name, arguments, config):
                 logger.error(f"[WEB] get_site_links: {type(e).__name__}: {e}")
                 return f"Error browsing website: {str(e)}", False
 
-        elif function_name == "get_images":
-            if not (url := arguments.get('url')):
-                logger.warning("[WEB] get_images: No URL provided")
-                return "I need a URL to get images from.", False
-
-            logger.info(f"[WEB] get_images: Fetching {url}")
+        elif function_name == "web_view_images":
+            query = (arguments.get('query') or '').strip()
+            url = (arguments.get('url') or '').strip()
+            if url and not query:
+                return view_image_url(url)
+            if not query:
+                return "Give me a search phrase (query) or an image URL (url).", False
+            count = _clamp(arguments.get('count'), 6, 1, 12)
+            page = _clamp(arguments.get('page'), 1, 1, 50)
+            view = arguments.get('view', True) not in (False, 'false', 0)
+            safesearch = _safesearch()
             try:
-                resp = get_session().get(url, timeout=12)
-                if resp.status_code != 200:
-                    return f"Couldn't access website. HTTP {resp.status_code}", False
-
-                images = extract_images(resp.text, url)
-                if not images:
-                    return "No images found in the content area of that page.", True
-
-                lines = []
-                for i, img in enumerate(images, 1):
-                    name = img['name'] or '(no description)'
-                    line = f"{i}. [{name}] {img['url']}"
-                    if img['link']:
-                        line += f"\n   → links to: {img['link']}"
-                    lines.append(line)
-
-                out = "\n\n".join(lines)
-
-                if arguments.get('show_to_user', False):
-                    urls = [img['url'] for img in images]
-                    return (f"Found {len(images)} images on {url}. Images are displayed in chat.\n\n{out}"
-                            f"\n<!--GALLERY:{json.dumps(urls)}-->"), True
-
-                return (f"Found {len(images)} images on {url}:\n\n{out}\n\n"
-                        "To display images, use: ![description](image_url)"), True
+                results = search_bing_images(query, count, page, safesearch)
+            except SocksAuthError as e:
+                logger.error(f"[WEB] web_view_images: SOCKS auth failed: {e}")
+                return "Image search failed: SOCKS proxy authentication error. Tell the user to check their SOCKS credentials in Settings.", False
             except ValueError as e:
                 if "SOCKS5 is enabled" in str(e):
-                    return "Web access failed: SOCKS5 credentials not configured.", False
+                    return "Image search failed: SOCKS5 is enabled but credentials are not configured. Tell the user to set them in Settings → SOCKS.", False
                 raise
-            except requests.exceptions.ProxyError as e:
-                logger.error(f"[WEB] get_images: SOCKS proxy error: {e}")
-                return "Web access failed: SOCKS proxy error.", False
-            except requests.exceptions.ConnectionError as e:
-                logger.error(f"[WEB] get_images: Connection error: {e}")
-                return "Web access failed: Connection error.", False
-            except Exception as e:
-                logger.error(f"[WEB] get_images: {type(e).__name__}: {e}")
-                return f"Error getting images: {str(e)}", False
+            except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+                logger.error(f"[WEB] web_view_images: Network/proxy error: {e}")
+                return "Image search failed: Could not connect through the network/proxy. Tell the user to check their SOCKS proxy and internet connection.", False
+            except requests.exceptions.Timeout:
+                return "Image search timed out.", False
+            if not results:
+                where = f" on page {page}" if page > 1 else ''
+                return f"No images found for '{query}'{where}.", True
+            if not looks_answered(query, results):
+                logger.info(f"[WEB] web_view_images: Bing filler rejected (no query words in the results)")
+                return (f"Bing didn't answer '{query}' — from here it only answers well-known subjects and "
+                        f"hands back an unrelated page for the rest, so I dropped those results rather than "
+                        f"show them. Try leading with the famous part of the subject, or a broader phrase."), True
+            return image_search_result(query, results, view, page), True
 
         logger.warning(f"[WEB] Unknown function: {function_name}")
         return f"Unknown function: {function_name}", False

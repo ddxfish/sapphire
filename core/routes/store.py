@@ -32,52 +32,44 @@ SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
 USER_PLUGINS_DIR = PROJECT_ROOT / "user" / "plugins"
 
 # ── Cache ────────────────────────────────────────────────────────────
-# Keyed by (path, sorted query string). Stores (expires_at, payload).
-# In-memory and per-process — restart clears it.
-_cache: dict[tuple, tuple[float, dict]] = {}
+# Keyed by (namespace, path, sorted query). Stores {expires_at, payload, etag}.
+# In-memory and per-process — restart clears it. Conditional GET: when an entry
+# is stale but we hold its ETag, we revalidate with If-None-Match and a 304
+# reuses the cached body (zero re-download) — once the store sends ETags.
+_cache: dict[tuple, dict] = {}
 _cache_lock = asyncio.Lock()
 
 
 def _cache_ttl() -> float:
     try:
-        return float(config.STORE_CACHE_TTL_SECONDS or 300)
+        return float(config.STORE_CACHE_TTL_SECONDS or 1800)
     except AttributeError:
-        return 300.0
+        return 1800.0
 
 
-def _cache_key(path: str, params: dict) -> tuple:
+def _cache_key(path: str, params: dict, namespace: Optional[str] = None) -> tuple:
     items = tuple(sorted((k, str(v)) for k, v in params.items() if v is not None))
-    return (path, items)
-
-
-async def _cache_get(key: tuple) -> Optional[dict]:
-    async with _cache_lock:
-        entry = _cache.get(key)
-        if not entry:
-            return None
-        expires_at, payload = entry
-        if time.monotonic() > expires_at:
-            _cache.pop(key, None)
-            return None
-        return payload
-
-
-async def _cache_set(key: tuple, payload: dict) -> None:
-    async with _cache_lock:
-        _cache[key] = (time.monotonic() + _cache_ttl(), payload)
+    return (namespace or "", path, items)
 
 
 # ── Store URL helpers ────────────────────────────────────────────────
 
-def _store_base() -> str:
+# Persona store rides the same bazaar engine under a different WP namespace.
+PERSONA_NAMESPACE = "sapphire-prompts/v1"
+
+
+def _store_base(namespace: Optional[str] = None) -> str:
     try:
         base = (config.STORE_URL or "https://sapphireblue.dev").rstrip("/")
     except AttributeError:
         base = "https://sapphireblue.dev"
-    try:
-        ns = (config.STORE_NAMESPACE or "sapphire-store/v1").strip("/")
-    except AttributeError:
-        ns = "sapphire-store/v1"
+    if namespace:
+        ns = namespace.strip("/")
+    else:
+        try:
+            ns = (config.STORE_NAMESPACE or "sapphire-store/v1").strip("/")
+        except AttributeError:
+            ns = "sapphire-store/v1"
     return f"{base}/wp-json/{ns}"
 
 
@@ -168,26 +160,13 @@ def _build_install_index() -> dict[str, dict]:
 
 # ── Semver compare ───────────────────────────────────────────────────
 # Conservative — when in doubt, return "current". Never falsely tell
-# the user there's an update.
-
-def _parse_version(v: str) -> Optional[tuple[int, ...]]:
-    if not v:
-        return None
-    parts = v.split("-", 1)[0].split(".")
-    try:
-        return tuple(int(p) for p in parts)
-    except (ValueError, TypeError):
-        return None
-
+# the user there's an update. Shared parser: core/versions.py (M1).
 
 def _install_state(store_version: str, local_version: str) -> str:
     if not local_version:
         return "current"
-    sv = _parse_version(store_version)
-    lv = _parse_version(local_version)
-    if sv is None or lv is None:
-        return "current"
-    return "update_available" if sv > lv else "current"
+    from core.versions import is_newer
+    return "update_available" if is_newer(store_version, local_version) else "current"
 
 
 def _annotate_item(item: dict, install_index: dict[str, dict]) -> dict:
@@ -211,31 +190,76 @@ def _annotate_item(item: dict, install_index: dict[str, dict]) -> dict:
 
 # ── HTTP fetch ───────────────────────────────────────────────────────
 
-async def _proxy_get(path: str, params: Optional[dict] = None) -> dict:
+async def _proxy_get(path: str, params: Optional[dict] = None,
+                     namespace: Optional[str] = None) -> dict:
     """
-    Proxy a GET to the store. Caches successful responses for STORE_CACHE_TTL_SECONDS.
-    On unreachable / non-2xx, returns last cached value if present, else
-    a graceful-empty payload so the UI can render an empty state.
+    Proxy a GET to the store, cached for STORE_CACHE_TTL_SECONDS. A fresh entry
+    is served from cache (no network). A stale entry is revalidated with a
+    conditional GET (If-None-Match) — a 304 reuses the cached body and resets
+    the timer. On error / non-2xx, serves the last cached body if we have one,
+    else a graceful-empty payload so the UI renders cleanly.
     """
     params = params or {}
-    key = _cache_key(path, params)
-    cached = await _cache_get(key)
-    if cached is not None:
-        return cached
+    key = _cache_key(path, params, namespace)
+    now = time.monotonic()
 
-    url = f"{_store_base()}{path}"
+    async with _cache_lock:
+        entry = _cache.get(key)
+    if entry and now <= entry["expires_at"]:
+        return entry["payload"]  # fresh — no network
+
+    headers = {}
+    if entry and entry.get("etag"):
+        headers["If-None-Match"] = entry["etag"]
+
+    url = f"{_store_base(namespace)}{path}"
     try:
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            resp = await client.get(url, params={k: v for k, v in params.items() if v is not None})
-        if resp.status_code != 200:
-            logger.warning(f"[store] {path} returned {resp.status_code}")
-            return _graceful_empty(path, params)
-        data = resp.json()
-        await _cache_set(key, data)
-        return data
-    except (httpx.HTTPError, ValueError) as e:
+            resp = await client.get(
+                url,
+                params={k: v for k, v in params.items() if v is not None},
+                headers=headers,
+            )
+    except httpx.HTTPError as e:
         logger.warning(f"[store] fetch failed: {path} — {e}")
-        return _graceful_empty(path, params)
+        return entry["payload"] if entry else _graceful_empty(path, params)
+
+    if resp.status_code == 304 and entry:
+        async with _cache_lock:
+            entry["expires_at"] = now + _cache_ttl()
+            _cache[key] = entry
+        return entry["payload"]  # unchanged — zero re-download
+
+    if resp.status_code != 200:
+        logger.warning(f"[store] {path} returned {resp.status_code}")
+        return entry["payload"] if entry else _graceful_empty(path, params)
+
+    try:
+        data = resp.json()
+    except ValueError as e:
+        logger.warning(f"[store] bad json: {path} — {e}")
+        return entry["payload"] if entry else _graceful_empty(path, params)
+
+    async with _cache_lock:
+        _cache[key] = {"expires_at": now + _cache_ttl(), "payload": data,
+                       "etag": resp.headers.get("ETag")}
+    return data
+
+
+async def _proxy_get_bytes(path: str, namespace: Optional[str] = None) -> Optional[bytes]:
+    """Fetch a binary asset (e.g. a persona card PNG) from the store. Not cached
+    — installs are rare and the payload is large. Returns None on failure."""
+    url = f"{_store_base(namespace)}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            logger.warning(f"[store] binary {path} returned {resp.status_code}")
+            return None
+        return resp.content
+    except httpx.HTTPError as e:
+        logger.warning(f"[store] binary fetch failed: {path} — {e}")
+        return None
 
 
 def _graceful_empty(path: str, params: dict) -> dict:
@@ -262,19 +286,11 @@ def _ensure_enabled():
         raise HTTPException(status_code=503, detail="Store is disabled.")
 
 
-@router.get("/api/store/plugins/list")
-async def store_list(
-    request: Request,
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    featured: Optional[bool] = None,
-    sort: Optional[str] = None,
-    page: int = 1,
-    per_page: int = 20,
-    _=Depends(require_login),
-):
-    """List or search plugins. q triggers FULLTEXT search, otherwise filtered list."""
-    _ensure_enabled()
+async def _items_query(q, category, featured, sort, page, per_page,
+                       namespace: Optional[str] = None, annotate: bool = False) -> dict:
+    """Shared list/search query. q triggers FULLTEXT search, otherwise filtered
+    list. `annotate` adds install-state (plugins only — personas have no
+    github_url/install concept)."""
     page = max(1, int(page))
     per_page = max(1, min(50, int(per_page)))
 
@@ -291,11 +307,27 @@ async def store_list(
         if featured is True:
             params["featured"] = "true"
 
-    data = await _proxy_get(path, params)
-    if "items" in data and isinstance(data["items"], list):
+    data = await _proxy_get(path, params, namespace=namespace)
+    if annotate and "items" in data and isinstance(data["items"], list):
         index = _build_install_index()
         data["items"] = [_annotate_item(dict(it), index) for it in data["items"]]
     return data
+
+
+@router.get("/api/store/plugins/list")
+async def store_list(
+    request: Request,
+    q: Optional[str] = None,
+    category: Optional[str] = None,
+    featured: Optional[bool] = None,
+    sort: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20,
+    _=Depends(require_login),
+):
+    """List or search plugins. q triggers FULLTEXT search, otherwise filtered list."""
+    _ensure_enabled()
+    return await _items_query(q, category, featured, sort, page, per_page, annotate=True)
 
 
 @router.get("/api/store/plugins/{slug}")
@@ -332,3 +364,71 @@ async def store_status(_=Depends(require_login)):
         "base": base,
         "cache_ttl": int(_cache_ttl()),
     }
+
+
+# ── Persona store ────────────────────────────────────────────────────
+# Same bazaar engine, `sapphire-prompts/v1` namespace. No install-state
+# annotation (personas have no github_url). Install pulls the PNG card and
+# runs it through the app's existing persona-card importer.
+
+@router.get("/api/store/personas/list")
+async def store_personas_list(
+    request: Request,
+    q: Optional[str] = None,
+    category: Optional[str] = None,
+    featured: Optional[bool] = None,
+    sort: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 20,
+    _=Depends(require_login),
+):
+    """List or search personas."""
+    _ensure_enabled()
+    data = await _items_query(q, category, featured, sort, page, per_page,
+                              namespace=PERSONA_NAMESPACE, annotate=False)
+    # The grid only needs display fields. Drop export_content (the full prompt
+    # bundle — ~82% of the payload); the detail/import path re-fetches it per
+    # persona. Build new item dicts so the in-memory cache copy stays intact.
+    if isinstance(data.get("items"), list):
+        data = dict(data)
+        data["items"] = [
+            {k: v for k, v in it.items() if k != "export_content"}
+            for it in data["items"]
+        ]
+    return data
+
+
+@router.get("/api/store/personas/categories")
+async def store_personas_categories(_=Depends(require_login)):
+    """Persona categories with counts. Empty list if unreachable."""
+    _ensure_enabled()
+    data = await _proxy_get("/categories", namespace=PERSONA_NAMESPACE)
+    return data if isinstance(data, list) else []
+
+
+@router.get("/api/store/personas/{slug}")
+async def store_personas_detail(slug: str, _=Depends(require_login)):
+    """Detail page for one persona."""
+    _ensure_enabled()
+    data = await _proxy_get(f"/items/{slug}", namespace=PERSONA_NAMESPACE)
+    if data.get("unreachable"):
+        raise HTTPException(status_code=503, detail="Store unreachable.")
+    return data
+
+
+@router.post("/api/store/personas/{slug}/install")
+async def store_personas_install(slug: str,
+                                 overwrite_prompt: bool = False,
+                                 overwrite_avatar: bool = False,
+                                 overwrite_persona: bool = False,
+                                 keep_components: str = "",
+                                 _=Depends(require_login)):
+    """Download a persona's PNG card and import it through the app's existing
+    card importer. 409 if a persona exists and overwrite_persona isn't set."""
+    _ensure_enabled()
+    raw = await _proxy_get_bytes(f"/items/{slug}/card", namespace=PERSONA_NAMESPACE)
+    if not raw:
+        raise HTTPException(status_code=502, detail="Could not download persona card.")
+    from core.routes.content import _import_persona_card_bytes
+    keep = [s for s in keep_components.split(",") if s]
+    return await _import_persona_card_bytes(raw, overwrite_prompt, overwrite_avatar, overwrite_persona, keep)

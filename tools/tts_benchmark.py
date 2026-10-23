@@ -1,7 +1,7 @@
 """TTS Performance Benchmark — tests threading, dtype, and precision combos.
 
 Run with the sapphire conda env:
-    C:/Users/bander/miniconda3/envs/sapphire/python.exe tools/tts_benchmark.py
+    conda run -n sapphire python tools/tts_benchmark.py
 
 Tests each optimization individually, then every sensible combination.
 Measures inference time only (no encoding, no I/O).

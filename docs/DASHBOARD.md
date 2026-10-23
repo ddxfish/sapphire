@@ -1,19 +1,46 @@
 # Dashboard & Metrics
 
-Sapphire tracks your local LLM usage — tokens, costs, cache hits, and daily trends. Everything stays on your machine.
+Sapphire tracks your local LLM usage — tokens, cache hits, and daily trends. Everything stays on your machine.
 
 ## Accessing the Dashboard
 
-Open **Settings** — the Dashboard is the first tab. It shows three cards: System, Updates, and Token Metrics.
+Open **Settings** — the Dashboard is the first tab. It's a widget-based command center: a hero header with Sapphire's status orb, a customizable row of **widget panels**, and below that the Token Metrics and Plugin Spotlight cards.
 
-## System Card
+## The Hero
 
-Shows your current Sapphire version and branch. Has buttons to:
+The top of the dashboard shows at a glance:
 
-- **Restart** — Restart Sapphire (useful after config changes)
-- **Shutdown** — Stop Sapphire entirely
+- **Status orb** — a mood ring (Online / Working / Issues / Error / Idle) derived from component health, update availability, and disk usage
+- **Display name** — click Sapphire's name to rename her; the name persists with the install
+- **Version and branch** — shown under the name
+- **Store / Help** quick links
+- **Component pills** — emb / tts / stt / ww (embeddings, text-to-speech, speech-to-text, wakeword) with health dots; idle just means a subsystem is configured off, not broken
 
-## Updates Card
+## Widgets
+
+The panel row under the hero is yours to arrange. Each widget is a small card with a title, a few info lines, and an **Actions** dropdown.
+
+**Built-in widgets:**
+
+| Widget | What it does |
+|--------|--------------|
+| **System** | Disk usage, memory, restart and shutdown |
+| **Updates** | Sapphire version status and plugin updates |
+| **Backups** | Backup count, size, schedule, quick actions |
+| **Maintenance** | Uptime, app status, cleanup tools |
+| **Plugin Spotlight** | Rotating featured plugins from the store |
+
+Plugins can ship their own widgets too — they appear in the picker alongside the built-ins (the `sample-widgets` plugin in the repo is a commented reference for writing one).
+
+**Customizing the row:**
+
+- **+ Add** opens the widget picker, grouped by source (built-ins first). Each row shows the widget's supported sizes; some widgets allow multiple instances ("Add another"). **Restore defaults** brings back the standard built-in set without disturbing what you've added.
+- **✎ Edit** enters edit mode: drag the dot handle to reorder, click a size pill to resize (only sizes the widget supports are offered), and × removes a widget. Click **✓ Done** to finish.
+- Widgets that declare settings get a **⚙ Settings...** entry in their Actions dropdown — it opens an auto-built form (a pinned-note widget's text and color, for example).
+
+Your layout is saved per-install in `user/webui/dashboard.json`. If a plugin is uninstalled while its widget is still on your dashboard, the panel stays as a labeled placeholder until you remove it or reinstall the plugin.
+
+## Updates Widget
 
 Sapphire checks GitHub for new versions automatically (every 24 hours, starting 30 seconds after boot).
 
@@ -38,7 +65,7 @@ Sapphire checks GitHub for new versions automatically (every 24 hours, starting 
 
 ## Token Metrics
 
-Tracks every LLM call. Usage is retained for 90 days (the dashboard's default view shows the last 30).
+The Token Metrics card sits below the widget row, with a **Track** toggle in its header. It tracks every LLM call. Usage is retained for 90 days (the dashboard's default view shows the last 30).
 
 ### What's Tracked
 
@@ -62,28 +89,44 @@ Metrics tracking is a toggle in the Dashboard. When disabled, no usage data is r
 
 All data is local — nothing is sent anywhere.
 
+## Plugin Spotlight
+
+Next to Token Metrics, the Plugin Spotlight card shows featured community plugins from the plugin store — with installed/update-available badges. Click a tile to open that plugin in the Store. The card hides itself when the store is unreachable. (There's also a smaller Plugin Spotlight *widget* for the panel row if you want it up top.)
+
+If any installed plugin is missing Python dependencies, a **Missing Dependencies** card appears above the content row with a Fix button that takes you to the Plugins tab.
+
 ## Troubleshooting
 
 - **Metrics not showing** — Check the toggle is enabled. Data only appears after LLM calls are made
-- **Update button missing** — You might be on Docker, a fork, or missing .git
+- **Update button missing** — You might be on Docker, a fork, missing .git, or on a branch other than `main`
 - **Update failed** — Usually means you have local changes that conflict with upstream. Check git status
 
 ## Reference for AI
 
-Dashboard with system info, auto-updater, and token metrics.
+Widget-based dashboard: hero (status orb + component pills) + customizable widget panels + token metrics.
 
 DASHBOARD LOCATION:
 - Settings → Dashboard tab (first tab)
 
-SYSTEM:
-- Shows version + branch
-- Restart and Shutdown buttons
+LAYOUT:
+- Hero: status orb (mood from component health/updates/disk), editable display name, version + branch, Store/Help links, emb/tts/stt/ww pills
+- Widget panels: built-ins System / Updates / Backups / Maintenance / Plugin Spotlight, plus plugin-shipped widgets (sample-widgets = reference plugin)
+- "+ Add" = widget picker (grouped, sizes, multi-instance, Restore defaults); "✎ Edit" = drag reorder / resize / remove
+- Widgets with settings_schema get an auto ⚙ Settings... form in their Actions dropdown
+- Panel list persists in user/webui/dashboard.json; uninstalled plugin widgets render as placeholders
+- Below the panels: Token Metrics card + Plugin Spotlight card (store-featured; hides when store unreachable) + conditional Missing Dependencies card
+
+WIDGET API:
+- GET /api/dashboard/widgets - user's panel list (auto-seeds defaults)
+- PUT /api/dashboard/widgets - save panel list
+- GET /api/dashboard/widgets/available - widget catalog
+- GET /api/dashboard/system-info, /api/dashboard/component-status - hero data
 
 UPDATES:
 - Auto-checks GitHub every 24 hours
 - GET /api/system/update-check - check for updates
 - POST /api/system/update - run update (preflight + backup + deferred git pull/pip on restart)
-- Docker/fork/no-git/dev-branch cases handled with appropriate instructions (the update button is blocked on the `dev` branch)
+- Docker/fork/no-git cases handled with appropriate instructions; auto-update only runs on the `main` branch (any other branch, e.g. `dev`, is blocked — pull manually)
 
 METRICS API:
 - GET /api/metrics/enabled - check if tracking is on

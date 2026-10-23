@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,37 @@ def _user_now():
         return datetime.now(ZoneInfo('UTC'))
 
 
+def _phone_key(s):
+    """Digit-tail (last 10 digits) for phone-shaped strings, else None.
+    Only engages when the value looks like a phone number, so non-phone filter
+    fields fall through to plain equality untouched."""
+    s = str(s).strip()
+    if not s or not re.fullmatch(r"[+\d\s().\-]+", s):
+        return None
+    digits = re.sub(r"\D", "", s)
+    return digits[-10:] if len(digits) >= 7 else None
+
+
+def _value_matches(ev_val, filter_val):
+    """Filter equality with two tolerances the caller allowlist needs:
+    a comma-separated filter value is an allowlist (match ANY of the entries),
+    and phone numbers compare on their digit tail so +1-240-555-1234,
+    (240) 555-1234 and 2405551234 all match the same incoming E.164 caller."""
+    ev = str(ev_val)
+    ev_lower = ev.lower()
+    ev_phone = _phone_key(ev)
+    for cand in str(filter_val).split(","):
+        cand = cand.strip()
+        if not cand:
+            continue
+        if ev_lower == cand.lower():
+            return True
+        cand_phone = _phone_key(cand)
+        if ev_phone and cand_phone and ev_phone == cand_phone:
+            return True
+    return False
+
+
 class ContinuityScheduler:
     """
     Background scheduler for continuity tasks.
@@ -91,6 +123,10 @@ class ContinuityScheduler:
         self._task_pending: Dict[str, list] = {}  # task_id -> [(event_data, reply_cb), ...]
         self._task_last_matched: Dict[str, str] = {}  # task_id -> "YYYY-MM-DD HH:MM"
         self._task_progress: Dict[str, Dict] = {}  # task_id -> {iteration, total}
+        # task_id -> threading.Event for the run in flight. Armed fresh per
+        # run; set by cancel_task / toggle-off / delete. Read by the executor
+        # between LLM rounds. 2026-09-08.
+        self._task_cancel: Dict[str, threading.Event] = {}
         self._event_threads: list = []  # track spawned event worker threads
         self._concurrency_sem = threading.Semaphore(3)  # max 3 concurrent task threads
         
@@ -114,9 +150,19 @@ class ContinuityScheduler:
             return
 
         try:
-            with open(self._tasks_path, 'r', encoding='utf-8') as f:
+            with open(self._tasks_path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
-            all_tasks = {t["id"]: t for t in data.get("tasks", [])}
+            # Per-entry tolerance (scout, 2026-07-20): one malformed entry
+            # (missing "id") used to KeyError the whole comprehension →
+            # _tasks = {} → and the same boot's plugin registration then
+            # PERSISTED the wipe. Skip bad entries loudly instead.
+            all_tasks = {}
+            for t in data.get("tasks", []):
+                if isinstance(t, dict) and t.get("id"):
+                    all_tasks[t["id"]] = t
+                else:
+                    logger.error(f"[Continuity] Skipping malformed task entry "
+                                 f"(no id): {str(t)[:120]}")
 
             # Purge plugin-sourced tasks — plugins re-register theirs via set_scheduler()
             plugin_count = 0
@@ -144,8 +190,23 @@ class ContinuityScheduler:
             logger.info(f"[Continuity] Loaded {len(self._tasks)} tasks")
         except Exception as e:
             logger.error(f"[Continuity] Failed to load tasks: {e}")
+            # Preserve the unreadable file before anything can persist over
+            # it — a later _save_tasks (plugin registration runs the same
+            # boot) would otherwise make the wipe permanent with no backup
+            # (scout, 2026-07-20).
+            try:
+                import shutil
+                from datetime import datetime as _dt
+                bad = self._tasks_path.with_name(
+                    self._tasks_path.name +
+                    f".bad-{_dt.now().strftime('%Y%m%d-%H%M%S')}")
+                shutil.copy2(self._tasks_path, bad)
+                logger.error(f"[Continuity] Unreadable tasks file preserved "
+                             f"at {bad.name} — restore by hand after fixing.")
+            except Exception:
+                pass
             self._tasks = {}
-    
+
     def _save_tasks(self):
         """Save tasks to JSON file (atomic write via temp + rename)."""
         try:
@@ -155,7 +216,7 @@ class ContinuityScheduler:
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
-                Path(tmp).replace(self._tasks_path)
+                replace_with_retry(Path(tmp), self._tasks_path)
             except Exception:
                 Path(tmp).unlink(missing_ok=True)
                 raise
@@ -169,7 +230,7 @@ class ContinuityScheduler:
             return
         
         try:
-            with open(self._activity_path, 'r', encoding='utf-8') as f:
+            with open(self._activity_path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             self._activity = data.get("activity", [])[-50:]  # Keep last 50
         except Exception as e:
@@ -185,7 +246,7 @@ class ContinuityScheduler:
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
-                Path(tmp).replace(self._activity_path)
+                replace_with_retry(Path(tmp), self._activity_path)
             except Exception:
                 Path(tmp).unlink(missing_ok=True)
                 raise
@@ -205,11 +266,16 @@ class ContinuityScheduler:
         self._activity = self._activity[-50:]  # Trim
         self._save_activity()
         
-        # Publish event
+        # Publish event. `cancel_requested` publishes nothing: the run is
+        # still live, and the old fall-through to COMPLETE flipped the body
+        # LED idle / cleared the avatar rail at the ⏹ click (E2#5).
+        if status == "cancel_requested":
+            return
         from core.event_bus import publish, Events
         event_map = {
             "started": Events.CONTINUITY_TASK_STARTING,
             "complete": Events.CONTINUITY_TASK_COMPLETE,
+            "cancelled": Events.CONTINUITY_TASK_COMPLETE,
             "skipped": Events.CONTINUITY_TASK_SKIPPED,
             "error": Events.CONTINUITY_TASK_ERROR,
         }
@@ -257,6 +323,8 @@ class ContinuityScheduler:
             for t in self._tasks.values():
                 task = dict(t)  # shallow copy so we don't persist transient fields
                 task["running"] = self._task_running.get(t["id"], False)
+                _ev = self._cancel_events().get(t["id"])
+                task["cancelling"] = bool(task["running"] and _ev is not None and _ev.is_set())
                 progress = self._task_progress.get(t["id"])
                 if progress:
                     task["progress"] = progress
@@ -271,14 +339,60 @@ class ContinuityScheduler:
         with self._lock:
             return self._tasks.get(task_id)
     
-    MAX_TASKS = 25
+    # Total and daemon caps are settings (Settings > System > Advanced, hot):
+    # MAX_TOTAL_TASKS / MAX_DAEMON_TASKS. Realtime rules are daemon-type
+    # tasks, so they share the daemon cap (2026-09-23). Heartbeat and
+    # webhook caps stay fixed.
     MAX_HEARTBEATS = 4
-    MAX_DAEMONS = 10
     MAX_WEBHOOKS = 10
+
+    @staticmethod
+    def _vault_ref_sync(new_name, old_name):
+        """Tasks are the third referrer class of the vault references index.
+        Called OUTSIDE self._lock (the release scan re-enters it)."""
+        try:
+            from core.prompt_crud import vault_ref_sync
+            vault_ref_sync(new_name, old_name)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _prompt_requires_privacy(name: str) -> bool:
+        """Resolve a prompt name and report its privacy_required flag.
+        Unresolvable (or any error) → False: the carrier this feeds is
+        OR-ed with the LIVE derivation at run time, so a miss here can
+        only under-stamp at edit time, never weaken an existing True."""
+        try:
+            from core import prompts
+            p = prompts.get_prompt(name)
+            return bool(isinstance(p, dict) and p.get('privacy_required'))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _check_llm_provider(data: Dict) -> None:
+        """A task's provider must exist (2026-09-21): the editor's list was
+        the only check, so a deleted provider stayed pinned and the task
+        failed every run. Raises ValueError (routes answer 400)."""
+        if "provider" not in data:
+            return
+        p = str(data.get("provider") or "auto").strip() or "auto"
+        if p in ("auto", "none"):
+            return
+        from core.chat.llm_providers.resolve import providers_config
+        if p not in providers_config():
+            raise ValueError(f"Unknown LLM provider '{p}' — pick one from Settings › LLM")
 
     def create_task(self, data: Dict) -> Dict:
         """Create new task, returns the created task."""
+        # P3-T14: the sealed-vault display mask is never a real target.
+        if data.get("chat_target") == "__locked__":
+            data = {k: v for k, v in data.items() if k != "chat_target"}
+        self._check_llm_provider(data)
         task_type = data.get("type", "heartbeat" if data.get("heartbeat") else "task")
+        import config
+        max_daemons = int(config.MAX_DAEMON_TASKS)
+        max_total = int(config.MAX_TOTAL_TASKS)
 
         with self._lock:
             total = len(self._tasks)
@@ -287,11 +401,12 @@ class ContinuityScheduler:
                 tt = t.get("type", "heartbeat" if t.get("heartbeat") else "task")
                 type_counts[tt] = type_counts.get(tt, 0) + 1
 
-            limits = {"heartbeat": self.MAX_HEARTBEATS, "daemon": self.MAX_DAEMONS, "webhook": self.MAX_WEBHOOKS}
+            limits = {"heartbeat": self.MAX_HEARTBEATS, "daemon": max_daemons, "webhook": self.MAX_WEBHOOKS}
             if task_type in limits and type_counts.get(task_type, 0) >= limits[task_type]:
-                raise ValueError(f"Maximum {task_type} tasks reached ({limits[task_type]})")
-            if total >= self.MAX_TASKS:
-                raise ValueError(f"Maximum tasks reached ({self.MAX_TASKS})")
+                hint = " - raise Max Daemon Tasks in Settings > System > Advanced" if task_type == "daemon" else ""
+                raise ValueError(f"Maximum {task_type} tasks reached ({limits[task_type]}){hint}")
+            if total >= max_total:
+                raise ValueError(f"Maximum tasks reached ({max_total}) - raise Max Total Tasks in Settings > System > Advanced")
 
         task = {
             "id": str(uuid.uuid4()),
@@ -332,6 +447,15 @@ class ContinuityScheduler:
             "created": _user_now().isoformat()
         }
 
+        # Privacy carrier (2026-08-09, vault phase 0c): privacy is part of the
+        # task's CONTRACT, not a lookup side-effect. Stamped here from the
+        # resolved prompt, OR-ed with the live derivation at run time
+        # (ExecutionContext._build_prompt) — the carrier is what survives the
+        # pinned prompt becoming unresolvable (deleted, or asleep in a locked
+        # vault), which used to silently drop the task onto cloud providers.
+        task["privacy_required"] = (bool(data.get("privacy_required"))
+                                    or self._prompt_requires_privacy(task["prompt"]))
+
         # Dynamically include all scope keys from SCOPE_REGISTRY so plugin scopes
         # propagate without code changes. Default 'none' for new tasks (disabled by default).
         from core.chat.function_manager import scope_setting_keys
@@ -355,8 +479,9 @@ class ContinuityScheduler:
         with self._lock:
             self._tasks[task["id"]] = task
             self._save_tasks()
-        
+
         logger.info(f"[Continuity] Created task: {task['name']} ({task['id']})")
+        self._vault_ref_sync(task.get("prompt"), None)
         return task
     
     def update_task(self, task_id: str, data: Dict) -> Optional[Dict]:
@@ -366,7 +491,19 @@ class ContinuityScheduler:
                 return None
             
             task = self._tasks[task_id]
-            
+            old_prompt = task.get("prompt") if "prompt" in data else None
+
+            # P3-T14: '__locked__' is the route's sealed-vault display mask,
+            # never a real target — a round-trip edit keeps the stored name.
+            if data.get("chat_target") == "__locked__":
+                data = {k: v for k, v in data.items() if k != "chat_target"}
+            self._check_llm_provider(data)
+            # The S6 rule for tasks: a provider change drops the old model
+            # unless the edit sets one (the editor kept it — V2, 2026-09-21).
+            if "provider" in data and "model" not in data \
+                    and str(data.get("provider") or "auto") != str(task.get("provider") or "auto"):
+                data = {**data, "model": ""}
+
             # Validate cron if provided
             if "schedule" in data:
                 try:
@@ -385,12 +522,23 @@ class ContinuityScheduler:
                 "heartbeat", "emoji",
                 "context_limit", "max_parallel_tools", "max_tool_rounds",
                 "active_hours_start", "active_hours_end",
-                "max_runs", "delete_after_run"
+                "max_runs", "delete_after_run", "privacy_required"
             }
             allowed.update(scope_setting_keys())
             for key in allowed:
                 if key in data:
                     task[key] = data[key]
+
+            # Re-stamp the privacy carrier whenever the prompt or the flag
+            # changed: stored value OR derived-from-prompt. A user can't
+            # un-flag a task whose pinned prompt demands privacy (same rule
+            # as the chat-settings 409 guard: switch prompts first). Stale
+            # directions are fail-CLOSED only — a True left behind by a
+            # since-public prompt stays until explicitly cleared.
+            if "prompt" in data or "privacy_required" in data:
+                task["privacy_required"] = (
+                    bool(task.get("privacy_required"))
+                    or self._prompt_requires_privacy(task.get("prompt", "default")))
             
             # Reset run count when re-enabling a completed task
             if data.get("enabled") and task.get("max_runs", 0) > 0:
@@ -402,9 +550,20 @@ class ContinuityScheduler:
             self._task_pending[task_id] = []
             self._task_last_matched.pop(task_id, None)
 
+            # Toggling OFF a running task cancels its in-flight run. Before
+            # this the drain loop only stopped BETWEEN runs — a daemon in a
+            # long tool loop had no off switch (Krem, 2026-09-08).
+            if data.get("enabled") is False and self._task_running.get(task_id):
+                _ev = self._cancel_events().get(task_id)
+                if _ev is not None:
+                    _ev.set()
+                    logger.info(f"[Continuity] '{task['name']}' disabled mid-run — cancelling")
+
             self._save_tasks()
             logger.info(f"[Continuity] Updated task: {task['name']} ({task_id})")
-            return task
+        if "prompt" in data:
+            self._vault_ref_sync(data.get("prompt"), old_prompt)
+        return task
     
     def delete_task(self, task_id: str) -> bool:
         """Delete task by ID."""
@@ -413,14 +572,69 @@ class ContinuityScheduler:
                 return False
             
             name = self._tasks[task_id].get("name", task_id)
+            old_prompt = self._tasks[task_id].get("prompt")
             del self._tasks[task_id]
             self._task_pending.pop(task_id, None)
             self._task_running.pop(task_id, None)
             self._task_last_matched.pop(task_id, None)
             self._task_progress.pop(task_id, None)
+            _ev = self._cancel_events().pop(task_id, None)
+            if _ev is not None:
+                _ev.set()   # a deleted task's live run stops too
             self._save_tasks()
             logger.info(f"[Continuity] Deleted task: {name} ({task_id})")
-            return True
+        self._vault_ref_sync(None, old_prompt)
+        return True
+
+    # ── Cancel (⏹ / toggle-off / delete) ──
+
+    def _cancel_events(self) -> Dict[str, threading.Event]:
+        # Test fixtures build the scheduler via __new__ and may skip __init__.
+        d = getattr(self, "_task_cancel", None)
+        if d is None:
+            d = self._task_cancel = {}
+        return d
+
+    def _arm_cancel(self, task_id: str) -> threading.Event:
+        """Fresh cancel Event for the run about to start. Armed in the SAME
+        lock block that flips `_task_running` True (pre-push hunt
+        2026-09-08, E2#1): arming later — after the concurrency semaphore
+        wait — left a gap where ⏹ set the PREVIOUS run's Event and the new
+        one was born unset (stop silently lost, UI said Stopping… then
+        Running…). The run sites read the armed Event back (`_run_cancel`)
+        instead of re-arming, so one Event spans a run's whole lifetime
+        including drained queue iterations."""
+        ev = threading.Event()
+        self._cancel_events()[task_id] = ev
+        return ev
+
+    def _run_cancel(self, task_id: str) -> threading.Event:
+        """The Event armed with `_task_running` — or a fresh one for a
+        caller that set the flag without arming (test doubles)."""
+        return self._cancel_events().get(task_id) or self._arm_cancel(task_id)
+
+    def cancel_task(self, task_id: str) -> Dict[str, Any]:
+        """Stop a task's in-flight run and drop anything queued behind it.
+        The run ends at its next cancel point (between LLM rounds); the
+        task stays enabled — a new event fires it again normally."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return {"success": False, "error": "Task not found"}
+            running = self._task_running.get(task_id, False)
+            self._task_pending[task_id] = []
+            ev = self._cancel_events().get(task_id)
+            # Only a RUNNING task's Event: setting a finished run's Event
+            # made the next run paint "Stopping…" for its whole pre-arm
+            # window. Second ⏹ on the same run = no second ledger row.
+            already = ev is not None and ev.is_set()
+            if ev is not None and running:
+                ev.set()
+            name = task.get("name", "Unnamed")
+        if running and not already:
+            logger.info(f"[Continuity] Cancel requested: {name}")
+            self._log_activity(task_id, name, "cancel_requested")
+        return {"success": True, "was_running": running}
     
     # =========================================================================
     # SCHEDULE CHECKING
@@ -503,11 +717,13 @@ class ContinuityScheduler:
                     break
 
             self._log_activity(task_id, task_name, "started")
+            ev = self._run_cancel(task_id)
             try:
                 result = self.executor.run(
                     task,
                     progress_callback=self._make_progress_callback(task_id),
                     response_callback=self._make_response_callback(task_id),
+                    cancel_event=ev,
                 )
 
                 with self._lock:
@@ -517,7 +733,9 @@ class ContinuityScheduler:
                         self._save_tasks()
                     self._task_progress.pop(task_id, None)
 
-                status = "complete" if result.get("success") else "error"
+                # The executor's own verdict, not the Event: a ⏹ landing
+                # after the run finished must not relabel real work.
+                status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
 
                 self._log_activity(task_id, task_name, status, {
                     "responses": len(result.get("responses", [])),
@@ -531,6 +749,13 @@ class ContinuityScheduler:
 
             # Check for queued fires
             with self._lock:
+                if ev.is_set():
+                    # cancel = queued fires die too (Krem's ruling 2026-09-08:
+                    # drop, but say so — a count only, never event content).
+                    dropped = len(self._task_pending.get(task_id, []))
+                    if dropped:
+                        logger.warning(f"[Continuity] '{task_name}' stopped — dropping {dropped} queued fire(s)")
+                    self._task_pending[task_id] = []
                 queue = self._task_pending.get(task_id, [])
                 if queue:
                     queue.pop(0)  # Cron queues don't carry data, just drain
@@ -605,15 +830,24 @@ class ContinuityScheduler:
 
             logger.info(f"[Continuity] '{task_name}' schedule '{schedule}' - MATCHED at {now.strftime('%H:%M')}")
 
-            # If task is already running, queue it instead of overlapping
+            # If task is already running, queue it instead of overlapping.
+            # Cap at 3 (scout, 2026-07-20): the cron path was UNCAPPED — a
+            # heartbeat wedged behind a hung provider accumulated one queued
+            # fire per matched minute, then machine-gunned them all on
+            # release. Missed fires beyond the cap coalesce into nothing.
             with self._lock:
                 if self._task_running.get(task_id, False):
                     queue = self._task_pending.setdefault(task_id, [])
+                    if len(queue) >= 3:
+                        logger.warning(f"[Continuity] '{task_name}' pending "
+                                       f"queue full — coalescing this fire")
+                        continue
                     queue.append((None, None))  # Cron queues don't carry event data
                     logger.info(f"[Continuity] '{task_name}' busy — queued (pending: {len(queue)})")
                     self._log_activity(task_id, task_name, "queued", {"pending": len(queue)})
                     continue
                 self._task_running[task_id] = True
+                self._arm_cancel(task_id)
 
             # Run on a separate thread so different tasks can run concurrently.
             # LOAD-BEARING: fresh threading.Thread per task is required for scope
@@ -657,15 +891,18 @@ class ContinuityScheduler:
             if self._task_running.get(task_id, False):
                 return {"success": False, "error": f"Task '{task_name}' is already running"}
             self._task_running[task_id] = True
+            self._arm_cancel(task_id)
 
         logger.info(f"[Continuity] Manual run: {task_name}")
         self._log_activity(task_id, task_name, "started", {"manual": True})
+        ev = self._run_cancel(task_id)
 
         try:
             result = self.executor.run(
                 task,
                 progress_callback=self._make_progress_callback(task_id),
                 response_callback=self._make_response_callback(task_id),
+                cancel_event=ev,
             )
 
             with self._lock:
@@ -674,7 +911,7 @@ class ContinuityScheduler:
                     self._increment_run_count(task_id)
                     self._save_tasks()
 
-            status = "complete" if result.get("success") else "error"
+            status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
 
             self._log_activity(task_id, task_name, status, {
                 "manual": True,
@@ -698,7 +935,8 @@ class ContinuityScheduler:
     # EVENT-TRIGGERED EXECUTION
     # =========================================================================
 
-    def fire_event_task(self, task_id: str, event_data: str, reply_callback=None) -> Dict[str, Any]:
+    def fire_event_task(self, task_id: str, event_data: str, reply_callback=None,
+                        skip_filter: bool = False) -> Dict[str, Any]:
         """Fire an event-triggered task (daemon or webhook) with event data.
         Runs on a worker thread, returns immediately.
 
@@ -736,33 +974,18 @@ class ContinuityScheduler:
                 pass
 
         # Check filter (daemon and webhook tasks)
-        if task_type in ("daemon", "webhook"):
+        # skip_filter: plugin_loader.fire_task — the owning daemon's own clock
+        # firing its task (a greeting is not a message; a "mentioned=True"
+        # filter must not swallow it). Account match above still applies.
+        if task_type in ("daemon", "webhook") and not skip_filter:
             trigger_config = task.get("trigger_config", {})
             task_filter = trigger_config.get("filter")
             if task_filter and isinstance(task_filter, dict):
                 try:
                     event_obj = json.loads(event_data) if isinstance(event_data, str) else event_data
                     if isinstance(event_obj, dict):
-                        for key, val in task_filter.items():
-                            # Support _not suffix for negative matching
-                            if key.endswith("_not"):
-                                field = key[:-4]  # strip _not
-                                ev_val = str(event_obj.get(field, ""))
-                                if ev_val.lower() == str(val).lower():
-                                    logger.debug(f"[Continuity] '{task_name}' filter excluded on '{field}' (not): {ev_val!r} == {val!r}")
-                                    return {"success": False, "error": "Event filtered out"}
-                            # Support _contains suffix for substring matching
-                            elif key.endswith("_contains"):
-                                field = key[:-9]  # strip _contains
-                                ev_val = str(event_obj.get(field, ""))
-                                if str(val).lower() not in ev_val.lower():
-                                    logger.debug(f"[Continuity] '{task_name}' filter mismatch on '{field}' (contains): {val!r} not in {ev_val!r}")
-                                    return {"success": False, "error": "Event filtered out"}
-                            else:
-                                ev_val = event_obj.get(key)
-                                if str(ev_val).lower() != str(val).lower():
-                                    logger.debug(f"[Continuity] '{task_name}' filter mismatch on '{key}': {ev_val!r} != {val!r}")
-                                    return {"success": False, "error": "Event filtered out"}
+                        if not self.filter_matches(task_filter, event_obj, task_name):
+                            return {"success": False, "error": "Event filtered out"}
                 except (json.JSONDecodeError, TypeError):
                     # Can't parse event as JSON — filter can't run, reject for safety
                     logger.debug(f"[Continuity] '{task_name}' filter active but event data not parseable as JSON, rejecting")
@@ -780,6 +1003,7 @@ class ContinuityScheduler:
                 logger.info(f"[Continuity] '{task_name}' busy — queued event ({len(queue)} pending)")
                 return {"success": True, "queued": True}
             self._task_running[task_id] = True
+            self._arm_cancel(task_id)
 
         # Build response callback — saves last_response + routes reply to daemon source
         internal_cb = self._make_response_callback(task_id)
@@ -839,13 +1063,27 @@ class ContinuityScheduler:
                         break
                     active_task = dict(live_task)
 
+                # "Webhook specifies chat name" (trigger_config.chat_from_payload):
+                # the secret-gated payload names the chat — route there (and that chat
+                # answers with its own settings; see executor._run_foreground).
+                # Override on the copy only (never the stored task).
+                if active_task.get("trigger_config", {}).get("chat_from_payload"):
+                    try:
+                        _ev = json.loads(cur_event_data) if isinstance(cur_event_data, str) else cur_event_data
+                        if isinstance(_ev, dict) and _ev.get("chat_target"):
+                            active_task["chat_target"] = str(_ev["chat_target"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 self._log_activity(task_id, task_name, "started", {"trigger": task_type})
+                ev = self._run_cancel(task_id)
                 try:
                     result = self.executor.run(
                         active_task,
                         event_data=cur_event_data,
                         progress_callback=self._make_progress_callback(task_id),
                         response_callback=_make_reply_cb(active_task, cur_event_data, cur_reply_callback),
+                        cancel_event=ev,
                     )
                     with self._lock:
                         if task_id in self._tasks:
@@ -854,7 +1092,7 @@ class ContinuityScheduler:
                             self._save_tasks()
                         self._task_progress.pop(task_id, None)
 
-                    status = "complete" if result.get("success") else "error"
+                    status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
                     self._log_activity(task_id, task_name, status, {
                         "trigger": task_type,
                         "responses": len(result.get("responses", [])),
@@ -867,6 +1105,13 @@ class ContinuityScheduler:
 
                 # Drain queued events (with their actual data) or release
                 with self._lock:
+                    if ev.is_set():
+                        # cancel = queued events die too — logged as a COUNT only
+                        # (event payloads are user content; Krem's ruling 2026-09-08)
+                        dropped = len(self._task_pending.get(task_id, []))
+                        if dropped:
+                            logger.warning(f"[Continuity] '{task_name}' stopped — dropping {dropped} queued event(s)")
+                        self._task_pending[task_id] = []
                     queue = self._task_pending.get(task_id, [])
                     if queue:
                         cur_event_data, cur_reply_callback = queue.pop(0)
@@ -883,6 +1128,31 @@ class ContinuityScheduler:
 
         logger.info(f"[Continuity] Event-triggered: {task_name} ({task_type})")
         return {"success": True, "queued": False}
+
+    @staticmethod
+    def filter_matches(task_filter: Dict, event_obj: Dict, task_name: str = "") -> bool:
+        """Evaluate a task's trigger_config.filter against an event payload.
+        Same semantics for fired events and realtime gate selection: exact
+        case-insensitive match, `_not` negation, `_contains` substring."""
+        for key, val in task_filter.items():
+            if key.endswith("_not"):
+                field = key[:-4]
+                ev_val = str(event_obj.get(field, ""))
+                if _value_matches(ev_val, val):
+                    logger.debug(f"[Continuity] '{task_name}' filter excluded on '{field}' (not): {ev_val!r} == {val!r}")
+                    return False
+            elif key.endswith("_contains"):
+                field = key[:-9]
+                ev_val = str(event_obj.get(field, ""))
+                if str(val).lower() not in ev_val.lower():
+                    logger.debug(f"[Continuity] '{task_name}' filter mismatch on '{field}' (contains): {val!r} not in {ev_val!r}")
+                    return False
+            else:
+                ev_val = event_obj.get(key)
+                if not _value_matches(ev_val, val):
+                    logger.debug(f"[Continuity] '{task_name}' filter mismatch on '{key}': {ev_val!r} != {val!r}")
+                    return False
+        return True
 
     def find_tasks_by_event(self, source: str) -> List[Dict]:
         """Find enabled daemon tasks that listen to a specific event source."""

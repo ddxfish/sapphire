@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 # Endpoint varies by model
 FIREWORKS_ENDPOINTS = {
-    'whisper-v3': 'https://audio-prod.api.fireworks.ai/v1/audio/transcriptions',
     'whisper-v3-turbo': 'https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions',
 }
 

@@ -2,6 +2,7 @@
 import * as ui from './ui.js';
 import * as api from './api.js';
 import * as audio from './audio.js';
+import { releaseOwnership } from './core/state.js';
 
 const handleError = (e, action) => {
     if (e.message === 'Cancelled') return console.log(`${action} cancelled by user`);
@@ -9,14 +10,58 @@ const handleError = (e, action) => {
     ui.showToast(e.message, 'error');
 };
 
+let _histPaintSeq = 0;
+
+// F2 degraded latch: warn ONCE per chat per page-load when the open chat has
+// unreadable rows (server marks /api/history with `degraded`). Sticky toast —
+// the chat is read-only and new replies aren't persisting; that must not
+// scroll away. Healthy fetch clears the memo so a re-degraded chat warns again.
+const _degradedWarned = new Set();
+const noteDegraded = (name, deg) => {
+    if (!name) return;
+    if (!deg?.skipped) { _degradedWarned.delete(name); return; }
+    if (_degradedWarned.has(name)) return;
+    _degradedWarned.add(name);
+    ui.showToast(
+        `⚠ ${deg.skipped} message(s) in this chat could not be read — the chat `
+        + `is READ-ONLY and new replies are NOT being saved. Repair it in Chat `
+        + `Manager, or clear/start a new chat.`, 'warning', 0);
+};
+
+// A refresh that arrived while an edit was open. Save/cancel swap only the
+// edited bubble; they replay a held refresh so no event is lost.
+let _heldRefresh = false;
+export const takeHeldRefresh = () => { const h = _heldRefresh; _heldRefresh = false; return h; };
+
 export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
+    // Hold the render while a message edit is open — renderHistory rebuilds the
+    // whole transcript, so a background refresh (SSE event, autoRefresh poll)
+    // would destroy the edit textarea and the unsaved text in it. The editor's
+    // exit path replays it (takeHeldRefresh).
+    // Same hold for a live bubble (a turn streaming, or one whose tab lost its
+    // feed — features/viewer.js): the reconnect resync and SERVER_RESTARTED
+    // call refresh() straight, and renderHistory would delete the bubble she
+    // is still filling. 2026-09-15.
+    if (document.querySelector('#chat-container .message.editing')
+            || document.getElementById('streaming-message')) {
+        _heldRefresh = true;
+        return { hist: null, len: lastLen };
+    }
     try {
-        const hist = await api.fetchHistory();
+        // Paint-seq + same-response binding (hunt 2026-08-17 H12): the old
+        // guard compared two globals that six concurrent fetchHistory
+        // callers clobber — a private chat's late fetch could paint its
+        // transcript into a tab showing another chat. Only the LATEST
+        // fetchAndRender paints, and the chat name comes from the same
+        // response as the messages it labels.
+        const seq = ++_histPaintSeq;
+        const { messages: hist, chat_name: returnedChat, degraded } = await api.fetchHistoryFull();
+        if (seq !== _histPaintSeq) return { hist: null, len: lastLen };
+        noteDegraded(returnedChat, degraded);
 
         // Guard: skip render if backend is temporarily on a different chat
         // (e.g. continuity foreground task switched the active chat)
         const expectedChat = document.getElementById('chat-select')?.value;
-        const returnedChat = api.getLastHistoryChatName();
         if (returnedChat && expectedChat && returnedChat !== expectedChat) {
             return { hist: null, len: lastLen };
         }
@@ -112,12 +157,13 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                     ui.hideStatus();
                 }
             },
-            async (ephemeral) => {
+            async (ephemeral, { ttsStreamed = false } = {}) => {
+                const myStreamId = ui.getCurrentStreamId();   // see handleRegen
                 if (isCancellingGetter && isCancellingGetter()) {
                     console.log('Stream completed but cancellation in progress - skipping finishStreaming');
                     return;
                 }
-                
+
                 // Ephemeral responses: just clean up, no TTS or history swap
                 if (ephemeral) {
                     console.log('[EPHEMERAL] Module response - skipping TTS and swap');
@@ -125,29 +171,17 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                     if (refreshFn) await refreshFn(false);
                     return;
                 }
-                
+
                 if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;  // streaming TTS already played it
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+                    // Whole-blob playback ONLY when the server's streaming-TTS
+                    // pump never ran this turn (see send-handlers.handleSend).
+                    if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
+                        const el = document.querySelector('.message.assistant:last-child .message-content');
+                        if (el) audioFn(ui.extractProseText(el));
+                    }
                 }
             },
             async (e, statusCode) => {
@@ -198,6 +232,7 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
 
 export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null) => {
     console.log(`[REGEN DEBUG] Starting regen at index ${idx}`);
+    let viewer = false;
     try {
         console.log('[REGEN DEBUG] Fetching history...');
         const hist = await api.fetchHistory();
@@ -237,12 +272,9 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         
         console.log(`[REGEN DEBUG] Will regenerate from: well, no logging..."`);
         
-        if (!confirm('Regenerate this response?')) {
-            console.log('[REGEN DEBUG] User cancelled');
-            return null;
-        }
-        
-        console.log('[REGEN DEBUG] User confirmed, setting proc...');
+        // (confirm happens in message-handlers.handleRegen, BEFORE the
+        // abort controller is registered -- S1 #3)
+        console.log('[REGEN DEBUG] Setting proc...');
         setProc(true);
         
         console.log('[REGEN DEBUG] Removing from user message...');
@@ -271,7 +303,11 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     ui.hideStatus();
                 }
             },
-            async (ephemeral) => {
+            async (ephemeral, { ttsStreamed = false } = {}) => {
+                // Captured synchronously: at llm_done this is OUR stream. Send
+                // returns during finishStreaming's sleep (llm-done split), so
+                // a newer turn can bump the id before the fallback below runs.
+                const myStreamId = ui.getCurrentStreamId();
                 if (isCancellingGetter && isCancellingGetter()) {
                     console.log('Regen completed but cancellation in progress - skipping finishStreaming');
                     return;
@@ -290,28 +326,39 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;  // streaming TTS already played it
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+                    // Whole-blob playback ONLY when the server's streaming-TTS
+                    // pump never ran this turn (see send-handlers.handleSend).
+                    if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
+                        const el = document.querySelector('.message.assistant:last-child .message-content');
+                        if (el) audioFn(ui.extractProseText(el));
+                    }
                 }
             },
             async (e, statusCode) => {
                 if (e.message === 'Cancelled') return (console.log('[REGEN DEBUG] Stream cancelled by user'), streamOk && ui.cancelStreaming());
+                if (statusCode === 409) {
+                    // One-turn gate refused AFTER the old turn was deleted --
+                    // don't lose the words: optimistic bubble off, text back
+                    // in the box (same shape as handleSend's 409 undo).
+                    // S1 #3, hunt 2026-08-30.
+                    const bubbles = document.querySelectorAll('#chat-container .message.user');
+                    bubbles[bubbles.length - 1]?.remove();
+                    const inp = document.getElementById('prompt-input');
+                    if (inp) { inp.value = userMessage; inp.dispatchEvent(new Event('input')); }
+                    ui.showToast(e.message, 'error');
+                    return;
+                }
+                if (e.feedLost) {
+                    // Server-owned turn: the reply keeps coming server-side.
+                    // Hand the button to the mirror (main.js) and let the
+                    // end-of-turn refresh paint the saved row. (The Send lane
+                    // reattaches live — features/viewer.js; regen/continue
+                    // reconcile at the end. 2026-09-15.)
+                    viewer = true;
+                    releaseOwnership();
+                    ui.showToast("Connection dropped — she's still working; the reply lands when she finishes", 'warning');
+                    return;
+                }
                 console.error('[REGEN DEBUG] Stream failed:', e.message);
                 streamOk && ui.cancelStreaming();
                 handleError(e, 'regenerate');
@@ -361,8 +408,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         return null;
     } finally {
         console.log('[REGEN DEBUG] Finally block - hiding status and unsetting proc');
-        ui.hideStatus();
-        setProc(false);
+        if (!viewer) { ui.hideStatus(); setProc(false); }
     }
 };
 
@@ -393,190 +439,76 @@ export const autoRefresh = async (isProc, lastLen, sceneUpdateFn) => {
     }
 };
 
-// Add this new function to chat.js
+// In-place Continue (2026-09-10). The reply's row never leaves history: the
+// engine reads it as the prefill, sends history with nothing appended, and
+// edits the row on success — a Stop that generated nothing changes nothing.
+// On the page the existing bubble is adopted as the streaming message, so
+// the tool half of a turn stays put and the sentence carries on in place.
 export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null) => {
-    console.log(`[CONTINUE DEBUG] Starting continue at index ${idx}`);
+    let viewer = false;
     try {
-        console.log('[CONTINUE DEBUG] Fetching history...');
         const hist = await api.fetchHistory();
-        console.log(`[CONTINUE DEBUG] Got history, length: ${hist.length}`);
-        
-        if (idx >= hist.length) {
-            console.log('[CONTINUE DEBUG] Index out of bounds');
-            return null;
-        }
-        
         const clicked = hist[idx];
-        console.log(`[CONTINUE DEBUG] Clicked message role: ${clicked.role}`);
-        
-        if (clicked.role !== 'assistant') {
-            console.log('[CONTINUE DEBUG] Can only continue assistant messages');
-            ui.showToast('Can only continue assistant messages', 'error');
+        if (!clicked || clicked.role !== 'assistant' || idx !== hist.length - 1) {
+            ui.showToast('Continue works on the last reply only', 'error');
             return null;
         }
-        
-        console.log('[CONTINUE DEBUG] Finding parent user message...');
-        let userMessage;
-        for (let i = idx - 1; i >= 0; i--) {
-            if (hist[i].role === 'user') {
-                userMessage = hist[i].content;
-                break;
-            }
-        }
-        
-        if (!userMessage) {
-            console.log('[CONTINUE DEBUG] No user text found!');
-            ui.showToast('No parent user message found', 'error');
+        // The raw tail row is what the engine resumes from; its last paragraph
+        // seeds the on-page paragraph so the sentence continues visibly.
+        const raw = await api.fetchRawHistory();
+        const tail = raw[raw.length - 1];
+        const prose = (tail && tail.role === 'assistant' && !tail.tool_calls
+                       && typeof tail.content === 'string') ? tail.content : '';
+        if (!prose.trim()) {
+            ui.showToast('Nothing to continue — that reply ended in a tool call', 'error');
             return null;
         }
-        
-        const rawHistory = await api.fetchRawHistory();
-        
-        let prefillContent = '';
-        const timestamp = clicked.timestamp;
-        
-        let lastAssistantInTurn = null;
-        for (let i = 0; i < rawHistory.length; i++) {
-            const msg = rawHistory[i];
-            if (msg.role === 'assistant' && msg.timestamp === timestamp) {
-                lastAssistantInTurn = msg;
-                for (let j = i + 1; j < rawHistory.length; j++) {
-                    if (rawHistory[j].role === 'user') break;
-                    if (rawHistory[j].role === 'assistant') {
-                        lastAssistantInTurn = rawHistory[j];
-                    }
-                }
-                break;
-            }
-        }
-        
-        if (lastAssistantInTurn) {
-            prefillContent = lastAssistantInTurn.content || '';
-        } else {
-            if (clicked.parts) {
-                const contentParts = clicked.parts.filter(p => p.type === 'content');
-                prefillContent = contentParts.map(p => p.text).join('\n\n');
-            } else {
-                prefillContent = clicked.content || '';
-            }
-        }
-        
-        const userPreview = userMessage.substring(0, 50);
-        const prefillPreview = prefillContent.substring(0, 50);
-        console.log(`[CONTINUE DEBUG] Will continue`);
-        
-        if (!confirm('Continue this assistant message?')) {
-            console.log('[CONTINUE DEBUG] User cancelled');
-            return null;
-        }
-        
-        console.log('[CONTINUE DEBUG] User confirmed, setting proc...');
+        if (!confirm('Continue this assistant message?')) return null;
+
         setProc(true);
-        
-        // Store backup before deletion (in case API fails)
-        const backupPrefill = prefillContent;
-        const backupTimestamp = timestamp;
-        
-        console.log('[CONTINUE DEBUG] Removing last assistant message from history...');
-        await api.removeLastAssistant(timestamp);
-        
-        console.log('[CONTINUE DEBUG] Removing message element from DOM...');
-        const messages = document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
-        let removedElement = null;
-        if (idx < messages.length) {
-            removedElement = messages[idx];
-            removedElement.remove();
-            console.log('[CONTINUE DEBUG] Message element removed from DOM');
+        const msgEl = document.querySelectorAll('#chat-container .message:not(.status):not(.error)')[idx];
+        if (!msgEl) {
+            ui.showToast('Reply not on screen — refresh and try again', 'error');
+            return null;
         }
-        
+        const paras = prose.trim().split(/\n\s*\n/);
+        ui.continueStreaming(msgEl, paras[paras.length - 1].trim());
         ui.showStatus();
         ui.updateStatus('Continuing...');
-        
-        console.log('[CONTINUE DEBUG] Starting stream with prefill (skip_user_message=true)...');
-        let streamOk = false;
-        
-        await api.streamChatContinue(
-            userMessage,
-            prefillContent,
-            chunk => {
-                if (!streamOk) {
-                    ui.updateStatus('Generating...');
-                    ui.startStreaming();
-                    streamOk = true;
-                }
-                ui.appendStream(chunk);
-                if (ui.hasVisibleContent()) {
-                    ui.hideStatus();
-                }
-            },
-            async (ephemeral) => {
-                if (isCancellingGetter && isCancellingGetter()) {
-                    console.log('Continue completed but cancellation in progress - skipping finishStreaming');
-                    return;
-                }
-                
-                // Ephemeral responses: just clean up, no TTS or history swap
-                if (ephemeral) {
-                    console.log('[EPHEMERAL] Module response - skipping TTS and swap');
-                    await ui.finishStreaming(true);
-                    if (refreshFn) await refreshFn(false);
-                    return;
-                }
-                
-                console.log('[CONTINUE DEBUG] Stream complete');
-                if (streamOk) {
-                    await ui.finishStreaming();
-                    // Note: finishStreaming already syncs with history - no refresh needed
 
-                    // Capture sawChunk NOW. `_ttsStreamSawChunk` is reset
-                    // when a NEW tts_stream_start arrives (audio.js startTtsStream),
-                    // so if the user clicks Replay or sends another message
-                    // within the 200ms window, fire-time check would falsely
-                    // see "no chunks for this turn" and fire the legacy
-                    // audioFn(prose) which calls stop(true) — killing the
-                    // newly-started stream. 2026-05-26 scout #2 secondary find.
-                    const sawChunks = audio.ttsStreamSawChunk();
-                    setTimeout(() => {
-                        if (sawChunks) return;  // streaming TTS already played it
-                        if (audioFn) {
-                            const el = document.querySelector('.message.assistant:last-child .message-content');
-                            if (el) {
-                                const prose = ui.extractProseText(el);
-                                audioFn(prose);
-                            }
-                        }
-                    }, 200);
+        await api.streamChatContinue(
+            clicked.timestamp,
+            chunk => {
+                ui.appendStream(chunk);
+                if (ui.hasVisibleContent()) ui.hideStatus();
+            },
+            async (ephemeral, { ttsStreamed = false } = {}) => {
+                const myStreamId = ui.getCurrentStreamId();   // see handleRegen
+                if (isCancellingGetter && isCancellingGetter()) return;
+                await ui.finishStreaming();   // swaps the bubble for the saved row
+                // Whole-blob playback ONLY when the server's streaming-TTS
+                // pump never ran this turn (see send-handlers.handleSend).
+                if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
+                    const el = document.querySelector('.message.assistant:last-child .message-content');
+                    if (el) audioFn(ui.extractProseText(el));
                 }
             },
-            async (e, statusCode) => {
-                if (e.message === 'Cancelled') return (console.log('[CONTINUE DEBUG] Stream cancelled by user'), streamOk && ui.cancelStreaming());
-                console.error('[CONTINUE DEBUG] Stream failed:', e.message);
-                streamOk && ui.cancelStreaming();
-                
-                // RECOVERY: Refresh to restore state from backend
-                console.log('[CONTINUE DEBUG] Attempting recovery - refreshing history...');
+            async (e) => {
+                if (e.feedLost) {   // see handleRegen — the turn goes on server-side
+                    viewer = true;
+                    releaseOwnership();
+                    ui.showToast("Connection dropped — she's still working; the reply lands when she finishes", 'warning');
+                    return;
+                }
+                ui.cancelStreaming();   // keeps what was rendered; the row on disk is the truth
+                if (e.message === 'Cancelled') return;
                 if (refreshFn) await refreshFn(true);
-                
                 handleError(e, 'continue');
             },
             abortController ? abortController.signal : null,
-            // Tool event handlers
-            (id, name, args) => {
-                if (!streamOk) {
-                    ui.updateStatus('Generating...');
-                    ui.startStreaming();
-                    streamOk = true;
-                }
-                ui.startTool(id, name, args);
-            },
-            (id, name, result, error) => {
-                ui.endTool(id, name, result, error);
-            },
-            // Stream started handler
-            () => {
-                ui.updateStatus('Processing...');
-            },
-            // Iteration start handler (after tool calls)
+            (id, name, args) => ui.startTool(id, name, args),
+            (id, name, result, error) => ui.endTool(id, name, result, error),
+            () => ui.updateStatus('Processing...'),
             (iteration) => {
                 if (iteration > 1) {
                     ui.showStatus();
@@ -584,26 +516,12 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 }
             }
         );
-        
-        console.log('[CONTINUE DEBUG] Counting messages...');
-        if (streamOk) {
-            const messageCount = document.querySelectorAll('#chat-container .message:not(.status):not(.error)').length;
-            console.log(`[CONTINUE DEBUG] Done! Message count: ${messageCount}`);
-            return messageCount;
-        }
-        
-        const len = await refreshFn(false);
-        console.log(`[CONTINUE DEBUG] Fallback done, length: ${len}`);
-        return len;
+
+        return document.querySelectorAll('#chat-container .message:not(.status):not(.error)').length;
     } catch (e) {
-        if (e.message !== 'Cancelled') {
-            console.error('[CONTINUE DEBUG] Error caught:', e);
-            handleError(e, 'continue');
-        }
+        if (e.message !== 'Cancelled') handleError(e, 'continue');
         return null;
     } finally {
-        console.log('[CONTINUE DEBUG] Finally block - hiding status and unsetting proc');
-        ui.hideStatus();
-        setProc(false);
+        if (!viewer) { ui.hideStatus(); setProc(false); }
     }
 };

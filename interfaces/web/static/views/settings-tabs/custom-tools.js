@@ -12,7 +12,6 @@ function renderToolInput(key, value) {
     if (typeof value === 'boolean') {
         return `<label class="setting-toggle">
             <input type="checkbox" id="${id}" data-key="${key}" ${value ? 'checked' : ''}>
-            <span>${value ? 'Enabled' : 'Disabled'}</span>
         </label>`;
     }
     if (typeof value === 'number') {

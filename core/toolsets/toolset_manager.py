@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -50,31 +51,57 @@ class ToolsetManager:
         if user_path.exists():
             # User file is authoritative — no re-seeding on boot
             try:
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 self._toolsets = {k: v for k, v in data.items() if not k.startswith('_')}
             except Exception as e:
-                logger.error(f"Failed to load user toolsets: {e}")
-                self._toolsets = {}
-            # Targeted migration: ensure 'default' exists. The agent persona
-            # (core/personas/personas.json) and the agents plugin default_toolset
-            # setting both reference `toolset='default'`. On installs that seeded
-            # their user file before 'default' was a shipped toolset, spawned
-            # agents resolve to 0 tools and silently run with no capability.
-            # Scout #8 — 2026-04-20. If the user deliberately deleted 'default'
-            # after this migration, they can remove it again; we only seed once
-            # per load pass when genuinely missing.
-            if 'default' not in self._toolsets:
+                # Fail-safe (2026-08-19): an unreadable file must not run the
+                # migrations below — they seed factory defaults and SAVE,
+                # clobbering a file the user might still hand-recover. On a
+                # reload (watcher mid-write race, transient corruption), keep
+                # the previous in-memory registry: wiping to {} made every
+                # toolset name dangle, so the next apply fell to 'none' —
+                # zero tools, cemented until restart. On first load there is
+                # nothing to keep — empty registry, file left untouched.
+                if self._toolsets:
+                    logger.error(f"Failed to load user toolsets: {e} — keeping "
+                                 f"{len(self._toolsets)} previously loaded toolsets")
+                else:
+                    logger.error(f"Failed to load user toolsets: {e} — no toolsets "
+                                 f"available; file left untouched for recovery")
+                return
+            # Targeted migration: ensure load-bearing toolsets exist. 'default'
+            # is referenced by the agent persona (core/personas/personas.json)
+            # and the agents plugin default_toolset setting; 'limited_web' is
+            # the factory new-chat default (chat_defaults.json). On installs
+            # that seeded their user file before these were shipped toolsets,
+            # the consumers resolve to 0 tools and silently run with no
+            # capability. Scout #8 — 2026-04-20; extended 2026-08-17. If the
+            # user deliberately deleted one after this migration, they can
+            # remove it again; we only seed when genuinely missing.
+            missing = [n for n in ('default', 'limited_web') if n not in self._toolsets]
+            if missing:
                 try:
                     with open(core_path, 'r', encoding='utf-8') as f:
                         core_data = json.load(f)
-                    core_default = core_data.get('default')
-                    if core_default:
-                        self._toolsets['default'] = core_default
+                    seeded = []
+                    for name in missing:
+                        if core_data.get(name):
+                            self._toolsets[name] = core_data[name]
+                            seeded.append(name)
+                    if seeded:
                         self._save_to_user()
-                        logger.info("Seeded missing 'default' toolset from core defaults (scout #8 migration)")
+                        logger.info(f"Seeded missing toolsets from core defaults (scout #8 migration): {seeded}")
                 except Exception as e:
-                    logger.warning(f"'default' toolset migration failed: {e}")
+                    logger.warning(f"Toolset seed migration failed: {e}")
+            # Targeted migration: rewrite meta tools renamed in a365e37 (2026-07).
+            # Seeded-before-the-rename user toolsets still list the old names,
+            # which silently drop at resolve time (logged INFO) — e.g. the
+            # 'personality' toolset loses ALL its prompt/voice tools. Same shape
+            # as the 'default' migration above: rewrite in place, persist once.
+            if self._migrate_renamed_tools():
+                self._save_to_user()
+                logger.info("Migrated renamed meta-tool references in user toolsets")
             logger.info(f"Loaded {len(self._toolsets)} toolsets")
             return
 
@@ -90,7 +117,42 @@ class ToolsetManager:
         if self._toolsets:
             self._save_to_user()
             logger.info(f"First run — seeded {len(self._toolsets)} toolsets from defaults")
-    
+
+    # Old -> new names for meta tools renamed in a365e37. The four *_piece tools
+    # collapse into the single action-based prompt_pieces (deduped below).
+    _TOOL_RENAMES = {
+        "view_prompt": "prompt_view",
+        "switch_prompt": "prompt_switch",
+        "edit_prompt": "prompt_edit",
+        "set_piece": "prompt_pieces",
+        "remove_piece": "prompt_pieces",
+        "create_piece": "prompt_pieces",
+        "list_pieces": "prompt_pieces",
+        "set_tts_voice": "set_voice",
+    }
+
+    def _migrate_renamed_tools(self):
+        """Rewrite renamed tool references in every user toolset, order-preserving
+        and deduped (the *_piece collapse can produce repeats). Names not in the
+        map are left untouched, so custom user tools are never disturbed. Returns
+        True if anything changed (caller persists)."""
+        changed = False
+        for ts in self._toolsets.values():
+            funcs = ts.get("functions")
+            if not isinstance(funcs, list):
+                continue
+            new_funcs, seen = [], set()
+            for fn in funcs:
+                mapped = self._TOOL_RENAMES.get(fn, fn)
+                if mapped in seen:
+                    continue
+                seen.add(mapped)
+                new_funcs.append(mapped)
+            if new_funcs != funcs:
+                ts["functions"] = new_funcs
+                changed = True
+        return changed
+
     def reload(self):
         """Reload toolsets from disk."""
         with self._lock:
@@ -232,7 +294,7 @@ class ToolsetManager:
             tmp_path = user_path.with_suffix('.tmp')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
-            tmp_path.replace(user_path)
+            replace_with_retry(tmp_path, user_path)
             
             # Update mtime after save to prevent watcher from triggering
             self._last_mtimes[str(user_path)] = user_path.stat().st_mtime

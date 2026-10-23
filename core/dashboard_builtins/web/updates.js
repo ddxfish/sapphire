@@ -23,21 +23,67 @@ export async function render(container, ctx) {
             container.querySelector('.upd-line1').innerHTML = '<span class="dim">checking...</span>';
             return;
         }
-        const ago = updateStatus.last_check ? _agoStr(updateStatus.last_check) : 'just now';
         const line1 = container.querySelector('.upd-line1');
+        if (updateStatus.pending_update) {
+            // A scheduled update is waiting on a restart — surface it and
+            // offer the exit (a stranded marker used to lock updates forever).
+            line1.innerHTML = `<span class="dash-pill warn" data-attention="warn">update pending restart</span> <a href="#" class="upd-cancel dim">cancel</a>`;
+            line1.querySelector('.upd-cancel')?.addEventListener('click', async (ev) => {
+                ev.preventDefault();
+                try {
+                    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                    const res = await ctx.api.fetch('/api/system/update', { method: 'DELETE', headers: { 'X-CSRF-Token': csrf } });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.detail || `HTTP ${res.status}`);
+                    }
+                    ctx.api.toast('Pending update cancelled', 'success');
+                    check();
+                } catch (e) {
+                    ctx.api.toast(`Cancel failed: ${e.message}`, 'error');
+                }
+            });
+            return;
+        }
         if (updateStatus.available) {
+            const ago = updateStatus.last_check ? _agoStr(updateStatus.last_check) : 'just now';
             line1.innerHTML = `<span class="dash-pill warn" data-attention="warn">v${_esc(updateStatus.latest)} available</span> <span class="dim">· running v${_esc(updateStatus.current)} · ${_esc(ago)}</span>`;
+        } else if (!updateStatus.last_check) {
+            // No successful check yet — "✓ current" here would be a guess.
+            line1.innerHTML = `<span class="dash-pill">not checked yet</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· use Check now</span>`;
         } else {
-            line1.innerHTML = `<span class="dash-pill success">✓ current</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· ${_esc(ago)}</span>`;
+            const branchNote = updateStatus.blocked_branch
+                ? ` · ${_esc(updateStatus.branch)} (manual pull only)` : '';
+            line1.innerHTML = `<span class="dash-pill success">✓ current</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· ${_esc(_agoStr(updateStatus.last_check))}${branchNote}</span>`;
         }
     }
 
-    async function check(force = false) {
+    // Why Force pull won't work right now, or null if it would. Rendered as
+    // an immediate toast instead of the old advertise-then-400 round trip.
+    function _pullBlockedReason() {
+        const s = updateStatus;
+        if (!s) return null;
+        if (s.docker) return 'Docker install — update with docker compose pull';
+        if (s.managed) return 'Managed install — updates are handled for you';
+        if (s.has_git === false) return 'Not a git install — download a release from GitHub';
+        if (s.is_fork) return 'Fork detected — pull from upstream manually';
+        if (s.blocked_branch) return `You're on '${s.branch}' — auto-update only runs on main. Pull manually.`;
+        return null;
+    }
+
+    async function check(force = false, retry = 0) {
         try {
             const res = await ctx.api.fetch('/api/system/update-check' + (force ? '?force=1' : ''));
             if (!res.ok) throw new Error('Check failed');
             updateStatus = await res.json();
             if (aborted) return;
+            // Cold boot: the endpoint fires its first GitHub check async and
+            // returns last_check=0 meanwhile — poll briefly before painting
+            // "not checked yet" (same pattern as dashboard.js checkForUpdate).
+            if (!force && !updateStatus.last_check && !updateStatus.pending_update && retry < 3) {
+                setTimeout(() => { if (!aborted) check(false, retry + 1); }, 2000);
+                return;
+            }
             paintLine1();
             if (updateStatus.available) {
                 window.dispatchEvent(new CustomEvent('update-available', { detail: updateStatus }));
@@ -87,6 +133,8 @@ export async function render(container, ctx) {
             {
                 icon: '⤴', label: 'Force pull (git)',
                 onClick: async () => {
+                    const blocked = _pullBlockedReason();
+                    if (blocked) { ctx.api.toast(blocked, 'warning', 6000); return; }
                     if (!confirm('Schedule an update? Sapphire will pre-flight the git state, take a backup, then restart to pull and install dependencies.')) return;
                     try {
                         const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';

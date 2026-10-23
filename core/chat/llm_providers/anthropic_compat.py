@@ -66,9 +66,11 @@ class AnthropicCompatProvider(BaseProvider):
     def provider_name(self) -> str:
         return 'anthropic'
 
-    @property
-    def supports_images(self) -> bool:
-        return False
+    # supports_images inherited from BaseProvider: the vision checkbox
+    # (config `supports_images`) decides; default False. Anthropic-compatible
+    # endpoints are a mixed bag (MiniMax M3 sees, many don't) — the user
+    # declares it per provider. Was hardcoded False, which silently discarded
+    # tool images even when the endpoint had vision. Fixed 2026-06-12.
 
     def _clamp_temperature(self, temp: float) -> float:
         """Clamp temperature to (0.0, 1.0] — some endpoints reject exactly 0.0."""
@@ -180,41 +182,78 @@ class AnthropicCompatProvider(BaseProvider):
 
             elif role == "user":
                 if isinstance(content, list):
-                    # Filter out image blocks (this provider class doesn't
-                    # support image content). Pre-fix this stripped silently;
-                    # the model's "I don't see an image" reply was confusing
-                    # to users who'd just attached one. Log when we strip so
-                    # the cause is visible. Wildcard scout 2026-05-07 M3.
-                    image_count = sum(
-                        1 for b in content
-                        if isinstance(b, dict) and b.get("type") == "image"
-                    )
-                    text_blocks = [
-                        b for b in content
-                        if not (isinstance(b, dict) and b.get("type") == "image")
-                    ]
-                    if image_count:
-                        logger.warning(
-                            f"[ANTHROPIC-COMPAT] Stripping {image_count} image "
-                            f"block(s) from user message — this provider class "
-                            f"doesn't pass images. Model will not see them."
+                    if self.supports_images:
+                        # Vision ON (the 👁 checkbox / supports_images). Convert the
+                        # internal image block {type:image, data, media_type} → the
+                        # Anthropic content-block shape {type:image, source:{type:
+                        # base64, media_type, data}} and pass it through. Mirrors
+                        # claude.py._convert_messages; this is the format an
+                        # Anthropic-compatible vision endpoint (e.g. MiniMax M3 via
+                        # api.minimax.io/anthropic) expects. Was unconditionally
+                        # stripped pre-fix — the checkbox was made configurable
+                        # 2026-06-12 but this request-builder never got the road.
+                        # 2026-06-14.
+                        out_blocks = []
+                        for b in content:
+                            if isinstance(b, dict) and b.get("type") == "image":
+                                if "source" in b:
+                                    out_blocks.append(b)  # already Anthropic-shaped
+                                else:
+                                    out_blocks.append({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": b.get("media_type", "image/jpeg"),
+                                            "data": b.get("data", ""),
+                                        },
+                                    })
+                            else:
+                                out_blocks.append(b)
+                        if out_blocks:
+                            api_messages.append({"role": "user", "content": out_blocks})
+                    else:
+                        # Vision OFF: strip image blocks (this provider/endpoint is
+                        # text-only). Pre-fix this stripped silently; the model's "I
+                        # don't see an image" reply confused users who'd just
+                        # attached one. Log so the cause is visible. 2026-05-07 M3.
+                        image_count = sum(
+                            1 for b in content
+                            if isinstance(b, dict) and b.get("type") == "image"
                         )
-                    # When the message is image-only (no caption), substitute a
-                    # placeholder so the user turn doesn't get silently dropped.
-                    # Without this, the API payload skips a user turn, causing
-                    # consecutive-assistants alternation violation → 400 →
-                    # permanent chat wedge that survives across messages
-                    # (each retry re-sends the same wedged history). 2026-05-14.
-                    if not text_blocks and image_count:
-                        text_blocks = [{
-                            "type": "text",
-                            "text": "[Image attached but not shown — this provider does not support images.]",
-                        }]
-                    if text_blocks:
-                        api_messages.append({"role": "user", "content": text_blocks})
+                        text_blocks = [
+                            b for b in content
+                            if not (isinstance(b, dict) and b.get("type") == "image")
+                        ]
+                        if image_count:
+                            logger.warning(
+                                f"[ANTHROPIC-COMPAT] Stripping {image_count} image "
+                                f"block(s) from user message — vision is off for this "
+                                f"provider (enable the 👁 checkbox if the endpoint "
+                                f"supports images). Model will not see them."
+                            )
+                        # When the message is image-only (no caption), substitute a
+                        # placeholder so the user turn doesn't get silently dropped.
+                        # Without this, the API payload skips a user turn, causing
+                        # consecutive-assistants alternation violation → 400 →
+                        # permanent chat wedge that survives across messages
+                        # (each retry re-sends the same wedged history). 2026-05-14.
+                        if not text_blocks and image_count:
+                            text_blocks = [{
+                                "type": "text",
+                                "text": "[Image attached but not shown — this provider does not support images.]",
+                            }]
+                        if text_blocks:
+                            api_messages.append({"role": "user", "content": text_blocks})
                 else:
                     if content and content.strip():
                         api_messages.append({"role": "user", "content": content})
+
+        # Anthropic requires the first message to be role=user. An assistant-
+        # initiated chat (e.g. a phone greeting recorded before the caller
+        # speaks) starts with assistant → 400. Prepend a minimal user turn so
+        # the conversation stays valid without dropping the opening line.
+        if api_messages and api_messages[0].get("role") == "assistant":
+            api_messages.insert(0, {"role": "user", "content": "[conversation started]"})
 
         return system_prompt, api_messages
 
@@ -256,7 +295,7 @@ class AnthropicCompatProvider(BaseProvider):
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": api_messages,
-            "max_tokens": params.get("max_tokens", 4096),
+            "max_tokens": params.get("max_tokens") or 4096,  # null-safe: blanked Max Tok persists JSON null (2026-09-20)
         }
 
         if system_prompt:
@@ -266,7 +305,9 @@ class AnthropicCompatProvider(BaseProvider):
             request_kwargs["temperature"] = self._clamp_temperature(params["temperature"])
 
         # Thinking support (opt-in, no safety guards)
-        disable_thinking = params.get('disable_thinking', False)
+        # B2: honor the provider-config "disable thinking" checkbox as a fallback
+        # when the per-request param isn't set (else the checkbox was a no-op here).
+        disable_thinking = params.get('disable_thinking', self.config.get('disable_thinking', False))
         if self._thinking_enabled and not disable_thinking:
             if request_kwargs["max_tokens"] <= self._thinking_budget:
                 request_kwargs["max_tokens"] = self._thinking_budget + 8000
@@ -297,7 +338,7 @@ class AnthropicCompatProvider(BaseProvider):
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": api_messages,
-            "max_tokens": params.get("max_tokens", 4096),
+            "max_tokens": params.get("max_tokens") or 4096,  # null-safe: blanked Max Tok persists JSON null (2026-09-20)
         }
 
         if system_prompt:
@@ -307,7 +348,9 @@ class AnthropicCompatProvider(BaseProvider):
             request_kwargs["temperature"] = self._clamp_temperature(params["temperature"])
 
         # Thinking support (opt-in, no safety guards)
-        disable_thinking = params.get('disable_thinking', False)
+        # B2: honor the provider-config "disable thinking" checkbox as a fallback
+        # when the per-request param isn't set (else the checkbox was a no-op here).
+        disable_thinking = params.get('disable_thinking', self.config.get('disable_thinking', False))
         if self._thinking_enabled and not disable_thinking:
             if request_kwargs["max_tokens"] <= self._thinking_budget:
                 request_kwargs["max_tokens"] = self._thinking_budget + 8000

@@ -1,5 +1,6 @@
 {
   "name": "bitcoin",
+  "short_display_name": "Bitcoin",
   "version": "1.0.0",
   "description": "Bitcoin — check balance, send BTC, view transactions",
   "author": "sapphire",

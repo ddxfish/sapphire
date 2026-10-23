@@ -2,9 +2,9 @@
   "plugin": "voice-commands",
   "version": "1.0.0",
   "files": {
-    "hooks/reset.py": "sha256:8093524868375275a0e5cfeab0e26fe604574c11ec748ff0aa3e5f8a719835df",
-    "hooks/stop.py": "sha256:06407e9a4072fb0eaba9822ee8bce3ebc6164e0b5f526f259e66bd0321202887",
-    "plugin.json": "sha256:618e0fa8840a1a5ee4a491c759e6bf85c81884aab6a3b8417149618559109ec4"
+    "hooks/reset.py": "sha256:7aa702f83349a9d59c6e736963ec497ca17b0c5d4da0fdc86b5307275aaa9ece",
+    "hooks/stop.py": "sha256:4087639924934d897a6ed6874ca76addca5e3adcd8c1a2f9367b58b7b8fcdba2",
+    "plugin.json": "sha256:a836bec00ac8a10fdaa0c9c8e18115777db7134787523b90f036e266230cfde7"
   },
-  "signature": "dkUgE4rpxQgjLpY+RUDCih2W4JUVbY2NCGZmNDri4VuOYoh7PLKtVE0PV307hXI/tYbDNUyX84s4StMcTXInBA=="
+  "signature": "RN8RwEK6ZAGVf+TShDVi3LljHYDbNDnvH6yJON6Pwkk45bEl8iHjCUultPn/TO0i5LA2Mj3bug+NxDvHEsjRAg=="
 }

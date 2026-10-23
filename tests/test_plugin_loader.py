@@ -499,9 +499,13 @@ def _make_mock_fm():
     fm.execution_map = {}
     fm._enabled_tools = []
     fm._network_functions = set()
+    fm._hidden_tools = set()
     fm._is_local_map = {}
+    fm._loop_warn_map = {}
     fm._function_module_map = {}
     fm._mode_filters = {}
+    fm._settings_gates = {}
+    fm.current_toolset_name = "none"
     return fm
 
 
@@ -1081,7 +1085,9 @@ def execute(function_name, arguments, config):
             fm._enabled_tools = []
             fm._mode_filters = {}
             fm._network_functions = set()
+            fm._hidden_tools = set()
             fm._is_local_map = {}
+            fm._loop_warn_map = {}
             fm._function_module_map = {}
             fm.current_toolset_name = "none"
             fm.register_plugin_tools("idem_a", plugin_dir, ["tools/idem_a_tool.py"])
@@ -1121,7 +1127,9 @@ def execute(function_name, arguments, config):
                 fm._enabled_tools = []
                 fm._mode_filters = {}
                 fm._network_functions = set()
+                fm._hidden_tools = set()
                 fm._is_local_map = {}
+                fm._loop_warn_map = {}
                 fm._function_module_map = {}
                 fm.current_toolset_name = "none"
                 fm.register_plugin_tools("idem_b", plugin_dir, ["tools/idem_b_tool.py"])
@@ -1153,13 +1161,40 @@ def execute(function_name, arguments, config):
             fm._enabled_tools = []
             fm._mode_filters = {}
             fm._network_functions = set()
+            fm._hidden_tools = set()
             fm._is_local_map = {}
+            fm._loop_warn_map = {}
             fm._function_module_map = {}
+            fm._settings_gates = {}
             fm.current_toolset_name = "none"
             fm.register_plugin_tools("idem_c", plugin_dir, ["tools/idem_c_tool.py"])
             assert canonical in sys.modules, "sanity: canonical should be registered"
             fm.unregister_plugin_tools("idem_c")
             assert canonical not in sys.modules, "unregister should purge sys.modules entry for reload safety"
+
+
+class TestMinCoreVersion:
+    """min_core_version manifest field — warns loudly, never blocks."""
+
+    def test_version_tuple_parsing(self):
+        from core.plugin_loader import _version_tuple
+        assert _version_tuple("2.10.1") == (2, 10, 1)
+        assert _version_tuple("2.9") == (2, 9)
+        assert _version_tuple("2.10.1-beta") == (2, 10, 1)
+        assert _version_tuple("garbage") is None
+        assert _version_tuple("") is None
+
+    def test_older_core_warns(self, caplog):
+        with patch.object(Path, "read_text", return_value="2.9.4\n"):
+            PluginLoader._warn_min_core_version("demo", {"min_core_version": "2.10.1"})
+        assert any("VERSION MISMATCH" in r.message for r in caplog.records)
+
+    def test_current_core_silent(self, caplog):
+        with patch.object(Path, "read_text", return_value="2.10.1"):
+            PluginLoader._warn_min_core_version("demo", {"min_core_version": "2.10.1"})
+            PluginLoader._warn_min_core_version("demo", {})
+            PluginLoader._warn_min_core_version("demo", {"min_core_version": "junk"})
+        assert not any("VERSION MISMATCH" in r.message for r in caplog.records)
 
 
 if __name__ == "__main__":

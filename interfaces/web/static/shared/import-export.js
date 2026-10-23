@@ -118,10 +118,11 @@ export function showImportDialog(opts) {
             }
 
             status.textContent = `Importing "${name}"...`;
-            await opts.onImport(parsed, { name, overwrites });
+            // A caller that returns false owns its own feedback (e.g. a follow-up
+            // overwrite-confirm modal) — skip the dialog's toast/onDone.
+            const result = await opts.onImport(parsed, { name, overwrites });
             modal.remove();
-            opts.onDone?.();
-            ui.showToast(`Imported: ${name}`, 'success');
+            if (result !== false) { opts.onDone?.(); ui.showToast(`Imported: ${name}`, 'success'); }
         } catch (e) { status.textContent = `Error: ${e.message}`; }
     }
 
@@ -147,10 +148,9 @@ export function showImportDialog(opts) {
             });
             status.textContent = `Importing ${file.name}...`;
             try {
-                const name = await opts.onImportFile(file, { overwrites });
+                const result = await opts.onImportFile(file, { overwrites });
                 modal.remove();
-                opts.onDone?.();
-                ui.showToast(`Imported: ${name || file.name}`, 'success');
+                if (result !== false) { opts.onDone?.(); ui.showToast(`Imported: ${result || file.name}`, 'success'); }
             } catch (err) { status.textContent = `Error: ${err.message}`; }
             return;
         }

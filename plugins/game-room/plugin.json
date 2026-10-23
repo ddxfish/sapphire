@@ -1,0 +1,321 @@
+{
+  "name": "game-room",
+  "privacy_aware": true,
+  "short_display_name": "Game Room",
+  "display_name": "Game Room",
+  "description": "The Game Room host: Surface rooms on the real chat rail, the sealed seat for moves, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
+  "version": "0.34.0",
+  "emoji": "🎲",
+  "author": "Krem & Claude",
+  "default_enabled": true,
+  "capabilities": {
+    "app": {
+      "label": "Game Room",
+      "icon": "🎲",
+      "nav": "chat",
+      "description": "Games and stories vs Sapphire — sessions are chats, the chat is the save"
+    },
+    "prompts": {
+      "monoliths": "prompts/monoliths.json",
+      "pieces": "prompts/pieces.json",
+      "kind": "internal"
+    },
+    "tools": [
+      "tools/story_tools.py",
+      "tools/story_info.py"
+    ],
+    "hooks": {
+      "ghost_inject": "hooks/ghost.py",
+      "prompt_inject": "hooks/costume.py",
+      "pre_chat": "hooks/mirror.py",
+      "post_chat": "hooks/mirror.py",
+      "tools_filter": "hooks/toolfence.py",
+      "plugins_ready": "hooks/boot.py",
+      "vault_locked": "hooks/vault.py",
+      "vault_unlocked": "hooks/vault.py",
+      "chat_cleared": "hooks/lifecycle.py"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "play/games",
+        "handler": "routes/play.py:list_games"
+      },
+      {
+        "method": "GET",
+        "path": "play/{game}/state",
+        "handler": "routes/play.py:get_state"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/new-session",
+        "handler": "routes/play.py:new_session"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/start",
+        "handler": "routes/play.py:start"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/act",
+        "handler": "routes/play.py:act"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/banter",
+        "handler": "routes/play.py:banter"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/forget",
+        "handler": "routes/play.py:forget"
+      },
+      {
+        "method": "GET",
+        "path": "play/{game}/settings",
+        "handler": "routes/play.py:get_game_settings"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/settings",
+        "handler": "routes/play.py:set_game_settings"
+      },
+      {
+        "method": "GET",
+        "path": "room/config",
+        "handler": "routes/play.py:get_room_config"
+      },
+      {
+        "method": "POST",
+        "path": "room/apply-model",
+        "handler": "routes/play.py:apply_room_model"
+      },
+      {
+        "method": "POST",
+        "path": "room/config",
+        "handler": "routes/play.py:set_room_config"
+      },
+      {
+        "method": "GET",
+        "path": "room/settings",
+        "handler": "routes/play.py:get_room_settings"
+      },
+      {
+        "method": "POST",
+        "path": "room/settings",
+        "handler": "routes/play.py:set_room_settings"
+      },
+      {
+        "method": "GET",
+        "path": "room/effective",
+        "handler": "routes/play.py:get_effective"
+      },
+      {
+        "method": "GET",
+        "path": "room/session-settings",
+        "handler": "routes/play.py:get_session_settings"
+      },
+      {
+        "method": "POST",
+        "path": "room/session-settings",
+        "handler": "routes/play.py:set_session_settings"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/arm",
+        "handler": "routes/play.py:cadence_arm"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/disarm",
+        "handler": "routes/play.py:cadence_disarm"
+      },
+      {
+        "method": "GET",
+        "path": "room/cadence/status",
+        "handler": "routes/play.py:cadence_status"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/pause",
+        "handler": "routes/play.py:cadence_pause"
+      },
+      {
+        "method": "POST",
+        "path": "room/cadence/poke",
+        "handler": "routes/play.py:cadence_poke"
+      },
+      {
+        "method": "POST",
+        "path": "room/session-end",
+        "handler": "routes/play.py:session_end"
+      },
+      {
+        "method": "GET",
+        "path": "story/status",
+        "handler": "routes/story_routes.py:status"
+      },
+      {
+        "method": "POST",
+        "path": "story/start",
+        "handler": "routes/story_routes.py:start"
+      },
+      {
+        "method": "POST",
+        "path": "story/mode",
+        "handler": "routes/story_routes.py:set_mode"
+      },
+      {
+        "method": "POST",
+        "path": "story/pause",
+        "handler": "routes/story_routes.py:pause"
+      },
+      {
+        "method": "POST",
+        "path": "story/fill",
+        "handler": "routes/story_routes.py:fill_seal"
+      },
+      {
+        "method": "POST",
+        "path": "story/wait",
+        "handler": "routes/story_routes.py:extend_wait"
+      },
+      {
+        "method": "POST",
+        "path": "story/reassert",
+        "handler": "routes/story_routes.py:reassert"
+      },
+      {
+        "method": "POST",
+        "path": "story/end",
+        "handler": "routes/story_routes.py:end"
+      },
+      {
+        "method": "GET",
+        "path": "story/inspect",
+        "handler": "routes/story_routes.py:inspect"
+      },
+      {
+        "method": "GET",
+        "path": "story/{slug}/settings",
+        "handler": "routes/story_routes.py:get_story_settings"
+      },
+      {
+        "method": "POST",
+        "path": "story/{slug}/settings",
+        "handler": "routes/story_routes.py:set_story_settings"
+      },
+      {
+        "method": "GET",
+        "path": "story/{slug}/setup",
+        "handler": "routes/story_routes.py:get_setup"
+      },
+      {
+        "method": "GET",
+        "path": "story/objects",
+        "handler": "routes/story_routes.py:get_objects"
+      },
+      {
+        "method": "POST",
+        "path": "story/objects",
+        "handler": "routes/story_routes.py:set_object"
+      },
+      {
+        "method": "POST",
+        "path": "story/objects/delete",
+        "handler": "routes/story_routes.py:delete_object"
+      },
+      {
+        "method": "POST",
+        "path": "story/items",
+        "handler": "routes/story_routes.py:set_item"
+      },
+      {
+        "method": "POST",
+        "path": "story/items/delete",
+        "handler": "routes/story_routes.py:delete_item"
+      },
+      {
+        "method": "POST",
+        "path": "story/room-text",
+        "handler": "routes/story_routes.py:set_room_text"
+      },
+      {
+        "method": "POST",
+        "path": "story/room-enter",
+        "handler": "routes/story_routes.py:set_room_enter"
+      },
+      {
+        "method": "POST",
+        "path": "story/exits",
+        "handler": "routes/story_routes.py:set_exit"
+      },
+      {
+        "method": "POST",
+        "path": "story/exits/delete",
+        "handler": "routes/story_routes.py:delete_exit"
+      },
+      {
+        "method": "POST",
+        "path": "story/{slug}/scenarios",
+        "handler": "routes/story_routes.py:set_scenario"
+      },
+      {
+        "method": "POST",
+        "path": "story/scenarios/load",
+        "handler": "routes/story_routes.py:load_scenario"
+      },
+      {
+        "method": "POST",
+        "path": "story/slots",
+        "handler": "routes/story_routes.py:set_slots"
+      },
+      {
+        "method": "POST",
+        "path": "story/fence",
+        "handler": "routes/story_routes.py:set_fence"
+      },
+      {
+        "method": "POST",
+        "path": "story/wear",
+        "handler": "routes/story_routes.py:dress"
+      },
+      {
+        "method": "GET",
+        "path": "story/art/{name}",
+        "handler": "routes/story_routes.py:get_art"
+      },
+      {
+        "method": "POST",
+        "path": "story/art",
+        "handler": "routes/story_routes.py:upload_art"
+      },
+      {
+        "method": "POST",
+        "path": "story/backdrop",
+        "handler": "routes/story_routes.py:set_backdrop"
+      },
+      {
+        "method": "POST",
+        "path": "story/rooms",
+        "handler": "routes/story_routes.py:create_room"
+      },
+      {
+        "method": "POST",
+        "path": "story/rooms/delete",
+        "handler": "routes/story_routes.py:delete_room"
+      },
+      {
+        "method": "GET",
+        "path": "story/{slug}/pieces",
+        "handler": "routes/story_routes.py:get_pieces"
+      },
+      {
+        "method": "POST",
+        "path": "story/{slug}/pieces",
+        "handler": "routes/story_routes.py:set_piece"
+      }
+    ]
+  }
+}

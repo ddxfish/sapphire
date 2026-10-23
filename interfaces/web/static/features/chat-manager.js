@@ -7,17 +7,43 @@ import { updateScene, updateSendButtonLLM } from './scene.js';
 import { applyTrimColor } from './chat-settings.js';
 import { cancelPendingSave, flushPendingSave } from '../views/chat.js';
 
-export async function populateChatDropdown() {
+let _listPaintSeq = 0;
+let _listRetryTimer = null;
+
+export async function populateChatDropdown({ forceAdopt = false } = {}) {
     const { chatSelect } = getElements();
+    const epochAtFetch = api.getSwitchEpoch();
+    // Paint-sequence guard (mirrors loadSidebar's _sbPaintSeq): event-driven
+    // callers never await this, so two list fetches routinely overlap even
+    // with no switch in flight — and out-of-order responses painted the
+    // STALE list last. Newest call wins; superseded responses are dropped.
+    const mySeq = ++_listPaintSeq;
     try {
         const data = await api.fetchChatList();
-        const regularChats = data.chats.filter(c => !c.private_chat);
-        const privateChats = data.chats.filter(c => c.private_chat);
-        ui.renderChatDropdown(regularChats, data.active_chat, [], privateChats);
+        if (mySeq !== _listPaintSeq) return;
+        // Adopt the server's active_chat into #chat-select only if no chat
+        // switch STARTED while this list was in flight — a stale response
+        // must not clobber the user's in-flight selection (the GLM-sidebar
+        // race, 2026-08-08). forceAdopt is the deliberate exception: after a
+        // REJECTED activate the select must roll back to server truth.
+        const adopt = forceAdopt || api.getSwitchEpoch() === epochAtFetch;
+        // Archived chats are hidden from the dropdown — a UI shade, not a
+        // freeze. The ACTIVE chat always shows even if archived, so the
+        // select never loses its selection; it drops out after switching away.
+        const visible = data.chats.filter(c => !c.archived || c.name === data.active_chat);
+        const regularChats = visible.filter(c => !c.private_chat);
+        const privateChats = visible.filter(c => c.private_chat);
+        ui.renderChatDropdown(regularChats, data.active_chat, [], privateChats, { adopt });
     } catch (e) {
         console.error('Failed to load chat list:', e);
-        if (chatSelect && chatSelect.options.length === 0) {
-            console.log('Backend may still be starting up, will retry...');
+        // Dropdown hunt #6: the old log line PROMISED a retry and lied —
+        // a boot-race failure left the sidebar blank until SSE reconnect.
+        // One timer at a time; each attempt re-arms only on failure.
+        if (chatSelect && chatSelect.options.length === 0 && !_listRetryTimer) {
+            _listRetryTimer = setTimeout(() => {
+                _listRetryTimer = null;
+                populateChatDropdown({ forceAdopt });
+            }, 3000);
         }
     }
 }
@@ -46,6 +72,7 @@ export async function handleChatChange() {
 
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
         await updateScene();
 
         // Use settings from activate response
@@ -64,7 +91,10 @@ export async function handleChatChange() {
     } catch (e) {
         console.error('Failed to switch chat:', e);
         ui.showToast(`Failed to switch chat: ${e.message}`, 'error');
-        await populateChatDropdown();
+        // The activate was REJECTED (400/409-while-streaming) but it still
+        // bumped the switch epoch — force adoption so the select rolls back
+        // to the chat the server actually kept.
+        await populateChatDropdown({ forceAdopt: true });
     }
 }
 
@@ -76,10 +106,13 @@ export async function handleNewChat() {
     const { chatSelect } = getElements();
     
     try {
-        await api.createChat(name);
+        const created = await api.createChat(name);
         await populateChatDropdown();
 
-        const normalizedName = name.toLowerCase().replace(/\s+/g, '_');
+        // Server echoes the sanitized name — re-deriving it here drifted
+        // (punctuation stripping was missed → dropdown select silently failed)
+        const normalizedName = (created && created.name)
+            || name.toLowerCase().replace(/\s+/g, '_');
         chatSelect.value = normalizedName;
         await handleChatChange();
         // Re-sync picker now that backend has correct active chat
@@ -114,6 +147,7 @@ export async function handleDeleteChat() {
         chatSelect.value = 'default';
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
     } catch (e) {
         console.error('Failed to delete chat:', e);
         alert(`Failed to delete chat: ${e.message}`);
@@ -130,6 +164,7 @@ export async function handleClearChat() {
         await api.clearChat();
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
         ui.showToast('Chat cleared', 'success');
     } catch (e) {
         console.error('Failed to clear chat:', e);
@@ -184,6 +219,7 @@ export async function handleImportFile(e) {
         await api.importChat(messages);
         const len = await refresh(false);
         setHistLen(len);
+        ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
         ui.showToast(`Imported ${messages.length} messages`, 'success');
     } catch (e) {
         console.error('Failed to import chat:', e);

@@ -76,7 +76,9 @@ def get_password_hash() -> str | None:
         if not SECRET_KEY_FILE.exists():
             return None
         
-        hash_value = SECRET_KEY_FILE.read_text().strip()
+        # utf-8-sig: strips a PowerShell/Notepad BOM that would fail the
+        # '$2' bcrypt prefix check below and lock the user out.
+        hash_value = SECRET_KEY_FILE.read_text(encoding='utf-8-sig').strip()
         
         # Validate it looks like a bcrypt hash
         if not hash_value or len(hash_value) < 50:
@@ -105,20 +107,36 @@ def save_password_hash(password: str) -> str | None:
     if not password or len(password) < 10:
         logger.error("Password too short (minimum 10 characters)")
         return None
-    
+    if len(password.encode('utf-8')) > 72:
+        # bcrypt 5.x raises past 72 bytes where 4.x silently truncated —
+        # refuse up front so both wheels behave alike (pre-push hunt 2026-09-08).
+        logger.error("Password too long (bcrypt limit is 72 bytes)")
+        return None
+
     try:
         if not ensure_config_directory():
             return None
-        
+
         # Generate bcrypt hash
         hash_bytes = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         hash_str = hash_bytes.decode('utf-8')
-        
-        # Write to file with restrictive permissions (Unix only)
-        SECRET_KEY_FILE.write_text(hash_str)
+
+        # Atomic write: tmp + fsync + mode BEFORE it becomes the live file +
+        # replace (same shape as api_tokens._save). The old in-place
+        # write_text left a ZERO-BYTE file on a crash mid-write — and an
+        # empty hash doesn't lock the owner out, it reopens /setup to
+        # whoever visits first (pre-push hunt 2026-09-08, E4#1).
+        from core.fs_utils import replace_with_retry
+        from core.settings_manager import _fsync_file, _fsync_dir
+        tmp = SECRET_KEY_FILE.with_suffix('.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(hash_str)
+            _fsync_file(f)
         if sys.platform != 'win32':
-            os.chmod(SECRET_KEY_FILE, 0o600)
-        
+            os.chmod(tmp, 0o600)
+        replace_with_retry(tmp, SECRET_KEY_FILE)
+        _fsync_dir(SECRET_KEY_FILE.parent)
+
         logger.info(f"Password hash saved to {SECRET_KEY_FILE}")
         return hash_str
     except Exception as e:
@@ -196,7 +214,7 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
     # 3. Legacy: platform config directory file
     if SOCKS_CONFIG_FILE.exists():
         try:
-            lines = SOCKS_CONFIG_FILE.read_text().splitlines()
+            lines = SOCKS_CONFIG_FILE.read_text(encoding='utf-8-sig').splitlines()
             if len(lines) >= 2:
                 username = _parse_legacy_line(lines[0])
                 password = _parse_legacy_line(lines[1])
@@ -210,7 +228,7 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
     project_config = Path(__file__).parent.parent / 'user' / '.socks_config'
     if project_config.exists():
         try:
-            lines = project_config.read_text().splitlines()
+            lines = project_config.read_text(encoding='utf-8-sig').splitlines()
             if len(lines) >= 2:
                 username = _parse_legacy_line(lines[0])
                 password = _parse_legacy_line(lines[1])
@@ -259,7 +277,7 @@ def get_claude_api_key() -> str | None:
     # 3. Legacy: config file
     if CLAUDE_API_KEY_FILE.exists():
         try:
-            api_key = CLAUDE_API_KEY_FILE.read_text().strip()
+            api_key = CLAUDE_API_KEY_FILE.read_text(encoding='utf-8-sig').strip()
             if api_key:
                 logger.info(f"Using Claude API key from {CLAUDE_API_KEY_FILE}")
                 return api_key
@@ -346,8 +364,12 @@ def ensure_prompt_files() -> bool:
             if not source.exists():
                 logger.warning(f"Template missing: {source}")
                 continue
-            
-            shutil.copy2(source, target)
+
+            # copyfile, not copy2: copy2 preserves source metadata — a
+            # read-only attr from the install dir (Windows) makes the
+            # provisioned file unwritable, and the stale mtime confuses
+            # the prompt file watcher.
+            shutil.copyfile(source, target)
             logger.info(f"Bootstrapped {filename} to user/prompts/")
         
         return True
@@ -375,46 +397,11 @@ def ensure_chat_defaults() -> bool:
             return False
         
         target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        shutil.copyfile(source, target)  # copyfile: don't inherit install-dir metadata
         logger.info(f"Bootstrapped chat_defaults.json to user/settings/")
         return True
     except Exception as e:
         logger.error(f"Failed to ensure chat_defaults: {e}")
-        return False
-
-
-def reset_prompt_files() -> bool:
-    """
-    Force-copy all prompt files from core → user (overwrite).
-    Used for recovery when user prompts are corrupted or botched.
-    Returns True on success, False on error.
-    """
-    source_dir = Path(__file__).parent / "prompt_defaults"
-    target_dir = Path(__file__).parent.parent / "user" / "prompts"
-    
-    files = [
-        "prompt_monoliths.json",
-        "prompt_pieces.json",
-        "prompt_spices.json"
-    ]
-    
-    try:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        
-        for filename in files:
-            source = source_dir / filename
-            target = target_dir / filename
-            
-            if not source.exists():
-                logger.warning(f"Source template missing: {source}")
-                continue
-            
-            shutil.copy2(source, target)
-            logger.info(f"Reset {filename} to factory defaults")
-        
-        return True
-    except Exception as e:
-        logger.error(f"Failed to reset prompt files: {e}")
         return False
 
 
@@ -433,7 +420,7 @@ def reset_chat_defaults() -> bool:
             return False
         
         target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        shutil.copyfile(source, target)  # copyfile: don't inherit install-dir metadata
         logger.info("Reset chat_defaults.json to factory defaults")
         return True
     except Exception as e:
@@ -441,106 +428,9 @@ def reset_chat_defaults() -> bool:
         return False
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    """
-    Deep merge two dicts. Override wins on conflicts.
-    Used for merging core prompts into user prompts.
-    """
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
+# ensure_chat_database() was deleted 2026-09-04 (hunt S6-6/S8-8): zero
+# callers, and it carried its OWN pre-rowify copy of the chats schema —
+# a revival hazard one stray import away from seeding an old-schema DB.
+# history.py _init_db is the one true schema.
 
 
-def ensure_chat_database() -> bool:
-    """
-    Ensure SQLite chat database exists and is initialized.
-    Called at startup to bootstrap the database.
-    Returns True if database is ready, False on error.
-    """
-    import sqlite3
-    
-    db_dir = Path(__file__).parent.parent / 'user' / 'history'
-    db_path = db_dir / 'sapphire_history.db'
-    
-    try:
-        db_dir.mkdir(parents=True, exist_ok=True)
-        
-        conn = sqlite3.connect(str(db_path), timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS chats (
-                name TEXT PRIMARY KEY,
-                settings TEXT NOT NULL,
-                messages TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"Chat database ready at {db_path}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to ensure chat database: {e}")
-        return False
-
-
-def merge_prompt_files() -> dict:
-    """
-    Deep merge core prompts into user prompts.
-    Core values overwrite user values at same path.
-    New user keys are preserved.
-    Returns dict with merge results per file.
-    """
-    source_dir = Path(__file__).parent / "prompt_defaults"
-    target_dir = Path(__file__).parent.parent / "user" / "prompts"
-    
-    files = [
-        "prompt_monoliths.json",
-        "prompt_pieces.json",
-        "prompt_spices.json"
-    ]
-    
-    results = {}
-    
-    try:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        
-        for filename in files:
-            source = source_dir / filename
-            target = target_dir / filename
-            
-            if not source.exists():
-                results[filename] = {"status": "skipped", "reason": "source missing"}
-                continue
-            
-            # Load core defaults
-            with open(source, 'r', encoding='utf-8') as f:
-                core_data = json.load(f)
-            
-            # Load user data (or empty dict if missing)
-            if target.exists():
-                with open(target, 'r', encoding='utf-8') as f:
-                    user_data = json.load(f)
-            else:
-                user_data = {}
-            
-            # Deep merge: core overwrites, user additions preserved
-            merged = _deep_merge(user_data, core_data)
-            
-            # Save merged result
-            with open(target, 'w', encoding='utf-8') as f:
-                json.dump(merged, f, indent=2)
-            
-            results[filename] = {"status": "merged", "keys": len(merged)}
-            logger.info(f"Merged {filename} - {len(merged)} top-level keys")
-        
-        return results
-    except Exception as e:
-        logger.error(f"Failed to merge prompt files: {e}")
-        return {"error": str(e)}

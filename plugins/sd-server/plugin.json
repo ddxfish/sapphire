@@ -1,0 +1,157 @@
+{
+  "name": "sd-server",
+  "short_display_name": "SD Server",
+  "version": "1.2.0",
+  "description": "Local image generation via stable-diffusion.cpp (sd-server). Generic — runs Z-Image Turbo by default, swap models per the README. Generate, grid, recreate-by-seed, and a wildcard slideshow.",
+  "author": "sapphire",
+  "icon": "🖼️",
+  "priority": 50,
+  "default_enabled": false,
+  "settingsUI": "plugin",
+  "capabilities": {
+    "app": {
+      "label": "Image Studio",
+      "icon": "🖼️",
+      "description": "Generate images directly — tune prompts, CFG, seed and steps in real time; run a wildcard slideshow",
+      "nav": false
+    },
+    "sidebar_accordion": {
+      "title": "Reel",
+      "icon": "🎞️",
+      "content": "sidebar.html",
+      "script": "sidebar.js"
+    },
+    "tools": [
+      "tools/zimage_tools.py"
+    ],
+    "routes": [
+      {
+        "method": "POST",
+        "path": "test",
+        "handler": "routes/api.py:test_connection"
+      },
+      {
+        "method": "POST",
+        "path": "generate",
+        "handler": "routes/api.py:generate"
+      },
+      {
+        "method": "POST",
+        "path": "slideshow/preview",
+        "handler": "routes/api.py:slideshow_preview"
+      },
+      {
+        "method": "POST",
+        "path": "slideshow/next",
+        "handler": "routes/api.py:slideshow_next"
+      }
+    ],
+    "settings": [
+      {
+        "key": "api_url",
+        "type": "string",
+        "label": "sd-server URL",
+        "default": "http://127.0.0.1:7861",
+        "help": "Base URL of the sd-server (stable-diffusion.cpp) running Z-Image Turbo. Use the server's LAN IP if Sapphire runs elsewhere."
+      },
+      {
+        "key": "max_count",
+        "type": "number",
+        "label": "Max images per call",
+        "default": 6,
+        "help": "Upper limit on how many images one tool call can generate (protects VRAM/time)."
+      },
+      {
+        "key": "default_steps",
+        "type": "number",
+        "label": "Default steps",
+        "default": 8,
+        "help": "Sampling steps. Match your model: Z-Image Turbo ~8, SDXL/Pony ~25-30."
+      },
+      {
+        "key": "default_cfg",
+        "type": "number",
+        "label": "Default CFG scale",
+        "default": 1.0,
+        "help": "Match your model: Z-Image Turbo ~1.0, SDXL/Pony ~5-7."
+      },
+      {
+        "key": "default_sampler",
+        "type": "string",
+        "label": "Sampler",
+        "default": "",
+        "help": "Sampler name. Blank = let sd-server pick (fine for Z-Image Turbo). SDXL/Pony: 'dpm++ 2m'. Others: 'euler a', 'euler', 'heun', 'dpm2', 'lcm', 'ddim'. Live list at /sdapi/v1/samplers."
+      },
+      {
+        "key": "default_scheduler",
+        "type": "string",
+        "label": "Scheduler",
+        "default": "",
+        "help": "Noise schedule. Blank = server default. SDXL/Pony: 'karras'. Live list at /sdapi/v1/schedulers."
+      },
+      {
+        "key": "default_negative",
+        "type": "string",
+        "label": "Default negative prompt",
+        "default": "",
+        "help": "Applied when the model doesn't override it. Z-Image needs little-to-none."
+      },
+      {
+        "key": "default_width",
+        "type": "number",
+        "label": "Image width (px)",
+        "default": 1024,
+        "help": "Output width in pixels. Z-Image Turbo is tuned for 1024."
+      },
+      {
+        "key": "default_height",
+        "type": "number",
+        "label": "Image height (px)",
+        "default": 1024,
+        "help": "Output height in pixels. Z-Image Turbo is tuned for 1024."
+      },
+      {
+        "key": "static_keywords",
+        "type": "string",
+        "label": "Static keywords",
+        "default": "",
+        "help": "Always appended to the prompt (e.g. 'cinematic, wide shot')."
+      },
+      {
+        "key": "ai_name",
+        "type": "string",
+        "label": "AI name",
+        "default": "",
+        "help": "The name the AI writes to mean itself (e.g. 'Sapphire'). Case-insensitive. Wherever it appears in a prompt it's auto-replaced with the AI appearance below — so the AI just writes the name, never the description."
+      },
+      {
+        "key": "ai_description",
+        "type": "string",
+        "label": "AI appearance",
+        "default": "",
+        "help": "Physical description filled in wherever the AI name appears (e.g. 'a short American woman with brown hair')."
+      },
+      {
+        "key": "user_name",
+        "type": "string",
+        "label": "User name",
+        "default": "",
+        "help": "The name the AI writes to mean the user (e.g. 'Fishy'). Case-insensitive. Auto-replaced with the user appearance below."
+      },
+      {
+        "key": "user_description",
+        "type": "string",
+        "label": "User appearance",
+        "default": "",
+        "help": "Physical description filled in wherever the user name appears."
+      },
+      {
+        "key": "timeout",
+        "type": "number",
+        "label": "Per-image timeout (seconds)",
+        "default": 180,
+        "help": "Max wait for a single image from sd-server."
+      }
+    ]
+  }
+}

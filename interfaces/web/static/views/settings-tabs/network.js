@@ -1,4 +1,4 @@
-// settings-tabs/network.js - SOCKS proxy and privacy whitelist
+// settings-tabs/network.js - SOCKS proxy settings
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import * as ui from '../../ui.js';
 
@@ -6,14 +6,10 @@ export default {
     id: 'network',
     name: 'Network',
     icon: '\uD83C\uDF10',
-    description: 'SOCKS proxy and privacy network settings',
-    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'],
+    description: 'SOCKS proxy and update-check settings',
+    keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'SOCKS_ROUTE_LLM', 'SOCKS_REMOTE_DNS', 'SOCKS_NO_PROXY_EXTRA', 'UPDATE_CHECK_ENABLED'],
 
     render(ctx) {
-        // Read via ctx.getValue so any unsaved changes (pendingChanges) survive
-        // tab switches. Reading settings directly would lose unsaved adds/removes
-        // when the user navigates away and back. See settings.js getValue().
-        const whitelist = ctx.getValue('PRIVACY_NETWORK_WHITELIST') || [];
         return `
             ${ctx.renderFields(this.keys)}
 
@@ -41,47 +37,15 @@ export default {
             </div>
 
             <div class="net-section">
-                <h4>Privacy Whitelist</h4>
-                <p class="text-muted" style="font-size:var(--font-sm);margin:0 0 8px">Allow these addresses when Privacy Mode is on. Supports IPs, hostnames, CIDR.</p>
-                <div id="wl-entries">${this.renderEntries(whitelist)}</div>
-                <div style="display:flex;gap:8px;margin-top:8px">
-                    <input type="text" id="wl-input" placeholder="IP, hostname, or CIDR"
-                           style="flex:1;padding:6px 8px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm)">
-                    <button class="btn-sm" id="wl-add">+ Add</button>
-                </div>
+                <h4>What rides the proxy</h4>
+                <div id="socks-strip" style="font-size:var(--font-sm);line-height:1.7">Loading\u2026</div>
             </div>
         `;
     },
 
-    renderEntries(list) {
-        if (!list?.length) return '<div class="text-muted" style="font-size:var(--font-sm)">No entries</div>';
-        return list.map(e => `
-            <div class="wl-entry">
-                <span>${esc(e)}</span>
-                <button class="btn-icon danger wl-remove" data-entry="${esc(e)}">&times;</button>
-            </div>
-        `).join('');
-    },
-
-    validate(entry) {
-        if (!entry?.trim()) return 'Entry cannot be empty';
-        entry = entry.trim();
-        if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/.test(entry)) return null;
-        if (/^(\d{1,3}\.){3}\d{1,3}$/.test(entry)) {
-            return entry.split('.').map(Number).every(o => o >= 0 && o <= 255) ? null : 'Invalid IP (octets 0-255)';
-        }
-        if (/^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/.test(entry)) {
-            const [ip, prefix] = entry.split('/');
-            if (!ip.split('.').map(Number).every(o => o >= 0 && o <= 255)) return 'Invalid CIDR IP';
-            if (parseInt(prefix) < 0 || parseInt(prefix) > 32) return 'Invalid prefix (0-32)';
-            return null;
-        }
-        if (/^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/.test(entry)) return null;
-        return 'Invalid format. Use IP, hostname, or CIDR';
-    },
-
     async attachListeners(ctx, el) {
         this.refreshCreds(el);
+        this.renderStrip(el);
 
         el.querySelector('#socks-save')?.addEventListener('click', async () => {
             const user = el.querySelector('#socks-user').value;
@@ -122,40 +86,56 @@ export default {
                 this.refreshCreds(el);
             } catch { ui.showToast('Failed', 'error'); }
         });
-
-        // Whitelist — read current state via ctx.getValue (pendingChanges-aware),
-        // queue updates via ctx.markChanged. Do NOT mutate ctx.settings directly.
-        const addEntry = () => {
-            const input = el.querySelector('#wl-input');
-            const entry = input.value.trim();
-            const err = this.validate(entry);
-            if (err) { ui.showToast(err, 'error'); return; }
-            const wl = ctx.getValue('PRIVACY_NETWORK_WHITELIST') || [];
-            if (wl.includes(entry)) { ui.showToast('Already exists', 'warning'); input.value = ''; return; }
-            const newWl = [...wl, entry];
-            ctx.markChanged('PRIVACY_NETWORK_WHITELIST', newWl);
-            el.querySelector('#wl-entries').innerHTML = this.renderEntries(newWl);
-            this.bindRemove(ctx, el);
-            input.value = '';
-        };
-
-        el.querySelector('#wl-add')?.addEventListener('click', addEntry);
-        el.querySelector('#wl-input')?.addEventListener('keydown', e => {
-            if (e.key === 'Enter') { e.preventDefault(); addEntry(); }
-        });
-        this.bindRemove(ctx, el);
     },
 
-    bindRemove(ctx, el) {
-        el.querySelectorAll('.wl-remove').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const entry = btn.dataset.entry;
-                const wl = (ctx.getValue('PRIVACY_NETWORK_WHITELIST') || []).filter(e => e !== entry);
-                ctx.markChanged('PRIVACY_NETWORK_WHITELIST', wl);
-                el.querySelector('#wl-entries').innerHTML = this.renderEntries(wl);
-                this.bindRemove(ctx, el);
-            });
-        });
+    // Trust strip — the honest lane list. Fail-closed plumbing means the
+    // silent risk is inverted: lanes the env CAN'T reach going direct while
+    // the user believes "everything routed". This strip is that truth.
+    async renderStrip(el) {
+        const strip = el.querySelector('#socks-strip');
+        if (!strip) return;
+        try {
+            const st = await fetchWithTimeout('/api/socks/status');
+            if (!st.enabled) {
+                const warn = '<span style="color:var(--warning,#f59e0b)">\u25cf</span> ';
+                if (st.system_proxy) {
+                    strip.innerHTML = warn + 'SOCKS is off, but a <b>system proxy</b> is set (' +
+                        st.system_proxy.replace(/</g, '&lt;') + ') \u2014 requests AND httpx fall through ' +
+                        'to it, so traffic is <b>not direct</b>. On Windows this is the IE/WinINET ' +
+                        'registry proxy (leftover VPN/Fiddler/corp). Clear it in your OS network ' +
+                        'settings, or turn SOCKS on to override.';
+                    return;
+                }
+                strip.innerHTML = '<span style="color:var(--text-muted)">Proxy off \u2014 all traffic goes direct.</span>';
+                return;
+            }
+            const ok = '<span style="color:var(--success,#22c55e)">\u25CF</span> ';
+            const warn = '<span style="color:var(--warning,#f59e0b)">\u25CF</span> ';
+            const off = '<span style="color:var(--text-muted)">\u25CB</span> ';
+            const rows = [];
+            rows.push(ok + (st.remote_dns
+                ? 'Web tools, search &amp; downloads \u2014 routed (DNS resolves via proxy)'
+                : 'Web tools, search &amp; downloads \u2014 routed (DNS resolves LOCALLY \u2014 hostnames visible to this box\u2019s resolver)'));
+            rows.push(st.route_llm
+                ? (st.remote_dns
+                    ? ok + 'LLM providers \u2014 routed (\u2601\uFE0F cloud; \uD83C\uDFE0 local stays direct)'
+                    : warn + 'LLM providers \u2014 routed, but the LLM lane always asks the proxy to resolve names; on a proxy without remote DNS these WILL fail \u2014 turn off Route LLM traffic')
+                : off + 'LLM providers \u2014 exempted (Route LLM traffic is off)');
+            rows.push(ok + 'Model &amp; plugin-key downloads \u2014 routed');
+            rows.push(off + 'Discord &amp; Telegram \u2014 direct (own connection libraries)');
+            rows.push(off + 'Voice calls \u2014 direct (UDP media; SOCKS cannot carry it)');
+            rows.push(off + 'Email \u2014 direct (IMAP/SMTP sockets)');
+            if (st.no_proxy?.length)
+                rows.push(off + 'Bypassed hosts: ' + st.no_proxy.join(', '));
+            if (!st.httpx_socks)
+                rows.push(warn + "httpx[socks] not installed \u2014 LLM/cloud requests will FAIL: pip install 'httpx[socks]'");
+            for (const w of (st.warnings || []))
+                rows.push(warn + w);
+            rows.push('<span style="color:var(--text-muted)">Nothing falls back to direct \u2014 a dead proxy fails loudly.</span>');
+            strip.innerHTML = rows.join('<br>');
+        } catch {
+            strip.textContent = 'Status unavailable';
+        }
     },
 
     async refreshCreds(el) {
@@ -171,9 +151,3 @@ export default {
         }
     }
 };
-
-function esc(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-}

@@ -1,11 +1,12 @@
 import numpy as np
-import sounddevice as sd
+from core.audio.backend import sd
 import threading
 import os
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import config
+from core.audio import convert_to_mono, resample_audio
 from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,9 @@ class WakeWordDetector:
         self.system = None
         self.running = False
         self.listen_thread = None
+        # Serializes start/stop_listening — the band had zero locks and an
+        # unlocked start-after-timed-out-stop spawned a second reader.
+        self._lifecycle_lock = threading.Lock()
         
         # Output device setup for tone playback
         self.output_device = None
@@ -247,6 +251,19 @@ class WakeWordDetector:
             publish(Events.STT_ERROR, {"message": f"Wakeword heard — {reason}"})
             return
 
+        # Voice privacy gate (vault v1.1): the wake path transcribes into the
+        # ACTIVE chat — gated BEFORE recording (don't capture what we refuse
+        # to transcribe).
+        try:
+            from core.voice_privacy import stt_gate_reason
+            gate = stt_gate_reason(self.system.llm_chat.session_manager.get_chat_settings())
+        except Exception:
+            gate = ''
+        if gate:
+            logger.warning(f"[WAKE] {gate} — utterance not recorded")
+            publish(Events.STT_ERROR, {"message": f"Wakeword heard — {gate}"})
+            return
+
         start_time = threading.local()
         start_time.value = time.time()
         logger.info("Wake word detected! Starting to listen...")
@@ -303,7 +320,9 @@ class WakeWordDetector:
                 text = stt_event.input
 
             logger.info(f"Transcribed: user text hidden")
-            self.system.process_llm_query(text)
+            # voice_turn: stream the reply into any open web page live
+            # (VOICE_TURN events) + make the Stop button work on this turn.
+            self.system.process_llm_query(text, voice_turn=True)
 
         except Exception as e:
             logger.error(f"Error during recording: {e}")
@@ -320,8 +339,12 @@ class WakeWordDetector:
             except Exception:
                 pass
 
-            # Restart wakeword audio stream after TTS is done (only if still enabled)
-            if self.audio_recorder and self.running:
+            # Restart wakeword audio stream after TTS is done (only if still
+            # enabled AND this thread is still THE listen thread — a
+            # superseded thread re-opening the mic is how two readers end up
+            # on one stream, hunt 2026-08-17 K1)
+            if (self.audio_recorder and self.running
+                    and threading.current_thread() is self.listen_thread):
                 logger.debug("Restarting wakeword audio stream after STT/TTS")
                 self.audio_recorder.start_recording()
 
@@ -329,12 +352,25 @@ class WakeWordDetector:
         """Main listening loop - polls OWW for predictions."""
         # OWW works best with 80ms frames (1280 samples at 16kHz)
         frame_samples = 1280
+        target_rate = 16000
         consecutive_errors = 0
         max_consecutive = 10  # After 10 rapid errors, back off hard
+        # 16kHz-mono accumulator between device reads and OWW. The device may
+        # capture at any rate/channel count; OWW only ever sees exact
+        # 1280-sample 16k mono frames drained from here. (F4 2026-08-17: the
+        # old loop read 1280 RAW device frames — at 48k that's 26.7ms of audio
+        # fed as "80ms" = 3x time-stretch, −1.58 octave, detector deaf; and
+        # .flatten() on stereo interleaved L/R samples — deaf even at native
+        # 16k. The resample path existed but had zero callers.)
+        buf16 = np.zeros(0, dtype=np.int16)
 
         logger.info(f"Listen loop started: frame_samples={frame_samples}, threshold={self.threshold}")
 
-        while self.running:
+        # Identity check beside the flag: after a toggle OFF (join timed out
+        # mid-turn) → ON, `running` is True again — the flag alone would let
+        # a SUPERSEDED thread fall back into the loop beside its replacement:
+        # two stream.read()ers + two OWW predict()ers on shared state.
+        while self.running and threading.current_thread() is self.listen_thread:
             try:
                 # Pause processing when disabled at runtime (save CPU)
                 if not config.WAKE_WORD_ENABLED:
@@ -343,36 +379,56 @@ class WakeWordDetector:
 
                 stream = self.audio_recorder.get_stream()
                 if stream is None:
+                    # Stream teardown (STT handoff) — any partial frame is
+                    # stale audio from before the handoff.
+                    buf16 = np.zeros(0, dtype=np.int16)
                     time.sleep(0.1)
                     continue
 
-                # Read audio frame (sounddevice returns numpy array directly)
-                audio_data, overflowed = stream.read(frame_samples)
+                # Read ~80ms of DEVICE frames (recomputed every pass — the
+                # error-recovery path can re-resolve to a different rate).
+                actual_rate = int(getattr(self.audio_recorder, 'actual_rate', None)
+                                  or target_rate)
+                read_frames = int(round(frame_samples * actual_rate / target_rate)) \
+                    or frame_samples
+                audio_data, overflowed = stream.read(read_frames)
                 if overflowed:
                     logger.debug("Audio buffer overflow in wake detection")
-                audio_array = audio_data.flatten().astype(np.int16)
+                chunk = convert_to_mono(np.asarray(audio_data))  # downmix, never interleave
+                if actual_rate != target_rate:
+                    chunk = resample_audio(chunk, actual_rate, target_rate)
+                buf16 = np.concatenate((buf16, chunk))
 
-                # Get prediction from OWW
-                predictions = self.model.predict(audio_array)
+                # Drain exact 1280-sample frames; score INSIDE the drain so a
+                # detection can't hide in a multi-frame backlog.
+                while len(buf16) >= frame_samples:
+                    frame = buf16[:frame_samples]
+                    buf16 = buf16[frame_samples:]
 
-                # Check if wake word detected. OWW keys predictions by file
-                # stem when loaded by path (e.g. 'hey_mycroft_v0.1' for the
-                # bundled v0.1.onnx files) and by bare name when loaded as a
-                # builtin. Try exact match first, then prefix match against
-                # versioned stems, finally fall back to whatever the only
-                # loaded model returned. Single-model detector — safe to
-                # inspect all keys.
-                score = predictions.get(self.model_name, 0)
-                if score < self.threshold and predictions:
-                    for k, v in predictions.items():
-                        if k.startswith(self.model_name):
-                            score = v
-                            break
-                if score >= self.threshold:
-                    logger.info(f"Wake word '{self.model_name}' detected with score {score:.3f}")
-                    self._on_activation()
-                    # Note: _on_activation resets state, minimal cooldown needed
-                    time.sleep(0.5)
+                    predictions = self.model.predict(frame)
+
+                    # Check if wake word detected. OWW keys predictions by file
+                    # stem when loaded by path (e.g. 'hey_mycroft_v0.1' for the
+                    # bundled v0.1.onnx files) and by bare name when loaded as a
+                    # builtin. Try exact match first, then prefix match against
+                    # versioned stems, finally fall back to whatever the only
+                    # loaded model returned. Single-model detector — safe to
+                    # inspect all keys.
+                    score = predictions.get(self.model_name, 0)
+                    if score < self.threshold and predictions:
+                        for k, v in predictions.items():
+                            if k.startswith(self.model_name):
+                                score = v
+                                break
+                    if score >= self.threshold:
+                        logger.info(f"Wake word '{self.model_name}' detected with score {score:.3f}")
+                        # Pre-activation audio is stale by the time the voice
+                        # turn ends — start the next listen fresh.
+                        buf16 = np.zeros(0, dtype=np.int16)
+                        self._on_activation()
+                        # Note: _on_activation resets state, minimal cooldown needed
+                        time.sleep(0.5)
+                        break
 
                 consecutive_errors = 0  # Reset on successful read
 
@@ -392,6 +448,11 @@ class WakeWordDetector:
                     try:
                         self.audio_recorder.stop_recording()
                         time.sleep(1)
+                        # Teardown may have landed during the backoff — a
+                        # re-open here would leave an unowned InputStream
+                        # holding the mic with no thread to close it (K3).
+                        if not self.running or threading.current_thread() is not self.listen_thread:
+                            break
                         self.audio_recorder.start_recording()
                         # Verify recovery actually succeeded — start_recording
                         # swallows exceptions and leaves stream=None on failure.
@@ -422,8 +483,23 @@ class WakeWordDetector:
                         break
 
     def start_listening(self):
+        with self._lifecycle_lock:
+            return self._start_listening_locked()
+
+    def _start_listening_locked(self):
         if self.running:
             logger.warning("Wake detector already listening — skipping duplicate start")
+            return
+
+        # Previous listen thread still mid-turn (stop_listening's 2s join
+        # can't outlast a 10-90s voice turn): spawning a second thread here
+        # put TWO readers on one InputStream and one OWW model (hunt
+        # 2026-08-17 K1 — garbage scores, then double turns). Re-arm the
+        # flag instead; the surviving thread resumes when its turn ends.
+        if self.listen_thread and self.listen_thread.is_alive():
+            self.running = True
+            logger.info("Wake listener re-armed — previous listen thread is "
+                        "finishing a voice turn and will resume")
             return
 
         if not self.audio_recorder:
@@ -455,12 +531,17 @@ class WakeWordDetector:
         logger.info("Wake word detection started successfully")
 
     def stop_listening(self):
+        with self._lifecycle_lock:
+            self._stop_listening_locked()
+
+    def _stop_listening_locked(self):
         self.running = False
         if self.listen_thread:
             self.listen_thread.join(timeout=2.0)
-            logger.info("Listen thread stopped")
-        try:
-            sd.stop()  # Stop any playing audio
-        except Exception:
-            pass
+            if self.listen_thread.is_alive():
+                logger.warning("Listen thread still mid-turn after 2s join — "
+                               "flag cleared; it will exit (or re-arm) when "
+                               "the turn finishes")
+            else:
+                logger.info("Listen thread stopped")
         self.callback_pool.shutdown()

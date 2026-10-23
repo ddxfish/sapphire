@@ -98,6 +98,24 @@ class TokenMetrics:
         except Exception as e:
             logger.error(f"[METRICS] Failed to record: {e}")
 
+    def scrub_chat(self, chat_name: str) -> int:
+        """Re-key an existing chat's rows to '__private__' (vaulted chats
+        full-scrub ruling F5: flipping a chat private also cleans the name
+        deposits it left while public). Returns rows updated."""
+        try:
+            with self._lock:
+                conn = sqlite3.connect(str(DB_PATH))
+                cur = conn.execute(
+                    "UPDATE token_usage SET chat_name = '__private__' "
+                    "WHERE chat_name = ?", (chat_name,))
+                updated = cur.rowcount
+                conn.commit()
+                conn.close()
+            return updated
+        except Exception as e:
+            logger.error(f"[METRICS] scrub_chat failed: {e}")
+            return 0
+
     def summary(self, days: int = 30) -> Dict:
         """Aggregate usage summary for the last N days."""
         cutoff = datetime.now().replace(hour=0, minute=0, second=0)

@@ -33,11 +33,18 @@ export function bindAllEvents() {
     el.sendBtn.addEventListener('click', handleSend);
     el.stopBtn.addEventListener('click', handleStop);
 
-    // Volume controls
+    // Audio flyout (volume + conversation) hangs off the mic caret
     el.volumeSlider.addEventListener('input', handleVolumeChange);
     el.muteBtn.addEventListener('click', () => {
-        const compact = document.getElementById('volume-compact');
-        if (compact) compact.classList.toggle('open');
+        const m = !audio.isMuted();
+        audio.setMuted(m);
+        el.muteBtn.textContent = m ? '\u{1F507}' : '\u{1F50A}';
+        el.muteBtn.classList.toggle('muted', m);
+        localStorage.setItem('sapphire-muted', String(m));
+    });
+    document.getElementById('mic-menu-btn')?.addEventListener('click', e => {
+        e.stopPropagation();
+        document.getElementById('mic-split')?.classList.toggle('open');
     });
 
     // Mic button - dual purpose (TTS stop or record)
@@ -76,8 +83,8 @@ export function bindAllEvents() {
     // Close dropdowns on outside click
     document.addEventListener('click', e => {
         if (!e.target.closest('.kebab-menu')) closeAllKebabs();
-        if (!e.target.closest('.volume-compact')) {
-            document.getElementById('volume-compact')?.classList.remove('open');
+        if (!e.target.closest('.mic-split')) {
+            document.getElementById('mic-split')?.classList.remove('open');
         }
     });
 
@@ -102,15 +109,28 @@ export function bindAllEvents() {
     // Document-level events
     document.addEventListener('visibilitychange', () => handleVisibilityChange(triggerSendWithText));
 
-    // Image ready handler (for inline cloning)
-    document.addEventListener('imageReady', handleImageReady);
 }
 
+// Image ready handler (for inline cloning) — bound at MODULE LOAD, not in
+// bindAllEvents: init renders history BEFORE bindAllEvents runs, with awaits
+// between, so a browser-CACHED image could load and dispatch into a document
+// with no listener — the inline clone silently lost on every refresh of a
+// chat whose image was cached (Krem live-hit 2026-08-15). Module scope runs
+// at first import, before any render exists to race.
+document.addEventListener('imageReady', handleImageReady);
+
+// PATH 2 of 2 for tool images: clones each accordion tool-result image (rendered
+// in ui-parsing.js, the loop tagged "PATH 1 of 2") out into the reply body, right
+// after the accordion. This is what surfaces tool images into the visible reply.
+// Every createImageElement image that loads inside a .message hits this.
 function handleImageReady(event) {
     const loadedImg = event.target;
 
     const message = loadedImg.closest('.message');
     if (!message) return;
+    // A result that carried a gallery row already shows its pictures (numbered,
+    // in the bubble); its contact sheet stays inside the accordion only.
+    if (loadedImg.closest('details')?.dataset.gallery) return;
 
     const content = message.querySelector('.message-content');
     if (!content) return;
@@ -127,8 +147,10 @@ function handleImageReady(event) {
         content.insertBefore(inlineImg, content.firstChild);
     }
 
-    // Force scroll
-    import('../ui.js').then(ui => ui.forceScrollToBottom());
+    // Follow the bottom only while the reader is stuck to it. A FORCED snap
+    // here (per image, re-arming sticky) undid the transcript's scroll carry
+    // on every background re-render of an image chat (D3-B1, 2026-09-08).
+    import('../ui.js').then(ui => ui.followIfSticky());
 }
 
 export function bindCleanupEvents(cleanupFn) {

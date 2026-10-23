@@ -15,13 +15,88 @@ This is the default provider and your 99% use case.
 import hashlib
 import json
 import logging
+import threading
 from typing import Dict, Any, List, Optional, Generator
 
 from openai import OpenAI
 
-from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, server_answered, http_status, AUTH_DEAD_STATUSES
 
 logger = logging.getLogger(__name__)
+
+# ── Shared HTTP transport pool ───────────────────────────────────────────────
+# Provider objects are rebuilt every turn (cheap), but the TRANSPORT persists
+# here so the TCP+TLS connection to each endpoint stays warm across turns.
+# Without this, every voice/phone turn paid a fresh DNS+TCP+TLS handshake:
+# each new OpenAI() got its own httpx pool, and httpx's default
+# keepalive_expiry (5s) is shorter than any conversational gap anyway.
+# API keys ride per-request headers, so providers sharing an endpoint can
+# safely share a pool; per-request timeouts still come from each provider's
+# own OpenAI(timeout=...) (explicit timeout wins over the client's). 2026-07-15.
+_HTTP_POOL = {}
+_HTTP_POOL_LOCK = threading.Lock()
+_KEEPALIVE_SECONDS = 120.0
+
+
+def _shared_http_client(base_url):
+    import httpx
+    key = (base_url or "").rstrip("/")
+    with _HTTP_POOL_LOCK:
+        cli = _HTTP_POOL.get(key)
+        if cli is None or cli.is_closed:
+            cli = httpx.Client(
+                limits=httpx.Limits(max_connections=100,
+                                    max_keepalive_connections=20,
+                                    keepalive_expiry=_KEEPALIVE_SECONDS),
+                timeout=httpx.Timeout(600.0, connect=10.0),
+            )
+            _HTTP_POOL[key] = cli
+        return cli
+
+
+def _drop_http_pool():
+    """Proxy config changed — drop pooled clients so the next construction
+    picks up the new env mounts (httpx reads proxy env at CLIENT build).
+    References only: in-flight requests finish on their old client, GC
+    reaps. (SOCKS-for-all, 2026-08-31)"""
+    with _HTTP_POOL_LOCK:
+        _HTTP_POOL.clear()
+
+
+try:
+    from core.socks_proxy import register_invalidator as _reg_inv
+    _reg_inv(_drop_http_pool)
+except Exception:
+    pass
+
+
+# Params a strict endpoint may refuse; each is optional to the request. A
+# 400 naming one is learned ONCE per provider instance (Krem's F1a,
+# 2026-08-23): stripped, the request retried, never sent again until
+# restart — one warning + toast names it and where to clear it.
+# stream_options rides the same law (it used to re-pay the double request
+# on EVERY streaming call to an endpoint that refused it).
+OPTIONAL_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty',
+                   'top_k', 'stream_options')
+# Not in the OpenAI SDK's signature — passing them as kwargs is a TypeError,
+# so they ride extra_body (LM Studio / llama.cpp honor them there).
+EXTRA_BODY_PARAMS = ('repeat_penalty', 'top_k')
+PENALTY_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty', 'top_k')
+
+
+# endpoint|model → optional params that endpoint refused (learn-once, lives
+# until restart — the toast says so). See OpenAICompatProvider.__init__.
+_REJECTED_PARAMS: Dict[str, set] = {}
+
+
+def _notify(message: str, severity: str = 'warning') -> None:
+    """Surface a provider notice as a UI toast (best effort, never raises)."""
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.PLUGIN_NOTICE, {'plugin': 'llm', 'message': message,
+                                       'severity': severity})
+    except Exception:
+        pass
 
 
 class OpenAICompatProvider(BaseProvider):
@@ -39,7 +114,8 @@ class OpenAICompatProvider(BaseProvider):
         self._client = OpenAI(
             base_url=self.base_url,
             api_key=self.api_key,
-            timeout=self.request_timeout
+            timeout=self.request_timeout,
+            http_client=_shared_http_client(self.base_url),
         )
 
         # Fireworks prompt caching: stable session ID for replica affinity
@@ -48,6 +124,12 @@ class OpenAICompatProvider(BaseProvider):
             self._fireworks_session_id = f"sapphire-{key_hash}"
         else:
             self._fireworks_session_id = None
+
+        # Optional params this endpoint has refused (learn-once, see OPTIONAL_PARAMS).
+        # Process-lifetime memory keyed by endpoint+model: the provider object is
+        # rebuilt from config EVERY turn, so a per-instance set forgot the lesson
+        # immediately — every turn paid 400 → retry → toast (scout F1, 2026-09-20).
+        self._rejected_params: set = _REJECTED_PARAMS.setdefault(f"{self.base_url}|{self.model}", set())
 
         logger.info(f"OpenAI-compat provider initialized: {self.base_url}")
     
@@ -62,67 +144,69 @@ class OpenAICompatProvider(BaseProvider):
     
     def _supports_multimodal(self) -> bool:
         """
-        Check if this specific provider instance supports multimodal (image) inputs.
-        
-        Conservative approach: only enable for known vision-capable endpoints.
-        Local models (LM Studio, llama.cpp) typically don't support multimodal
-        unless running specific VLM models.
+        Whether this provider instance supports multimodal (image) inputs.
+
+        Priority:
+        1. Explicit per-provider override `supports_images` in the config (wins).
+        2. OpenAI official API → always.
+        3. Self-hosted endpoints (localhost OR private LAN IPs OR .local) and
+           known model marketplaces → detect by VLM model-name token.
+        4. Unknown public endpoint → conservative (off).
         """
+        import re as _re
         base_url = (self.base_url or '').lower()
         model = (self.model or '').lower()
-        
-        # OpenAI official API - supports vision with gpt-4-vision, gpt-4o, etc.
+
+        # 1. Explicit override — lets any vision-capable endpoint be declared
+        #    regardless of host/name heuristics. Set supports_images on the provider.
+        override = self.config.get('supports_images')
+        logger.debug(f"[VISION-DEBUG] supports_images: base_url={base_url!r} model={model!r} config_flag={override!r}")
+        if override is not None:
+            logger.debug(f"[VISION-DEBUG]   -> config override decides: {bool(override)}")
+            return bool(override)
+
+        vision_indicators = ['llava', 'vision', 'vl', 'pixtral', 'bakllava', 'cogvlm',
+                             'minicpm-v', 'internvl', 'gemma-3', 'qwen2-vl', 'qwen2.5-vl',
+                             'qwen3-vl', 'gpt-4o', 'gpt-4-vision']
+
+        # 2. OpenAI official
         if 'api.openai.com' in base_url:
-            logger.debug(f"[MULTIMODAL] OpenAI API detected, enabling multimodal")
             return True
-        
-        # Fireworks - supports vision with specific VLM models
-        if 'fireworks.ai' in base_url:
-            # Check for known vision models
-            vision_indicators = ['llava', 'vision', 'vl', 'pixtral', 'qwen2-vl']
+
+        # 3. Self-hosted (user-run servers) + known marketplaces → detect by model name.
+        #    Private-LAN IPs are self-hosted too — a Qwen-VL on the box at 192.168.x.x
+        #    is just as vision-capable as one on localhost.
+        is_self_hosted = (
+            any(h in base_url for h in
+                ['localhost', '127.0.0.1', '0.0.0.0', '.local', 'host.docker.internal'])
+            or bool(_re.search(r'//(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)', base_url))
+        )
+        if is_self_hosted or 'fireworks.ai' in base_url or 'openrouter.ai' in base_url:
             supported = any(ind in model for ind in vision_indicators)
-            logger.debug(f"[MULTIMODAL] Fireworks: model={model}, multimodal={supported}")
+            logger.debug(f"[VISION-DEBUG]   -> heuristic (self_hosted={is_self_hosted}) name-match = {supported}")
             return supported
-        
-        # OpenRouter - check model name for vision capability
-        if 'openrouter.ai' in base_url:
-            vision_indicators = ['vision', 'vl', 'llava', 'pixtral', 'gpt-4o']
-            supported = any(ind in model for ind in vision_indicators)
-            logger.debug(f"[MULTIMODAL] OpenRouter: model={model}, multimodal={supported}")
-            return supported
-        
-        # Local endpoints (LM Studio, llama.cpp, etc.) - check model name
-        if any(local in base_url for local in ['localhost', '127.0.0.1', '0.0.0.0']):
-            # Only enable if model name suggests vision capability
-            vision_indicators = ['llava', 'vision', 'vl', 'bakllava', 'cogvlm', 'minicpm-v']
-            supported = any(ind in model for ind in vision_indicators)
-            logger.debug(f"[MULTIMODAL] Local endpoint: model={model}, multimodal={supported}")
-            return supported
-        
-        # Unknown endpoint - be conservative, disable multimodal
-        logger.debug(f"[MULTIMODAL] Unknown endpoint {base_url}, disabling multimodal")
+
+        # 4. Unknown public endpoint — conservative.
+        logger.debug(f"[VISION-DEBUG]   -> unknown endpoint, defaulting OFF")
         return False
     
     def _is_deepseek_official(self) -> bool:
         """
-        Check if this is DeepSeek's official reasoner endpoint.
+        Check if this is DeepSeek's official endpoint (api.deepseek.com).
 
-        DeepSeek's official API for `deepseek-reasoner` requires that
-        `reasoning_content` be round-tripped on every assistant message that
-        contains `tool_calls`. Without it, request 2+ in a tool cycle returns
-        400 "Missing reasoning_content field in the assistant message at
-        message index N". Other DeepSeek deployments (Fireworks, OpenRouter,
-        Featherless) don't enforce this — they accept the standard OpenAI
-        message shape. The strip-on-non-tool-turn rule still applies: we
-        ONLY add reasoning_content for assistant messages that have tool_calls.
-
-        Gating on the model name (`reasoner`) keeps `deepseek-chat` requests
-        clean — that model has no reasoning content and the field would be
-        ignored or rejected.
+        V4 contract (api-docs.deepseek.com/guides/thinking_mode, verified
+        2026-09-20): every model there (deepseek-v4-pro, deepseek-flash) thinks
+        by default, switched via extra_body {"thinking": {"type": ...}}, and
+        "for requests carrying the tools parameter, the reasoning_content must
+        be fully passed back in all subsequent requests — even for turns where
+        the model did not perform a tool call", else 400. The old name gate
+        (`reasoner` in model) matched a model that was discontinued 2026-07-24
+        and would have silently disarmed the round-trip for every V4 name.
+        Other DeepSeek hosts (Fireworks, OpenRouter, Featherless) accept the
+        plain OpenAI shape and ignore the field.
         """
         base_url = (self.base_url or '').lower()
-        model = (self.model or '').lower()
-        return 'api.deepseek.com' in base_url and 'reasoner' in model
+        return 'api.deepseek.com' in base_url
 
     def _is_fireworks_reasoning_model(self) -> bool:
         """
@@ -152,40 +236,60 @@ class OpenAICompatProvider(BaseProvider):
         """Access the underlying OpenAI client if needed."""
         return self._client
     
+    def _try_v1_autocorrect(self) -> bool:
+        """A missing /v1 suffix is the classic llama.cpp / Ollama misconfig
+        (`http://box:11434` instead of `…:11434/v1`). Probe the corrected URL
+        once; on success adopt it for this instance."""
+        base = self.base_url.rstrip('/')
+        if base.endswith('/v1'):
+            return False
+        corrected = base + '/v1'
+        try:
+            test_client = OpenAI(
+                base_url=corrected,
+                api_key=self.api_key,
+                timeout=self.request_timeout,
+                http_client=_shared_http_client(corrected),
+            )
+            test_client.models.list(timeout=self.health_check_timeout)
+        except Exception:
+            return False
+        logger.info(f"Auto-corrected base_url: {self.base_url} -> {corrected}")
+        self.base_url = corrected
+        self._client = test_client
+        return True
+
     def health_check(self) -> bool:
-        """Check endpoint health via models.list(), with HTTP fallback."""
+        """Reachability probe via models.list().
+
+        Verdicts (2026-09-20 rework of the 2026-06-21 "any status = reachable"):
+        - 200 → healthy.
+        - 401/402/403 → DEAD. A refused key never fixes itself mid-turn; the old
+          verdict picked the provider every turn in Auto mode, the completion
+          failed, and everything behind it in the fallback order never ran.
+        - 404 → try the /v1 auto-correct first (Ollama answers 404 on
+          `{base}/models` when /v1 is missing — the old code only ran the fix
+          on connection errors, where it can't help). If that doesn't take,
+          count it reachable: a gateway without /models can still complete.
+        - any other status (500, 429, …) → reachable; the completion is the
+          judge (Fireworks' /models 500 must not mark a working box dead).
+        - connection/DNS/timeout → /v1 auto-correct, else dead.
+        """
         try:
             self._client.models.list(timeout=self.health_check_timeout)
             return True
         except Exception as e:
-            # Some APIs (xAI/Grok) don't support /models but are otherwise fine.
-            # If we got an HTTP error (not a connection error), the server is alive.
-            err_str = str(e).lower()
-            if '400' in err_str or '403' in err_str or '404' in err_str or '405' in err_str:
-                logger.debug(f"Health check: {self.base_url} doesn't support /models but server is reachable")
+            status = http_status(e)
+            if status in AUTH_DEAD_STATUSES:
+                logger.info(f"Health check: {self.base_url} /models answered {status} — key refused, provider skipped")
+                return False
+            if status == 404 and self._try_v1_autocorrect():
                 return True
-
+            if server_answered(e):
+                logger.debug(f"Health check: {self.base_url} /models errored ({e}) but server is reachable")
+                return True
             logger.debug(f"Health check failed for {self.base_url}: {e}")
-
-            # Auto-correct missing /v1 suffix (common with llama.cpp, Ollama, etc.)
-            base = self.base_url.rstrip('/')
-            if not base.endswith('/v1'):
-                corrected = base + '/v1'
-                try:
-                    test_client = OpenAI(
-                        base_url=corrected,
-                        api_key=self.api_key,
-                        timeout=self.request_timeout
-                    )
-                    test_client.models.list(timeout=self.health_check_timeout)
-                    logger.info(f"Auto-corrected base_url: {self.base_url} -> {corrected}")
-                    self.base_url = corrected
-                    self._client = test_client
-                    return True
-                except Exception:
-                    pass
-
-            return False
+            return self._try_v1_autocorrect()
 
     def list_models(self) -> Optional[list]:
         """Discover available models via /v1/models endpoint."""
@@ -215,16 +319,17 @@ class OpenAICompatProvider(BaseProvider):
         if not params:
             return params
 
-        result = dict(params)
+        # Blank = absent = never sent (None would go out as JSON null).
+        result = {k: v for k, v in params.items() if v is not None and v != ''}
 
         # Strip internal Sapphire params that aren't part of the OpenAI API
         result.pop('disable_thinking', None)
 
         model_lower = (self.model or '').lower()
 
-        # Detect reasoning models (GPT-5+, o1, o3)
+        # Detect reasoning models (GPT-5+/GPT-6, o1, o3)
         is_reasoning_model = (
-            model_lower.startswith('gpt-5') or
+            model_lower.startswith(('gpt-5', 'gpt-6')) or
             model_lower.startswith('o1') or
             model_lower.startswith('o3')
         )
@@ -242,7 +347,7 @@ class OpenAICompatProvider(BaseProvider):
 
             # Remove unsupported sampling params (reasoning models don't use these)
             removed = []
-            for unsupported in ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']:
+            for unsupported in ['temperature', 'top_p', *PENALTY_PARAMS]:
                 if unsupported in result:
                     result.pop(unsupported)
                     removed.append(unsupported)
@@ -252,15 +357,71 @@ class OpenAICompatProvider(BaseProvider):
 
         elif is_grok:
             removed = []
-            for unsupported in ['presence_penalty', 'frequency_penalty', 'stop']:
+            for unsupported in [*PENALTY_PARAMS, 'stop']:
                 if unsupported in result:
                     result.pop(unsupported)
                     removed.append(unsupported)
 
             if removed:
                 logger.debug(f"Filtered unsupported params for {self.model}: {removed}")
-        
+
+        # Non-schema knobs ride extra_body — as kwargs they'd TypeError in the SDK.
+        for k in EXTRA_BODY_PARAMS:
+            if k in result:
+                result.setdefault('extra_body', {})[k] = result.pop(k)
+
         return result
+
+    # ── Learn-once param stripping ─────────────────────────────────────────
+
+    def _strip_rejected(self, kwargs: Dict[str, Any]) -> None:
+        for p in self._rejected_params:
+            kwargs.pop(p, None)
+            eb = kwargs.get('extra_body')
+            if isinstance(eb, dict):
+                eb.pop(p, None)
+                if not eb:
+                    kwargs.pop('extra_body', None)
+
+    def _params_named(self, err: Exception, kwargs: Dict[str, Any]) -> List[str]:
+        """Which OPTIONAL params of THIS request the error names."""
+        text = f"{err} {getattr(err, 'body', '') or ''}".lower()
+        eb = kwargs.get('extra_body') or {}
+        sent = [p for p in OPTIONAL_PARAMS if p in kwargs or p in eb]
+        named = [p for p in sent if p in text]
+        if not named and 'stream_options' in sent and any(
+                h in text for h in ('unrecognized', 'unknown parameter', 'unknown field')):
+            # endpoints that refuse stream_options without naming it (llama.cpp lineage)
+            named = ['stream_options']
+        return named
+
+    def _create(self, request_kwargs: Dict[str, Any]):
+        """chat.completions.create with learn-once stripping of refused
+        optional params: strip what this endpoint already refused, try,
+        and on a refusal naming an optional param remember it, warn once
+        (log + toast), retry once without it."""
+        self._strip_rejected(request_kwargs)
+        try:
+            return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
+        except Exception as e:
+            bad = self._params_named(e, request_kwargs)
+            if not bad:
+                from core.socks_proxy import maybe_llm_proxy_hint
+                maybe_llm_proxy_hint(self.config.get('display_name') or self.provider_name, str(e))
+                raise
+            self._rejected_params.update(bad)
+            self._strip_rejected(request_kwargs)
+            where = self.config.get('display_name') or self.provider_name
+            msg = (f"{where} ({self.model}) rejected {', '.join(bad)} — sent without it from "
+                   f"now on (until restart). Clear it under Settings › LLM › {where} to stop this.")
+            logger.warning(f"[OPENAI-COMPAT] {msg} | {e}")
+            _notify(msg)
+            try:
+                return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
+            except Exception as e2:
+                from core.socks_proxy import maybe_llm_proxy_hint
+                maybe_llm_proxy_hint(self.config.get('display_name') or self.provider_name, str(e2))
+                raise
     
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -299,15 +460,19 @@ class OpenAICompatProvider(BaseProvider):
             
             # Normalize content - handle multimodal content lists
             if isinstance(content, list):
-                # Check if content has images
-                has_images = any(
-                    isinstance(b, dict) and b.get('type') == 'image' 
+                # Images ride only when the vision checkbox (supports_images) is
+                # on. Pre-fix this "always sent images and let the provider
+                # reject" — with the vision window replaying last turn's contact
+                # sheet, a text-only model 400'd on the very next message
+                # (Krem, 2026-09-10). Off → the placeholder branch below, like
+                # the Anthropic converter.
+                has_images = self.supports_images and any(
+                    isinstance(b, dict) and b.get('type') == 'image'
                     for b in content
                 )
                 
                 if has_images:
-                    # Convert to OpenAI multimodal format — always send images,
-                    # let the provider reject if model doesn't support vision
+                    # Convert to OpenAI multimodal format
                     openai_content = []
                     for block in content:
                         if isinstance(block, dict):
@@ -342,8 +507,8 @@ class OpenAICompatProvider(BaseProvider):
                                 # Tool use blocks are handled via tool_calls field
                                 continue
                             elif block.get('type') == 'image':
-                                # Provider doesn't support images - add placeholder
-                                text_parts.append('[image]')
+                                # Vision off: the pixels stay home, the model is told why
+                                text_parts.append('[image not sent: this model has no vision]')
                         elif isinstance(block, str):
                             text_parts.append(block)
                     content = ' '.join(text_parts).strip()
@@ -382,7 +547,7 @@ class OpenAICompatProvider(BaseProvider):
                             try:
                                 json.loads(args)
                             except (json.JSONDecodeError, ValueError):
-                                logger.warning(f"[OPENAI-COMPAT] Tool call arguments not valid JSON, defaulting to empty: {args[:100]!r}")
+                                logger.warning(f"[OPENAI-COMPAT] Tool call arguments not valid JSON, defaulting to empty ({len(args)} chars)")
                                 args = '{}'
                         else:
                             args = '{}'
@@ -418,35 +583,20 @@ class OpenAICompatProvider(BaseProvider):
             if msg.get('name') and role != 'tool':
                 clean_msg['name'] = msg['name']
 
-            # DeepSeek-reasoner official API requires reasoning_content
-            # round-trip on tool-calling assistant turns. Without this,
-            # the next request after a tool result hits 400 "Missing
-            # reasoning_content field in the assistant message at message
-            # index N". Only fires for the official endpoint + reasoner
-            # model — other providers ignore the field. 2026-05-11.
-            if (self._is_deepseek_official()
-                    and msg.get('tool_calls')
-                    and msg.get('thinking')):
+            # DeepSeek official API requires reasoning_content round-tripped
+            # on assistant turns — V4 (2026-09-20) says EVERY assistant turn
+            # once tools are in play, not just the tool-calling ones (the
+            # 2026-05-11 rule). Without it the next request 400s "Missing
+            # reasoning_content field in the assistant message at index N".
+            # Only the official endpoint; other hosts ignore the field.
+            if self._is_deepseek_official() and msg.get('thinking'):
                 clean_msg['reasoning_content'] = msg['thinking']
 
             clean.append(clean_msg)
 
-        # Qwen /no_think — opt-in. If provider config has
-        # `disable_thinking_qwen: true`, append the /no_think token to the
-        # final user message. Qwen 3 models honor it natively (chat template
-        # skips the thinking stage entirely). Non-Qwen models ignore the
-        # token, so this is safe to leave on for any LM Studio provider
-        # config that's serving Qwen. Off by default — users must opt in
-        # by setting the flag in their provider's advanced settings, which
-        # protects everyone else's setups.
-        if self.config.get('disable_thinking_qwen', False):
-            for i in range(len(clean) - 1, -1, -1):
-                m = clean[i]
-                if m.get('role') == 'user' and isinstance(m.get('content'), str):
-                    if not m['content'].rstrip().endswith('/no_think'):
-                        m['content'] = m['content'].rstrip() + ' /no_think'
-                    break
-
+        # (The old Qwen `/no_think` token trick was removed 2026-07-02 — it never
+        #  reliably worked. Thinking-disable now goes through _inject_thinking_control
+        #  via extra_body, which is the mechanism Qwen/vLLM actually honor.)
         return clean
     
     def chat_completion(
@@ -513,34 +663,78 @@ class OpenAICompatProvider(BaseProvider):
             # reduces the rejection surface with strict OpenAI-compat providers.
             # (Matches the Anthropic provider, which also never sets tool_choice.)
 
-        # Qwen disable-thinking via chat_template_kwargs. LM Studio (and
-        # vLLM) forward this to the model's chat template; Qwen 3 then
-        # skips the thinking stage entirely. Opt-in via provider config.
-        self._inject_qwen_no_think(request_kwargs)
+        # Thinking control (universal, family-gated) + raw extra_body passthrough.
+        self._inject_thinking_control(
+            request_kwargs, want_disable=(generation_params or {}).get('disable_thinking', False))
 
-        # Wrap in retry for rate limiting
-        response = retry_on_rate_limit(
-            self._client.chat.completions.create,
-            **request_kwargs
-        )
+        response = self._create(request_kwargs)
 
         return self._parse_response(response)
 
-    def _inject_qwen_no_think(self, kwargs: dict) -> None:
-        """If provider config opts in, set chat_template_kwargs.enable_thinking=false.
+    def _inject_thinking_control(self, kwargs: dict, want_disable: bool = False) -> None:
+        """Merge thinking-control + a raw extra_body passthrough into the request.
 
-        Belt-and-suspenders with the /no_think suffix in _sanitize_messages:
-        some Qwen 3 variants honor the suffix, others need the template
-        kwarg. Setting both costs nothing for providers that ignore them.
+        Universal, best-effort, per-provider "disable thinking" (replaces the old
+        Qwen-only /no_think trick). Family-GATED: a model's own off-switch is sent
+        ONLY to that family, so a strict endpoint never sees a param it 400s on.
+        Unknown models are a logged no-op — the user's raw `extra_body` config is the
+        escape hatch for those. OFF path (no flag, no extra_body config) leaves kwargs
+        untouched → byte-identical to a no-op.
+
+        "Disable" comes from any of: the per-provider `disable_thinking` config (the
+        Settings checkbox), the per-request `disable_thinking` gen param (continue/
+        prefill), or the legacy `disable_thinking_qwen` flag (migrated transparently).
         """
-        if not self.config.get('disable_thinking_qwen', False):
-            return
-        existing = kwargs.get('extra_body') or {}
-        ctk = dict(existing.get('chat_template_kwargs') or {})
-        ctk['enable_thinking'] = False
-        existing['chat_template_kwargs'] = ctk
-        kwargs['extra_body'] = existing
-        logger.info(f"[OPENAI-COMPAT] disable_thinking_qwen ACTIVE → {self.model} (extra_body.chat_template_kwargs.enable_thinking=false)")
+        cfg = self.config
+        disable = (want_disable or cfg.get('disable_thinking', False)
+                   or cfg.get('disable_thinking_qwen', False))
+        raw = cfg.get('extra_body')
+        if not (disable or raw):
+            return                                    # OFF path — leave kwargs untouched
+
+        extra = dict(kwargs.get('extra_body') or {})
+
+        if disable:
+            model = (self.model or '').lower()
+            base = (self.base_url or '').lower()
+            if self._is_fireworks_reasoning_model():
+                # Fireworks disables reasoning via the top-level `reasoning_effort`
+                # param (none/false), NOT extra_body — its schema is strict and 400s
+                # on unknown fields like `thinking` / `chat_template_kwargs`. This
+                # overrides the "medium" default set in build_request_kwargs.
+                kwargs['reasoning_effort'] = 'none'
+                fam = 'fireworks'
+            elif 'api.deepseek.com' in base:
+                extra['thinking'] = {'type': 'disabled'}          # DeepSeek V4 official (on by default)
+                fam = 'deepseek'
+            elif model.startswith('glm') or any(h in base for h in ('z.ai', 'bigmodel', 'zhipu')):
+                extra['thinking'] = {'type': 'disabled'}          # GLM / Z.AI convention
+                fam = 'glm'
+            elif 'qwen' in model:
+                ctk = dict(extra.get('chat_template_kwargs') or {})
+                ctk['enable_thinking'] = False                    # Qwen 3 (vLLM / LM Studio)
+                extra['chat_template_kwargs'] = ctk
+                fam = 'qwen'
+            else:
+                fam = None                                        # unknown → don't guess (avoid 400)
+            if fam:
+                logger.info(f"[OPENAI-COMPAT] disable_thinking ({fam}) → {self.model}")
+            else:
+                logger.info(f"[OPENAI-COMPAT] disable_thinking requested but no known switch "
+                            f"for {self.model}; set extra_body manually if it's a reasoning model")
+
+        if raw:
+            try:
+                rb = raw if isinstance(raw, dict) else json.loads(raw)
+                if isinstance(rb, dict):
+                    extra.update(rb)                              # user's raw extra_body wins
+                else:
+                    logger.warning("[OPENAI-COMPAT] extra_body config is not a JSON object; ignoring")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"[OPENAI-COMPAT] extra_body config not valid JSON, ignoring: {e}")
+
+        if extra:
+            kwargs['extra_body'] = extra
 
     def chat_completion_stream(
         self,
@@ -597,44 +791,21 @@ class OpenAICompatProvider(BaseProvider):
             # reduces the rejection surface with strict OpenAI-compat providers.
             # (Matches the Anthropic provider, which also never sets tool_choice.)
 
-        # Qwen disable-thinking — apply for streaming path too.
-        self._inject_qwen_no_think(request_kwargs)
+        # Thinking control (universal, family-gated) + raw extra_body — streaming path too.
+        self._inject_thinking_control(
+            request_kwargs, want_disable=(generation_params or {}).get('disable_thinking', False))
 
         logger.info(f"[OPENAI-COMPAT] Request params: model={request_kwargs.get('model')}, tools={len(request_kwargs.get('tools', []))}")
 
-        # Wrap in retry for rate limiting
-        # If stream_options is rejected (local servers like LM Studio/llama.cpp), retry without.
-        # Narrow the trigger: only retry when the error actually mentions stream_options or
-        # related "unknown parameter" phrasing — NOT on every 400/422, which was catching
-        # unrelated errors (like tool call validation failures) and producing misleading logs.
+        # Refused optional params (stream_options on llama.cpp-lineage servers,
+        # a penalty a strict cloud endpoint won't take) are learned once and
+        # retried without — see _create. Anything else fails loud.
         try:
-            stream = retry_on_rate_limit(
-                self._client.chat.completions.create,
-                **request_kwargs
-            )
+            stream = self._create(request_kwargs)
         except Exception as e:
-            err_str = str(e).lower()
-            looks_like_stream_options_issue = (
-                "stream_options" in err_str
-                or "unrecognized" in err_str
-                or "unknown parameter" in err_str
-                or "unknown field" in err_str
-            )
-            if looks_like_stream_options_issue:
-                logger.info(f"[OPENAI-COMPAT] stream_options rejected, retrying without: {e}")
-                request_kwargs.pop("stream_options", None)
-                try:
-                    stream = retry_on_rate_limit(
-                        self._client.chat.completions.create,
-                        **request_kwargs
-                    )
-                except Exception as e2:
-                    logger.error(f"[OPENAI-COMPAT] REQUEST FAILED (retry): {e2}")
-                    raise
-            else:
-                logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
-                logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
-                raise
+            logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
+            logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
+            raise
         
         # Track accumulated state for final response
         full_content = ""
@@ -689,7 +860,7 @@ class OpenAICompatProvider(BaseProvider):
                 for attr in ['reasoning', 'reasoning_content', 'thought', 'thinking']:
                     val = getattr(delta, attr, None)
                     if val:
-                        logger.info(f"[REASONING] Found {attr}: {val[:100]}...")
+                        logger.info(f"[REASONING] Found {attr} ({len(val)} chars)")
             
             # Content chunk
             if delta.content:

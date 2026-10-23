@@ -1,5 +1,6 @@
 {
   "name": "claude-code",
+  "short_display_name": "Claude Code",
   "version": "1.0.0",
   "description": "Claude Code",
   "author": "Sapphire",

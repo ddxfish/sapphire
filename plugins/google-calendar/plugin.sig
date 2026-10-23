@@ -1,12 +1,12 @@
 {
   "plugin": "google-calendar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "files": {
-    "README.md": "sha256:f13e2bdabcf78fec8bf805f8f14a692cd9f7303a6e3d8e2653c2d3c6a463e73b",
-    "plugin.json": "sha256:2d2afa1e07ca8adb8efaddb546e9deb91db3739e6fb80de4947acf7f7dc52c5d",
-    "routes/oauth.py": "sha256:71e803e4e365d316c0db5dadf4b909daf73e7b0e2312c54f55a74ac042501413",
-    "tools/calendar.py": "sha256:3c6a24a2bdcfb536be1b037466bd1000e479ac8c0e43cea8fc9131eb51044c9b",
-    "web/index.js": "sha256:5f1b40d68be78700e8b347f82908b6ccd094d31234a95f70a242e3477471bc6c"
+    "README.md": "sha256:3093a0b5ed9c4a41051aa49fd4b6afa777a97e45925e515a4dbe1d821efae8aa",
+    "plugin.json": "sha256:6cedc12c4fa0f95399b720408060c43eabac7ca8511341bf9b539e72d1b508e5",
+    "routes/oauth.py": "sha256:9fdc9ef08bf7a2780dcc0c2eedee8237ece1039c0cecb02a0446f44c3108557f",
+    "tools/calendar.py": "sha256:ee1f3aa17963e8726120bf886333fe2b83bae34620db72a2ffbb467de8603792",
+    "web/index.js": "sha256:4e5d1ccddc1353132ea7d1daedb4abf5ffc5bf457106b0dbb86d8981edae3a35"
   },
-  "signature": "uTrFKRNmDZmCEwRkkasyrhyX+LCvONPwEJ/7KgHmsQamsgBIe2RjKAd2ZVjblVd1VhBUUZpEy9Ky4lcvM1jZBg=="
+  "signature": "D1PKzK7Bt5rrlXdJ7HuF663RrVModEKEkOdz6qzFdbWXqX4YHWaVXbrm6tDd+FDKjs2cyedmMhCSSz/lqulXDg=="
 }

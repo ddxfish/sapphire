@@ -1,5 +1,29 @@
 {
-  "_comment": "Default starter toolsets - seeded into user file on first run. Also: 'default' is the lean background-worker baseline referenced by the agent persona and the agents plugin's default_toolset setting — missing it means agents resolve to 0 tools (scout #8). ToolsetManager ensures 'default' stays seeded even after the initial user-file seed.",
+  "_comment": "Default starter toolsets - seeded into user file on first run. Also: 'default' is the lean background-worker baseline referenced by the agent persona and the agents plugin's default_toolset setting, and 'limited_web' is the factory new-chat default (chat_defaults.json) — missing either means those consumers resolve to 0 tools (scout #8). ToolsetManager ensures both stay seeded even after the initial user-file seed.",
+  "limited_web": {
+    "emoji": "🌐",
+    "functions": [
+      "web_search",
+      "get_website",
+      "web_view_images",
+      "save_memory",
+      "search_memory",
+      "get_recent_memories",
+      "list_entities",
+      "update_memory",
+      "delete_memory",
+      "read_self",
+      "update_self",
+      "read_ledger",
+      "create_goal",
+      "list_goals",
+      "update_goal",
+      "read_document",
+      "memory_view_image",
+      "local_view_images",
+      "memory_save_image"
+    ]
+  },
   "default": {
     "emoji": "\uD83E\uDDF0",
     "functions": [
@@ -10,6 +34,7 @@
       "save_memory",
       "search_memory",
       "get_recent_memories",
+      "list_entities",
       "save_knowledge",
       "search_knowledge",
       "create_goal",
@@ -20,7 +45,6 @@
       "notepad_delete_lines",
       "notepad_insert_line",
       "search_help_docs",
-      "ask_claude",
       "get_time"
     ]
   },
@@ -32,7 +56,9 @@
       "get_wikipedia",
       "research_topic",
       "get_site_links",
-      "get_images",
+      "web_view_images",
+      "memory_view_image",
+      "local_view_images",
       "create_goal",
       "list_goals",
       "update_goal",
@@ -41,8 +67,7 @@
       "notepad_append_lines",
       "notepad_delete_lines",
       "notepad_insert_line",
-      "search_help_docs",
-      "ask_claude"
+      "search_help_docs"
     ]
   },
   "smarthome": {
@@ -68,30 +93,31 @@
   "personality": {
     "emoji": "\uD83C\uDFAD",
     "functions": [
-      "view_prompt",
-      "switch_prompt",
+      "prompt_view",
+      "prompt_switch",
       "reset_chat",
-      "edit_prompt",
-      "set_piece",
-      "remove_piece",
-      "create_piece",
-      "list_pieces",
+      "prompt_edit",
+      "prompt_pieces",
       "change_username",
-      "set_tts_voice",
+      "set_voice",
+      "switch_model",
+      "switch_toolset",
       "list_tools",
       "get_time",
       "save_memory",
       "search_memory",
       "get_recent_memories",
+      "list_entities",
       "delete_memory",
+      "read_self",
+      "update_self",
       "save_knowledge",
       "search_knowledge",
       "delete_knowledge",
       "create_goal",
       "list_goals",
       "update_goal",
-      "delete_goal",
-      "ask_claude"
+      "delete_goal"
     ]
   }
 }

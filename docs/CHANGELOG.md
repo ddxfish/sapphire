@@ -1,3 +1,198 @@
+# 2.13.1 - Discord Simplify
+- Removed Discord memory
+- Routed Discord through Daemons and Realtime
+- Moved greetings to their own daemon
+- Simplified many settings to fewer tied settings
+# 2.13.0 - Discord v2
+## September 13, 2026
+- Total Discord plugin rebuild by Zeebie
+- Can see and put images in chat
+- Voice chat ability in Discord
+- Human-like reactions: delayed writes, multi-part messages, emoji
+- Slash command support
+- Memory system for past users that the AI sees
+- Discord plugin depends on py-cord (git-pinned build): uninstall discord.py first if you had it, and Git must be on PATH for pip to fetch the pin
+# 2.12.9 - Images
+- AI can web search images and diplay or see them itself
+- AI can add images to its knowledge layer
+- AI can see images for X messages, not just current
+# 2.12.8 - QoL 
+- Password reset in Settings > System
+- Cancel running daemon
+- save_memory definition and return to discourage redo on trims
+- Removed a ton of full DOM refreshes stealing cursor
+- Move prompts into vault in batch, redid prompt modal handler
+# 2.12.7 - Full Docs Makeover
+- Complete docs overhaul, 50+ docs
+- Added plugin docs search for AI tool search_help_docs
+# 2.12.6 - SOCKS v2
+- SOCKS has 5h or 5
+- Toggle remote dns and LLM through SOCKS
+- Allow local IPs without SOCKS
+# 2.12.5 - Privacy enhancement
+- Aggressive caching of resources (STT, TTS, embeddings, silero, CLIP, fonts)
+- Added 24 hour cache to plugin keys
+- Routed whole app through SOCKS with option to bypass LLM
+# 2.12.4 - QoL UX UI
+- LLM has repeat penalty and more params
+- Cap memory at 512 char and write it trimmed instead of rejecting
+- New toolbar upper right, bigger click targets, combined bg modal and color
+- Removed personas sidebar tab in favor of faces-strip
+- Faces strip has favorites (in Personas) and can re-order
+- Moved conversation and TTS controls to flyout on STT button
+- Mobile bottom navrail has Sapphire Gem icon, User modal
+# 2.12.3 - Story Engine expansion
+- Items can have multiple verbs with actions
+- Set images and create rooms
+- Add prompt pieces to story, items can toggle on off
+- Edit story mid-run
+# 2.12.2 - Story Engine
+- Story editor in app
+- Can edit characters, rooms, exits, scenario, place items
+- Items have full conditions: flags, items, values, riddle
+- Inventory system
+# 2.12.1 - Prompt page cleanup
+- Added tidy up button to delete orphans and danglers
+- Make prompts multi-select for many delete and move to vault
+- Delete can do 1 prompt, pieces optional, or many prompts
+- Can move all prompt pieces in a prompt to/from vault at once
+- Added trash bin in cleanup section for prompt pieces removed this way
+# 2.12.0 - Million Dollar Bug Hunt
+- Combined old blob chat into chat streaming, chat.py chat_streaming.py
+- Voice path folded into main chat streaming as listener
+- One engine now, major core changes
+- Wakeword compatibility: convert to 16khz, flatten stereo
+- Detect chat corruption and make read-only
+# 2.11.5 - Theme v2
+- Theme BG is a fallback when no per-chat bg is set
+- Wont crash on theme error, proper handling
+- CSS ground truth reduced, removed dead code
+- Added 3 fonts with new font-size switcher
+- New theme selector, and new Paper theme
+# 2.11.4 - App icon
+- Can set favicon color in Settings > Visual
+- Updated SVG icon for app with trim optional
+# 2.11.3 - Private Games
+- Story engine and game room chats private capable
+- Settings > Privacy > Allow Unflagged Tools to unblock legacy tools
+# 2.11.2 - Privacy Aware Plugins
+- Hooks are not exposed to plugins unless they are privacy_aware true
+# 2.11.1 - Private chats
+- Chats in private mode are encrypted
+# 2.11.0 - Privacy v2
+- Prompt vault, encrypted auto-locking prompt db overlay
+- Move between vault and plaintext
+- Settings page for Privacy Vault
+- When vault is unlocked, only private models allowed
+# 2.10.4 - Bug fixes and QoL
+- Spices can go in ghost rail or sys prompt so AI doesn't get suspicious
+- Cursor being moved when DOM reset
+- Next TTS overlapping last message stops last
+- Code harness safety for ~ and other literals
+- Expanded Improved metrics on each chat, timestamp, accordion more info
+- Blender plugin
+# 2.10.3 - Prompt refactor
+- Old prompt system yeeted for new one
+- Reduced code paths for prompt and privacy
+- Improved metrics per message in UI
+# 2.10.2 - Plugin UI
+- Made rows instead of tiles, added search filter
+# 2.10.1 - Chat manager
+- Tabs for chat, librarian, games
+- Search full chats
+- Added archive tab (real archive now)
+- Improved search_help_docs tool with a search feature
+# 2.10.0 - Game Room
+- Game Room replaces story engine
+- Story mode is text adventures with illustrations per room
+- Game mode has the AI as a player or watcher
+- Games and Stories are both plugins
+- Demo game Texas Hold Em and demo story Titanic
+# 2.9.3 - Google Calendar
+- Added oauth relay for easy Google Calendar setup
+# 2.9.2 - Pip conflict resolution
+- Resolve old pip and new pip deps (remove, add, replace)
+- Prep for new Discord plugin
+# 2.9.1 - Mind adjustments
+- Reduced spidering and duplicates from read_self
+- Vision RAG threshold added to Settings > Embeddings
+- Removed old "self" layer from Memories
+# 2.9.0 - Mind v2 
+- Mind (memory v2) launches in core
+- Switch back and forth memory v1 v2
+- Self sheet added to wake up and spider from
+- Visual RAG added for Knowledge images
+- Mind tools combined into one small set
+- Librarian launched, does nightly re-arranging, sorting, dedup
+- Imports memory v1 data
+# 2.8.8 - Bug hunt for Mind v2
+# 2.8.7 - Plugin prompts + Twilio
+- Plugins can hot-load prompt packs
+- Twilio respects engine at first message, select model
+- switch_model and switch_toolset in Settings > Tools
+- Twilio has elevate_toolset with password
+# 2.8.6 - Plugins and daemons
+- Daemon > Filters changed to dropdowns instead of JSON
+- Plugins now have subprocess officially, and plugins can make their own conda
+- Plugin events (cron) are now settings, not hard coded files
+- Added core registry for memory layers
+- Plugin Settings has tabs now
+- Hidden tools for memory librarian and internal use
+# 2.8.5 - Settings > LLM
+- Unified main and secondary models in settings with 1 drag and drop
+- Unified handler and CSS for add/edit, vision checkmark
+# 2.8.4 - Privacy Mode v2
+- Removed whitelist, added "private" checkmark to LLM instead
+- Changed Privacy Mode to eyeball toggle just below chat dropdown
+# 2.8.3 - Chat refactor
+- Changed giant json blobs to rows in db
+- Added Chat Manager to bulk delete, export
+- Compress and trim chats
+- Archive chats hides from sidebar
+# 2.8.2 - Isolation
+- Might higher isolation between tasks, call + web ui same time
+- Coding harness update
+- Refactor meta tools self-edit prompt
+- Remove backups encryption from core, moved to plugin
+- Disable thinking Settings > LLM works for most providers
+# 2.8.1 - Twilio
+- Added Twilio Realtime plugin for phone
+# 2.8.0 - Conversation
+## July 3, 2026
+- local and browser conversation mode (duplex)
+- Barge-in to interrupt the AI
+- Realtime trigger section, like a continuous daemon
+# 2.7.14 - Webhook per-chat
+- Webhooks can specify which chat they return to
+# 2.7.13 - Backup Restore + Encryption
+- time of day settable
+- encrypted backups
+- restore backups from UI
+- tools/decrypt_backup.py for manual restore
+# 2.7.12 - Exclude in backup
+- exclude files, estimate backup pre-gz size
+# 2.7.11 - UI stale cache
+- Found multiple stale UI paths, fixed
+# 2.7.10 - asyncio update
+- Added async_teardown for daemons that need async stdio child procs
+- Documented ProcessManager popen for plugins (simpler)
+# 2.7.9 - sd-server plugin
+- Slideshow support in Apps and Sidebar in chat
+- auto gen images with random prompt pieces
+# 2.7.8 - Stability + Pipework
+- Laid piping for conversation mode
+- Added Settings > System > integrity check (verify/repair)
+# 2.7.7 - Piper TTS + Wordpress
+- New plugin-save hook
+- Piper TTS added for CPU TTS fast (streaming supported)
+- Wordpress tools (blogs, pages, settings, plugins, users)
+# 2.7.6 - Background UI images per persona
+- Works like persona trim color, per chat override
+# 2.7.5 - Loop guards
+- Optional feature in plugins to notify the AI when it is looping on tools
+# 2.7.4 - Image pipeline for daemons
+- Plugins can send and receive images
+- Checkmark in Settings > LLM for vision models
 # 2.7.3 - Ghost messages in sidebar
 - Add or override ghost message in System Prompt in sidebar
 # 2.7.2 - Refactor UI
@@ -365,3 +560,6 @@
 # 1.0 - Public release
 ## December 2025
 - first release after a year of development
+## Reference for AI
+
+Release history, newest first. For current behavior always trust the feature docs over old entries here — this file records what changed and when, not what is true now.

@@ -30,6 +30,7 @@ export async function mergeRegistryProviders(tabConfig) {
             if (!merged.providers[p.key]) {
                 merged.providers[p.key] = {
                     label: p.display_name || p.key,
+                    is_local: p.is_local,
                     essentialKeys: [],
                     advancedKeys: [],
                     _plugin: true,
@@ -144,9 +145,11 @@ function _renderDropdown(tabConfig, current, ctx) {
     const isOverridden = ctx.overrides.includes(key);
 
     const options = Object.entries(tabConfig.providers)
-        .map(([value, def]) =>
-            `<option value="${value}" ${value === current ? 'selected' : ''}>${def.label}</option>`
-        ).join('');
+        .map(([value, def]) => {
+            // Same glyph pair the chat dropdowns use — cloud honesty (2026-08-31)
+            const badge = def.is_local === undefined ? '' : (def.is_local ? ' \uD83C\uDFE0' : ' \u2601\uFE0F');
+            return `<option value="${value}" ${value === current ? 'selected' : ''}>${def.label}${badge}</option>`;
+        }).join('');
 
     return `
         <div class="settings-grid">

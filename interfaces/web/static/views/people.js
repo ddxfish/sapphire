@@ -8,6 +8,7 @@ import { MIND_TABS, csrfHeaders, escHtml, escAttr, scopeForChatTab, subscribeMin
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
+import { snapScroll } from '../shared/dom-guard.js';
 
 const SCOPE_KEY = 'people_scope';
 const DOMAIN = 'people';
@@ -59,6 +60,7 @@ async function renderPeople() {
     const data = await resp.json();
     const people = data.people || [];
 
+    const restoreScroll = snapScroll(el);   // DOM-refresh hunt 2026-09-08
     el.innerHTML = `
         <div class="mind-toolbar">
             <button class="mind-btn" id="mind-add-person">+ Add Person</button>
@@ -70,7 +72,7 @@ async function renderPeople() {
         ${people.length ? `<div class="mind-people-grid">
             ${people.map(p => `
                 <div class="mind-person-card" data-id="${p.id}">
-                    <div class="mind-person-name">${escHtml(p.name)}${p.email_whitelisted ? ' <span title="Email allowed" style="font-size:12px">&#x1F4E7;</span>' : ''}</div>
+                    <div class="mind-person-name">${escHtml(p.name)}${p.email_whitelisted ? ' <span title="Email allowed" style="font-size:0.75rem">&#x1F4E7;</span>' : ''}${p.call_whitelisted ? ' <span title="Calls allowed" style="font-size:0.75rem">&#x1F4DE;</span>' : ''}</div>
                     ${p.relationship ? `<div class="mind-person-rel">${escHtml(p.relationship)}</div>` : ''}
                     <div class="mind-person-details">
                         ${p.phone ? `<div>&#x1F4DE; ${escHtml(p.phone)}</div>` : ''}
@@ -86,6 +88,7 @@ async function renderPeople() {
             `).join('')}
         </div>` : '<div class="mind-empty">No contacts saved</div>'}
     `;
+    restoreScroll();
 
     el.querySelector('#mind-add-person')?.addEventListener('click', () => showPersonModal());
 
@@ -186,8 +189,11 @@ function showPersonModal(person = null) {
                     <input type="text" id="mp-email" placeholder="Email" value="${escAttr(person?.email || '')}">
                     <input type="text" id="mp-address" placeholder="Address" value="${escAttr(person?.address || '')}">
                     <textarea id="mp-notes" placeholder="Notes" rows="3">${escHtml(person?.notes || '')}</textarea>
-                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);cursor:pointer">
+                    <label style="display:flex;align-items:center;gap:8px;font-size:0.8125rem;color:var(--text-muted);cursor:pointer">
                         <input type="checkbox" id="mp-email-whitelist" ${person?.email_whitelisted ? 'checked' : ''}> Allow AI to send email
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;font-size:0.8125rem;color:var(--text-muted);cursor:pointer">
+                        <input type="checkbox" id="mp-call-whitelist" ${person?.call_whitelisted ? 'checked' : ''}> Allow AI to call
                     </label>
                     <button class="mind-btn" id="mp-save">${person ? 'Update' : 'Save'}</button>
                 </div>
@@ -210,6 +216,7 @@ function showPersonModal(person = null) {
             address: overlay.querySelector('#mp-address').value.trim(),
             notes: overlay.querySelector('#mp-notes').value.trim(),
             email_whitelisted: overlay.querySelector('#mp-email-whitelist').checked,
+            call_whitelisted: overlay.querySelector('#mp-call-whitelist').checked,
             scope,
         };
         if (person?.id) body.id = person.id;

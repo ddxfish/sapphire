@@ -33,6 +33,82 @@ except Exception as _e:
 
 import pytest
 
+
+# ─── Destructive-git safety net (2026-07-09) ─────────────────────────────────
+# integrity._repair_git runs `git checkout HEAD -- <file>` — reverting a file to
+# HEAD, which silently eats uncommitted local edits. That is exactly the
+# 2026-07-05 incident (a test reached repair() on a dev tree and reverted staged
+# work mid-session). This net replaces it with a LOUD RuntimeError for the whole
+# suite, so no test — present or future — can `git checkout` the working tree.
+# The one test that legitimately exercises repair's git path stubs _repair_git
+# itself, which overrides this. Makes the suite structurally safe with uncommitted
+# work, not merely safe because each test happens to be careful.
+#
+# (updater is NOT wrapped here: it defers pulls to boot-time apply_pending_update
+# and every test stubs _run_git for tree-mutating ops, so it's hermetic already —
+# and a source-inspection test reads _run_git's source, which a wrapper would break.)
+@pytest.fixture(autouse=True)
+def _no_destructive_git(monkeypatch):
+    def _blocked_repair(rel):
+        raise RuntimeError(
+            f"BLOCKED: real integrity._repair_git({rel!r}) during a test — would "
+            "`git checkout` the working tree. Stub _repair_git in your test.")
+    try:
+        import core.integrity as _integ
+        monkeypatch.setattr(_integ, "_repair_git", _blocked_repair, raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _no_real_metrics_db(tmp_path, monkeypatch):
+    """Vaulted chats Phase 3: vault_chat's full-scrub (and metrics tests)
+    reach core.metrics — redirect its DB_PATH so no test can UPDATE the dev
+    box's real user/metrics/token_usage.db."""
+    try:
+        import core.metrics as _m
+        _p = tmp_path / "metrics" / "token_usage.db"
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(_m, "DB_PATH", _p)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _no_stale_sealed_rows_probe():
+    """Vault hunt G3 (2026-08-15): ChatSessionManager registers a global
+    sealed-rows probe with prompt_vault at construction. Hermetic managers
+    built on tmp dirs leak that probe across test files — a later REAL
+    chat_data_key() mint then probes a dead DB and refuses. Reset around
+    every test; a test's own manager re-registers when it constructs."""
+    try:
+        from core import prompt_vault as _pv
+        _pv.set_sealed_rows_probe(None)
+    except Exception:
+        pass
+    yield
+    try:
+        from core import prompt_vault as _pv
+        _pv.set_sealed_rows_probe(None)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _no_real_vault_seal(monkeypatch):
+    """Vaulted chats (Phase 1, 2026-08-14): the dev box usually has a REAL
+    locked prompt vault, which would flip core.chat.history._vault_sealed()
+    True for every test — hiding private chats from store tests on this
+    machine but not in CI (no vault file). Pin the baseline to 'no vault'
+    so the suite is environment-independent; sealed-state tests monkeypatch
+    _vault_sealed (or prompt_vault.vault_status for route gates) explicitly."""
+    try:
+        import core.chat.history as _hist
+        monkeypatch.setattr(_hist, "_vault_sealed", lambda: False)
+    except Exception:
+        pass
+
+
 # ─── Thread leak guard ────────────────────────────────────────────────────────
 # Default every threading.Thread created during tests to daemon=True. Some
 # concurrency tests (SQLite write stress in test_220_regression, scope-bleed
@@ -286,7 +362,12 @@ def mock_system(monkeypatch):
     try:
         yield sys_mock
     finally:
-        if old is not None and hasattr(apifa, "set_system"):
+        # Restore ALWAYS — including back to None. The old `if old is not
+        # None` guard left the MagicMock installed for the REST OF THE
+        # SUITE once the first mock_system test ran; every later
+        # get_system() caller (the P3 vault gates in game-room, notably)
+        # then saw truthy Mocks and mis-gated. Caught 2026-08-15.
+        if hasattr(apifa, "set_system"):
             try:
                 apifa.set_system(old)
             except Exception:

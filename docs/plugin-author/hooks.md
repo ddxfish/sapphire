@@ -14,6 +14,7 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `post_chat` | After response saved | `input`, `response` | Logging, analytics |
 | `pre_execute` | Before tool call | `function_name`, `arguments` | Modify args, block tools |
 | `post_execute` | After tool call | `function_name`, `result` | Audit, react to results |
+| `tools_filter` | After toolset resolution, before each LLM call | `tools` (subtract-only) | Withhold tools from this turn — [see below](#tools_filter--per-turn-tool-fence) |
 | `pre_tts` | Before speech (legacy/whole-blob) | `tts_text`, `skip_tts` | Modify text, cancel TTS |
 | `post_tts` | After playback ends (legacy/whole-blob) | `tts_text` | Analytics, reactions, subtitles |
 | `tts_stream_start` | Streaming TTS: turn begins | `skip_tts` | Disable the whole turn's streaming speech |
@@ -22,6 +23,23 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `tts_stream_end` | Streaming TTS: turn ends | — | Finalize captions/recording |
 | `on_wake` | Wakeword detected | — | Play sounds, log, custom reactions |
 | `provider_switched` | After a TTS/STT/embed provider hot-swap | metadata `kind`, `provider` | Warm caches / reset state (observational) |
+| `chat_renamed` | After a chat rename succeeds | metadata `old`, `new` | Re-key chat-keyed data your plugin holds *outside* the chat-scoped store |
+| `chat_deleted` | After a chat delete succeeds (every path) | metadata `name` | Drop chat-keyed data your plugin holds *outside* the chat-scoped store |
+| `chat_cleared` | After a chat's transcript is cleared (every clear path) | metadata `chat` | Drop turn-anchored rows (journals, message-index anchors) — the messages they pointed at are gone |
+| `chat_vaulted` | After a chat is encrypted into the vault | metadata `name` | Scrub plaintext deposits keyed by that name. **`privacy_aware` plugins only — see [Private chats](#private-chats--privacy_aware)** |
+| `plugins_ready` | After a registration wave settles — fires on the boot scan AND on hot reload, rescan, and toggle-on | metadata `loaded`, `reason` | Boot work that needs other plugins present — handlers must be idempotent |
+
+Data kept in the [chat-scoped store](tools.md#chat-scoped-state) needs neither
+rename nor delete handling — core carries those rows through the rename and
+drops them inside the delete transaction. Reach for `chat_renamed` /
+`chat_deleted` only for chat-keyed things that live somewhere else: files,
+your own database, an external service. (The Game Room used to carry its
+playthroughs by hand this way; it doesn't any more.)
+
+A **clear** is different from a delete: clearing wipes the transcript but
+chat-scoped rows survive. If your rows anchor to message positions (journal
+turn anchors, message-index bookmarks), register `chat_cleared` and drop them —
+they now point at messages that no longer exist.
 
 ### Manifest Declaration
 
@@ -62,9 +80,15 @@ class HookEvent:
     function_name: Optional[str] = None      # Tool name (execute hooks)
     arguments: Optional[dict] = None         # Tool args (mutable in pre_execute)
     result: Optional[str] = None             # Tool result (post_execute)
+    tools: Optional[List[Dict]] = None       # This turn's tool schemas (tools_filter — subtract-only)
     tts_text: Optional[str] = None           # TTS text (mutable in pre_tts)
     skip_tts: bool = False                   # Cancel TTS
+    chat_name: Optional[str] = None          # This turn's chat (runner-stamped)
+    chat_private: Optional[bool] = None      # True = private chat (runner-stamped)
+    surface: Optional[str] = None            # 'chat' | 'game' — the chat's surface (fire-site-stamped)
 ```
+
+`chat_name` / `chat_private` are stamped by the runner, not by you — read them, don't set them. See [Private chats](#private-chats--privacy_aware). `surface` is stamped by the fire site for the presence hooks — see [Surfaces](#surfaces--where-presence-hooks-fire).
 
 ---
 
@@ -79,11 +103,12 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `post_stt` | **Yes** | Yes | `input` (transcribed text) |
 | `pre_chat` | **Yes** | Yes | `input`, `skip_llm`, `response`, `ephemeral` |
 | `prompt_inject` | No | Yes | `context_parts` (list — append to it) |
-| `ghost_inject` | **Yes** | Yes | `ghost_text` (set to a string to contribute one ghost line) |
+| `ghost_inject` | **Yes** | **No** (`event.config` is `None` — `import config` if needed) | `ghost_text` (set to a string to contribute one ghost line) |
 | `post_llm` | **Yes** | Yes | `response` (AI's answer text) |
 | `post_chat` | **Yes** | Yes | None (observational) |
 | `pre_execute` | **Yes** | Yes | `arguments`, `skip_llm`, `result` |
 | `post_execute` | No | Yes | None (observational) |
+| `tools_filter` | No | No | `tools` (remove entries — additions are discarded) |
 | `pre_tts` | No | Yes | `tts_text`, `skip_tts` |
 | `post_tts` | No | Yes | None (observational) |
 | `tts_stream_start` | **Yes** | Yes | `skip_tts` |
@@ -92,6 +117,11 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `tts_stream_end` | **Yes** | Yes | None (observational) |
 | `on_wake` | No | Yes | None (notification only) |
 | `provider_switched` | No | No | None (observational; metadata `kind`, `provider`) |
+| `chat_renamed` | No | No | None (observational; metadata `old`, `new`) |
+| `chat_deleted` | No | No | None (observational; metadata `name`) |
+| `chat_cleared` | No | No | None (observational; metadata `chat`) |
+| `chat_vaulted` | No | No | None (observational; metadata `name`) |
+| `plugins_ready` | No | No | None (observational; metadata `loaded`, `reason`) |
 
 ### What System Access Gives You
 
@@ -104,7 +134,7 @@ Through `system = event.metadata.get("system")`, plugins can control:
 | **Wakeword** | `system.toggle_wakeword(bool)` | Enable/disable wakeword detection |
 | **LLM** | `system.llm_chat` | `chat(query)` — send a message directly to the LLM |
 | **System Prompt** | `system.llm_chat` | `set_system_prompt(text)`, `get_system_prompt_template()` |
-| **Chat History** | `system.llm_chat.session_manager` | `get_messages()`, `list_chats()`, `create_chat(name)`, `set_active_chat(name)`, `delete_chat(name)` |
+| **Chat History** | `system.llm_chat.session_manager` | `get_messages()`, `list_chats()`, `create_chat(name)`, `set_active_chat(name)` (also applies that chat's prompt/toolset/voice to the live runtime), `delete_chat(name)` |
 | **Tool Manager** | `system.llm_chat.function_manager` | `update_enabled_functions([toolset])`, `execute_function(name, args)`, `get_enabled_function_names()` |
 | **Scopes** | `system.llm_chat.function_manager` | `set_rag_scope(s)`, `set_private_chat(bool)` — the only core scope setters. Plugin scopes (memory/knowledge/people/email/etc.) apply from chat settings via `apply_scopes_from_settings()`; there are no per-scope setter methods |
 | **Generation** | `system` | `cancel_generation()` — cancel in-progress LLM streaming |
@@ -119,6 +149,120 @@ def pre_chat(event):
         return
     if hasattr(system, "tts") and system.tts:
         system.tts.set_voice("af_sky")
+```
+
+---
+
+## `tools_filter` — per-turn tool fence
+
+Fires after toolset resolution, with the FINAL tool-schema list for this turn's
+LLM call in `event.tools`. Remove entries to withhold tools for this turn only —
+toolset membership and the Toolsets UI are untouched.
+
+- **Subtract-only.** The fire site intersects your result against the original
+  list, so additions never land.
+- **Fail-open.** If a handler raises, the unfiltered list ships — a buggy fence
+  must not silence every tool.
+- The fence is re-applied on the post-tool-cycle refresh, so it holds across
+  tool calls within the same turn.
+- `chat_name` is pre-stamped by the fire site; there is no `system` or `config`
+  on this event.
+
+```python
+# hooks/fence.py — hide a tool while some plugin condition holds
+def tools_filter(event):
+    if not _fence_active(event.chat_name):
+        return
+    event.tools = [t for t in (event.tools or [])
+                   if t.get("function", {}).get("name") != "story_place"]
+```
+
+---
+
+## Surfaces — where presence hooks fire
+
+A chat is shown on a **surface**: `chat` (the chat view, with plugin sidebar accordions) or `game` (the Game Room — stories and games, where core sections render but plugin accordions don't). Core derives it: an explicit `surface` chat setting wins, otherwise any session tagged `mode: "game"` (every game and story session) resolves to `game`. Nothing has to stamp it by hand.
+
+If your plugin injects text *because something is on screen* — an avatar, a scene, a soundscape — declare where that something actually lives:
+
+```json
+{ "surfaces": ["chat"] }
+```
+
+Core then withholds **`prompt_inject` and `ghost_inject`** (only those two — the presence hooks) from your plugin on every other surface. No declaration = fire everywhere, exactly as before. The user can change your default per plugin from **Settings › Plugins** ("Show in: ☑ Chat ☐ Game Room") — the override lives in your plugin state under `surfaces` and wins over the manifest. Unknown surface ids are dropped. `GET /api/chats/{name}/prompt-preview` shows the assembled prompt for a chat *after* this filtering — the honest way to check what she gets.
+
+---
+
+## Private chats & `privacy_aware`
+
+A chat can be marked private (the 👁 toggle; with the prompt vault set up, its
+history is also encrypted at rest). On a turn in a private chat, the hook runner
+**withholds every hook from plugins that haven't declared themselves
+privacy-aware**. Your handler simply isn't called — the skip is logged at debug
+level and nothing else happens. Core withholds by default because a plugin with
+no privacy signal might persist or transmit content the user just locked up.
+
+Declare it **top-level in `plugin.json`** (next to `name`, not inside `capabilities`):
+
+```json
+{
+  "name": "my-plugin",
+  "privacy_aware": true,
+  "capabilities": {
+    "hooks": { "post_chat": "hooks/log.py" }
+  }
+}
+```
+
+**Rules the runner follows:**
+
+- Privacy is resolved **once per fire**. The event arrives at your handler with
+  `chat_name` and `chat_private` already stamped.
+- **Fail-closed**: if privacy can't be resolved (resolver error), the turn is
+  treated as private and non-aware plugins are withheld.
+- Some hooks **always deliver**, private or not: `chat_renamed`, `chat_deleted`,
+  `chat_cleared`, `plugins_ready`, `provider_switched`, `on_wake`. Rename/delete/clear
+  are housekeeping —
+  withholding them would strand a private chat's plugin-side data under a stale
+  name, which is the exact plaintext orphan the gate exists to prevent. The rest
+  carry no chat content and no chat identity.
+- Awareness is dropped when the plugin unloads, and re-read from the manifest on
+  the next load.
+
+**When to declare it.** Only when your plugin is correct on private content: it
+doesn't write chat text or chat names into plaintext stores, doesn't ship them
+off-box, and doesn't log them. If your plugin mirrors conversation anywhere,
+leave the flag off — being withheld in private chats is the safe default, not a
+bug. Bundled examples that declare it: `plugins/game-room`, `plugins/mindpalace`,
+`plugins/captioning`.
+
+### `chat_vaulted` — a chat just went private
+
+Fires **after** the chat is sealed (encryption already committed), with
+`event.metadata["name"]` set to the chat that flipped. Delivered **only to
+privacy_aware plugins** — the event itself says "this name is now a secret."
+
+Use it to scrub plaintext deposits your plugin left while the chat was public:
+rows keyed by that chat name, exports, caches. Errors are isolated and best-effort
+(a failure here doesn't unwind the vaulting), so make the handler idempotent.
+Scrubbing is **one-way** — unvaulting the chat later cannot restore what you
+removed, and shouldn't.
+
+```python
+# hooks/chat_vaulted.py
+def chat_vaulted(event):
+    name = (event.metadata or {}).get("name")
+    if not name:
+        return
+    my_store.rekey_chat(name, "__private__")   # or delete outright
+    # Don't log the name — it just became a secret.
+```
+
+```json
+"privacy_aware": true,
+"capabilities": {
+  "hooks": { "chat_vaulted": "hooks/chat_vaulted.py" }
+}
 ```
 
 ---
@@ -230,7 +374,7 @@ Voice commands are pre_chat hooks with keyword trigger matching. See the dedicat
 **post_stt — correct transcription:**
 ```python
 def post_stt(event):
-    fixes = {"creme": "Krem", "saphire": "Sapphire", "hey i": "AI"}
+    fixes = {"saphire": "Sapphire", "hey i": "AI", "tea tea ess": "TTS"}
     text = event.input
     for wrong, right in fixes.items():
         text = text.replace(wrong, right)
@@ -448,7 +592,7 @@ handle = ghost_inject  # fallback for `handle` dispatch
 When ghost contributions exist for a turn, the runner builds a single envelope and inserts it as a user-role message just before the new user input:
 
 ```
-[Operator metadata for assistant — these are turn-only notes, not the user's voice. Acknowledge or weave only if natural.]
+[System context from Sapphire's own app — not written by the user]
 - Time: Tuesday, May 8, 8:55 PM (America/Indiana/Indianapolis)
 - Spice: Speak more urgently in this reply.
 - weather: Light rain in user's area.
@@ -483,3 +627,18 @@ Each line is attributed to the plugin that contributed it. The opener tells the 
 
 The ghost rail is **labeled operator metadata**, not invisible puppetry. If you wouldn't be comfortable with a user discovering exactly what your plugin injects on every turn, your plugin probably shouldn't ship through the store. Build for plugins where the user **knows** their AI has weather context, time awareness, or calendar awareness — they just don't need it cluttering what they read.
 
+---
+
+## Reference for AI
+
+- Register: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`; never `def run` (schedule-only, silently fails to register).
+- Pipeline hooks: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason`).
+- `plugins_ready` fires on the boot scan AND on hot reload, rescan, and toggle-on — handlers must be idempotent and re-check their plugin is still loaded.
+- `tools_filter`: `event.tools` = final tool-schema list for this turn; subtract-only (additions discarded by intersection); handler errors fail open (unfiltered list ships); no `system`/`config` on the event; `chat_name` pre-stamped.
+- `chat_cleared`: chat-scoped store rows SURVIVE a clear (unlike delete) — use this hook to drop turn-anchored rows whose message anchors are gone.
+- `event.metadata.get("system")` (VoiceChatSystem) is stamped on: `post_stt`, `pre_chat`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, and the `tts_stream_*`/`tts_chunk_*` hooks. NOT on: `prompt_inject`, `post_execute`, `pre_tts`, `post_tts`, `on_wake`, or the lifecycle hooks.
+- Private chats: every hook is withheld from plugins without top-level `"privacy_aware": true` (fail-closed on resolver error). ALWAYS_DELIVER regardless of privacy: `chat_renamed`, `chat_deleted`, `chat_cleared`, `plugins_ready`, `provider_switched`, `on_wake`.
+- Surfaces: manifest top-level `"surfaces": ["chat"|"game"]` withholds ONLY `prompt_inject`/`ghost_inject` on other surfaces; user override wins; absent = fire everywhere. A chat's surface = explicit `surface` setting, else derived (`mode: "game"` → `game`).
+- `ghost_inject`: set `event.ghost_text` (one string per plugin per turn); runner attributes it by plugin name in the envelope; ephemeral (never saved, cache-friendly); oversized contributions are truncated; `event.config` is None here.
+- Streaming TTS: `tts_stream_end` fires exactly once per turn on every exit path; `tts_chunk_audio` may fire fewer times than `tts_chunk_text`; `stream_id` correlates a turn's hooks; only streaming-capable providers fire these (legacy providers use `pre_tts`/`post_tts`).
+- Handler errors are isolated (logged, next handler fires). Mutations persist across handlers in priority order: system plugins 0-99 first, user plugins 100-199.

@@ -11,7 +11,8 @@ Behavior:
 - Detects sentence ends via `.!?` followed by whitespace+capital
   (so `Dr. Smith`, `3.14`, `3:45 PM`, URLs don't split).
 - Paragraph breaks (`\\n\\n`) always split.
-- Ellipsis (`...`) is its own boundary with a longer post-pause.
+- Ellipsis (`...`) is ordinary text — its final dot splits like a period in
+  sentence mode; Kokoro renders the trail-off pause from the dots.
 - Secondary punctuation (`;` `:`) splits only when the chunk has already
   grown past max_chars * 0.5 — avoids tiny chunks on natural prose pauses.
 - If no boundary appears within `max_chars`, force-splits on the last
@@ -40,7 +41,6 @@ PAUSE_AFTER_MS = {
                          # on top of HTML5 Audio element startup, producing an
                          # audible ~100ms gap on fast hardware where the
                          # natural pause alone is enough.
-    "ellipsis":   150,   # ... — slightly longer than sentence (kept; rare boundary)
     "secondary":  0,     # ; : — gapless
     "paragraph":  80,    # \n\n — clear paragraph break (was 200; dropped 2026-05-21,
                          # same rationale as sentence — natural startup adds latency)
@@ -176,7 +176,7 @@ def chunkify_for_speech(
         dict per chunk:
           {
             "text": str,            # cleaned, ready for TTS
-            "boundary": str,        # 'sentence'|'paragraph'|'ellipsis'|
+            "boundary": str,        # 'sentence'|'paragraph'|
                                     #  'secondary'|'maxlen'|'end'
             "pause_after_ms": int,  # suggested gap before next chunk
             "index": int,           # 0-indexed within this stream
@@ -346,8 +346,9 @@ def _apply_stage_prosody(text: str, style: str) -> str:
     # substitution-induced doublings always have a space between them
     # (stage markers are ", " or ". " with trailing space), so requiring
     # \s+ between consecutive markers is safe.
-    # 2026-05-26 — fix for ellipsis being silently collapsed to "." which
-    # broke ellipsis-boundary detection in _find_split.
+    # 2026-05-26 — fix for ellipsis being silently collapsed to ".".
+    # Still load-bearing: the dots must reach Kokoro intact so it renders
+    # the trail-off pause (ellipsis is no longer a split boundary, 2026-06-11).
     text = re.sub(r"(,\s+){2,}", ", ", text)
     text = re.sub(r"(\.\s+){2,}", ". ", text)
     return text
@@ -380,11 +381,6 @@ _CASUAL_SENTENCE_RE = re.compile(r"(?<=\w{4})([\.!?])([\"'\)\]]*)\s+(?=[a-z])")
 # Matches the terminator + any trailing closing punctuation. 2026-05-20.
 _CJK_SENTENCE_RE = re.compile(r"([。！？؟])([\"'\)\]」』]*)")
 
-# Ellipsis: 3+ dots, then whitespace, then anything non-whitespace.
-# Dropped uppercase requirement — "..." is unambiguous (no abbreviation
-# uses three dots) and casual register is common. 2026-05-20.
-_ELLIPSIS_RE = re.compile(r"(\.{3,})\s+(?=\S)")
-
 # Paragraph: at least two newlines in a row (allow whitespace between).
 _PARAGRAPH_RE = re.compile(r"\n\s*\n")
 
@@ -400,7 +396,7 @@ def _find_split(buf: str, max_chars: int, min_chars: int,
 
     split_mode='paragraph' (default) skips sentence/casual/secondary boundaries
     to preserve TTS prosody across consecutive sentences in same paragraph.
-    Paragraph + ellipsis + max_chars cap still apply.
+    Paragraph + max_chars cap still apply.
 
     split_mode='sentence' keeps the original (lower-latency) behavior splitting
     on every sentence end.
@@ -420,12 +416,11 @@ def _find_split(buf: str, max_chars: int, min_chars: int,
         if len(buf[:m.start()].strip()) >= min_chars:
             return buf[:m.start()], "paragraph", buf[m.end():]
 
-    # 2. Ellipsis: kept in BOTH modes — narrative pauses are intentional
-    # prosodic events, not sentence splits. Check before sentence_re since
-    # `...` contains `.` that sentence_re would match as a plain period.
-    m = _ELLIPSIS_RE.search(buf)
-    if m:
-        return buf[:m.end(1)], "ellipsis", buf[m.end():]
+    # Ellipsis is NOT a boundary — `...` rides through as ordinary text and
+    # the sentence regex below treats its final dot like any period. Kokoro
+    # renders the trail-off pause from the dots themselves. The old special
+    # case (split + 150ms pause) was a fossil from the 250ms-pause era and
+    # broke "Fishy... You know" into two streams. Removed 2026-06-11.
 
     if split_mode == "sentence":
         # 3. Sentence: .!? followed by uppercase next (strict — abbreviation-safe)

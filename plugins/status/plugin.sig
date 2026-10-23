@@ -1,11 +1,11 @@
 {
   "plugin": "status",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "files": {
-    "app/index.js": "sha256:1e857ed46dffbe53a13a927f913f03e8f1f390eff3808bf9b861789fbfdd9394",
-    "plugin.json": "sha256:62277981c4f9e51c93db43f5dba7bba2cc986a754097c68a85f1c25796d123c2",
-    "routes/status.py": "sha256:e52d003c0d6c47d3c0dfe1e566f61ff96e9beb9b69896c04abfa7e997599c582",
-    "tools/status_tool.py": "sha256:08c7a8f92bef08c9eb411f4631a1da91c61b5fba2a6975d3cf92eca66f54c4f7"
+    "app/index.js": "sha256:18f8eb6fdb37d996ef0f732613a86f598d098a781d12befd3ba7dae90eba6c6b",
+    "plugin.json": "sha256:b6bb7ac8dad680db29e427c2bd5ad8da40cb3a164b1d971e7ea3ad301bf28b14",
+    "routes/status.py": "sha256:d054bba22907b129fb81d1ddb235fbfc004c5c19f73ca6c4309b1e4c6dbad9af",
+    "tools/status_tool.py": "sha256:e415ab6d93e54609939ff734a727f23ed1bfe966f63b20606a0aa4648beaa4dc"
   },
-  "signature": "aLqm+vZwpDaEGAW8Y0l5h89kVoMyt3wApTl513icMv11+r88feXodzQFBu7W4ouwzlgO7MqC4wpx8fEb8+U6AQ=="
+  "signature": "+JifV/Yt9VTabJ57tCEXgkdwwQNdQIqdHkjghHf1BaAzb0W4cWTO6NR2zQjXMj9evOdFDbWHw5h0iH8vi0KsDA=="
 }

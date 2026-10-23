@@ -5,9 +5,11 @@ import logging
 import os
 import sys
 import threading
-from pathlib import Path as _Path
 
 import numpy as np
+import requests
+
+from core import net
 import config
 
 logger = logging.getLogger(__name__)
@@ -22,19 +24,9 @@ EMBEDDING_ONNX_FILE = 'onnx/model_quantized.onnx'
 # config.EMBEDDING_MODEL_REVISION.
 EMBEDDING_MODEL_REVISION = getattr(config, 'EMBEDDING_MODEL_REVISION', None)
 
-# Windows MAX_PATH safety: the HuggingFace cache directory nests quite deep
-# (`~/.cache/huggingface/hub/models--{slug}/snapshots/<40charSHA>/...`), which
-# routinely overflows Windows' 260-char path limit especially when combined
-# with a non-ASCII username. Redirect the cache to a project-local short path
-# on Windows. Linux/macOS keep the default HF location so existing caches work.
-if sys.platform == 'win32' and not os.environ.get('HF_HOME'):
-    try:
-        _hf_home = _Path(__file__).parent.parent.parent / 'user' / 'models' / 'hf'
-        _hf_home.mkdir(parents=True, exist_ok=True)
-        os.environ['HF_HOME'] = str(_hf_home)
-        logger.info(f"Set HF_HOME={_hf_home} for Windows MAX_PATH safety")
-    except Exception as _e:
-        logger.debug(f"HF_HOME redirect skipped: {_e}")
+# Windows MAX_PATH redirect of HF_HOME lives in sapphire.py's env block now —
+# it has to be in place before the TTS server is spawned, and this module is
+# only imported once the memory plugin loads (2026-09-20).
 
 
 class LocalEmbedder:
@@ -211,10 +203,6 @@ class RemoteEmbedder:
         if not url:
             return None
         try:
-            client = _get_http_client()
-            if client is None:
-                logger.error("Remote embedding: httpx not installed")
-                return None
             from core.credentials_manager import credentials
             key = credentials.get_service_api_key('embedding') or getattr(config, 'EMBEDDING_API_KEY', '')
             headers = {}
@@ -222,8 +210,8 @@ class RemoteEmbedder:
                 headers['Authorization'] = f'Bearer {key}'
 
             prefixed = [f'{prefix}: {t}' for t in texts]
-            resp = client.post(url, json={'input': prefixed, 'model': EMBEDDING_MODEL},
-                               headers=headers, timeout=30.0)
+            resp = net.post(url, json={'input': prefixed, 'model': EMBEDDING_MODEL},
+                            headers=headers, timeout=30.0)
             resp.raise_for_status()
             data = resp.json().get('data', [])
             if not data:
@@ -276,15 +264,11 @@ class SapphireRouterEmbedder:
         if not url:
             return None
         try:
-            client = _get_http_client()
-            if client is None:
-                logger.error("Sapphire Router embeddings: httpx not installed")
-                return None
             headers = {'Content-Type': 'application/json'}
             tenant_id = self._get_tenant_id()
             if tenant_id:
                 headers['X-Tenant-ID'] = tenant_id
-            resp = client.post(
+            resp = net.post(
                 f'{url}/v1/embeddings/embed',
                 json={'texts': texts, 'prefix': prefix},
                 headers=headers,
@@ -306,8 +290,7 @@ class SapphireRouterEmbedder:
                 return result
             return None
         except Exception as e:
-            import httpx as _hx
-            if isinstance(e, _hx.ConnectError):
+            if isinstance(e, requests.exceptions.ConnectionError):
                 logger.error(f"Sapphire Router embeddings: cannot reach router at {url}")
             else:
                 logger.error(f"Sapphire Router embedding failed: {e}")
@@ -561,24 +544,13 @@ embedding_registry = EmbeddingRegistry()
 _embedder = None
 _embedder_lock = threading.Lock()
 
-# Shared httpx client for remote providers — reused across calls so we don't
-# burn TIME_WAIT connections on high-volume RAG ingest. Lazy-initialized since
-# httpx may not be available in minimal installs. Scout longevity finding #20.
-_shared_httpx_client = None
-_shared_httpx_lock = threading.Lock()
-
-
-def _get_http_client():
-    global _shared_httpx_client
-    if _shared_httpx_client is None:
-        with _shared_httpx_lock:
-            if _shared_httpx_client is None:
-                try:
-                    import httpx as _httpx
-                    _shared_httpx_client = _httpx.Client(timeout=30.0)
-                except ImportError:
-                    return None
-    return _shared_httpx_client
+# Remote/router embedding providers ride core.net (2026-09-01): the net
+# facade classifies a LAN embedding host (single-label or private IP) onto
+# the direct lane — the raw-httpx client was CIDR-blind so a LAN embedder
+# rode the proxy — and net's pooled session drops on every SOCKS change,
+# so flipping the proxy no longer leaves embedding traffic on the real IP
+# until restart (chaos/longevity scout finding, net-facade wave 2). Pooled
+# keep-alive preserves the TIME_WAIT benefit the old shared client gave.
 
 
 def get_embedder():
@@ -610,7 +582,20 @@ def switch_embedding_provider(provider_name):
         pass  # reembed module unavailable — proceed
     with _embedder_lock:
         logger.info(f"Switching embedding provider to: {provider_name}")
-        _embedder = embedding_registry.create(provider_name or 'none')
+        _new = embedding_registry.create(provider_name or 'none')
+        if _new is None or (isinstance(_new, NullEmbedder)
+                            and (provider_name or 'none') != 'none'):
+            # create() launders every failure into a NullEmbedder (unknown
+            # key, constructor raise, canary fail) — a silent no-vectors
+            # world the Settings UI toasted as success and persisted to
+            # disk, broken at every future boot (hunt 2026-09-04 S7-1:
+            # the 2026-08-15 registry lie's third lane; STT/TTS callers
+            # were fixed, embeddings never was). Keep the old embedder,
+            # raise so both switch routes catch and report honestly.
+            raise RuntimeError(
+                f"Embedding provider '{provider_name}' failed to initialize "
+                f"(fell back to null) — keeping the previous provider.")
+        _embedder = _new
     # Reset backfill flag so new provider can re-embed missing memories
     try:
         import plugins.memory.tools.memory_tools as mem

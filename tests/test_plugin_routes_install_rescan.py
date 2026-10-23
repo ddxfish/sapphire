@@ -104,6 +104,166 @@ def test_install_without_force_returns_409_with_existing_meta(
     assert body.get('author') == 'new_author'
 
 
+# ─── Wave 2 (2026-08-06 hunt): staged install, expected_name, revert ─────────
+
+def _setup_dirs(temp_user_dir, monkeypatch):
+    import core.routes.plugins as rp
+    import core.plugin_loader as pl
+    plugins_dir = temp_user_dir / 'plugins'
+    prev_dir = temp_user_dir / 'plugin_prev'
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(rp, 'USER_PLUGINS_DIR', plugins_dir, raising=False)
+    monkeypatch.setattr(pl, 'USER_PLUGINS_DIR', plugins_dir)
+    monkeypatch.setattr(pl, 'PLUGIN_PREV_DIR', prev_dir)
+    return plugins_dir, prev_dir
+
+
+def _mock_loader(monkeypatch, name, loaded=True, version='1.0.0'):
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info(name, loaded=loaded, version=version)
+    mock_pl._lock = threading.RLock()
+    mock_pl._plugins = {}
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+    return mock_pl
+
+
+def _existing_plugin(plugins_dir, name='my_plugin', version='1.0.0'):
+    d = plugins_dir / name
+    d.mkdir(parents=True)
+    (d / 'plugin.json').write_text(json.dumps({
+        'name': name, 'version': version, 'author': 'orig_author', 'description': 'test',
+    }))
+    return d
+
+
+def _plugin_zip(name, version='2.0.0'):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        zf.writestr(f'{name}/plugin.json', json.dumps({
+            'name': name, 'version': version, 'author': 'new_author',
+            'description': 'replacement',
+        }))
+    buf.seek(0)
+    return buf
+
+
+def test_install_expected_name_mismatch_409_changes_nothing(
+    client, temp_user_dir, monkeypatch,
+):
+    """[C4] A repo that renamed its plugin.json name used to install as a NEW
+    plugin (or force-replace the wrong one) under an 'update' toast. With
+    expected_name the server refuses and nothing on disk moves."""
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    _mock_loader(monkeypatch, 'my_plugin')
+    buf = _plugin_zip('renamed_plugin')
+
+    c, csrf = client
+    r = c.post(
+        '/api/plugins/install',
+        headers={'X-CSRF-Token': csrf},
+        files={'file': ('renamed.zip', buf.getvalue(), 'application/zip')},
+        data={'force': 'true', 'expected_name': 'my_plugin'},
+    )
+    assert r.status_code == 409, r.text
+    assert 'renamed_plugin' in r.json()['detail']
+    assert (plugins_dir / 'my_plugin' / 'plugin.json').exists()
+    assert not (plugins_dir / 'renamed_plugin').exists()
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+
+
+def test_force_update_unsigned_refused_keeps_working_copy(
+    client, temp_user_dir, monkeypatch,
+):
+    """[C2] Old flow: rmtree the working plugin, copy the replacement, let
+    rescan discover the unsigned corpse — 'Updated ✓' toast, plugin dark, old
+    copy gone. New flow verifies in staging FIRST and refuses with the
+    working copy untouched."""
+    import config
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    _mock_loader(monkeypatch, 'my_plugin')
+    monkeypatch.setattr(config, 'ALLOW_UNSIGNED_PLUGINS', False, raising=False)
+    buf = _plugin_zip('my_plugin')
+
+    c, csrf = client
+    r = c.post(
+        '/api/plugins/install',
+        headers={'X-CSRF-Token': csrf},
+        files={'file': ('my_plugin.zip', buf.getvalue(), 'application/zip')},
+        data={'force': 'true'},
+    )
+    assert r.status_code == 400, r.text
+    assert 'untouched' in r.json()['detail']
+    # Working copy intact, no prev created, staging cleaned up
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+    assert not (prev_dir / 'my_plugin').exists()
+    assert not (prev_dir / '.staging-my_plugin').exists()
+
+
+def test_force_update_retains_previous_version(
+    client, temp_user_dir, monkeypatch,
+):
+    """[C2] A successful update keeps one generation in plugin_prev/<name>
+    (= per-plugin Revert) and reports prev_kept."""
+    import config
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    mock_pl = _mock_loader(monkeypatch, 'my_plugin')
+    monkeypatch.setattr(config, 'ALLOW_UNSIGNED_PLUGINS', True, raising=False)
+    buf = _plugin_zip('my_plugin')
+
+    c, csrf = client
+    r = c.post(
+        '/api/plugins/install',
+        headers={'X-CSRF-Token': csrf},
+        files={'file': ('my_plugin.zip', buf.getvalue(), 'application/zip')},
+        data={'force': 'true', 'expected_name': 'my_plugin'},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body['version'] == '2.0.0'
+    assert body['old_version'] == '1.0.0'
+    assert body['prev_kept'] is True
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '2.0.0'
+    assert json.loads((prev_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+    mock_pl.unload_plugin.assert_called_once_with('my_plugin')
+    mock_pl.rescan.assert_called()
+
+
+def test_revert_swaps_live_and_retained(client, temp_user_dir, monkeypatch):
+    """[C2 payoff] Revert swaps live ↔ retained, so reverting again toggles
+    back — nothing destroyed in either direction."""
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin', version='2.0.0')
+    (prev_dir / 'my_plugin').mkdir(parents=True)
+    (prev_dir / 'my_plugin' / 'plugin.json').write_text(json.dumps({
+        'name': 'my_plugin', 'version': '1.0.0', 'author': 'orig_author',
+        'description': 'test',
+    }))
+    mock_pl = _mock_loader(monkeypatch, 'my_plugin', loaded=False, version='1.0.0')
+
+    c, csrf = client
+    r = c.post('/api/plugins/my_plugin/revert', headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200, r.text
+    assert r.json()['version'] == '1.0.0'
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+    assert json.loads((prev_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '2.0.0'
+    mock_pl.rescan.assert_called()
+
+
+def test_revert_without_retained_copy_404(client, temp_user_dir, monkeypatch):
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    _mock_loader(monkeypatch, 'my_plugin', loaded=False)
+
+    c, csrf = client
+    r = c.post('/api/plugins/my_plugin/revert', headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 404
+    assert 'No previous version' in r.json()['detail']
+
+
 # ─── 1.33 Uninstall publishes TOOLSET_CHANGED with action=plugin_uninstall ───
 
 def test_uninstall_publishes_toolset_event_with_uninstall_action(
@@ -230,14 +390,15 @@ def test_check_update_newer_version_returns_true(client, temp_user_dir, monkeypa
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    # Patch requests.get — the route does `import requests as req` inside
-    # the function, so we patch the module-level attr.
-    import requests as req_mod
+    # Patch net.get (the facade lane, 2026-09-01) — the GitHub path goes through
+    # core.github_files (contents API + raw fallback), which reads resp.text.
+    import json as _json
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
-    fake_resp.json.return_value = {'name': 'pm', 'version': '1.1.0',
-                                   'author': 'user'}
-    monkeypatch.setattr(req_mod, 'get', lambda url, timeout=10: fake_resp)
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.1.0', 'author': 'user'})
+    monkeypatch.setattr(net_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
     r = c.get('/api/plugins/pm/check-update')
@@ -257,11 +418,13 @@ def test_check_update_same_version_returns_false(client, temp_user_dir, monkeypa
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests as req_mod
+    import json as _json
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
-    fake_resp.json.return_value = {'name': 'pm', 'version': '1.0.0', 'author': 'user'}
-    monkeypatch.setattr(req_mod, 'get', lambda url, timeout=10: fake_resp)
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.0.0', 'author': 'user'})
+    monkeypatch.setattr(net_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
     r = c.get('/api/plugins/pm/check-update')
@@ -323,7 +486,7 @@ def test_check_update_gitlab_source_attempts_fetch(client, temp_user_dir, monkey
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests
+    from core import net as net_mod
     fetched = []
 
     def _fake_get(url, *_, **__):
@@ -332,7 +495,7 @@ def test_check_update_gitlab_source_attempts_fetch(client, temp_user_dir, monkey
         resp.status_code = 404
         return resp
 
-    monkeypatch.setattr(requests, 'get', _fake_get)
+    monkeypatch.setattr(net_mod, 'get', _fake_get)
 
     c, csrf = client
     r = c.get('/api/plugins/gitlab_plugin/check-update')
@@ -348,6 +511,94 @@ def test_check_update_gitlab_source_attempts_fetch(client, temp_user_dir, monkey
         f"Expected fallback to master branch, fetched: {fetched}"
 
 
+def test_check_update_v_prefixed_remote_version_is_offered(client, temp_user_dir, monkeypatch):
+    """[REGRESSION — 2026-08-06 hunt M1] The old inline _ver_tuple returned
+    (0,) for 'v1.1.0', so a v-prefixed remote release was NEVER offered.
+    The shared core/versions.py parser strips the prefix."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('pm', version='1.0.0')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://github.com/user/repo'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    import json as _json
+    from core import net as net_mod
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': 'v1.1.0', 'author': 'user'})
+    monkeypatch.setattr(net_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
+
+    c, csrf = client
+    r = c.get('/api/plugins/pm/check-update')
+    assert r.status_code == 200
+    assert r.json()['update_available'] is True
+
+
+def test_check_update_unparseable_local_reports_reason(client, temp_user_dir, monkeypatch):
+    """[REGRESSION — 2026-08-06 hunt M1] Garbage local version used to parse
+    as (0,) and make EVERYTHING look like an update. Now: no update offered,
+    honest reason=version_unparseable so the UI can say why."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('pm', version='garbage')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://github.com/user/repo'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    import json as _json
+    from core import net as net_mod
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.1.0', 'author': 'user'})
+    monkeypatch.setattr(net_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
+
+    c, csrf = client
+    r = c.get('/api/plugins/pm/check-update')
+    assert r.status_code == 200
+    body = r.json()
+    assert body['update_available'] is False
+    assert body['reason'] == 'version_unparseable'
+    assert body['remote_version'] == '1.1.0'
+
+
+def test_check_update_github_tries_contents_api_first(client, temp_user_dir, monkeypatch):
+    """[REGRESSION — 2026-08-06 hunt H1] raw.githubusercontent lags pushes
+    ~5 min ("no updates" right after a release). The GitHub path must hit the
+    contents API before falling back to the raw CDN."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('pm', version='1.0.0')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://github.com/user/repo'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    from core import net as net_mod
+    fetched = []
+
+    def _fake_get(url, *_, **__):
+        fetched.append(url)
+        resp = MagicMock()
+        resp.status_code = 404
+        return resp
+
+    monkeypatch.setattr(net_mod, 'get', _fake_get)
+
+    c, csrf = client
+    r = c.get('/api/plugins/pm/check-update')
+    assert r.status_code == 200
+    assert r.json()['reason'] == 'fetch_failed'
+    assert 'api.github.com/repos/user/repo/contents/plugin.json' in fetched[0], \
+        f"Contents API must be tried first, fetched: {fetched}"
+    assert any('raw.githubusercontent.com/user/repo' in u for u in fetched), \
+        f"Raw CDN must remain the fallback, fetched: {fetched}"
+
+
 def test_check_update_url_with_query_params_still_matches(client, temp_user_dir, monkeypatch):
     """A stored installed_from URL with a query string / fragment should still
     match the GitHub/GitLab regex. Path-only matching via urlparse. 2026-04-26."""
@@ -359,7 +610,7 @@ def test_check_update_url_with_query_params_still_matches(client, temp_user_dir,
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests
+    from core import net as net_mod
     fetched = []
 
     def _fake_get(url, *_, **__):
@@ -368,7 +619,7 @@ def test_check_update_url_with_query_params_still_matches(client, temp_user_dir,
         resp.status_code = 404
         return resp
 
-    monkeypatch.setattr(requests, 'get', _fake_get)
+    monkeypatch.setattr(net_mod, 'get', _fake_get)
 
     c, csrf = client
     r = c.get('/api/plugins/gh_with_qs/check-update')
@@ -392,12 +643,12 @@ def test_check_update_version_tuple_handles_non_numeric(client, temp_user_dir, m
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    import requests as req_mod
+    from core import net as net_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.json.return_value = {'name': 'exotic', 'version': 'unknown',
                                    'author': 'user'}
-    monkeypatch.setattr(req_mod, 'get', lambda url, timeout=10: fake_resp)
+    monkeypatch.setattr(net_mod, 'get', lambda url, timeout=10: fake_resp)
 
     c, csrf = client
     r = c.get('/api/plugins/exotic/check-update')

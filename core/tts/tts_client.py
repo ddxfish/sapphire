@@ -9,7 +9,7 @@ import config
 import re
 import gc
 import numpy as np
-import sounddevice as sd
+from core.audio.backend import sd
 import soundfile as sf
 from core.event_bus import publish, Events
 
@@ -159,6 +159,15 @@ class TTSClient:
             return True  # Keep current voice (default af_heart)
         self.voice_name = voice_name
         logger.info(f"Voice set to: {self.voice_name}")
+        # Notify the provider so it can react to a voice change — e.g. pre-fetch a
+        # model for a newly-selected voice off the hot path (Piper). Opt-in +
+        # isolated: only providers that define on_voice_selected react. 2026-06-16.
+        prov = self._provider
+        if prov is not None and hasattr(prov, "on_voice_selected"):
+            try:
+                prov.on_voice_selected(voice_name)
+            except Exception as e:
+                logger.warning(f"provider on_voice_selected failed: {e}")
         return True
     
     def set_speed(self, speed):
@@ -174,8 +183,17 @@ class TTSClient:
         return True
     
     def set_pitch(self, pitch):
-        """Set the pitch shift"""
-        self.pitch_shift = float(pitch)
+        """Set the pitch shift, clamped to a sane range.
+
+        No provider declares pitch bounds (unlike SPEED_MIN/MAX) — UI
+        sliders span 0.5-1.5 (trigger editor 2.0), so [0.5, 2.0] covers
+        every surface while blocking unclamped legacy-path values."""
+        pitch = float(pitch)
+        if pitch < 0.5 or pitch > 2.0:
+            clamped = max(0.5, min(2.0, pitch))
+            logger.warning(f"Pitch {pitch} outside range [0.5-2.0], clamped to {clamped}")
+            pitch = clamped
+        self.pitch_shift = pitch
         logger.info(f"Pitch set to: {self.pitch_shift}")
         return True
 
@@ -202,6 +220,11 @@ class TTSClient:
             r'`[^`]+`',                      # Inline code
             r'!\[.*?\]\(.*?\)',              # Image markdown ![alt](url)
             r'\|.*?\|(?:\n\|.*?\|)*',        # Markdown tables
+            # Avatar display token BEFORE the HTML catch-all: `<[^>]+>` ate
+            # `<<avatar: wave 2s>` and left a stray `>` that got SPOKEN on
+            # every blob-lane speak (streaming.py had this order since
+            # 2026-05-28; this cleaner never got it — broadsword M-C5).
+            r'<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>',
             r'<[^>]+>',                      # HTML tags
         ]
         for pattern in block_patterns:
@@ -228,8 +251,24 @@ class TTSClient:
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         return processed_text
 
-    def speak(self, text):
-        """Send text to TTS server and play audio (non-blocking)."""
+    def speak(self, text, chat_settings=None):
+        """Send text to TTS server and play audio (non-blocking).
+
+        chat_settings: the settings of the chat that PRODUCED the text. Pass
+        it from any lane that speaks after its stream ended (cadence, the
+        continuity executor) — by then the stream-brain override is gone and
+        the self-gate below would read the operator's ACTIVE chat instead
+        (broadsword H3: a private game session's reply reached a cloud TTS
+        provider because the operator sat on a public chat). None = resolve
+        the effective chat (the wake door, mid-stream callers)."""
+        # Voice privacy gate (vault v1.1): private chat + cloud TTS = the
+        # response text leaves the machine as a synthesis request.
+        from core.voice_privacy import tts_gate_reason
+        _gate = tts_gate_reason(chat_settings)
+        if _gate:
+            logger.info(f"[TTS] {_gate} — speech skipped")
+            return False
+
         if not self.audio_available:
             logger.warning("Audio playback unavailable - skipping TTS")
             return False
@@ -292,8 +331,15 @@ class TTSClient:
             return self._generate_and_play_audio
         return self._generate_and_play_audio_stream
 
-    def speak_sync(self, text):
-        """Send text to TTS server, play audio, and block until playback finishes."""
+    def speak_sync(self, text, chat_settings=None):
+        """Send text to TTS server, play audio, and block until playback finishes.
+        chat_settings: see speak() — the producing chat's settings for the gate."""
+        from core.voice_privacy import tts_gate_reason
+        _gate = tts_gate_reason(chat_settings)
+        if _gate:
+            logger.info(f"[TTS] {_gate} — speech skipped")
+            return False
+
         if not self.audio_available:
             logger.warning("Audio playback unavailable - skipping TTS")
             return False
@@ -352,7 +398,8 @@ class TTSClient:
         """Fetch audio from provider. Returns (audio_data, samplerate) or (None, None)."""
         temp_path = None
         try:
-            audio_bytes = self._provider.generate(text, self.voice_name, self.speed)
+            kw = {"pitch": self.pitch_shift} if getattr(self._provider, "supports_pitch", False) else {}
+            audio_bytes = self._provider.generate(text, self.voice_name, self.speed, **kw)
             if not audio_bytes:
                 return None, None
 
@@ -371,8 +418,10 @@ class TTSClient:
             # Load audio data
             audio_data, samplerate = sf.read(temp_path)
 
-            # Apply pitch shift if needed (Kokoro supports this; cloud providers may not benefit)
-            if self.pitch_shift != 1.0:
+            # Legacy client-side pitch — ONLY for providers that can't shift at
+            # synthesis time; supports_pitch providers already applied it
+            # server-side (double-shift guard, 2026-08-08).
+            if self.pitch_shift != 1.0 and not getattr(self._provider, "supports_pitch", False):
                 audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate)
 
             return audio_data, samplerate
@@ -430,7 +479,7 @@ class TTSClient:
             with self.lock:
                 if self.should_stop.is_set() or _stale():
                     return
-                publish(Events.TTS_PLAYING)
+                publish(Events.TTS_PLAYING, {"surface": "local"})
 
             # Convert stereo to mono if needed
             if len(audio_data.shape) > 1:
@@ -500,7 +549,7 @@ class TTSClient:
                 was_playing = self._is_playing
                 self._is_playing = False
             if was_playing:
-                publish(Events.TTS_STOPPED)
+                publish(Events.TTS_STOPPED, {"surface": "local"})
             gc.collect()
 
     def _generate_and_play_audio_stream(self, text, gen=None):
@@ -534,7 +583,15 @@ class TTSClient:
                     return
                 self._is_playing = True
 
-            chunk_iter = self._provider.generate_stream(text, self.voice_name, self.speed)
+            # Pitch parity with the blob path (_fetch_audio) and the SSE pump
+            # (stream_pump._synth): supports_pitch providers shift server-side
+            # via the payload. This call site was the ONE place that dropped
+            # the kwarg — wake/voice blob replies spoke at pitch 1.0 while
+            # browser turns honored the setting (found via Krem's 0.78 test,
+            # 2026-08-17; broken since supports_pitch landed 2026-08-08).
+            _provider_pitch = getattr(self._provider, "supports_pitch", False)
+            kw = {"pitch": self.pitch_shift} if _provider_pitch else {}
+            chunk_iter = self._provider.generate_stream(text, self.voice_name, self.speed, **kw)
 
             for chunk_bytes in chunk_iter:
                 if self.should_stop.is_set() or _stale():
@@ -551,6 +608,12 @@ class TTSClient:
 
                 if len(audio_data.shape) > 1:
                     audio_data = audio_data.mean(axis=1)
+                # Legacy client-side shift for providers that can't pitch at
+                # synthesis time — same double-shift guard as the blob path.
+                # Before the output-rate resample: the shift works at the
+                # chunk's native rate.
+                if self.pitch_shift != 1.0 and not _provider_pitch:
+                    audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate)
                 if samplerate != self.output_rate:
                     audio_data = self._resample(audio_data, samplerate, self.output_rate)
                     samplerate = self.output_rate
@@ -599,7 +662,7 @@ class TTSClient:
                         if self.should_stop.is_set() or _stale():
                             stopped_early = True
                             break
-                        publish(Events.TTS_PLAYING)
+                        publish(Events.TTS_PLAYING, {"surface": "local"})
                         playing_started = True
                     first_chunk_at = time.time() - t_start
                     logger.debug(f"[TTS-stream] first chunk playing at +{first_chunk_at*1000:.0f}ms")
@@ -653,7 +716,7 @@ class TTSClient:
                 was_playing = self._is_playing
                 self._is_playing = False
             if was_playing and playing_started:
-                publish(Events.TTS_STOPPED)
+                publish(Events.TTS_STOPPED, {"surface": "local"})
             gc.collect()
 
     def stop(self):
@@ -662,14 +725,13 @@ class TTSClient:
         was_playing = False
         with self.lock:
             if self._is_playing:
-                try:
-                    sd.stop()
-                except Exception:
-                    pass
+                # Playback runs on dedicated OutputStreams that poll
+                # should_stop — sd.stop() couldn't reach them, it only
+                # stomped OTHER components' sd.play (wake tone, test tone).
                 self._is_playing = False
                 was_playing = True
         if was_playing:
-            publish(Events.TTS_STOPPED)
+            publish(Events.TTS_STOPPED, {"surface": "local"})
 
     def wait(self, timeout=300):
         """Block until TTS playback finishes or timeout (seconds)."""
@@ -689,12 +751,15 @@ class TTSClient:
         use_pitch = pitch if pitch is not None else self.pitch_shift
         temp_path = None
         try:
-            audio_bytes = self._provider.generate(text, use_voice, use_speed)
+            provider_pitch = getattr(self._provider, "supports_pitch", False)
+            kw = {"pitch": use_pitch} if provider_pitch else {}
+            audio_bytes = self._provider.generate(text, use_voice, use_speed, **kw)
             if not audio_bytes:
                 return None
 
-            # Apply pitch shift if needed (requires decode → re-encode)
-            if use_pitch != 1.0:
+            # Legacy decode → shift → re-encode — only when the provider
+            # couldn't apply pitch at synthesis time (double-shift guard).
+            if use_pitch != 1.0 and not provider_pitch:
                 ext_map = {'audio/mp3': '.mp3', 'audio/mpeg': '.mp3', 'audio/wav': '.wav', 'audio/ogg': '.ogg'}
                 ext = ext_map.get(self._provider.audio_content_type, '.ogg')
                 fd, temp_path = tempfile.mkstemp(suffix=ext, dir=self.temp_dir)

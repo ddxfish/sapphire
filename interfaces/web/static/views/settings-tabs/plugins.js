@@ -1,13 +1,13 @@
 // settings-tabs/plugins.js - Plugin Manager
 import * as ui from '../../ui.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
+import { setupModalClose } from '../../shared/modal.js';
 import pluginsAPI from '../../shared/plugins-api.js';
 
-// Infrastructure plugins hidden from toggle list.
-// (Phase 2 v7: backup + continuity were dead core-ui leftovers; the real backup
-// UI lives at views/settings-tabs/backup.js and the real continuity UI is the
-// schedule view. setup-wizard is the only live core-ui plugin.)
-const HIDDEN = new Set(['setup-wizard']);
+// Core plugins hidden from the toggle list: manifest/meta "essential": true
+// (boolean — a group STRING like "memory" marks switchable alternates and
+// stays visible). The toggle route 403s these too; hiding is the UI half.
+const _isHidden = p => p.essential === true;
 
 // Danger confirmation configs for risky plugins
 const DANGER_PLUGINS = {
@@ -90,8 +90,9 @@ const PLUGIN_NAV_MAP = { continuity: 'triggers' };
 // Prevent double-click race condition on toggles
 const toggling = new Set();
 
-// Active filter
+// Active filter + search term (persist across re-renders within the session)
 let activeFilter = 'all';
+let searchTerm = '';
 
 function _esc(s) {
     if (!s) return '';
@@ -119,10 +120,9 @@ function _trustClass(p, locked) {
     return 'pm-trust-unsigned';
 }
 
-// ── In-place tile update — avoids the full grid re-render (and the
-// staggered fade-in animation flash) on every toggle. The toggle handler
-// at the bottom of attachListeners calls these instead of refreshTab().
-// 2026-04-30.
+// ── In-place row update — avoids the full list re-render on every toggle.
+// The toggle handler at the bottom of attachListeners calls these instead
+// of refreshTab(). 2026-04-30 (tiles), 2026-08-06 (rows).
 
 function _bindGearClick(el, gearBtn, name) {
     gearBtn.addEventListener('click', () => {
@@ -158,28 +158,28 @@ function _bindReloadClick(el, ctx, reloadBtn, name) {
     });
 }
 
-function _updateTileInPlace(el, ctx, name, locked) {
+function _updateRowInPlace(el, ctx, name, locked) {
     const cached = (ctx.pluginList || []).find(p => p.name === name);
     if (!cached) return;
     const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);
     if (!card) return;
 
-    // Visual state — opacity, border tint via .pm-enabled.
+    // Visual state — opacity, accent tint via .pm-enabled.
     card.classList.toggle('pm-enabled', !!cached.enabled);
     // Sync the toggle input in case it drifted.
     const toggleInput = card.querySelector('input[data-plugin-toggle]');
     if (toggleInput) toggleInput.checked = !!cached.enabled;
 
     // Gear button (visible only when enabled + has settingsUI).
-    const controlsRight = card.querySelector('.pm-tile-controls-right');
-    if (controlsRight) {
-        const existingGear = controlsRight.querySelector('.pm-gear');
+    const actions = card.querySelector('.pm-row-actions');
+    if (actions) {
+        const existingGear = actions.querySelector('.pm-gear');
         const wantGear = cached.enabled && cached.settingsUI;
         if (wantGear && !existingGear) {
             const tmpl = document.createElement('div');
             tmpl.innerHTML = `<button class="pm-gear" data-settings-tab="${_esc(name)}" title="Plugin settings" type="button">⚙️</button>`;
             const newGear = tmpl.firstElementChild;
-            controlsRight.insertBefore(newGear, controlsRight.firstChild);
+            actions.insertBefore(newGear, actions.querySelector('.pm-toggle'));
             _bindGearClick(el, newGear, name);
         } else if (!wantGear && existingGear) {
             existingGear.remove();
@@ -219,6 +219,9 @@ function _updateTileInPlace(el, ctx, name, locked) {
     } else if (!deps.length && existingWarn) {
         existingWarn.remove();
     }
+
+    // Env strip — sync against cached.env.
+    _syncEnvStrip(el, cached);
 }
 
 function _updateFilterCountsInPlace(el, plugins) {
@@ -236,6 +239,28 @@ function _fadeOutAndRemove(card) {
     card.style.opacity = '0';
     card.style.transform = 'scale(0.94)';
     setTimeout(() => card.remove(), 260);
+}
+
+function _matchesSearch(p, term) {
+    if (!term) return true;
+    const t = term.toLowerCase();
+    return [p.name, p.title, p.description, p.author]
+        .some(f => (f || '').toLowerCase().includes(t));
+}
+
+// Search narrows by show/hide — no re-render, so every bound listener
+// (gear, kebab, materialized update buttons) survives typing.
+function _applySearch(el, ctx) {
+    const rows = el.querySelectorAll('.pm-row[data-plugin]');
+    let shown = 0;
+    rows.forEach(row => {
+        const p = (ctx.pluginList || []).find(x => x.name === row.dataset.plugin);
+        const match = !p || _matchesSearch(p, searchTerm);
+        row.style.display = match ? '' : 'none';
+        if (match) shown++;
+    });
+    const empty = el.querySelector('.pm-search-empty');
+    if (empty) empty.style.display = (rows.length && !shown) ? '' : 'none';
 }
 
 function _filterPlugins(plugins, filter) {
@@ -271,10 +296,34 @@ function _badgeHTML(p, locked) {
     return '';
 }
 
-function _renderCard(p, locked) {
-    // 2026-04-30 redesign: square-ish tiles, kebab menu for less-frequent
-    // actions, gear stays prominent for plugin settings, trust signaled
-    // by tile border color + a chip near the bottom.
+// Shared by the per-row and Check-All update flows. Toasts the version that
+// actually LANDED (install response), not the check's advertised version —
+// GitHub's archive CDN can lag the check by minutes (2026-08-06 incident).
+async function _runPluginUpdate(btn, name, result, ctx) {
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+    try {
+        const inst = await pluginsAPI.installPlugin({ url: result.source_url, force: true, expectedName: name });
+        if (inst?.conflict) throw new Error('plugin already exists (force not honored)');
+        const newV = inst?.version || result.remote_version;
+        ui.showToast(`Updated ${name}: v${inst?.old_version || '?'} → v${newV}`, 'success');
+        if (inst?.version && result.remote_version && inst.version !== result.remote_version) {
+            ui.showToast(`Check advertised v${result.remote_version} but the download contained v${inst.version} — GitHub's CDN may still be syncing. Re-check in a few minutes.`, 'warning', 8000);
+        }
+        // Tell main.js to drop the module-cache entry — without this the
+        // plugin's BROWSER script stays on the old version (H8).
+        document.dispatchEvent(new CustomEvent('sapphire:plugin_updated', { detail: { plugin: name } }));
+        await ctx.refreshTab();
+    } catch (err) {
+        ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
+        btn.disabled = false;
+        btn.textContent = `Update to v${result.remote_version}`;
+    }
+}
+
+function _renderRow(p, locked) {
+    // 2026-08-06 redesign: compact WordPress-style rows. Trust signaled by a
+    // left accent border, kebab keeps less-frequent actions, toggle unchanged.
     const hasSettings = p.settingsUI && p.enabled;
     const isUser = p.band === 'user';
     // Icon is server-sanitized to emoji-class chars only, but escape here
@@ -296,6 +345,11 @@ function _renderCard(p, locked) {
     if (isUser) {
         kebabItems.push(
             `<button class="pm-kebab-item plugin-update-btn" data-plugin="${_esc(p.name)}">Check for updates</button>`
+        );
+    }
+    if (isUser && p.has_prev) {
+        kebabItems.push(
+            `<button class="pm-kebab-item plugin-revert-btn" data-plugin="${_esc(p.name)}">Revert last update</button>`
         );
     }
     if (p.enabled && !locked) {
@@ -321,35 +375,46 @@ function _renderCard(p, locked) {
         ? `<button class="pm-gear" data-settings-tab="${p.name}" title="Plugin settings" type="button">\u2699\uFE0F</button>`
         : '';
 
-    // Update button stays on the tile for user plugins as a primary
-    // visible affordance. The existing handler transitions it to
-    // "Update to vX.Y" when an update is found.
+    // Update button is hidden until a check finds an update: the check flow
+    // strips .plugin-update-btn (and adds .btn-primary) on hit, which releases
+    // the CSS hide rule keyed on that class. Until then, Check Updates and the
+    // kebab item are the affordances.
     const updateBtn = isUser
-        ? `<button class="btn btn-sm plugin-update-btn pm-tile-update-btn" data-plugin="${_esc(p.name)}">Update</button>`
+        ? `<button class="btn btn-sm plugin-update-btn pm-row-update" data-plugin="${_esc(p.name)}">Update</button>`
         : '';
 
     const titleText = _esc(p.title || p.name);
-    const verLine = p.version ? `<div class="pm-tile-version">v${_esc(p.version)}</div>` : '';
+    const ver = p.version ? `<span class="pm-version">v${_esc(p.version)}</span>` : '';
+    const desc = p.description
+        ? `<div class="pm-row-desc" title="${_esc(p.description)}">${_esc(p.description)}</div>` : '';
+    const authorName = _esc(p.author || '');
+    const authorLine = authorName
+        ? `<div class="pm-row-author">by ${p.url
+            ? `<a href="${_esc(p.url)}" target="_blank" rel="noopener">${authorName}</a>`
+            : authorName}</div>`
+        : '';
 
     return `
-        <div class="pm-card pm-tile ${trustClass}${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
-            ${kebab}
-            <div class="pm-tile-content">
-                <div class="pm-tile-icon">${icon}</div>
-                <div class="pm-tile-title" title="${titleText}">${titleText}</div>
-                ${verLine}
-                <div class="pm-tile-badge-row">${_badgeHTML(p, locked)}</div>
-            </div>
-            <div class="pm-tile-controls">
-                <div class="pm-tile-controls-left">${updateBtn}</div>
-                <div class="pm-tile-controls-right">
-                    ${gearBtn}
-                    <label class="pm-toggle">
-                        <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
-                               ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
-                        <span class="pm-slider"></span>
-                    </label>
+        <div class="pm-card pm-row ${trustClass}${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
+            <div class="pm-row-main">
+                <div class="pm-row-head">
+                    <span class="pm-row-icon">${icon}</span>
+                    <span class="pm-row-title" title="${titleText}">${titleText}</span>
+                    ${ver}
+                    ${_badgeHTML(p, locked)}
                 </div>
+                ${desc}
+                ${authorLine}
+            </div>
+            <div class="pm-row-actions">
+                ${updateBtn}
+                ${gearBtn}
+                <label class="pm-toggle">
+                    <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
+                           ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+                    <span class="pm-slider"></span>
+                </label>
+                ${kebab}
             </div>
             ${p.missing_deps?.length ? `
             <div class="pm-deps-warning" data-plugin-deps="${_esc(p.name)}">
@@ -357,8 +422,199 @@ function _renderCard(p, locked) {
                 <span class="pm-deps-text">Missing: ${_esc(p.missing_deps.join(', '))}</span>
                 <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(p.name)}">Install</button>
             </div>` : ''}
+            ${_surfacesStripHTML(p)}
+            ${_envStripHTML(p)}
         </div>
     `;
+}
+
+// ── Plugin surfaces (2026-08-23) ─────────────────────────────────────────────
+// A plugin whose manifest declares `surfaces` (where its presence injections
+// belong — avatar: chat only) gets a "Show in" strip; the user's picks are a
+// per-plugin override core applies to prompt_inject/ghost_inject delivery.
+// Labels come from the list payload (core/hooks.py SURFACES).
+let _surfaceDefs = [];
+function _surfacesStripHTML(p) {
+    if (!Array.isArray(p.surfaces) || !_surfaceDefs.length) return '';
+    const active = new Set(p.surfaces_active || []);
+    return `
+        <div class="pm-surfaces" data-plugin-surfaces="${_esc(p.name)}">
+            <span class="pm-surfaces-label">Show in:</span>
+            ${_surfaceDefs.map(s => `
+            <label class="pm-surface-opt">
+                <input type="checkbox" data-surface="${_esc(s.id)}" ${active.has(s.id) ? 'checked' : ''}>
+                ${_esc(s.label)}
+            </label>`).join('')}
+        </div>`;
+}
+
+// ── Per-plugin conda environments ────────────────────────────────────────────
+// Plugins with an "environment" manifest section run their services in a
+// dedicated conda env (sapphire-plugin-<name>). Backend: core/plugin_envs.py.
+
+function _envStripHTML(p) {
+    const env = p.env;
+    if (!env?.required || env.state === 'ready') return '';
+    let text, btn = '';
+    if (env.state === 'building') {
+        text = 'Building environment...';
+    } else if (env.state === 'stale') {
+        text = 'Environment outdated';
+        btn = 'Rebuild';
+    } else if (env.state === 'error') {
+        text = 'Environment build failed';
+        btn = 'Retry';
+    } else if (env.state === 'no-conda') {
+        text = 'Conda not found — needed for this plugin';
+    } else {
+        text = 'Needs its own Python environment';
+        btn = 'Build';
+    }
+    return `
+        <div class="pm-deps-warning pm-env-strip" data-plugin-env="${_esc(p.name)}">
+            <span class="pm-deps-icon">&#x1F4E6;</span>
+            <span class="pm-deps-text">${_esc(text)}</span>
+            ${btn ? `<button class="btn btn-sm pm-env-build-btn" data-env-plugin="${_esc(p.name)}">${btn}</button>` : ''}
+        </div>`;
+}
+
+function _syncEnvStrip(el, p) {
+    if (!p) return;
+    const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(p.name)}"]`);
+    if (!card) return;
+    card.querySelector('.pm-env-strip')?.remove();
+    const html = _envStripHTML(p);
+    if (html) {
+        const tmpl = document.createElement('div');
+        tmpl.innerHTML = html.trim();
+        card.appendChild(tmpl.firstElementChild);
+    }
+}
+
+// Simple Yes/No — deliberately lighter than the typed I-UNDERSTAND gate,
+// which the user has already cleared by this point if the plugin needed it.
+function _confirmEnvBuild(title, env) {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML = `
+            <div class="modal-base" style="max-width:420px">
+                <div class="modal-header">
+                    <h3>Build environment?</h3>
+                    <button class="close-btn modal-x">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p style="margin:0;color:var(--text-secondary);line-height:1.5">
+                        ${_esc(title)} needs its own Python environment
+                        (<code>${_esc(env.env_name || '')}</code>).
+                        Building can download packages — possibly gigabytes — and take a while.
+                        You can also build later from the plugin card.
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary env-no">Not now</button>
+                    <button class="btn btn-primary env-yes">Build now</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.classList.add('active'));
+        let done = false;
+        const close = val => {
+            if (done) return;
+            done = true;
+            overlay.classList.remove('active');
+            setTimeout(() => overlay.remove(), 300);
+            resolve(val);
+        };
+        setupModalClose(overlay, () => close(false));
+        overlay.querySelector('.modal-x').addEventListener('click', () => close(false));
+        overlay.querySelector('.env-no').addEventListener('click', () => close(false));
+        overlay.querySelector('.env-yes').addEventListener('click', () => close(true));
+    });
+}
+
+async function _startEnvBuild(el, ctx, name) {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    try {
+        const res = await fetch(`/api/plugins/${name}/build-env`, {
+            method: 'POST', headers: { 'X-CSRF-Token': csrf },
+        });
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.detail || res.status);
+        }
+        const cached = ctx.pluginList?.find(p => p.name === name);
+        if (cached?.env) cached.env.state = 'building';
+        _syncEnvStrip(el, cached);
+        ui.showToast('Environment build started — watch the plugin card for progress', 'info');
+        _pollEnvBuild(el, ctx, name);
+    } catch (err) {
+        ui.showToast(`Env build failed to start: ${err.message}`, 'error', 5000);
+    }
+}
+
+const envPolling = new Set();
+
+async function _pollEnvBuild(el, ctx, name) {
+    if (envPolling.has(name)) return;
+    envPolling.add(name);
+    try {
+        let misses = 0;   // consecutive failed status checks
+        for (let i = 0; i < 1800; i++) {   // 2s interval, ~1h cap
+            await new Promise(r => setTimeout(r, 2000));
+            let status;
+            try {
+                const res = await fetch(`/api/plugins/${name}/env-status`);
+                if (!res.ok) {
+                    // Plugin uninstalled/route gone: don't grind a dead
+                    // endpoint every 2s for an hour with no signal.
+                    if (++misses >= 5) {
+                        ui.showToast(`Lost track of the environment build for ${name} — status endpoint unavailable`, 'error');
+                        return;
+                    }
+                    continue;
+                }
+                misses = 0;
+                status = await res.json();
+            } catch {
+                if (++misses >= 5) {
+                    ui.showToast(`Lost track of the environment build for ${name} — status endpoint unreachable`, 'error');
+                    return;
+                }
+                continue;
+            }
+
+            const cached = ctx.pluginList?.find(p => p.name === name);
+            if (cached) cached.env = status;
+
+            if (status.state === 'building') {
+                const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);
+                const text = card?.querySelector('.pm-env-strip .pm-deps-text');
+                if (text) text.textContent = `Building environment - ${status.build?.step || 'working'}...`;
+                continue;
+            }
+
+            _syncEnvStrip(el, cached);
+            if (status.state === 'ready') {
+                ui.showToast(`Environment ready for ${name} — plugin reloaded`, 'success');
+                // Only re-render if the user is still on this tab — refreshTab()
+                // redraws the ACTIVE tab and would wipe half-typed edits there.
+                // ctx.pluginList is already updated above, so a later visit
+                // renders the ready state without this refresh.
+                if (ctx.isTabActive?.('plugins')) await ctx.refreshTab();
+            } else {
+                const lastLine = (status.log_tail || []).filter(Boolean).pop() || 'see user/logs';
+                ui.showToast(`Environment build failed for ${name}: ${lastLine}`, 'error', 0);
+            }
+            return;
+        }
+        // Fell out of the loop: still "building" after the ~1h cap — say so
+        // instead of freezing the strip at "Building…" with no explanation.
+        ui.showToast(`Environment build for ${name} is still running after 1h — stopped watching; `
+            + `check the plugin card or user/logs/env-build-${name}.log`, 'error', 0);
+    } finally {
+        envPolling.delete(name);
+    }
 }
 
 export default {
@@ -368,7 +624,8 @@ export default {
     description: 'Enable or disable feature plugins',
 
     render(ctx) {
-        const visible = (ctx.pluginList || []).filter(p => !HIDDEN.has(p.name));
+        _surfaceDefs = ctx.pluginSurfaces || _surfaceDefs;
+        const visible = (ctx.pluginList || []).filter(p => !_isHidden(p));
         if (!visible.length) return '<p class="text-muted">No feature plugins available.</p>';
 
         const allowUnsigned = ctx.settings?.ALLOW_UNSIGNED_PLUGINS ?? false;
@@ -403,6 +660,8 @@ export default {
                     <button class="pm-filter${activeFilter === 'disabled' ? ' active' : ''}" data-filter="disabled">Disabled <span class="pm-filter-count">${counts.disabled}</span></button>
                     <button class="pm-filter${activeFilter === 'official' ? ' active' : ''}" data-filter="official">Official <span class="pm-filter-count">${counts.official}</span></button>
                     <button class="pm-filter${activeFilter === 'user' ? ' active' : ''}" data-filter="user">User <span class="pm-filter-count">${counts.user}</span></button>
+                    <input type="search" class="pm-search" id="pm-search" placeholder="Search plugins…"
+                           value="${_esc(searchTerm)}" autocomplete="off">
                 </div>
             </div>
             <div class="pm-install-section" id="pm-install-section" style="display:none">
@@ -416,9 +675,10 @@ export default {
                     <button class="btn btn-sm" id="plugin-install-file-btn">Upload</button>
                 </div>
             </div>
-            <div class="pm-grid">
-                ${sorted.length ? sorted.map(p => _renderCard(p, ctx.lockedPlugins.includes(p.name))).join('')
-                    : '<p class="text-muted" style="grid-column:1/-1;text-align:center;padding:24px 0;">No plugins match this filter.</p>'}
+            <div class="pm-list">
+                ${sorted.length ? sorted.map(p => _renderRow(p, ctx.lockedPlugins.includes(p.name))).join('')
+                    : '<p class="text-muted" style="text-align:center;padding:24px 0;">No plugins match this filter.</p>'}
+                <p class="pm-search-empty text-muted" style="display:none;text-align:center;padding:24px 0;">No plugins match this search.</p>
             </div>
         `;
     },
@@ -462,7 +722,7 @@ export default {
                         body: JSON.stringify({ settings: { ALLOW_UNSIGNED_PLUGINS: enabling } })
                     });
                     if (!res.ok) throw new Error('Failed to save');
-                    ctx.settings.ALLOW_UNSIGNED_PLUGINS = enabling;
+                    ctx.commit('ALLOW_UNSIGNED_PLUGINS', enabling);
                     ui.showToast(`Unsigned plugins ${enabling ? 'allowed' : 'blocked'}`, enabling ? 'warning' : 'success');
                     if (!enabling) await ctx.refreshTab();
                 } catch (err) {
@@ -504,44 +764,44 @@ export default {
         const checkAllBtn = el.querySelector('#check-all-updates-btn');
         if (checkAllBtn) {
             checkAllBtn.addEventListener('click', async () => {
-                // Find all user-installed plugins (they have Update buttons)
-                const updateBtns = el.querySelectorAll('.plugin-update-btn');
-                if (!updateBtns.length) {
+                // Row button + kebab item share .plugin-update-btn — dedupe by
+                // plugin name so each plugin is checked ONCE, then mutate every
+                // button for it (double-fire read "2 updates" for one, H7).
+                const allBtns = Array.from(el.querySelectorAll('.plugin-update-btn'));
+                const names = [...new Set(allBtns.map(b => b.dataset.plugin))];
+                if (!names.length) {
                     ui.showToast('No user-installed plugins to check', 'info');
                     return;
                 }
                 checkAllBtn.disabled = true;
                 checkAllBtn.textContent = 'Checking...';
-                let updatesFound = 0;
-                const results = await Promise.allSettled(
-                    Array.from(updateBtns).map(async (btn) => {
-                        const name = btn.dataset.plugin;
-                        try {
-                            const result = await pluginsAPI.checkUpdate(name);
-                            if (result.update_available) {
-                                updatesFound++;
-                                btn.textContent = `Update to v${result.remote_version}`;
-                                btn.classList.add('btn-primary');
-                                btn.classList.remove('plugin-update-btn');
-                                btn.addEventListener('click', async () => {
-                                    btn.disabled = true;
-                                    btn.textContent = 'Updating...';
-                                    try {
-                                        await pluginsAPI.installPlugin({ url: result.source_url, force: true });
-                                        ui.showToast(`Updated ${name} → v${result.remote_version}`, 'success');
-                                        await ctx.refreshTab();
-                                    } catch (err) {
-                                        ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
-                                        btn.disabled = false;
-                                        btn.textContent = `Update to v${result.remote_version}`;
-                                    }
-                                }, { once: true });
-                            }
-                        } catch { /* skip failed checks */ }
-                    })
-                );
-                if (updatesFound > 0) {
-                    ui.showToast(`${updatesFound} update${updatesFound > 1 ? 's' : ''} available`, 'success');
+                let updatesFound = 0, failed = 0, uncheckable = 0;
+                await Promise.allSettled(names.map(async (name) => {
+                    const btns = allBtns.filter(b => b.dataset.plugin === name);
+                    try {
+                        const result = await pluginsAPI.checkUpdate(name);
+                        if (result.update_available) {
+                            updatesFound++;
+                            btns.forEach(b => {
+                                b.textContent = `Update to v${result.remote_version}`;
+                                b.classList.add('btn-primary');
+                                b.classList.remove('plugin-update-btn');
+                                b.addEventListener('click', () => _runPluginUpdate(b, name, result, ctx), { once: true });
+                            });
+                        } else if (result.reason === 'no_source' || result.reason === 'unsupported_source') {
+                            uncheckable++;
+                        } else if (result.reason) {
+                            failed++;   // fetch_failed / version_unparseable
+                        }
+                    } catch { failed++; }
+                }));
+                // A failed check is NOT "up to date" — say so.
+                if (failed > 0) {
+                    ui.showToast(`${updatesFound} update${updatesFound === 1 ? '' : 's'} found · ${failed} check${failed === 1 ? '' : 's'} FAILED`, 'warning', 6000);
+                } else if (updatesFound > 0) {
+                    ui.showToast(`${updatesFound} update${updatesFound === 1 ? '' : 's'} available`, 'success');
+                } else if (uncheckable > 0) {
+                    ui.showToast(`Checkable plugins up to date · ${uncheckable} can't be checked (no update source)`, 'success');
                 } else {
                     ui.showToast('All plugins up to date', 'success');
                 }
@@ -557,6 +817,17 @@ export default {
                 ctx.refreshTab();
             });
         });
+
+        // Search — show/hide rows, never re-render (bound handlers survive).
+        const searchInput = el.querySelector('#pm-search');
+        if (searchInput) {
+            searchInput.addEventListener('input', () => {
+                searchTerm = searchInput.value.trim();
+                _applySearch(el, ctx);
+            });
+            // Re-apply a persisted term after any full re-render.
+            if (searchTerm) _applySearch(el, ctx);
+        }
 
         // Gear → navigate to plugin settings tab via custom event
         el.querySelectorAll('.pm-gear[data-settings-tab]').forEach(btn => {
@@ -705,6 +976,13 @@ export default {
 
         // Store ctx for delegated handlers
         el._pluginCtx = ctx;
+
+        // Resume progress polling for any env build already in flight
+        // (envPolling guards against duplicates across re-renders).
+        (ctx.pluginList || []).forEach(p => {
+            if (p.env?.state === 'building') _pollEnvBuild(el, ctx, p.name);
+        });
+
         if (el._pluginsBound) return;
         el._pluginsBound = true;
 
@@ -746,6 +1024,38 @@ export default {
             }
         });
 
+        // ── Revert last update (delegated) ──
+        el.addEventListener('click', async e => {
+            const btn = e.target.closest('.plugin-revert-btn');
+            if (!btn) return;
+            const name = btn.dataset.plugin;
+            const ctx = el._pluginCtx;
+
+            const confirmed = await showDangerConfirm({
+                title: `Revert ${name} to previous version`,
+                warnings: [
+                    'Swaps back to the copy retained by the last update',
+                    'The current version stays retained — revert again to toggle back',
+                ],
+                buttonLabel: 'Revert',
+            });
+            if (!confirmed) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Reverting...';
+            try {
+                const r = await pluginsAPI.revertPlugin(name);
+                ui.showToast(`Reverted ${name} to v${r.version || '?'}`, 'success');
+                window.dispatchEvent(new CustomEvent('functions-changed'));
+                document.dispatchEvent(new CustomEvent('sapphire:plugin_updated', { detail: { plugin: name } }));
+                await ctx.refreshTab();
+            } catch (err) {
+                ui.showToast(`Revert failed: ${err.message}`, 'error', 5000);
+                btn.disabled = false;
+                btn.textContent = 'Revert last update';
+            }
+        });
+
         // ── Check update (delegated) ──
         el.addEventListener('click', async e => {
             const btn = e.target.closest('.plugin-update-btn');
@@ -755,6 +1065,10 @@ export default {
 
             btn.disabled = true;
             btn.textContent = 'Checking...';
+            const resetBtn = (label) => {
+                btn.textContent = label;
+                setTimeout(() => { btn.textContent = 'Check Update'; btn.disabled = false; }, 2500);
+            };
             try {
                 const result = await pluginsAPI.checkUpdate(name);
                 if (result.update_available) {
@@ -762,27 +1076,52 @@ export default {
                     btn.disabled = false;
                     btn.classList.add('btn-primary');
                     btn.classList.remove('plugin-update-btn');
-                    btn.addEventListener('click', async () => {
-                        btn.disabled = true;
-                        btn.textContent = 'Updating...';
-                        try {
-                            await pluginsAPI.installPlugin({ url: result.source_url, force: true });
-                            ui.showToast(`Updated ${name} \u2192 v${result.remote_version}`, 'success');
-                            await ctx.refreshTab();
-                        } catch (err) {
-                            ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
-                            btn.disabled = false;
-                            btn.textContent = `Update to v${result.remote_version}`;
-                        }
-                    }, { once: true });
+                    btn.addEventListener('click', () => _runPluginUpdate(btn, name, result, ctx), { once: true });
+                } else if (result.reason === 'no_source') {
+                    // "Up to date" here would be a lie \u2014 we never checked.
+                    ui.showToast(`${name}: installed manually \u2014 no update source on record`, 'info');
+                    resetBtn('No source');
+                } else if (result.reason === 'unsupported_source') {
+                    ui.showToast(`${name}: update source isn't GitHub or GitLab \u2014 can't check`, 'info');
+                    resetBtn('Not checkable');
+                } else if (result.reason === 'fetch_failed') {
+                    ui.showToast(`${name}: couldn't fetch the remote manifest \u2014 source unreachable or moved`, 'error');
+                    btn.textContent = 'Check Update';
+                    btn.disabled = false;
+                } else if (result.reason === 'version_unparseable') {
+                    ui.showToast(`${name}: can't compare versions (local "${result.current_version}", remote "${result.remote_version}")`, 'warning', 6000);
+                    btn.textContent = 'Check Update';
+                    btn.disabled = false;
                 } else {
-                    btn.textContent = 'Up to date';
-                    setTimeout(() => { btn.textContent = 'Check Update'; btn.disabled = false; }, 2000);
+                    resetBtn(`Up to date (v${result.remote_version || result.current_version})`);
                 }
             } catch (err) {
                 ui.showToast(`Update check failed: ${err.message}`, 'error');
                 btn.textContent = 'Check Update';
                 btn.disabled = false;
+            }
+        });
+
+        // ── Show in (plugin surfaces, delegated) ──
+        el.addEventListener('change', async e => {
+            const strip = e.target.closest('.pm-surfaces');
+            if (!strip || !e.target.matches('input[data-surface]')) return;
+            const name = strip.dataset.pluginSurfaces;
+            const chosen = [...strip.querySelectorAll('input[data-surface]:checked')]
+                .map(i => i.dataset.surface);
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            try {
+                const res = await fetch(`/api/plugins/${encodeURIComponent(name)}/surfaces`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                    body: JSON.stringify({ surfaces: chosen }),
+                });
+                if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+                const p = (el._pluginCtx?.pluginList || []).find(x => x.name === name);
+                if (p) p.surfaces_active = chosen;
+                ui.showToast(chosen.length ? `${name}: shows in ${chosen.join(', ')}` : `${name}: hidden everywhere`, 'success', 1800);
+            } catch (err) {
+                ui.showToast(`Surfaces save failed: ${err.message}`, 'error');
             }
         });
 
@@ -871,6 +1210,15 @@ export default {
             }
         });
 
+        // ── Build plugin env (delegated) ──
+        el.addEventListener('click', async e => {
+            const btn = e.target.closest('.pm-env-build-btn');
+            if (!btn) return;
+            btn.disabled = true;
+            await _startEnvBuild(el, el._pluginCtx, btn.dataset.envPlugin);
+            btn.disabled = false;
+        });
+
         // ── Toggle (delegated) ──
         el.addEventListener('change', async e => {
             const name = e.target.dataset.pluginToggle;
@@ -957,16 +1305,15 @@ export default {
                         : [];
                 }
 
-                // In-place tile + counts update — avoids the full grid
-                // re-render (and the staggered fade-in animation flash)
-                // that ctx.refreshTab() previously triggered. 2026-04-30.
-                const visible = (ctx.pluginList || []).filter(p => !HIDDEN.has(p.name));
-                _updateTileInPlace(el, ctx, name, ctx.lockedPlugins.includes(name));
+                // In-place row + counts update — avoids the full list
+                // re-render that ctx.refreshTab() previously triggered.
+                const visible = (ctx.pluginList || []).filter(p => !_isHidden(p));
+                _updateRowInPlace(el, ctx, name, ctx.lockedPlugins.includes(name));
                 _updateFilterCountsInPlace(el, visible);
 
                 // If the active filter would now hide this plugin (e.g.
                 // user is on "Enabled" and just disabled it), fade the
-                // tile out and remove it. Otherwise leave it in place.
+                // row out and remove it. Otherwise leave it in place.
                 const stillMatchesFilter = _filterPlugins([cached], activeFilter).length > 0;
                 if (!stillMatchesFilter) {
                     const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);
@@ -984,6 +1331,16 @@ export default {
                 }
 
                 ui.showToast(`${cached?.title || name} ${data.enabled ? 'enabled' : 'disabled'}`, 'success');
+
+                // Env-needing plugin just enabled — offer to build (simple
+                // Yes/No; the heavy typed gates have already run above).
+                if (data.enabled && data.env?.required
+                    && ['missing', 'stale', 'error'].includes(data.env.state)) {
+                    if (cached) cached.env = data.env;
+                    _syncEnvStrip(el, cached);
+                    const wantBuild = await _confirmEnvBuild(cached?.title || name, data.env);
+                    if (wantBuild) await _startEnvBuild(el, ctx, name);
+                }
             } catch (err) {
                 e.target.checked = !e.target.checked;
                 const msg = (err.message || 'Unknown error').replace(/^Plugin blocked:\s*/, '');

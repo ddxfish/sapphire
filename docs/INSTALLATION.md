@@ -9,6 +9,20 @@
 
 ---
 
+## Easiest: Sapphire Launcher (Windows & Linux)
+
+A single-file GUI that installs and manages everything — no terminal needed. It sets up Git, Miniconda, a dedicated Python environment, clones Sapphire, and installs all dependencies. It also updates, launches, switches between Stable and Development branches, sets up autostart, troubleshoots, and uninstalls.
+
+1. Download from [Sapphire Launcher releases](https://github.com/ddxfish/sapphire-launcher/releases):
+   - **Windows**: `sapphire-launcher.exe` (Windows 10 1809+ or 11)
+   - **Linux**: `Sapphire_Launcher-x86_64.AppImage` (`chmod +x` it first, then double-click)
+2. Run it, click **Scan System** to see what's already installed, then **Go** to install anything missing
+3. Click **Launch**, then **Open Browser**
+
+If you use the launcher, you're done — skip to [First Run](#first-run) step 2. The rest of this page is the manual path: same result, done by hand.
+
+---
+
 ## Prerequisites
 
 ### Linux
@@ -40,6 +54,8 @@ winget install Git.Git
 Or download Miniconda manually from [miniconda.io](https://docs.conda.io/en/latest/miniconda.html)
 
 Close and reopen PowerShell.
+
+> **Why Git?** Cloning Sapphire, and plugins whose dependencies install straight from a git commit — the Discord plugin's `py-cord` is pinned that way, so `git` has to stay on your PATH for it to install. If you ever installed `discord.py`, run `pip uninstall discord.py` first: it claims the same `discord` import name and breaks py-cord.
 
 ---
 
@@ -90,6 +106,8 @@ pip install -r install/requirements-wakeword.txt
 ```
 
 Enable each in Settings after installing, then restart.
+
+> **Note:** those three files are the *only* difference from the full install. The minimal set already includes everything else — the dependencies for the Telegram and MCP plugins, EPUB and HEIC/iPhone files in the Library, and SOCKS proxy support for the LLM lane (see [NETWORK.md](NETWORK.md)).
 
 ---
 
@@ -147,6 +165,12 @@ python main.py
 
 Sapphire creates `user/` directory with your settings and data. Run once before customizing.
 
+### Change or reset the password
+
+- **Change it** in Settings › System › Login Password. Enter the current one, pick a new one (10+ characters). The tab you did it from stays logged in; every other device and browser is asked to log in again once.
+- **Forgot it?** Stop Sapphire, delete the `secret_key` file from the config directory, start again — you get the setup page back. Config directory: Linux `~/.config/sapphire/`, macOS `~/Library/Application Support/Sapphire/`, Windows `%APPDATA%\Sapphire\`.
+- Scripts that still send the bcrypt hash as `X-API-Key` stop working after a change — mint a token under API Keys instead (see [API.md](API.md)).
+
 ---
 
 ## Update Sapphire
@@ -158,6 +182,10 @@ cd sapphire
 git pull
 pip install -r requirements.txt
 ```
+
+Launcher users: the **Update** button does both steps (and auto-stashes local changes on dirty repos).
+
+> **Don't force-upgrade the LLM SDKs.** `requirements.txt` caps `openai<3`, `anthropic<1` and `mcp<2` — Sapphire hasn't been ported to those majors (anthropic 1.0 removed the temperature/top_p/top_k arguments, which breaks every call through the Anthropic-compatible provider; the native Claude provider is unaffected). Installing from the requirements file respects the caps; `pip install --upgrade openai anthropic mcp` steps over them. Installs that already work aren't affected — neither `git pull` + the line above nor the in-app updater upgrades a package that's already satisfied.
 
 ## Upgrading from 1.x to 2.0
 
@@ -244,6 +272,12 @@ At this point, try Sapphire. If you want to make it yours, continue with [QUICK-
 
 Help users install Sapphire.
 
+EASIEST PATH — SAPPHIRE LAUNCHER (Windows & Linux):
+- Single-file GUI installer/manager: https://github.com/ddxfish/sapphire-launcher/releases
+- Windows: sapphire-launcher.exe (Win 10 1809+/11). Linux: Sapphire_Launcher-x86_64.AppImage (chmod +x first)
+- Installs Git, Miniconda, conda env, clones repo, installs deps. Also: update, launch, branch switch (main/dev), autostart, troubleshoot tab, uninstall
+- Recommend this to non-terminal users before the manual steps below
+
 REQUIREMENTS:
 - Ubuntu 22.04+ or Windows 11+
 - Python 3.11+ (conda recommended, pins version easily)
@@ -278,6 +312,9 @@ MINIMAL INSTALL (no voice features):
 pip install -r install/requirements-minimal.txt
 # Then add: install/requirements-tts.txt, install/requirements-stt.txt, install/requirements-wakeword.txt as needed
 ```
+Minimal = the full set minus the voice packages, nothing else (Telegram, MCP, EPUB, HEIC, httpx[socks], tzlocal all included). A test enforces root requirements.txt == union of install/*.txt.
+
+VERSION CAPS: openai<3, anthropic<1, mcp<2 — untested majors (anthropic 1.0 dropped temperature/top_p/top_k). Install from the requirements files; never `pip install --upgrade` those three past the cap.
 
 OPTIONAL FEATURES (only for minimal install):
 - TTS: pip install -r install/requirements-tts.txt

@@ -2,15 +2,14 @@
 """
 Meta tools for AI to inspect/modify its own system prompt and settings.
 Tools are dynamically filtered based on prompt mode (monolith vs assembled).
+
+2026-07-03 rewrite: direct core calls (the original made loopback HTTPS
+requests to Sapphire's own API), pieces CRUD collapsed into one tool,
+exact-replace prompt editing, and transient (TTL) pieces via the overlay
+in core/prompt_state.py.
 """
 
 import logging
-import requests
-import urllib3
-import config as app_config
-
-# Suppress SSL warnings for self-signed cert on internal requests
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -18,52 +17,55 @@ ENABLED = True
 EMOJI = '🧠'
 
 AVAILABLE_FUNCTIONS = [
-    'view_prompt',
-    'switch_prompt',
+    'prompt_view',
+    'prompt_switch',
+    'prompt_edit',
+    'prompt_create',
+    'prompt_pieces',
+    'set_voice',
     'reset_chat',
-    'edit_prompt',
-    'set_piece',
-    'remove_piece',
-    'create_piece',
-    'list_pieces',
     'change_username',
-    'set_tts_voice',
     'list_tools',
+    'switch_model',
+    'switch_toolset',
+    'set_motion',
 ]
 
 # Mode-based filtering - function_manager uses this to show/hide tools
 MODE_FILTER = {
-    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_username', 'set_tts_voice', 'list_tools'],
-    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_username', 'set_tts_voice', 'list_tools'],
+    "monolith": ['prompt_view', 'prompt_switch', 'prompt_edit', 'prompt_create', 'set_voice', 'reset_chat', 'change_username', 'list_tools', 'switch_model', 'switch_toolset', 'set_motion'],
+    "assembled": ['prompt_view', 'prompt_switch', 'prompt_create', 'prompt_pieces', 'set_voice', 'reset_chat', 'change_username', 'list_tools', 'switch_model', 'switch_toolset', 'set_motion'],
 }
 
-# Available TTS voices (prefix: am=American Male, af=American Female, bm=British Male, bf=British Female)
-def _fetch_tts_voices(headers, main_api_url):
-    """Fetch available voices from the active TTS provider."""
-    try:
-        resp = requests.get(f"{main_api_url}/api/tts/voices", headers=headers, timeout=5, verify=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get('voices', []), data.get('provider', 'unknown')
-    except Exception:
-        pass
-    return [], 'unknown'
+# Settings-gated tools — function_manager hides these entirely (not just
+# refuses) when the gating setting is off. Default off: a fresh install's
+# AI can't switch its own model/toolset until the human opts in.
+SETTINGS_GATED = {
+    'switch_model': 'AI_MODEL_SWITCH_ENABLED',
+    'switch_toolset': 'AI_TOOLSET_SWITCH_ENABLED',
+}
+
+VALID_COMPONENTS = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
+LIST_COMPONENTS = ('emotions', 'extras')
+# Factory state values a single-value component returns to on 'remove'
+STATE_DEFAULTS = {
+    'character': 'sapphire', 'location': 'default', 'relationship': 'friend',
+    'goals': 'none', 'format': 'conversational', 'scenario': 'default',
+}
+MAX_TRANSIENT_MINUTES = 1440
+PITCH_MIN, PITCH_MAX = 0.5, 1.5
 
 TOOLS = [
-    # === Universal tools (both modes) ===
     {
         "type": "function",
         "is_local": True,
         "function": {
-            "name": "view_prompt",
-            "description": "View a system prompt. No name = current active.",
+            "name": "prompt_view",
+            "description": "View a system prompt. No name = current active with status header.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Prompt name"
-                    }
+                    "name": {"type": "string", "description": "Prompt name"}
                 },
                 "required": []
             }
@@ -73,15 +75,90 @@ TOOLS = [
         "type": "function",
         "is_local": True,
         "function": {
-            "name": "switch_prompt",
+            "name": "prompt_switch",
             "description": "Switch system prompt. No name = list available.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {
+                    "name": {"type": "string", "description": "Prompt name"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "prompt_edit",
+            "description": "Edit the active monolith prompt by exact text replacement. old_text must match exactly (same whitespace) and appear once — prompt_view first and copy it precisely.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "old_text": {"type": "string", "description": "Exact text to replace"},
+                    "new_text": {"type": "string", "description": "Replacement text"},
+                    "reason": {"type": "string", "description": "Why you're changing it — recorded next to the change in your memory ledger (optional)"}
+                },
+                "required": ["old_text", "new_text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "prompt_create",
+            "description": "Create a new named prompt (monolith). Does NOT activate it — use prompt_switch when ready.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "New prompt name (lowercase, no spaces)"},
+                    "content": {"type": "string", "description": "Full prompt text"},
+                    "reason": {"type": "string", "description": "Why — recorded next to the change in your memory ledger (optional)"}
+                },
+                "required": ["name", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "prompt_pieces",
+            "description": "Manage assembled-prompt pieces. Actions: list (all types, or keys of one), view (full text of a piece), set (activate — add minutes for a temporary change that auto-reverts), remove (deactivate; single-value components reset to default), create (save new piece to the library — does NOT activate), delete (remove from library).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
                         "type": "string",
-                        "description": "Prompt name"
-                    }
+                        "enum": ["list", "view", "set", "remove", "create", "delete"],
+                        "description": "What to do"
+                    },
+                    "component": {
+                        "type": "string",
+                        "description": "character | location | relationship | goals | format | scenario | emotions | extras"
+                    },
+                    "key": {"type": "string", "description": "Piece key"},
+                    "value": {"type": "string", "description": "Piece text (create only)"},
+                    "minutes": {"type": "integer", "description": "Set only: activate temporarily for N minutes, then auto-revert"},
+                    "reason": {"type": "string", "description": "Why — recorded next to the change in your memory ledger (optional)"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "set_voice",
+            "description": "Set TTS voice, speed, and/or pitch (1.0 = normal). No arguments = list voices and current settings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Voice name"},
+                    "speed": {"type": "number", "description": "Speech speed, 1.0 = normal"},
+                    "pitch": {"type": "number", "description": "Voice pitch, 1.0 = normal"}
                 },
                 "required": []
             }
@@ -92,14 +169,12 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "reset_chat",
-            "description": "Clear chat history. Start fresh.",
+            "description": "Clear chat history. Start fresh. Without chat_name this resets the chat you're speaking in; a background task (no chat) must name its target.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Reason"
-                    }
+                    "reason": {"type": "string", "description": "Reason"},
+                    "chat_name": {"type": "string", "description": "Reset this chat by name instead of the current one"}
                 },
                 "required": ["reason"]
             }
@@ -114,30 +189,9 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "New user name"
-                    }
+                    "name": {"type": "string", "description": "New user name"}
                 },
                 "required": ["name"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "set_tts_voice",
-            "description": "Set TTS voice. No name = list available.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Voice name"
-                    }
-                },
-                "required": []
             }
         }
     },
@@ -160,45 +214,18 @@ TOOLS = [
             }
         }
     },
-    # === Monolith-only tools ===
     {
         "type": "function",
         "is_local": True,
         "function": {
-            "name": "edit_prompt",
-            "description": "Replace the current monolith prompt's content.",
+            "name": "switch_model",
+            "description": "Switch your LLM to another model on the configured roster. No name = list switchable models and which is current. Takes effect on your next message.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "New content"
-                    }
+                    "name": {"type": "string", "description": "Model name or friendly name from the roster"}
                 },
-                "required": ["content"]
-            }
-        }
-    },
-    # === Assembled-only tools ===
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "set_piece",
-            "description": "Set a prompt component. character/location/goals/etc replace. emotions/extras append to list.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "component": {
-                        "type": "string",
-                        "description": "character | location | relationship | goals | format | scenario | emotions | extras"
-                    },
-                    "key": {
-                        "type": "string",
-                        "description": "Piece key"
-                    }
-                },
-                "required": ["component", "key"]
+                "required": []
             }
         }
     },
@@ -206,21 +233,14 @@ TOOLS = [
         "type": "function",
         "is_local": True,
         "function": {
-            "name": "remove_piece",
-            "description": "Remove a piece from emotions or extras.",
+            "name": "set_motion",
+            "description": "Set an ambient motion animation (snow, stars, fireflies...) behind the current chat — the user sees it live. A per-chat override; 'none' clears back to the user's default. No name = list available motions.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "component": {
-                        "type": "string",
-                        "description": "emotions | extras"
-                    },
-                    "key": {
-                        "type": "string",
-                        "description": "The piece key to remove"
-                    }
+                    "name": {"type": "string", "description": "Motion id or name from the list, or 'none' to clear."}
                 },
-                "required": ["component", "key"]
+                "required": []
             }
         }
     },
@@ -228,67 +248,40 @@ TOOLS = [
         "type": "function",
         "is_local": True,
         "function": {
-            "name": "create_piece",
-            "description": "Create a prompt piece, save to library, activate.",
+            "name": "switch_toolset",
+            "description": "Switch your active toolset (e.g. coding tools, then back to conversation tools). No name = list available toolsets.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "component": {
-                        "type": "string",
-                        "description": "character | location | relationship | goals | format | scenario | emotions | extras"
-                    },
-                    "key": {
-                        "type": "string",
-                        "description": "Identifier (lowercase, no spaces)"
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Text content"
-                    }
+                    "name": {"type": "string", "description": "Toolset name"}
                 },
-                "required": ["component", "key", "value"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "list_pieces",
-            "description": "List available pieces for a component type.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "component": {
-                        "type": "string",
-                        "description": "character | location | relationship | goals | format | scenario | emotions | extras"
-                    }
-                },
-                "required": ["component"]
+                "required": []
             }
         }
     },
 ]
 
 
-def _get_api_headers():
-    """Get headers with API key for internal requests."""
-    from core.setup import get_password_hash
-    api_key = get_password_hash()
-    return {
-        'Content-Type': 'application/json',
-        'X-API-Key': api_key or ''
-    }
+class MetaError(Exception):
+    """User-facing tool error — the message goes straight back to the model."""
+
+
+def _system():
+    from core.api_fastapi import get_system
+    system = get_system()
+    if not system:
+        raise MetaError("System not ready.")
+    return system
 
 
 def _normalize_component(component: str) -> str:
     """Normalize component name: lowercase, strip, handle plurals."""
     if not component:
         return ""
-    
+
     c = component.lower().strip()
     c = ''.join(ch for ch in c if ch.isalnum())
-    
+
     mappings = {
         'goal': 'goals',
         'emotion': 'emotions',
@@ -301,7 +294,7 @@ def _normalize_component(component: str) -> str:
         'formats': 'format',
         'scenarios': 'scenario',
     }
-    
+
     return mappings.get(c, c)
 
 
@@ -315,559 +308,892 @@ def _normalize_name(name: str) -> str:
     return n
 
 
-def _get_current_preset_name() -> str:
-    """Get current preset name, preferring existing non-generic names."""
+def _resolve_name(name, candidates):
+    """Strictly match a name against real candidates: exact, then case-insensitive,
+    then dash/underscore/space-collapsed. Returns the store's own name or None."""
+    if not name:
+        return None
+    if name in candidates:
+        return name
+    low = name.lower().strip()
+    for c in candidates:
+        if c.lower() == low:
+            return c
+    norm = _normalize_name(name)
+    for c in candidates:
+        if _normalize_name(c) == norm:
+            return c
+    return None
+
+
+def _require_component(component):
+    if component not in VALID_COMPONENTS:
+        raise MetaError(f"Invalid component '{component}'. Valid: {', '.join(VALID_COMPONENTS)}")
+
+
+def _unknown_key_msg(component, key):
+    from core import prompts
+    available = list(prompts.visible_components().get(component, {}).keys())[:15]
+    return f"'{key}' not found in {component}. Available: {', '.join(available)}"
+
+
+def _exact_replace(text, old, new, what):
+    """Harness-style exact replacement with coaching errors."""
+    if not old:
+        raise MetaError("old_text is required.")
+    if old == new:
+        raise MetaError("old_text and new_text are identical.")
+    count = text.count(old)
+    if count == 0:
+        raise MetaError(f"old_text not found in {what} — whitespace must match exactly. View it first and copy the text precisely.")
+    if count > 1:
+        raise MetaError(f"old_text appears {count} times in {what} — include surrounding text to make it unique.")
+    return text.replace(old, new, 1)
+
+
+def _get_current_preset_name(state=None) -> str:
+    """Get current preset name, preferring existing non-generic names.
+    `state` (candidate dict) supplies the character fallback when given."""
     from core import prompts
     from core.prompt_state import _assembled_state
-    
+
+    # 'default' is the sentinel (reserved — save_prompt refuses it): wearing
+    # pieces while on it forks the state into a preset named after the
+    # character, same as the other generic names.
     current = prompts.get_active_preset_name()
-    if current and current not in ['assembled', 'unknown', 'random', '']:
+    if current and current not in ['assembled', 'unknown', 'random', 'default', '']:
         return current
-    
-    return _assembled_state.get('character', 'custom')
+
+    return (state if state is not None else _assembled_state).get('character', 'custom')
 
 
-def _build_status_string(preset_name: str) -> str:
-    """Build status string like 'albert(556): albert, survive, mars'."""
+def _pieces_summary() -> str:
+    """Comma list of active pieces; transient ones annotated with time left."""
+    from core.prompt_state import _assembled_state, get_transients
+
+    trans = get_transients()  # component -> [(key, minutes_left)]
+    tmap = {}
+    for comp, entries in trans.items():
+        for key, mins in entries:
+            tmap[(comp, key)] = mins
+
+    pieces = []
+
+    def add(comp, key):
+        if not key or key in ('default', 'none', ''):
+            return
+        mins = tmap.get((comp, key))
+        pieces.append(f"{key}({mins}m)" if mins else key)
+
+    for comp in ('character', 'goals', 'location', 'scenario'):
+        entries = trans.get(comp)
+        if entries:  # transient shadows the persistent value
+            add(comp, entries[0][0])
+        else:
+            add(comp, _assembled_state.get(comp, ''))
+
+    for comp in LIST_COMPONENTS:
+        persistent = _assembled_state.get(comp, [])
+        for k in persistent:
+            add(comp, k)
+        for key, mins in trans.get(comp, []):
+            if key not in persistent:
+                pieces.append(f"{key}({mins}m)")
+
+    return ', '.join(p for p in pieces if p)
+
+
+def _status_string() -> str:
+    """Status like 'albert(556): albert, mars, excited(12m)'."""
     from core import prompts
-    from core.prompt_state import _assembled_state
-    
     prompt_data = prompts.get_current_prompt()
     content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
-    char_count = len(content)
-    
-    pieces = []
-    character = _assembled_state.get('character', '')
-    if character:
-        pieces.append(character)
-    
-    for k in ['goals', 'location', 'scenario']:
-        v = _assembled_state.get(k)
-        if v and v not in ['default', 'none', '']:
-            pieces.append(v)
-    
-    pieces.extend(_assembled_state.get('extras', []))
-    pieces.extend(_assembled_state.get('emotions', []))
-    
-    pieces_str = ', '.join(p for p in pieces if p)
-    return f"{preset_name}({char_count}): {pieces_str}"
+    return f"{_get_current_preset_name()}({len(content)}): {_pieces_summary()}"
 
 
-def _save_and_activate_assembled(preset_name: str, headers: dict, api_url: str) -> tuple:
-    """Save current _assembled_state as a preset and activate it."""
+def _resnapshot(system):
+    """Re-assemble the active prompt and push it into the live chat."""
     from core import prompts
-    from core.prompt_state import _assembled_state
-    
+    prompt_data = prompts.get_current_prompt()
+    content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
+    system.llm_chat.set_system_prompt(content)
+
+
+def _save_and_activate_assembled(system, state=None) -> str:
+    """Persist an assembled state as the active preset and re-activate.
+
+    `state` is a CANDIDATE dict (DR-7: save first, mutate on success) —
+    callers snapshot _assembled_state, apply their change to the copy, and
+    pass it here. The save persists the candidate; the activation's
+    apply_scenario then installs it as the live state atomically. If the
+    save refuses, the live state was never touched. state=None falls back
+    to a snapshot of the current live state.
+    """
+    from core import prompts
+    from core.prompt_state import _assembled_state, _state_lock
+
+    if state is None:
+        with _state_lock:
+            state = {k: (list(v) if isinstance(v, list) else v)
+                     for k, v in _assembled_state.items()}
+
+    preset_name = _get_current_preset_name(state)
     components = {}
-    for key in ['character', 'location', 'relationship', 'goals', 'format', 'scenario']:
-        if key in _assembled_state and _assembled_state[key]:
-            components[key] = _assembled_state[key]
-    
-    if _assembled_state.get('extras'):
-        components['extras'] = _assembled_state['extras'].copy()
-    if _assembled_state.get('emotions'):
-        components['emotions'] = _assembled_state['emotions'].copy()
-    
+    for k in ['character', 'location', 'relationship', 'goals', 'format', 'scenario']:
+        if state.get(k):
+            components[k] = state[k]
+    for k in LIST_COMPONENTS:
+        if state.get(k):
+            components[k] = list(state[k])
+
+    # Carry the preset's privacy flag through the rebuild — omitting it
+    # defaulted privacy_required to False, so her wearing/removing any piece
+    # on a privacy-flagged preset silently stripped its privacy gate.
+    prev = prompts.get_prompt(preset_name)
+    privacy_required = bool(isinstance(prev, dict) and prev.get('privacy_required'))
+
+    # audit=False: the caller's activation event already describes this
+    # change ("piece X added to Y") — a preset-diff row would double-log it.
+    # The audit snapshot still refreshes so nothing shows up as a phantom
+    # change on the next diff.
+    ok, msg = prompts.save_prompt(preset_name, {"type": "assembled", "components": components,
+                                                "privacy_required": privacy_required},
+                                  audit=False)
+    if not ok:
+        raise MetaError(f"Failed to save preset: {msg}")
+    ok, msg = prompts.activate_prompt(preset_name, system)
+    if not ok:
+        raise MetaError(f"Saved but failed to activate: {msg}")
+    return preset_name
+
+
+# === Tools ===
+
+def _prompt_view(args):
+    from core import prompts
+
+    name = args.get('name')
+    if not name:
+        prompt_data = prompts.get_current_prompt()
+        content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
+        active = prompts.get_active_preset_name()
+        mode = prompts.get_prompt_mode()
+        header = f"[Active: {active} ({mode}, {len(content)} chars)]"
+        if mode == 'assembled':
+            header += f"\n[Pieces: {_pieces_summary()}]"
+        return f"{header}\n\n{content}", True
+
+    name = _resolve_name(name, prompts.list_prompts())
+    prompt_data = prompts.get_prompt(name) if name else None
+    if not prompt_data:
+        return f"Prompt '{args.get('name')}' not found. Available: {', '.join(prompts.list_prompts())}", False
+    content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
+    prompt_type = prompt_data.get('type', 'unknown') if isinstance(prompt_data, dict) else 'monolith'
+    return f"[{name} - {prompt_type}]\n\n{content}", True
+
+
+def _prompt_switch(args):
+    from core import prompts
+
+    name = args.get('name')
+    if not name:
+        current = prompts.get_active_preset_name()
+        lines = [f"Current: {current}", "Available prompts:"]
+        for n in prompts.list_prompts():
+            pdata = prompts.get_prompt(n)
+            ptype = pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith'
+            content = pdata.get('content', '') if isinstance(pdata, dict) else str(pdata)
+            marker = " *" if n == current else ""
+            lines.append(f"  {n} ({ptype}, {len(content)} chars){marker}")
+        return '\n'.join(lines), True
+
+    name = _resolve_name(name, prompts.list_prompts())
+    prompt_data = prompts.get_prompt(name) if name else None
+    if not prompt_data:
+        return f"Prompt '{args.get('name')}' not found. Available: {', '.join(prompts.list_prompts())}", False
+
+    prompts.clear_transients()  # a mood doesn't survive becoming someone else
+    ok, msg = prompts.activate_prompt(name, _system())
+    if not ok:
+        return msg, False
+    prompt_type = prompt_data.get('type', 'monolith') if isinstance(prompt_data, dict) else 'monolith'
+    return f"Switched to '{name}' ({prompt_type}).", True
+
+
+def _audit_emit(event):
+    """Fire-and-forget prompt-ledger emit (core.audit) — never blocks the
+    tool; with no sink registered it's a no-op."""
     try:
-        response = requests.put(
-            f"{api_url}/api/prompts/{preset_name}",
-            json={"type": "assembled", "components": components},
-            headers=headers,
-            timeout=5, verify=False
-        )
-        if response.status_code != 200:
-            return False, f"Failed to save preset: {response.text}"
-    except Exception as e:
-        return False, f"Failed to save preset: {e}"
-    
+        from core.audit import emit
+        emit(event)
+    except Exception:
+        pass
+
+
+def _reason(args):
+    return (args.get('reason') or '').strip() or None
+
+
+def _prompt_edit(args):
+    from core import prompts
+    from core.event_bus import publish, Events
+
+    current = prompts.get_active_preset_name()
+    if not current:
+        return "No active prompt to edit.", False
+    prompt_data = prompts.get_prompt(current)
+    if not prompt_data:
+        return f"Active prompt '{current}' not found.", False
+    if isinstance(prompt_data, dict) and prompt_data.get('type') == 'assembled':
+        return "Active prompt is assembled — edit pieces with prompt_pieces instead.", False
+
+    content = prompt_data.get('content', '') if isinstance(prompt_data, dict) else str(prompt_data)
+    new_content = _exact_replace(content, args.get('old_text', ''), args.get('new_text', ''), f"prompt '{current}'")
+
+    ok, msg = prompts.save_prompt(current, {"type": "monolith", "content": new_content},
+                                  reason=_reason(args))
+    if not ok:
+        return f"Failed to save: {msg}", False
+    # Vault-resolved names stay off the event bus (SSE replays to new tabs).
+    if prompts.is_vault_prompt(current):
+        publish(Events.PROMPT_CHANGED, {"name": "", "action": "vault_changed"})
+    else:
+        publish(Events.PROMPT_CHANGED, {"name": current, "action": "saved"})
+
+    ok, msg = prompts.activate_prompt(current, _system())
+    if not ok:
+        return f"Saved but failed to reload: {msg}", False
+    return f"Updated prompt '{current}' ({len(new_content)} chars).", True
+
+
+def _prompt_create(args):
+    from core import prompts
+    from core.event_bus import publish, Events
+
+    name = _normalize_name(args.get('name', ''))
+    content = args.get('content', '')
+    if not name or not content:
+        return "Both name and content are required.", False
+    existing = _resolve_name(args.get('name', ''), prompts.list_prompts())
+    if existing:
+        return f"Prompt '{existing}' already exists — pick another name, or prompt_switch to it and use prompt_edit.", False
+
+    ok, msg = prompts.save_prompt(name, {"type": "monolith", "content": content},
+                                  reason=_reason(args))
+    if not ok:
+        return f"Failed to create: {msg}", False
+    if prompts.is_vault_prompt(name):
+        publish(Events.PROMPT_CHANGED, {"name": "", "action": "vault_changed"})
+    else:
+        publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
+    where = " (vault)" if msg.endswith("(vault)") else ""
+    return f"Created prompt '{name}'{where} ({len(content)} chars). Not active — use prompt_switch('{name}') when ready.", True
+
+
+def _prompt_pieces(args):
+    from core import prompts
+    from core.event_bus import publish, Events
+    from core.prompt_state import _assembled_state, _state_lock, get_transients
+
+    action = (args.get('action') or '').lower().strip()
+    component = _normalize_component(args.get('component', ''))
+    # Visible view — hidden pack scaffolding (kind != 'user') stays out of
+    # her piece tool, same world the UI sees. The renderer reads the full merge.
+    comps = prompts.visible_components()
+    key = args.get('key', '')
+    key = _resolve_name(key, comps.get(component, {})) or _normalize_name(key)
+
+    def _act(key_, active, ttl=None):
+        e = {'kind': 'activation', 'comp_type': component, 'key': key_,
+             'active': active, 'prompt': prompts.get_active_preset_name(),
+             'actor': 'ai', 'reason': _reason(args)}
+        if ttl:
+            e['ttl_minutes'] = ttl
+        _audit_emit(e)
+
+    if action == 'list':
+        # Locked-vault hint (vault v1.1): without it she burns tokens hunting
+        # a piece that's asleep in the vault — AIX bug class.
+        def _vault_hint():
+            try:
+                from core import prompt_vault
+                if prompt_vault.vault_exists() and not prompt_vault.vault_unlocked():
+                    return ("(a prompt vault exists and is LOCKED — its pieces are "
+                            "hidden until a human unlocks it)")
+            except Exception:
+                pass
+            return ''
+
+        if not component:
+            trans = get_transients()
+            lines = ["Component types (active marked, temporary pieces show minutes left):"]
+            for c in VALID_COMPONENTS:
+                available = len(comps.get(c, {}))
+                if c in LIST_COMPONENTS:
+                    active = list(_assembled_state.get(c, []))
+                    active += [f"{k}({m}m)" for k, m in trans.get(c, []) if k not in active]
+                    active_str = ', '.join(active) if active else 'none'
+                else:
+                    tv = trans.get(c)
+                    active_str = f"{tv[0][0]}({tv[0][1]}m)" if tv else _assembled_state.get(c, 'none')
+                lines.append(f"  {c} ({available} available) — active: {active_str}")
+            lines.append("prompt_pieces(action='list', component='X') to see keys.")
+            hint = _vault_hint()
+            if hint:
+                lines.append(hint)
+            return '\n'.join(lines), True
+        _require_component(component)
+        items = comps.get(component, {})
+        hint = _vault_hint()
+        if not items:
+            return f"No {component} pieces available." + (f" {hint}" if hint else ""), True
+        lines = [f"Available {component}:"]
+        for k, v in items.items():
+            preview = v[:80].replace('\n', ' ') + ('...' if len(v) > 80 else '')
+            lines.append(f"  {k}: {preview}")
+        if hint:
+            lines.append(hint)
+        return '\n'.join(lines), True
+
+    if action == 'view':
+        _require_component(component)
+        if not key:
+            return "key is required for view.", False
+        value = comps.get(component, {}).get(key)
+        if value is None:
+            return _unknown_key_msg(component, key), False
+        return f"[{component}/{key}]\n\n{value}", True
+
+    if action == 'set':
+        _require_component(component)
+        if not key:
+            return "key is required for set.", False
+        if key not in comps.get(component, {}):
+            return _unknown_key_msg(component, key), False
+        system = _system()
+        minutes = args.get('minutes')
+        if minutes:
+            minutes = max(1, min(int(minutes), MAX_TRANSIENT_MINUTES))
+            prompts.set_transient_piece(component, key, minutes)
+            _resnapshot(system)
+            _act(key, True, ttl=minutes)
+            return f"Set {component}='{key}' for {minutes}m (temporary — reverts automatically). {_status_string()}", True
+        # Candidate-state pattern (DR-7): snapshot, mutate the COPY, save
+        # first — the activation installs it as live state only on success.
+        # A refused save leaves _assembled_state exactly as it was.
+        with _state_lock:
+            state = {k: (list(v) if isinstance(v, list) else v)
+                     for k, v in _assembled_state.items()}
+        if component in LIST_COMPONENTS:
+            if key in state.get(component, []):
+                return f"'{key}' already in {component}.", True
+            state.setdefault(component, []).append(key)
+        else:
+            state[component] = key
+        _save_and_activate_assembled(system, state)
+        _act(key, True)
+        verb = "Added" if component in LIST_COMPONENTS else "Set"
+        return f"{verb} {component}='{key}'. {_status_string()}", True
+
+    if action == 'remove':
+        _require_component(component)
+        system = _system()
+        # Transient entries first — dropping one never touches the preset
+        if key and prompts.remove_transient_piece(component, key):
+            _resnapshot(system)
+            _act(key, False)
+            return f"Removed temporary {component} '{key}'. {_status_string()}", True
+        if component in LIST_COMPONENTS:
+            if not key:
+                return "key is required to remove from emotions/extras.", False
+            # Candidate-state pattern (DR-7) — see 'set' above.
+            with _state_lock:
+                state = {k: (list(v) if isinstance(v, list) else v)
+                         for k, v in _assembled_state.items()}
+            if key not in state.get(component, []):
+                return f"'{key}' not in current {component}.", False
+            state[component].remove(key)
+            _save_and_activate_assembled(system, state)
+            _act(key, False)
+            return f"Removed '{key}' from {component}. {_status_string()}", True
+        # Single-value component: clear any transient shadow, reset to default
+        trans = get_transients()
+        had_transient = component in trans
+        if had_transient:
+            prompts.remove_transient_piece(component, trans[component][0][0])
+        default = STATE_DEFAULTS.get(component, 'default')
+        with _state_lock:
+            state = {k: (list(v) if isinstance(v, list) else v)
+                     for k, v in _assembled_state.items()}
+        prev = state.get(component)
+        state[component] = default
+        # No-op guard (scout find 2026-07-22): already at default and no
+        # transient to clear → nothing changed; a save + "piece removed"
+        # ledger row here was ghost evidence.
+        if not had_transient and prev in (None, default):
+            return f"{component} is already '{default}'.", True
+        _save_and_activate_assembled(system, state)
+        if prev not in (None, default):
+            _act(prev, False)
+        return f"Reset {component} to '{default}'. {_status_string()}", True
+
+    if action == 'create':
+        _require_component(component)
+        value = args.get('value', '')
+        if not key or not value:
+            return "Both key and value are required for create.", False
+        # Item-level funnel (phase 0 of the vault): lock discipline, private-
+        # dict write, refusal propagation, and the COMPONENTS_CHANGED publish
+        # all live in prompt_crud.save_component now.
+        ok, msg = prompts.save_component(component, key, value, reason=_reason(args))
+        if not ok:
+            return msg, False
+        # Routing note so she knows where it landed (vault-routed while the
+        # vault is unlocked — the funnel's message carries the marker).
+        where = " (vault)" if msg.endswith("(vault)") else ""
+        return (f"Created {component}/'{key}' in the library{where}. Not active — "
+                f"prompt_pieces(action='set', component='{component}', key='{key}') to wear it."), True
+
+    if action == 'delete':
+        _require_component(component)
+        if not key:
+            return "key is required for delete.", False
+        if key == 'default':
+            return "Can't delete the 'default' piece.", False
+        if key not in comps.get(component, {}):
+            return _unknown_key_msg(component, key), False
+        if component in LIST_COMPONENTS:
+            active = key in _assembled_state.get(component, [])
+        else:
+            active = _assembled_state.get(component) == key
+        active = active or any(k == key for k, _ in get_transients().get(component, []))
+        if active:
+            return f"'{key}' is currently active — remove it first, then delete.", False
+        # Item-level funnel (phase 0 of the vault) — pack-owned and store-latch
+        # refusals come back as codes; wording stays here.
+        ok, code = prompts.delete_component(component, key, reason=_reason(args))
+        if not ok:
+            if code == 'pack_owned':
+                from core import prompt_packs
+                owner = prompt_packs.piece_source(component, key)
+                return (f"'{component}/{key}' is shipped by plugin '{owner or 'a plugin'}' — "
+                        f"read-only. Disable the plugin to remove it.", False)
+            if code == 'store_latch':
+                return ("Delete not persisted — the prompt store failed to load earlier "
+                        "(check user/prompts/prompt_pieces.json)."), False
+            return _unknown_key_msg(component, key), False
+        return f"Deleted {component}/{key} from the library.", True
+
+    return f"Unknown action '{action}'. Valid: list, view, set, remove, create, delete.", False
+
+
+def _set_voice(args):
+    import config as app_config
+    from core.event_bus import publish, Events
+
+    system = _system()
+    provider = getattr(system.tts, 'provider', None)
+    prov_name = getattr(app_config, 'TTS_PROVIDER', 'none')
+    voices = []
+    if provider and hasattr(provider, 'list_voices'):
+        try:
+            voices = provider.list_voices() or []
+        except Exception as e:
+            logger.error(f"Failed to list voices: {e}")
+    speed_min = float(getattr(provider, 'SPEED_MIN', 0.5) or 0.5)
+    speed_max = float(getattr(provider, 'SPEED_MAX', 2.0) or 2.0)
+
+    sm = system.llm_chat.session_manager
+    # Captured with the settings read (R5 intent): if a vault eviction
+    # retargets the active chat before the write below, refuse the stamp
+    # instead of writing the landing chat.
+    _intended = sm._effective_chat_name()
+    current = sm.get_chat_settings() or {}
+    name = (args.get('name') or '').strip()
+    speed = args.get('speed')
+    pitch = args.get('pitch')
+
+    if not name and speed is None and pitch is None:
+        lines = [
+            f"Provider: {prov_name}",
+            f"Current: voice={current.get('voice', 'default')}, speed={current.get('speed', 1.0)}, pitch={current.get('pitch', 1.0)}",
+            f"Ranges: speed {speed_min}-{speed_max}, pitch {PITCH_MIN}-{PITCH_MAX} (1.0 = normal)",
+            "Available voices:",
+        ]
+        categories = {}
+        for v in voices:
+            categories.setdefault(v.get('category', 'Other'), []).append(v)
+        for cat, cat_voices in categories.items():
+            lines.append(f"  {cat}: {', '.join(v['voice_id'] for v in cat_voices)}")
+        return '\n'.join(lines), True
+
+    updates = {}
+    if name:
+        name_lower = name.lower()
+        match = next((v['voice_id'] for v in voices
+                      if v.get('voice_id', '').lower() == name_lower or v.get('name', '').lower() == name_lower), None)
+        if not match:
+            return f"Voice '{name}' not found. Use set_voice without params to list available voices.", False
+        updates['voice'] = match
+    if speed is not None:
+        updates['speed'] = round(min(max(float(speed), speed_min), speed_max), 2)
+    if pitch is not None:
+        updates['pitch'] = round(min(max(float(pitch), PITCH_MIN), PITCH_MAX), 2)
+
+    if not sm.update_chat_settings(updates, expected_active=_intended):
+        return "Failed to update chat settings.", False
+    # Apply ONLY the keys we changed. _apply_chat_settings(full dict) would
+    # also re-apply prompt/scopes/spice/toolset — snapping a live toolset
+    # back to the persisted one mid-conversation.
     try:
-        response = requests.post(
-            f"{api_url}/api/prompts/{preset_name}/load",
-            headers=headers,
-            timeout=5, verify=False
-        )
-        if response.status_code != 200:
-            return False, f"Saved but failed to activate: {response.text}"
+        if 'voice' in updates:
+            system.tts.set_voice(updates['voice'])
+        if 'speed' in updates:
+            system.tts.set_speed(updates['speed'])
+        if 'pitch' in updates:
+            system.tts.set_pitch(updates['pitch'])
     except Exception as e:
-        return False, f"Saved but failed to activate: {e}"
-    
-    return True, "OK"
+        logger.error(f"Error applying TTS settings live: {e}")
+        return f"Saved, but failed to apply live: {e}", False
+    publish(Events.CHAT_SETTINGS_CHANGED, {"chat": sm._effective_chat_name(), "settings": updates, "origin": None})
+
+    changed = ', '.join(f"{k}={v}" for k, v in updates.items())
+    logger.info(f"Voice settings changed: {changed}")
+    return f"Voice settings updated: {changed}.", True
 
 
-def _is_list_component(component: str) -> bool:
-    """Check if component is a list type (emotions/extras)."""
-    return component in ['emotions', 'extras']
+def _reset_chat(args):
+    from core import prompts
 
+    reason = args.get('reason')
+    if not reason:
+        return "A reason is required.", False
 
-def _get_active_chat(headers: dict, api_url: str) -> str:
-    """Get the active chat name."""
+    system = _system()
+    sm = system.llm_chat.session_manager
+    chat_name = (args.get('chat_name') or '').strip()
+
+    _ov = None
     try:
-        response = requests.get(
-            f"{api_url}/api/chats/active",
-            headers=headers,
-            timeout=5, verify=False
-        )
-        if response.status_code == 200:
-            return response.json().get('active_chat', 'default')
-    except Exception as e:
-        logger.error(f"Failed to get active chat: {e}")
-    return 'default'
+        from core.chat.stream_brain import get_override
+        _ov = get_override()
+    except Exception:
+        pass
 
+    if not chat_name:
+        if _ov and _ov.get('ephemeral'):
+            # Background task with no chat: the old behavior wiped whatever
+            # chat the OPERATOR had open. Honest AIX instead.
+            return ("You're not in a chat right now (background task) — "
+                    "nothing was reset. Name the target instead: "
+                    "reset_chat(chat_name='...', reason='...').", False)
+        logger.info(f"AI INITIATED CHAT RESET - Reason: {reason}")
+        sm.clear()  # clears + persists the EFFECTIVE chat and publishes CHAT_CLEARED
+        if not _ov:
+            # Transient TTL prompt pieces are process-GLOBAL and ride the
+            # operator's live prompt — only an operator-lane reset clears
+            # them. A daemon's reset of its own chat used to kill the
+            # operator's mood pieces too (pre-existing wart, closed here).
+            prompts.clear_transients()
+        return f"Chat reset. Reason: {reason}", True
 
-def _update_chat_setting(setting_key: str, value, headers: dict, api_url: str) -> tuple:
-    """Update a single chat setting (voice, pitch, speed)."""
-    chat_name = _get_active_chat(headers, api_url)
-    
+    # Named target: ride the by-name primitive — vault-gated (a sealed chat
+    # behaves as nonexistent) and live-call-refusing, same rules as the
+    # Chat Manager's bulk clear.
+    from core.chat.history import sanitize_chat_name
+    name = sanitize_chat_name(chat_name)
+    if _ov and _ov.get('ephemeral') and name == sm.get_active_chat_name():
+        # A chatless background turn may reset a chat it was told to manage,
+        # but never the operator's OPEN chat — that's the original blast-
+        # radius CRIT through the named front door (hunt 2026-09-04 S5-02).
+        return (f"'{name}' is the chat the user has open right now — "
+                f"background tasks can't reset it.", False)
     try:
-        response = requests.put(
-            f"{api_url}/api/chats/{chat_name}/settings",
-            json={"settings": {setting_key: value}},
-            headers=headers,
-            timeout=5, verify=False
-        )
-        if response.status_code != 200:
-            return False, f"Failed to update {setting_key}: {response.text}"
-        return True, "OK"
-    except Exception as e:
-        return False, f"Failed to update {setting_key}: {e}"
+        # Same source the Chat Manager's bulk ops consult (routes/chat.py
+        # _live_call_chats) — read directly, a functions module must not
+        # import a routes module (circular from a cold start).
+        _mgr = getattr(system, "_conversation_manager", None)
+        if _mgr and name in _mgr.external_chats():
+            return (f"Chat '{name}' belongs to a live phone call — "
+                    f"not resetting it mid-call.", False)
+    except Exception:
+        pass
+    logger.info(f"AI INITIATED CHAT RESET of '{name}' - Reason: {reason}")
+    if not sm.clear_chat(name):
+        return (f"Couldn't reset '{name}' — it doesn't exist (or is "
+                f"sealed in a locked vault).", False)
+    return f"Chat '{name}' reset. Reason: {reason}", True
+
+
+def _change_username(args):
+    from core.settings_manager import settings
+
+    name = (args.get('name') or '').strip()
+    if not name:
+        return "Name is required.", False
+    if len(name) > 100:
+        return "That name is too long (max 100 characters) — it is injected into every prompt.", False
+    settings.set('DEFAULT_USERNAME', name, persist=True)
+    logger.info(f"Username changed to: {name}")
+    return f"Username changed to {name}. This will appear in prompts using {{user_name}}.", True
+
+
+def _list_tools(args):
+    scope = (args.get('scope') or 'enabled').lower().strip()
+    fm = _system().llm_chat.function_manager
+
+    def short(desc):
+        return desc[:60] + ('...' if len(desc) > 60 else '')
+
+    if scope == 'all':
+        enabled = set(fm.get_enabled_function_names())
+        lines = []
+        total = 0
+        for module_name, module_info in sorted(fm.function_modules.items()):
+            for tool in module_info.get('tools', []):
+                func_name = tool['function']['name']
+                total += 1
+                status = "✓" if func_name in enabled else "✗"
+                lines.append(f"  [{status}] {func_name}: {short(tool['function'].get('description', ''))}")
+        return '\n'.join([f"All tools ({total} total):"] + lines + ["\n✓ = enabled, ✗ = inactive"]), True
+
+    enabled = list(fm.get_enabled_function_names())
+    desc_map = {t['function']['name']: t['function'].get('description', '')
+                for mi in fm.function_modules.values() for t in mi.get('tools', [])}
+    lines = [f"Enabled tools ({len(enabled)}) - Toolset: {fm.current_toolset_name}"]
+    for n in enabled:
+        lines.append(f"  {n}: {short(desc_map.get(n, ''))}")
+    if not enabled:
+        lines.append("  (no tools enabled)")
+    return '\n'.join(lines), True
+
+
+def _switch_model(args):
+    import config as app_config
+
+    # Belt+suspenders — function_manager already hides this tool when the
+    # gate is off, but never trust visibility alone (silent-default class).
+    if not getattr(app_config, 'AI_MODEL_SWITCH_ENABLED', False):
+        return "Model switching is disabled. Enable it in Settings > Tools.", False
+
+    from core.chat.llm_providers import provider_registry, set_active_model
+    roster = [k for k in (getattr(app_config, 'AI_MODEL_SWITCH_ROSTER', None) or [])]
+    if not roster:
+        return "No models are configured for switching — add them in Settings > Tools.", False
+
+    providers = {p['key']: p for p in provider_registry.get_all_providers()}
+    system = _system()
+    current = (system.llm_chat.session_manager.get_chat_settings() or {}).get('llm_primary', 'auto')
+    ratchet = bool(getattr(app_config, 'AI_MODEL_SWITCH_RATCHET', False))
+
+    def label(key):
+        p = providers.get(key, {})
+        kind = 'local' if p.get('is_local') else 'cloud'
+        return f"{p.get('display_name', key)} ({key}, {kind})"
+
+    name = (args.get('name') or '').strip()
+    if not name:
+        lines = [f"Current model: {label(current) if current in providers else current}"]
+        if ratchet:
+            lines.append("Privacy ratchet is ON — switches only move DOWN this list, never back up.")
+            if current not in roster:
+                lines.append("You're above the list (least private) — you can switch to any model below, "
+                             "then privacy only rolls downhill from there.")
+        lines.append("Switchable models (top = least private):")
+        for i, key in enumerate(roster, 1):
+            if key not in providers:
+                continue
+            marker = "  <- current" if key == current else ""
+            lines.append(f"  {i}. {label(key)}{marker}")
+        lines.append("switch_model(name) to switch — takes effect on your next message.")
+        return '\n'.join(lines), True
+
+    name_lower = name.lower()
+    target = next((k for k in roster
+                   if k.lower() == name_lower
+                   or providers.get(k, {}).get('display_name', '').lower() == name_lower), None)
+    if not target:
+        return f"'{name}' is not on the switch roster. Call switch_model without params to see options.", False
+    if target == current:
+        return f"Already on {label(target)}.", True
+    # Privacy ratchet, option B: 'auto' (and any current not on the roster) is the
+    # invisible top rung — least private. So a first switch away from 'auto' is
+    # always "downhill" and allowed; the ratchet only locks once she's pinned to a
+    # concrete roster model. `current in roster` being false here is intentional,
+    # not a bypass — don't "fix" it.
+    if ratchet and current in roster and roster.index(target) < roster.index(current):
+        return (f"Privacy ratchet: can't switch back up to "
+                f"{providers.get(target, {}).get('display_name', target)} — this chat moved to "
+                f"{providers.get(current, {}).get('display_name', current)} and privacy only rolls "
+                f"downhill. The user can change it in the sidebar."), False
+
+    ok, msg = set_active_model(system, target)
+    if not ok:
+        return msg, False
+    logger.info(f"AI switched model: {current} -> {target}")
+    return f"Switching to {msg} — takes effect on my next message.", True
+
+
+def _switch_toolset(args):
+    import config as app_config
+
+    if not getattr(app_config, 'AI_TOOLSET_SWITCH_ENABLED', False):
+        return "Toolset switching is disabled. Enable it in Settings > Tools.", False
+
+    from core.event_bus import publish, Events
+    from core.toolsets import toolset_manager
+
+    system = _system()
+    fm = system.llm_chat.function_manager
+    available = sorted(set(list(fm.get_available_toolsets())
+                           + list(toolset_manager.get_toolset_names())
+                           + ['all', 'none']))
+
+    name = (args.get('name') or '').strip()
+    if not name:
+        current = fm.current_toolset_name
+        lines = [f"Current toolset: {current}", "Available:"]
+        lines += [f"  {n}{'  <- current' if n == current else ''}" for n in available]
+        return '\n'.join(lines), True
+
+    match = next((n for n in available if n.lower() == name.lower()), None)
+    if not match:
+        return f"Toolset '{name}' not found. Available: {', '.join(available)}", False
+
+    # Background lane (phone/cron/agent — a stream override is installed):
+    # the settings write targets the stream's own chat, and the RUNTIME
+    # palette is the operator's — swapping it out from under them (and
+    # dropping their extra_toolsets, which the stub override starved) was
+    # hunt finding M11 (2026-08-17). The stream's next turn re-resolves its
+    # tools from the chat settings it just wrote.
+    _ov = None
+    try:
+        from core.chat.stream_brain import get_override
+        _ov = get_override()
+    except Exception:
+        pass
+    if _ov and _ov.get("ephemeral"):
+        # Chatless background turn: no chat to stamp, and the fall-through
+        # below is a LIVE palette swap on the operator (the M11 class).
+        return ("You're not in a chat right now (background task) — toolset "
+                "unchanged. This turn's tools were set by the task.", False)
+    # Captured BEFORE the reads below — if a vault eviction retargets the
+    # active chat mid-turn, the write refuses instead of stamping the
+    # landing chat (R5 intent).
+    _intended = system.llm_chat.session_manager._effective_chat_name()
+    if _ov and _ov.get("chat"):
+        if not system.llm_chat.session_manager.update_chat_settings({"toolset": match}):
+            return "Failed to update chat settings.", False
+        publish(Events.CHAT_SETTINGS_CHANGED,
+                {"chat": _ov["chat"], "settings": {"toolset": match}, "origin": None})
+        logger.info(f"AI switched toolset to '{match}' for chat '{_ov['chat']}'")
+        return f"Switched to toolset '{match}' for this chat (applies from its next turn).", True
+
+    # Write-first, matching the route twin (content.py activate_toolset):
+    # a refused stamp (active chat changed mid-turn — eviction) aborts
+    # BEFORE the live palette flips, so nothing needs healing. The old
+    # apply-then-write order left the runtime wearing the requested set
+    # over the landing chat's settings (hunt 2026-09-04 S5-07).
+    if not system.llm_chat.session_manager.update_chat_settings(
+            {"toolset": match}, expected_active=_intended):
+        return "Active chat changed mid-switch — toolset not saved.", False
+    # The chat's extra_toolsets stay on across a deliberate toolset switch —
+    # settings still claim them (the "include story tools" checkbox), so the
+    # runtime must keep matching (extras-decay site #9, 2026-08-05).
+    extras = None
+    try:
+        extras = (system.llm_chat.session_manager.get_chat_settings()
+                  or {}).get('extra_toolsets') or None
+    except Exception:
+        pass
+    fm.update_enabled_functions([match], extra_toolsets=extras)
+    publish(Events.TOOLSET_CHANGED, {"name": match})
+    logger.info(f"AI switched toolset to: {match}")
+
+    note = ""
+    if 'switch_toolset' not in fm.get_enabled_function_names():
+        note = (" Note: this toolset doesn't include switch_toolset — one-way door. "
+                "The user switches back in the sidebar, or add switch_toolset to that set.")
+    return f"Switched to toolset '{match}' ({len(fm.get_enabled_function_names())} tools).{note}", True
+
+
+def _set_motion(args):
+    from core.event_bus import publish, Events
+    from core.routes.plugins import collect_motions
+
+    system = _system()
+    sm = system.llm_chat.session_manager
+    # R5 intent — see _set_voice.
+    _intended = sm._effective_chat_name()
+    motions = collect_motions()
+    current = (sm.get_chat_settings() or {}).get('motion', '')
+
+    raw = args.get('name')
+    name = raw.strip() if isinstance(raw, str) else ''
+    if not name:
+        cur_label = current or "(default — follows the user's global pick)"
+        if current and not any(m['id'] == current for m in motions):
+            cur_label = f"{current} (not available — its plugin may be disabled)"
+        lines = [f"Current chat motion: {cur_label}",
+                 "Available motions:"]
+        for m in motions:
+            marker = "  <- current" if m['id'] == current else ""
+            desc = f" — {m['description']}" if m.get('description') else ""
+            lines.append(f"  {m['id']}: {m['name']}{desc}{marker}")
+        if not motions:
+            lines.append("  (none installed)")
+        lines.append("set_motion(name) to set it for this chat, or 'none' to clear.")
+        return '\n'.join(lines), True
+
+    low = name.lower()
+    if low in ("none", "clear", "off", "default"):
+        target = ""
+    else:
+        target = next((m['id'] for m in motions
+                       if m['id'].lower() == low or m['name'].lower() == low), None)
+        if target is None:
+            menu = ", ".join(m['id'] for m in motions) or "(none installed)"
+            return f"Motion '{name}' not found. Available: {menu}.", False
+
+    # Per-chat override (merges; resolution = chat > user's global pick > theme).
+    if not sm.update_chat_settings({"motion": target}, expected_active=_intended):
+        return "Failed to update chat settings.", False
+    # Tell the frontend to apply it live. `chat` is load-bearing: without it
+    # a background-lane call (phone/cron/agent) repainted whatever chat the
+    # operator had open (hunt 2026-08-17).
+    publish(Events.CHAT_SETTINGS_CHANGED,
+            {"chat": sm._effective_chat_name(), "motion": target, "origin": "set_motion"})
+
+    if target:
+        return f"Motion set to '{target}' for this chat — the user sees it animating behind the conversation.", True
+    return "Chat motion cleared — back to the user's default.", True
+
+
+_HANDLERS = {
+    'prompt_view': _prompt_view,
+    'prompt_switch': _prompt_switch,
+    'prompt_edit': _prompt_edit,
+    'prompt_create': _prompt_create,
+    'prompt_pieces': _prompt_pieces,
+    'set_voice': _set_voice,
+    'reset_chat': _reset_chat,
+    'change_username': _change_username,
+    'list_tools': _list_tools,
+    'switch_model': _switch_model,
+    'switch_toolset': _switch_toolset,
+    'set_motion': _set_motion,
+}
 
 
 def execute(function_name, arguments, config):
     """Execute meta-related functions."""
-    main_api_url = app_config.API_URL
-    headers = _get_api_headers()
-    
     try:
-        # === Universal tools ===
-        
-        if function_name == "view_prompt":
-            from core import prompts
-            
-            name = arguments.get('name')
-            
-            if not name:
-                prompt_data = prompts.get_current_prompt()
-                content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
-                active_name = prompts.get_active_preset_name()
-                return f"[Active: {active_name}]\n\n{content}", True
-            
-            name = _normalize_name(name)
-            prompt_data = prompts.get_prompt(name)
-            
-            if not prompt_data:
-                return f"Prompt '{name}' not found.", False
-            
-            content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
-            prompt_type = prompt_data.get('type', 'unknown') if isinstance(prompt_data, dict) else 'monolith'
-            return f"[{name} - {prompt_type}]\n\n{content}", True
-
-        elif function_name == "switch_prompt":
-            from core import prompts
-            
-            name = arguments.get('name')
-            
-            # No name provided - list available prompts
-            if not name:
-                try:
-                    response = requests.get(
-                        f"{main_api_url}/api/prompts",
-                        headers=headers,
-                        timeout=5, verify=False
-                    )
-                    if response.status_code == 200:
-                        prompt_list = response.json().get('prompts', [])
-                        current = prompts.get_active_preset_name()
-                        lines = [f"Current: {current}", "Available prompts:"]
-                        for p in prompt_list:
-                            marker = " *" if p['name'] == current else ""
-                            lines.append(f"  {p['name']} ({p['type']}, {p['char_count']} chars){marker}")
-                        return '\n'.join(lines), True
-                    else:
-                        # Fallback to local list
-                        available = prompts.list_prompts()
-                        current = prompts.get_active_preset_name()
-                        return f"Current: {current}\nAvailable: {', '.join(available)}", True
-                except Exception as e:
-                    logger.error(f"Failed to list prompts: {e}")
-                    available = prompts.list_prompts()
-                    current = prompts.get_active_preset_name()
-                    return f"Current: {current}\nAvailable: {', '.join(available)}", True
-            
-            name = _normalize_name(name)
-            prompt_data = prompts.get_prompt(name)
-            
-            if not prompt_data:
-                return f"Prompt '{name}' not found.", False
-            
-            response = requests.post(
-                f"{main_api_url}/api/prompts/{name}/load",
-                headers=headers,
-                timeout=5, verify=False
-            )
-            
-            if response.status_code != 200:
-                return f"Failed to activate '{name}': {response.text}", False
-            
-            prompt_type = prompt_data.get('type', 'monolith') if isinstance(prompt_data, dict) else 'monolith'
-            return f"Switched to '{name}' ({prompt_type}).", True
-
-        elif function_name == "reset_chat":
-            reason = arguments.get('reason')
-            if not reason:
-                return "A reason is required.", False
-            
-            logger.info(f"AI INITIATED CHAT RESET - Reason: {reason}")
-            
-            response = requests.delete(
-                f"{main_api_url}/api/history/messages",
-                json={"count": -1},
-                headers=headers,
-                timeout=5, verify=False
-            )
-            response.raise_for_status()
-            
-            return f"Chat reset. Reason: {reason}", True
-
-        elif function_name == "change_username":
-            name = arguments.get('name', '').strip()
-            if not name:
-                return "Name is required.", False
-            
-            response = requests.put(
-                f"{main_api_url}/api/settings/DEFAULT_USERNAME",
-                json={"value": name, "persist": True},
-                headers=headers,
-                timeout=5, verify=False
-            )
-            
-            if response.status_code != 200:
-                return f"Failed to change username: {response.text}", False
-            
-            logger.info(f"Username changed to: {name}")
-            return f"Username changed to {name}. This will appear in prompts using {{user_name}}.", True
-
-        elif function_name == "set_tts_voice":
-            name = arguments.get('name', '').strip()
-            voices, provider = _fetch_tts_voices(headers, main_api_url)
-
-            # No name — list available voices with current
-            if not name:
-                current_voice = "unknown"
-                try:
-                    chat_name = _get_active_chat(headers, main_api_url)
-                    response = requests.get(
-                        f"{main_api_url}/api/chats/{chat_name}/settings",
-                        headers=headers,
-                        timeout=5, verify=False
-                    )
-                    if response.status_code == 200:
-                        current_voice = response.json().get('settings', {}).get('voice', 'unknown')
-                except Exception:
-                    pass
-
-                lines = [f"Provider: {provider}", f"Current: {current_voice}", "Available voices:"]
-                # Group by category if present
-                categories = {}
-                for v in voices:
-                    cat = v.get('category', 'Other')
-                    categories.setdefault(cat, []).append(v)
-                for cat, cat_voices in categories.items():
-                    names = ', '.join(v['voice_id'] for v in cat_voices)
-                    lines.append(f"  {cat}: {names}")
-                return '\n'.join(lines), True
-
-            # Match by voice_id or name (case-insensitive)
-            match = None
-            name_lower = name.lower()
-            for v in voices:
-                if v['voice_id'].lower() == name_lower or v.get('name', '').lower() == name_lower:
-                    match = v['voice_id']
-                    break
-
-            if not match:
-                return f"Voice '{name}' not found. Use set_tts_voice without params to list available voices.", False
-
-            success, msg = _update_chat_setting('voice', match, headers, main_api_url)
-            if not success:
-                return msg, False
-
-            logger.info(f"TTS voice changed to: {match}")
-            return f"Voice changed to {match}.", True
-
-        elif function_name == "list_tools":
-            scope = arguments.get('scope', 'enabled').lower().strip()
-            
-            try:
-                if scope == 'all':
-                    # Get all functions via API
-                    response = requests.get(
-                        f"{main_api_url}/api/functions",
-                        headers=headers,
-                        timeout=5, verify=False
-                    )
-                    
-                    if response.status_code != 200:
-                        return f"Failed to get functions: {response.text}", False
-                    
-                    data = response.json()
-                    modules = data.get('modules', {})
-                    total = sum(m.get('count', 0) for m in modules.values())
-
-                    lines = [f"All tools ({total} total):"]
-                    
-                    for module_name, module_info in sorted(modules.items()):
-                        for func in module_info.get('functions', []):
-                            name = func['name']
-                            desc = func.get('description', '')[:60]
-                            if len(func.get('description', '')) > 60:
-                                desc += '...'
-                            status = "✓" if func.get('enabled') else "✗"
-                            lines.append(f"  [{status}] {name}: {desc}")
-                    
-                    lines.append(f"\n✓ = enabled, ✗ = inactive")
-                    return '\n'.join(lines), True
-                else:
-                    # Get current ability info via API
-                    response = requests.get(
-                        f"{main_api_url}/api/toolsets/current",
-                        headers=headers,
-                        timeout=5, verify=False
-                    )
-                    
-                    if response.status_code != 200:
-                        return f"Failed to get current ability: {response.text}", False
-                    
-                    data = response.json()
-                    ability_name = data.get('name', 'unknown')
-                    enabled_functions = data.get('enabled_functions', [])
-                    
-                    lines = [f"Enabled tools ({len(enabled_functions)}) - Ability: {ability_name}"]
-                    
-                    # Get full function details for descriptions
-                    func_response = requests.get(
-                        f"{main_api_url}/api/functions",
-                        headers=headers,
-                        timeout=5, verify=False
-                    )
-                    
-                    desc_map = {}
-                    if func_response.status_code == 200:
-                        for module_info in func_response.json().get('modules', {}).values():
-                            for func in module_info.get('functions', []):
-                                desc_map[func['name']] = func.get('description', '')
-                    
-                    for name in enabled_functions:
-                        desc = desc_map.get(name, '')[:60]
-                        if len(desc_map.get(name, '')) > 60:
-                            desc += '...'
-                        lines.append(f"  {name}: {desc}")
-                    
-                    if not enabled_functions:
-                        lines.append("  (no tools enabled)")
-                    
-                    return '\n'.join(lines), True
-                    
-            except Exception as e:
-                logger.error(f"Error listing tools: {e}")
-                return f"Error listing tools: {e}", False
-
-        # === Monolith-only tools ===
-
-        elif function_name == "edit_prompt":
-            from core import prompts
-            
-            content = arguments.get('content')
-            if not content:
-                return "Content is required.", False
-            
-            # Get current prompt
-            current_name = prompts.get_active_preset_name()
-            if not current_name:
-                return "No active prompt to edit.", False
-            
-            prompt_data = prompts.get_prompt(current_name)
-            if not prompt_data:
-                return f"Current prompt '{current_name}' not found.", False
-            
-            # Verify it's a monolith (though tool shouldn't be visible if not)
-            if isinstance(prompt_data, dict) and prompt_data.get('type') == 'assembled':
-                return "Cannot edit assembled prompt with edit_prompt. Use set_piece instead.", False
-            
-            # Update in place
-            response = requests.put(
-                f"{main_api_url}/api/prompts/{current_name}",
-                json={"type": "monolith", "content": content},
-                headers=headers,
-                timeout=5, verify=False
-            )
-            
-            if response.status_code != 200:
-                return f"Failed to save: {response.text}", False
-            
-            # Re-activate to apply changes
-            response = requests.post(
-                f"{main_api_url}/api/prompts/{current_name}/load",
-                headers=headers,
-                timeout=5, verify=False
-            )
-            
-            if response.status_code != 200:
-                return f"Saved but failed to reload: {response.text}", False
-            
-            return f"Updated prompt '{current_name}' ({len(content)} chars).", True
-
-        # === Assembled-only tools ===
-        
-        elif function_name == "set_piece":
-            from core import prompts
-            from core.prompt_state import _assembled_state
-            
-            component = _normalize_component(arguments.get('component', ''))
-            key = _normalize_name(arguments.get('key', ''))
-            
-            if not component or not key:
-                return "Both component and key are required.", False
-            
-            valid = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
-            if component not in valid:
-                return f"Invalid component '{component}'. Valid: {', '.join(valid)}", False
-            
-            # Check piece exists
-            if component not in prompts.prompt_manager._components:
-                return f"Component type '{component}' not found.", False
-            
-            if key not in prompts.prompt_manager._components[component]:
-                available = list(prompts.prompt_manager._components[component].keys())[:10]
-                return f"'{key}' not found in {component}. Available: {', '.join(available)}", False
-            
-            # Set or add based on component type
-            if _is_list_component(component):
-                # Add to list
-                if key in _assembled_state.get(component, []):
-                    return f"'{key}' already in {component}.", True
-                if component not in _assembled_state:
-                    _assembled_state[component] = []
-                _assembled_state[component].append(key)
-            else:
-                # Set single value
-                _assembled_state[component] = key
-            
-            preset_name = _get_current_preset_name()
-            success, msg = _save_and_activate_assembled(preset_name, headers, main_api_url)
-            
-            if not success:
-                return msg, False
-            
-            status = _build_status_string(preset_name)
-            action = "Added" if _is_list_component(component) else "Set"
-            return f"{action} {component}='{key}'. {status}", True
-
-        elif function_name == "remove_piece":
-            from core.prompt_state import _assembled_state
-            
-            component = _normalize_component(arguments.get('component', ''))
-            key = _normalize_name(arguments.get('key', ''))
-            
-            if not component or not key:
-                return "Both component and key are required.", False
-            
-            if not _is_list_component(component):
-                return f"Can only remove from emotions or extras, not '{component}'.", False
-            
-            if component not in _assembled_state or key not in _assembled_state[component]:
-                return f"'{key}' not in current {component}.", False
-            
-            _assembled_state[component].remove(key)
-            
-            preset_name = _get_current_preset_name()
-            success, msg = _save_and_activate_assembled(preset_name, headers, main_api_url)
-            
-            if not success:
-                return msg, False
-            
-            status = _build_status_string(preset_name)
-            return f"Removed '{key}' from {component}. {status}", True
-
-        elif function_name == "create_piece":
-            from core import prompts
-            from core.prompt_state import _assembled_state
-            
-            component = _normalize_component(arguments.get('component', ''))
-            key = _normalize_name(arguments.get('key', ''))
-            value = arguments.get('value', '')
-            
-            if not component or not key or not value:
-                return "Component, key, and value are all required.", False
-            
-            valid = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
-            if component not in valid:
-                return f"Invalid component '{component}'. Valid: {', '.join(valid)}", False
-            
-            # Save to library via API
-            response = requests.put(
-                f"{main_api_url}/api/prompts/components/{component}/{key}",
-                json={"value": value},
-                headers=headers,
-                timeout=5, verify=False
-            )
-            
-            if response.status_code != 200:
-                return f"Failed to save: {response.text}", False
-            
-            # Reload components
-            prompts.prompt_manager._load_pieces()
-            
-            # Activate it
-            if _is_list_component(component):
-                if component not in _assembled_state:
-                    _assembled_state[component] = []
-                if key not in _assembled_state[component]:
-                    _assembled_state[component].append(key)
-            else:
-                _assembled_state[component] = key
-            
-            preset_name = _get_current_preset_name()
-            success, msg = _save_and_activate_assembled(preset_name, headers, main_api_url)
-            
-            if not success:
-                return msg, False
-            
-            status = _build_status_string(preset_name)
-            return f"Created {component}='{key}'. {status}", True
-
-        elif function_name == "list_pieces":
-            from core import prompts
-            
-            component = _normalize_component(arguments.get('component', ''))
-            
-            if not component:
-                return "Component type is required.", False
-            
-            valid = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
-            if component not in valid:
-                return f"Invalid component '{component}'. Valid: {', '.join(valid)}", False
-            
-            if component not in prompts.prompt_manager._components:
-                return f"No {component} available.", True
-            
-            items = prompts.prompt_manager._components[component]
-            if not items:
-                return f"No {component} available.", True
-            
-            lines = [f"Available {component}:"]
-            for key, value in items.items():
-                preview = value[:50] + '...' if len(value) > 50 else value
-                preview = preview.replace('\n', ' ')
-                lines.append(f"  {key}: {preview}")
-            
-            return '\n'.join(lines), True
-
-        else:
+        handler = _HANDLERS.get(function_name)
+        if not handler:
             return f"Unknown function: {function_name}", False
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"API request failed for '{function_name}': {e}")
-        return f"API request failed: {str(e)}", False
+        return handler(arguments or {})
+    except MetaError as e:
+        return str(e), False
     except Exception as e:
         logger.error(f"Meta function error for '{function_name}': {e}", exc_info=True)
         return f"Error in {function_name}: {str(e)}", False

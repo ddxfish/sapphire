@@ -31,6 +31,37 @@ except ImportError:
     logger.warning("anthropic SDK not installed. Run: pip install anthropic")
 
 
+# ── Thinking contracts by model family ─────────────────────────────────────
+# Verified 2026-09-20 against platform.claude.com models overview + migration
+# guide. Three contracts, one switchboard (ClaudeProvider._apply_thinking):
+#   adaptive  Opus 5 / 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6 — {type:"adaptive"} +
+#             output_config.effort. OFF must be an explicit {type:"disabled"}:
+#             Opus 5 THINKS WHEN THE PARAM IS OMITTED (4.8 and earlier don't),
+#             so the old omit-to-disable was silent billed thinking with an
+#             empty display. "disabled" is accepted only at effort ≤ high, so
+#             no output_config rides with it.
+#   always    Fable 5 / 5.1 (and Mythos), Opus 5.5 — thinking cannot be turned
+#             off: {type:"disabled"} and budget_tokens both 400 at every
+#             effort. OFF = omit the param (still thinks, display omitted).
+#             History's thinking blocks are never stripped: preserved thinking
+#             treats that as an edit. Opus 5.5 (launch 2026-09-23) defaults to
+#             effort=medium — we always send one, so nothing drifts.
+#   budget    Haiku 4.5 — extended thinking only: {type:"enabled",
+#             budget_tokens:N} with 1024 ≤ N < max_tokens; adaptive, display
+#             and output_config.effort all 400. OFF = omit (Haiku's default).
+HAIKU_BUDGET_BY_EFFORT = {'low': 2048, 'medium': 6000, 'high': 12000,
+                          'xhigh': 12000, 'max': 12000}
+
+
+def thinking_family(model: str) -> str:
+    m = (model or '').lower()
+    if 'haiku' in m:
+        return 'budget'
+    if 'fable' in m or 'mythos' in m or 'opus-5-5' in m:
+        return 'always'
+    return 'adaptive'
+
+
 class ClaudeProvider(BaseProvider):
     """
     Provider for Anthropic Claude API.
@@ -80,6 +111,7 @@ class ClaudeProvider(BaseProvider):
             self._client.messages.create(
                 model=self.model,
                 max_tokens=1,
+                **self._probe_kwargs(),
                 messages=[{"role": "user", "content": "hi"}],
                 timeout=self.health_check_timeout
             )
@@ -94,6 +126,7 @@ class ClaudeProvider(BaseProvider):
             response = self._client.messages.create(
                 model=self.model,
                 max_tokens=1024,
+                **self._probe_kwargs(),
                 messages=[{"role": "user", "content": "Say hello in exactly 5 words."}],
                 timeout=self.health_check_timeout
             )
@@ -198,6 +231,59 @@ class ClaudeProvider(BaseProvider):
 
         return cache_enabled, cache_ttl, cache_system_prompt
     
+    def _apply_thinking(self, request_kwargs: dict, thinking_enabled: bool,
+                        disable_thinking: bool) -> bool:
+        """Write the model family's thinking contract into request_kwargs
+        (see the table above the class). Returns True when thinking is really
+        OFF and history's thinking blocks must be stripped — never for the
+        always-on family."""
+        model = request_kwargs.get('model') or self.model
+        family = thinking_family(model)
+        effort = self.config.get('reasoning_effort') or 'high'
+        on = bool(thinking_enabled) and not disable_thinking
+
+        if on and request_kwargs["max_tokens"] < 16000:
+            # Thinking spends from the max_tokens pool — floor it so a small
+            # response cap doesn't truncate mid-thought.
+            request_kwargs["max_tokens"] = 16000
+
+        if family == 'always':
+            if on:
+                # display defaults to "omitted" (empty thinking text);
+                # "summarized" restores the streamed thinking the UI shows.
+                request_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+                request_kwargs["output_config"] = {"effort": effort}
+                logger.info(f"[THINK] Claude adaptive thinking enabled (effort: {effort})")
+            else:
+                logger.info(f"[THINK] {model} cannot disable thinking — param omitted "
+                            "(it thinks anyway, display omitted)")
+            return False
+
+        if family == 'budget':
+            if on:
+                budget = HAIKU_BUDGET_BY_EFFORT.get(effort, 12000)
+                request_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                logger.info(f"[THINK] Claude extended thinking enabled (budget: {budget})")
+            elif thinking_enabled:
+                logger.info("[THINK] Extended thinking disabled for this request")
+            return not on
+
+        if on:
+            request_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+            request_kwargs["output_config"] = {"effort": effort}
+            logger.info(f"[THINK] Claude adaptive thinking enabled (effort: {effort})")
+        else:
+            request_kwargs["thinking"] = {"type": "disabled"}
+            if thinking_enabled:
+                logger.info("[THINK] Thinking disabled for this request")
+        return not on
+
+    def _probe_kwargs(self) -> dict:
+        """Health/test probes: Opus 5 thinks when the param is omitted and
+        would spend the tiny probe budget on it — say "disabled" where the
+        family accepts it."""
+        return {"thinking": {"type": "disabled"}} if thinking_family(self.model) == 'adaptive' else {}
+
     def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -214,7 +300,9 @@ class ClaudeProvider(BaseProvider):
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": claude_messages,
-            "max_tokens": params.get("max_tokens", 4096),
+            # `or` not a default: a blanked Max Tok box persists JSON null
+            # (scout, 2026-09-20) and the thinking floor compares it.
+            "max_tokens": params.get("max_tokens") or 4096,
         }
 
         # Prompt caching configuration (read dynamically for hot-reload)
@@ -233,57 +321,52 @@ class ClaudeProvider(BaseProvider):
         if cache_enabled:
             self._apply_history_cache_control(claude_messages, cache_ttl)
 
-        if "temperature" in params:
-            request_kwargs["temperature"] = params["temperature"]
+        # Sampling params (temperature/top_p/top_k) are removed on modern
+        # Claude models (Opus 4.7+, Fable 5) and return a 400 — never sent.
 
-        # Add extended thinking if enabled (unless explicitly disabled)
-        # Read from provider config first, fall back to global config
+        # Thinking: the per-family contract lives in _apply_thinking (Opus 5
+        # thinks when the param is omitted, Fable can't stop, Haiku wants a
+        # budget) — see the table above the class.
         thinking_enabled = self.config.get('thinking_enabled')
         if thinking_enabled is None:
             thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
-        thinking_budget = self.config.get('thinking_budget')
-        if thinking_budget is None:
-            thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
-        disable_thinking = params.get('disable_thinking', False)
-        
+        # B2: the Settings "disable thinking" checkbox lives on provider config —
+        # honor it as a fallback when the per-request param isn't set (continue/
+        # prefill set the param directly). Without this it was a no-op on Claude.
+        disable_thinking = params.get('disable_thinking', self.config.get('disable_thinking', False))
+
         # SAFETY: Auto-disable thinking if active tool cycle lacks thinking_raw
         if needs_thinking_disabled:
             if thinking_enabled and not disable_thinking:
                 logger.info("[THINK] Auto-disabling thinking for this request: active tool cycle started without thinking")
             disable_thinking = True
-        
+
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
+        # Claude requires thinking blocks at start - can't inject into existing prefill
         if claude_messages and claude_messages[-1].get("role") == "assistant":
             if thinking_enabled and not disable_thinking:
                 logger.info("[THINK] Auto-disabling thinking: last message is assistant (continue mode)")
             disable_thinking = True
-        
-        # CRITICAL: Strip thinking blocks from messages if thinking is disabled
-        # Claude rejects thinking blocks in messages when thinking param is disabled
-        if disable_thinking:
+
+        if self._apply_thinking(request_kwargs, thinking_enabled, disable_thinking):
+            # Thinking is really off → history's thinking blocks must go
+            # (the API rejects them when the thinking param is disabled).
             claude_messages = self._strip_thinking_blocks(claude_messages)
             request_kwargs["messages"] = claude_messages  # Update reference!
-        
-        if thinking_enabled and not disable_thinking:
-            if request_kwargs["max_tokens"] <= thinking_budget:
-                request_kwargs["max_tokens"] = thinking_budget + 8000
-                logger.info(f"[THINK] Bumped max_tokens to {request_kwargs['max_tokens']} (must exceed budget)")
-            
-            request_kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": thinking_budget
-            }
-            request_kwargs.pop("temperature", None)
-            logger.info(f"[THINK] Claude extended thinking enabled (budget: {thinking_budget})")
-        
+
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools, cache_enabled, cache_ttl)
         
         # Wrap in retry for rate limiting
-        response = retry_on_rate_limit(
-            self._client.messages.create,
-            **request_kwargs
-        )
+        try:
+            response = retry_on_rate_limit(
+                self._client.messages.create,
+                **request_kwargs
+            )
+        except Exception as e:
+            from core.socks_proxy import maybe_llm_proxy_hint
+            maybe_llm_proxy_hint('Claude', str(e))
+            raise
         
         return self._parse_response(response)
     
@@ -312,7 +395,9 @@ class ClaudeProvider(BaseProvider):
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": claude_messages,
-            "max_tokens": params.get("max_tokens", 4096),
+            # `or` not a default: a blanked Max Tok box persists JSON null
+            # (scout, 2026-09-20) and the thinking floor compares it.
+            "max_tokens": params.get("max_tokens") or 4096,
         }
 
         # Prompt caching configuration (read dynamically for hot-reload)
@@ -328,52 +413,39 @@ class ClaudeProvider(BaseProvider):
         if cache_enabled:
             self._apply_history_cache_control(claude_messages, cache_ttl)
 
-        if "temperature" in params:
-            request_kwargs["temperature"] = params["temperature"]
+        # Sampling params (temperature/top_p/top_k) are removed on modern
+        # Claude models (Opus 4.7+, Fable 5) and return a 400 — never sent.
 
-        # Add extended thinking if enabled (unless explicitly disabled for this request)
-        # Read from provider config first, fall back to global config
+        # Thinking: the per-family contract lives in _apply_thinking (Opus 5
+        # thinks when the param is omitted, Fable can't stop, Haiku wants a
+        # budget) — see the table above the class.
         thinking_enabled = self.config.get('thinking_enabled')
         if thinking_enabled is None:
             thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
-        thinking_budget = self.config.get('thinking_budget')
-        if thinking_budget is None:
-            thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
-        disable_thinking = params.get('disable_thinking', False)
-        
+        # B2: the Settings "disable thinking" checkbox lives on provider config —
+        # honor it as a fallback when the per-request param isn't set (continue/
+        # prefill set the param directly). Without this it was a no-op on Claude.
+        disable_thinking = params.get('disable_thinking', self.config.get('disable_thinking', False))
+
         # SAFETY: Auto-disable thinking if active tool cycle lacks thinking_raw
         if needs_thinking_disabled:
             if thinking_enabled and not disable_thinking:
                 logger.info("[THINK] Auto-disabling thinking for this request: active tool cycle started without thinking")
             disable_thinking = True
-        
+
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
         # Claude requires thinking blocks at start - can't inject into existing prefill
         if claude_messages and claude_messages[-1].get("role") == "assistant":
             if thinking_enabled and not disable_thinking:
                 logger.info("[THINK] Auto-disabling thinking: last message is assistant (continue mode)")
             disable_thinking = True
-        
-        # CRITICAL: Strip thinking blocks from messages if thinking is disabled
-        # Claude rejects thinking blocks in messages when thinking param is disabled
-        if disable_thinking:
+
+        if self._apply_thinking(request_kwargs, thinking_enabled, disable_thinking):
+            # Thinking is really off → history's thinking blocks must go
+            # (the API rejects them when the thinking param is disabled).
             claude_messages = self._strip_thinking_blocks(claude_messages)
             request_kwargs["messages"] = claude_messages  # Update reference!
-        
-        if thinking_enabled and not disable_thinking:
-            if request_kwargs["max_tokens"] <= thinking_budget:
-                request_kwargs["max_tokens"] = thinking_budget + 8000
-                logger.info(f"[THINK] Bumped max_tokens to {request_kwargs['max_tokens']} (must exceed budget)")
-            
-            request_kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": thinking_budget
-            }
-            request_kwargs.pop("temperature", None)
-            logger.info(f"[THINK] Claude extended thinking enabled (budget: {thinking_budget})")
-        elif thinking_enabled and disable_thinking:
-            logger.info(f"[THINK] Extended thinking disabled for this request")
-        
+
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools, cache_enabled, cache_ttl)
         
@@ -671,7 +743,7 @@ class ClaudeProvider(BaseProvider):
         try:
             from core.ghost_messages import _ENVELOPE_HEADER as _GHOST_PREFIX
         except Exception:
-            _GHOST_PREFIX = "[Sapphire turn-context"
+            _GHOST_PREFIX = "[System context from Sapphire's own app"
         second_to_last = claude_messages[-2]
         _content = second_to_last.get("content") if isinstance(second_to_last.get("content"), str) else ""
         is_ghost = (
@@ -832,7 +904,14 @@ class ClaudeProvider(BaseProvider):
                 else:
                     if content and content.strip():
                         claude_messages.append({"role": "user", "content": content})
-        
+
+        # Anthropic requires the first message to be role=user. The history
+        # trims are role-blind and an assistant-initiated chat (phone
+        # greeting, unprompted turn) can start on an assistant row → 400.
+        # Same belt anthropic_compat.py carries (broadsword H16b).
+        if claude_messages and claude_messages[0].get("role") == "assistant":
+            claude_messages.insert(0, {"role": "user", "content": "[conversation started]"})
+
         return system_prompt, claude_messages, needs_thinking_disabled, dynamic_system
     
     def _convert_tools(self, tools: List[Dict[str, Any]], cache_enabled: bool = False, cache_ttl: str = '5m') -> List[Dict[str, Any]]:

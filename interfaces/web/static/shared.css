@@ -6,11 +6,19 @@
    Spacing/font overrides via [data-density] and [data-font] attributes
    ============================================================================= */
 :root {
+    /* Tell the browser we're a dark UI so UA-rendered internals (select
+       option popups, autofill, scrollbars) match. Light themes override. */
+    color-scheme: dark;
+
     /* =========================================================================
        LAYOUT VARIABLES (new)
        ========================================================================= */
     --sidebar-width: 275px;
     --chat-max-width: 1280px;
+    /* Nav rail tokens — the rail was an unthemable opaque wall (P0 2026-08-16) */
+    --nav-rail-w: 64px;
+    --nav-bg: var(--bg-secondary);
+    --nav-border: var(--border);
     --chat-padding-x: 30px;
     --chat-padding-y: 20px;
     
@@ -44,9 +52,19 @@
     --trim-light: rgba(74, 158, 255, 0.15);
     --trim-border: rgba(74, 158, 255, 0.4);
     --trim-50: rgba(74, 158, 255, 0.5);
-    /* Accordion uses even more subtle trim */
-    --accordion-header-bg: rgba(74, 158, 255, 0.08);
-    --accordion-header-hover: rgba(74, 158, 255, 0.12);
+    /* Accordion uses even more subtle trim — derived so every theme's trim
+       flows through without redefining these (themes may still override) */
+    --accordion-header-bg: color-mix(in srgb, var(--trim) 8%, transparent);
+    --accordion-header-hover: color-mix(in srgb, var(--trim) 12%, transparent);
+
+    /* Compat aliases — these names are used across style.css but were never
+       defined anywhere (aborted second naming convention); aliased to the
+       canonical tokens so themes flow through them. Do not use in new code. */
+    --bg-primary: var(--bg);
+    --bg-elevated: var(--bg-tertiary);
+    --text-primary: var(--text);
+    --accent: var(--primary);
+    --radius: var(--radius-md);
     
     /* Toolbar buttons (message actions) */
     --toolbar-btn-bg: var(--bg-tertiary);
@@ -63,6 +81,10 @@
     --bg-inset: rgba(0, 0, 0, 0.25);
     --text: #e0e0e0;
     --text-bright: #fff;
+    /* Text ON accent/semantic fills (send button, btn-primary, toasts).
+       Dark themes: same as text-bright. Light themes MUST override — their
+       dark text-bright lands on dark accent fills otherwise (paper bug). */
+    --text-on-accent: var(--text-bright);
     --text-light: #ddd;
     --text-secondary: #ccc;
     --text-tertiary: #aaa;
@@ -116,13 +138,13 @@
     /* =========================================================================
        FONT SIZES
        ========================================================================= */
-    --font-xs: 10px;
-    --font-sm: 11px;
-    --font-base: 13px;
-    --font-md: 14px;
-    --font-lg: 16px;
-    --font-xl: 18px;
-    --font-2xl: 20px;
+    --font-xs: 0.625rem;
+    --font-sm: 0.6875rem;
+    --font-base: 0.8125rem;
+    --font-md: 0.875rem;
+    --font-lg: 1rem;
+    --font-xl: 1.125rem;
+    --font-2xl: 1.25rem;
     
     /* =========================================================================
        TRANSITIONS
@@ -233,13 +255,13 @@
     --msg-margin: 10px;
     --msg-avatar-size: 26px;
     
-    --font-xs: 9px;
-    --font-sm: 10px;
-    --font-base: 12px;
-    --font-md: 13px;
-    --font-lg: 14px;
-    --font-xl: 16px;
-    --font-2xl: 18px;
+    --font-xs: 0.5625rem;
+    --font-sm: 0.625rem;
+    --font-base: 0.75rem;
+    --font-md: 0.8125rem;
+    --font-lg: 0.875rem;
+    --font-xl: 1rem;
+    --font-2xl: 1.125rem;
     
     --radius-sm: 3px;
     --radius-md: 4px;
@@ -266,13 +288,13 @@
     --msg-margin: 20px;
     --msg-avatar-size: 40px;
     
-    --font-xs: 11px;
-    --font-sm: 12px;
-    --font-base: 14px;
-    --font-md: 15px;
-    --font-lg: 18px;
-    --font-xl: 20px;
-    --font-2xl: 24px;
+    --font-xs: 0.6875rem;
+    --font-sm: 0.75rem;
+    --font-base: 0.875rem;
+    --font-md: 0.9375rem;
+    --font-lg: 1.125rem;
+    --font-xl: 1.25rem;
+    --font-2xl: 1.5rem;
     
     --radius-sm: 6px;
     --radius-md: 8px;
@@ -285,17 +307,36 @@
    Applied via data-font attribute on <html>
    ============================================================================= */
 
+/* Form controls do NOT inherit font-family per spec (UA default wins) — this
+   is why <button>-based chrome (#nav-apps, settings-nav-item) stayed sans
+   while <div role="button"> siblings followed the font mode. Inherit
+   restores one voice; explicit rules (JetBrains Mono blocks etc.) still win. */
+button, input, select, textarea { font-family: inherit; }
+
+/* Font scale: user zoom × per-font native compensation, as MULTIPLYING vars —
+   two plain font-size rules on html would last-rule-wins instead of compose.
+   On the root element 1em = the browser's configured default, so user browser
+   font settings are respected as the baseline. */
+html { font-size: calc(1em * var(--font-zoom, 1) * var(--font-native-scale, 1)); }
+[data-fontsize="small"]  { --font-zoom: 0.9; }
+[data-fontsize="large"]  { --font-zoom: 1.15; }
+[data-fontsize="xlarge"] { --font-zoom: 1.3; }
+
 /* System (default) - no override needed */
+
+/* Webfont-first stacks: the leading family is a downloadable OFL webfont
+   (shared/fonts.js registers it via FontFace when present); the rest of the
+   stack is the graceful system fallback when it was never downloaded. */
 
 /* Monospace - everything in mono */
 [data-font="mono"] {
-    --font-body: 'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', monospace;
+    --font-body: 'JetBrains Mono', 'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', monospace;
     --font-heading: var(--font-body);
 }
 
 /* Serif - elegant reading font */
 [data-font="serif"] {
-    --font-body: 'Georgia', 'Cambria', 'Times New Roman', serif;
+    --font-body: 'Lora', 'Georgia', 'Cambria', 'Times New Roman', serif;
     --font-heading: var(--font-body);
 }
 
@@ -303,6 +344,15 @@
 [data-font="rounded"] {
     --font-body: 'Nunito', 'Varela Round', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-heading: var(--font-body);
+}
+
+/* Handwriting - Caveat script (paper theme's default) */
+[data-font="handwriting"] {
+    --font-body: 'Caveat', 'Segoe Script', cursive;
+    --font-heading: var(--font-body);
+    --font-native-scale: 1.15;  /* mild x-height compensation — 1.7 was tuned against the
+                                   old px plumbing where root scaling barely reached text;
+                                   with rem it overshot. 1 = no special treatment. */
 }
 
 /* =============================================================================
@@ -321,15 +371,20 @@
 /* =============================================================================
    TOAST NOTIFICATIONS
    ============================================================================= */
+/* Top-CENTER, over the transcript — never over the sidebar header, whose
+   controls (eye, collapse, expand tab) a top-right toast used to cover. */
 #toast-container {
     position: fixed;
-    top: 20px;
-    right: 20px;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 10100;
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: var(--space-sm);
     pointer-events: none;
+    max-width: calc(100vw - 32px);
 }
 
 .toast {
@@ -339,14 +394,24 @@
     padding: var(--space-md) var(--space-md) var(--space-md) var(--space-xl);
     border-radius: var(--radius-md);
     background: var(--error-bg);
-    color: var(--text-bright);
+    color: var(--text-on-accent);
     font-size: var(--font-md);
     box-shadow: 0 4px 12px var(--shadow-medium);
     opacity: 0;
-    transform: translateX(100px);
-    animation: toastIn var(--transition-slow) forwards, toastOut var(--transition-slow) 3.7s forwards;
+    transform: translateY(-12px);
+    animation: toastIn var(--transition-slow) forwards;
+    transition: opacity var(--transition-slow), transform var(--transition-slow);
     pointer-events: auto;
     max-width: 350px;
+}
+
+/* Exit is driven by JS (shared/toast.js dismissLater) — the element goes
+   inert the instant it starts fading, so it can never sit invisible and
+   clickable on top of something else. */
+.toast.leaving {
+    opacity: 0 !important;             /* !important: outranks toastIn's forwards fill */
+    transform: translateY(-12px) !important;
+    pointer-events: none;
 }
 
 .toast-text { flex: 1; }
@@ -356,7 +421,7 @@
     border: none;
     color: inherit;
     opacity: 0.6;
-    font-size: 18px;
+    font-size: 1.125rem;
     cursor: pointer;
     padding: 0 4px;
     line-height: 1;
@@ -373,7 +438,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-sm);
-    animation: toastIn var(--transition-slow) forwards;
 }
 
 .toast-message {
@@ -416,8 +480,7 @@
     opacity: 1;
 }
 
-@keyframes toastIn { to { opacity: 1; transform: translateX(0); } }
-@keyframes toastOut { to { opacity: 0; transform: translateX(100px); } }
+@keyframes toastIn { to { opacity: 1; transform: translateY(0); } }
 
 @keyframes shake {
     0%, 100% { transform: translateX(0); }
@@ -782,14 +845,14 @@
 .btn-action {
     padding: 6px 16px;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg-elevated);
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
     color: var(--text);
     cursor: pointer;
     font-size: var(--font-sm);
     transition: background 0.15s, border-color 0.15s;
 }
-.btn-action:hover { background: var(--bg-hover); border-color: var(--accent); }
+.btn-action:hover { background: var(--bg-hover); border-color: var(--trim); }
 .btn-action.btn-connected {
     border-color: var(--success, #4caf50);
     color: var(--success, #4caf50);
@@ -797,7 +860,7 @@
 .btn-disconnect {
     padding: 6px 12px;
     border: 1px solid var(--danger, #e53935);
-    border-radius: var(--radius);
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--danger, #e53935);
     cursor: pointer;
@@ -888,7 +951,7 @@
 .btn-primary {
     background: var(--trim, var(--primary));
     border-color: var(--trim, var(--primary));
-    color: var(--text-bright);
+    color: var(--text-on-accent);
 }
 
 .btn-primary:hover {
@@ -899,7 +962,7 @@
 .btn-danger {
     background: var(--danger);
     border-color: var(--danger);
-    color: var(--text-bright);
+    color: var(--text-on-accent);
 }
 
 .btn-danger:hover {
@@ -910,7 +973,7 @@
 .btn-success {
     background: var(--success);
     border-color: var(--success);
-    color: var(--text-bright);
+    color: var(--text-on-accent);
 }
 
 .btn-ghost {
@@ -1044,11 +1107,22 @@ select:focus {
 select {
     cursor: pointer;
     appearance: none;
-    background-image: var(--select-arrow);
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    background-size: 20px;
+    /* !important: appearance:none strips the native arrow, so this SVG is the
+       only dropdown affordance a select has. Any component that styles a
+       select with the `background:` SHORTHAND resets background-image and
+       leaves an arrow-less flat box (the "unstyled dropdowns" class bug).
+       Components keep control of background-color; the arrow is untouchable. */
+    background-image: var(--select-arrow) !important;
+    background-repeat: no-repeat !important;
+    background-position: right 8px center !important;
+    background-size: 20px !important;
     padding-right: 35px;
+}
+
+/* Firefox paints option lists from CSS (Chrome uses color-scheme) */
+select option {
+    background: var(--bg-secondary);
+    color: var(--text);
 }
 
 /* Select variants */
@@ -1255,7 +1329,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
     text-transform: uppercase;
 }
 
-.badge-primary { background: var(--primary); color: var(--text-bright); }
+.badge-primary { background: var(--primary); color: var(--text-on-accent); }
 .badge-success { background: var(--success-light); color: var(--success-text); border: 1px solid var(--success-border); }
 .badge-warning { background: var(--warning-light); color: var(--warning-text); border: 1px solid var(--warning-border); }
 .badge-danger { background: var(--error-light); color: var(--error-text); border: 1px solid var(--error-border); }
@@ -1326,7 +1400,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
 }
 
 .accordion-arrow {
-    font-size: 10px;
+    font-size: 0.625rem;
     transition: transform 0.2s ease;
     color: var(--text-muted);
 }
@@ -1337,7 +1411,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
 
 .accordion-badge {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 0.6875rem;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
     background: var(--trim, var(--accent-blue));
@@ -1367,7 +1441,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
 .state-info {
     display: flex;
     gap: var(--space-lg);
-    font-size: 12px;
+    font-size: 0.75rem;
     color: var(--text-muted);
     margin-bottom: var(--space-sm);
 }
@@ -1377,3 +1451,38 @@ input[type="range"]:focus::-webkit-slider-thumb {
     gap: var(--space-sm);
     margin-top: var(--space-sm);
 }
+
+/* ── Scene picker (shared: persona Scene accordion + chat sidebar modal) ── */
+.scene-picker { display: flex; flex-direction: column; gap: 10px; }
+.scene-search {
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-primary); color: var(--text); font-size: 0.8125rem;
+}
+.scene-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 8px; max-height: 320px; overflow-y: auto; padding: 2px;
+}
+.scene-tile {
+    position: relative; aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden;
+    border: 2px solid transparent; cursor: pointer; background: var(--bg-tertiary);
+    display: flex; align-items: center; justify-content: center;
+}
+.scene-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scene-tile.selected { border-color: var(--trim, var(--accent-blue, #4a9eff)); }
+.scene-tile:hover { border-color: var(--border-hover, var(--border)); }
+.scene-tile-name {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 5px;
+    font-size: 0.625rem; color: #fff; background: rgba(0, 0, 0, 0.55);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.scene-tile-del {
+    position: absolute; top: 2px; right: 2px; width: 18px; height: 18px;
+    border: none; border-radius: 4px; background: rgba(0, 0, 0, 0.55); color: #fff;
+    font-size: 0.875rem; line-height: 1; cursor: pointer; display: none; padding: 0;
+}
+.scene-tile:hover .scene-tile-del { display: block; }
+.scene-tile-del:hover { background: var(--error, #e74c3c); }
+.scene-none-inner, .scene-upload-inner {
+    font-size: 0.75rem; color: var(--text-muted); text-align: center;
+}
+.scene-none, .scene-upload { border: 1px dashed var(--border); background: var(--bg-primary); }

@@ -1,0 +1,28 @@
+{
+  "name": "screenshot",
+  "short_display_name": "Simple Screenshot",
+  "version": "1.0.0",
+  "description": "Best-effort screen capture — the AI grabs this machine's screen (Windows / Linux X11 / Wayland) or asks the user to paste one",
+  "author": "sapphire",
+  "icon": "🖥️",
+  "priority": 50,
+  "default_enabled": false,
+  "pip_dependencies": ["mss"],
+  "settingsUI": "auto",
+  "capabilities": {
+    "tools": ["tools/screenshot.py"],
+    "routes": [
+      { "method": "GET",  "path": "pending", "handler": "routes/capture.py:get_pending" },
+      { "method": "POST", "path": "capture", "handler": "routes/capture.py:handle_capture" }
+    ],
+    "settings": [
+      {
+        "key": "max_dimension",
+        "type": "number",
+        "label": "Max image dimension (px)",
+        "default": 1568,
+        "help": "Long-edge cap before the screenshot is sent to the model. Vision models downscale to ~1568 anyway; lower = fewer tokens."
+      }
+    ]
+  }
+}

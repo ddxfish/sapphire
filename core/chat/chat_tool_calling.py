@@ -34,23 +34,35 @@ def filter_to_thinking_only(content: str) -> str:
     
     return filtered
 
-def strip_ui_markers(content: str) -> str:
+def strip_ui_markers(content: str, keep_img: bool = False) -> str:
     """
     Strip UI-only markers from content before sending to LLM.
-    
+
     Removes patterns like:
     - <<IMG::image_id>>
     - <<FILE::file_id>>
     - Any other <<MARKER::data>> patterns
-    
+
     These markers are kept in history for UI parsing but removed from LLM context.
+
+    keep_img: preserve <<IMG::...>> markers. Used by history-less lanes
+    (ExecutionContext) where the wire copy doubles as the persisted copy —
+    stripping IMG there makes tool images permanently invisible in the
+    transcript. The marker is bounded noise to the LLM within the same run;
+    the history read path cleans it before the next run's wire.
     """
     if not content:
         return content
-    
-    # Pattern to match <<TYPE::data>> markers
-    marker_pattern = r'<<[A-Z]+::[^>]+>>\s*'
-    
+
+    # Pattern to match <<TYPE::data>> markers. The GALLERY marker (tile list a
+    # tool appends for the browser — see shared/gallery-marker.js) is UI-only
+    # too: the model already has the numbered URL list above it. It rides the
+    # keep_img rule for the same reason IMG does. 2026-09-09.
+    if keep_img:
+        marker_pattern = r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*'
+    else:
+        marker_pattern = r'<<[A-Z]+::[^>]+>>\s*|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
+
     # Remove all markers
     clean = re.sub(marker_pattern, '', content)
     
@@ -59,7 +71,7 @@ def strip_ui_markers(content: str) -> str:
         markers_found = re.findall(marker_pattern, content)
         logger.info(f"[CLEANUP] Stripped {len(markers_found)} UI markers from tool result for LLM context")
         for marker in markers_found:
-            logger.debug(f"   - {marker.strip()}")
+            logger.debug(f"   - {marker.strip()[:120]}")
     
     return clean.strip()
 
@@ -72,11 +84,14 @@ def wrap_tool_result(tool_call_id: str, function_name: str, result: str) -> Dict
         tool_call_id: The tool call ID
         function_name: Name of the function that was called
         result: The result string from the function (ALREADY STRIPPED of UI markers)
-    
+
     Returns:
         Properly formatted message dict for the LLM
     """
-    clean_result = strip_ui_markers(result) if '<<' in result else result
+    # Defensive re-strip preserves IMG: history-less lanes deliberately keep
+    # IMG markers in the wire copy (it doubles as the persisted copy) and this
+    # layer must not undo that. Foreground callers pre-strip everything anyway.
+    clean_result = strip_ui_markers(result, keep_img=True) if '<<' in result else result
     
     return {
         "role": "tool",
@@ -177,7 +192,33 @@ def wire_to_canonical(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return result
 
 
-def _extract_tool_images(result, history=None, provider=None):
+def cap_tool_result_text(text, function_name=None):
+    """Head-preserving cap on tool-result text (TOOL_RESULT_MAX_CHARS, 0=off).
+
+    HEAD-preserving is mandatory: <<IMG::tool:id>> markers are PREPENDED to
+    the text and are the ONLY liveness reference protecting saved image bytes
+    from the orphan-GC sweep (history.py orphan cleanup) — a tail-keeping cap
+    would silently delete the user's images.
+    """
+    try:
+        import config
+        limit = int(getattr(config, 'TOOL_RESULT_MAX_CHARS', 200_000))
+    except Exception:
+        limit = 200_000
+    if limit <= 0 or len(text) <= limit:
+        return text
+    dropped = len(text) - limit
+    who = f" from '{function_name}'" if function_name else ""
+    logger.warning(f"[TOOL] result{who} capped: {len(text)} -> {limit} chars")
+    return (text[:limit] +
+            f"\n[... {dropped} chars truncated — this result{who} exceeded "
+            f"Sapphire's {limit}-char tool-result cap. This is a size limit, "
+            f"NOT a tool failure. Re-run with a narrower scope (smaller range, "
+            f"fewer items, a filter) if you need the rest. Any images this "
+            f"tool returned were unaffected.]")
+
+
+def _extract_tool_images(result, history=None, provider=None, function_name=None):
     """Extract images from a tool result if it returned structured data.
 
     Tools can return {"text": "...", "images": [{"data": base64, "media_type": "image/..."}]}
@@ -202,21 +243,34 @@ def _extract_tool_images(result, history=None, provider=None):
             if isinstance(img, dict) and img.get("data")
         ]
         supports_vision = bool(provider and getattr(provider, 'supports_images', False))
+        logger.info(f"[VISION-DEBUG] tool returned {len(result['images'])} image(s); "
+                    f"provider={type(provider).__name__ if provider else None} "
+                    f"supports_vision={supports_vision} → {'LLM sees them' if supports_vision else 'CLIP fallback'}")
         # Save images to DB and embed markers in text
         # Images with display_only=True are saved for user gallery but not sent to LLM
         llm_images = []
+        hidden_to_vibe = []  # hidden from the LLM, but described via CLIP so it still gets the gist
         for img in images:
             img_id = _save_tool_image(img, history)
             if img_id:
-                text = f"<<IMG::tool:{img_id}>>\n{text}"
+                # Marker = the UI's (stripped from the LLM copy). The receipt
+                # line = the model's handle: any image tool accepts img:<id>
+                # (core.images.resolve). Head-placed so the cap can't eat it.
+                text = f"<<IMG::tool:{img_id}>>\n(image img:{img_id})\n{text}"
             if not img.get("display_only") and supports_vision:
                 llm_images.append(img)
-        if images and not supports_vision:
-            # Non-vision model: image goes to disk + UI history, but the LLM
-            # can't see it. Generate a CLIP-based atmospheric description so
-            # the model still gets the "vibe" of what was captured.
+            elif not supports_vision and not img.get("display_only"):
+                # CLIP describe fires only as a FALLBACK: the model was meant to
+                # see this image (not display_only) but the provider has no
+                # vision. display_only images are deliberately hidden; describing
+                # them defeats the point, and CLIP's subject-blind guesses read as
+                # "wrong image" to literal models → regeneration loops. 2026-08-09.
+                hidden_to_vibe.append(img)
+        if hidden_to_vibe:
+            # Generate a CLIP-based atmospheric description so the model still
+            # gets the "vibe" of what was captured/produced.
             vibe_parts = []
-            for img in images:
+            for img in hidden_to_vibe:
                 try:
                     import base64 as _b64
                     from core import vibes as _vibes
@@ -226,34 +280,41 @@ def _extract_tool_images(result, history=None, provider=None):
                     logger.warning(f"[VIBES] failed to describe image: {e}")
             if vibe_parts:
                 text = (text + "\n\n" + "\n\n".join(vibe_parts)).strip()
-            else:
-                text = (text + "\n\n[Note: current model does not support image inputs — "
+            elif not supports_vision:
+                text = (text + "\n\n[Note: current model does not support image inputs - "
                         f"image(s) were captured and saved but cannot be analyzed this turn.]").strip()
-        return text, llm_images
-    return str(result), []
+        # Cap AFTER marker-prepend so head-keeping preserves every marker.
+        return cap_tool_result_text(text, function_name), llm_images
+    return cap_tool_result_text(str(result), function_name), []
 
 
 def _save_tool_image(img, history=None):
-    """Save a base64 tool image to the chat history database. Returns image ID or None."""
+    """Save a base64 tool image to the chat history database. Returns image ID or None.
+    visible = the model was meant to see it (not display_only) — the vision
+    window replays only those. Ids + the history-less disk lane come from
+    core.images so stash() and this write the same shape. 2026-09-10."""
     import base64
+    from core import images as ci
 
     try:
-        img_id = uuid.uuid4().hex[:12]
         media_type = img.get("media_type", "image/jpeg")
-        ext = "png" if "png" in media_type else "jpg"
-        full_id = f"{img_id}.{ext}"
-
+        full_id = ci.new_id(media_type)
         img_bytes = base64.b64decode(img["data"])
+        visible = not img.get("display_only")
 
         if history and hasattr(history, 'save_tool_image'):
-            history.save_tool_image(full_id, img_bytes, media_type)
+            # EFFECTIVE chat, not active: a phone/background stream's image
+            # belongs to ITS chat — keying it to the operator's open chat
+            # both mis-cascades AND stores a private chat's image plaintext
+            # (the encrypt decision reads the owner's vaulted flag). P3-T4.
+            owner = None
+            if hasattr(history, '_effective_chat_name'):
+                owner = history._effective_chat_name()
+            history.save_tool_image(full_id, img_bytes, media_type, chat_name=owner, visible=visible)
             logger.info(f"[TOOL] Saved tool image to DB: {full_id}")
         else:
             # Fallback to disk if no history available (isolated tool calls)
-            from pathlib import Path
-            img_dir = Path(__file__).parent.parent.parent / "user" / "tool_images"
-            img_dir.mkdir(parents=True, exist_ok=True)
-            (img_dir / full_id).write_bytes(img_bytes)
+            ci._disk_put(full_id, img_bytes)
             logger.info(f"[TOOL] Saved tool image to disk (no history): {full_id}")
 
         return full_id
@@ -298,7 +359,39 @@ class ToolCallingEngine:
                 )
         except (AttributeError, ZeroDivisionError, TypeError):
             pass
-        
+
+        # Deposit token metrics — this method's only caller is the
+        # ExecutionContext loop (tasks/agents/wake), whose calls never hit the
+        # streaming lane's recorder, so until 2026-08-17 background LLM spend
+        # was invisible in token_usage.db. Label via metrics_chat_label():
+        # override-aware and fail-closed ('__private__') so a private task
+        # chat's name never lands in the plaintext metrics DB.
+        try:
+            usage = response.usage or {}
+            if usage.get("total_tokens") or usage.get("prompt_tokens"):
+                from core.metrics import metrics as _tm
+                try:
+                    from core.api_fastapi import get_system
+                    _label = get_system().llm_chat.session_manager.metrics_chat_label()
+                except Exception:
+                    _label = "__background__"
+                _tm.record(
+                    _label,
+                    getattr(provider, "provider_name", "?"),
+                    getattr(provider, "model", "?") or "?",
+                    "task",
+                    {"tokens": {
+                        "prompt": usage.get("prompt_tokens", 0),
+                        "content": usage.get("completion_tokens", 0),
+                        "thinking": usage.get("reasoning_tokens", 0),
+                        "cache_read_tokens": usage.get("cache_read_tokens", 0),
+                        "cache_write_tokens": usage.get("cache_write_tokens", 0),
+                        "total": usage.get("total_tokens", 0),
+                    }, "duration_seconds": elapsed},
+                )
+        except Exception:
+            pass  # Metrics are best-effort
+
         return response
 
     def extract_function_call_from_text(self, text: str) -> Optional[Dict]:
@@ -355,25 +448,38 @@ class ToolCallingEngine:
             except json.JSONDecodeError as e:
                 logger.debug(f"JSON parse failed for raw format: {e}")
 
+        # Format 5: nested-XML pseudo tool call (Llama / llama.cpp / functionary
+        # style) — NO JSON payload; args are <parameter> tags:
+        #   <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
+        # The <tool_call> wrapper is optional (some models emit a bare
+        # <function=...>). Require the </function> close so we never fire on a
+        # partial stream. Lowest precedence — only reached when formats 1-4 miss,
+        # so it can't override a working parse. Added 2026-06-20 after a Discord
+        # user's local model leaked this dialect as raw text (web_search).
+        fn_match = re.search(
+            r'<function\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*>(.*?)</function\s*>',
+            text, re.IGNORECASE | re.DOTALL,
+        )
+        if fn_match:
+            args = {}
+            for pname, pval in re.findall(
+                r'<parameter\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*>(.*?)</parameter\s*>',
+                fn_match.group(2), re.IGNORECASE | re.DOTALL,
+            ):
+                args[pname] = pval.strip()
+            logger.info(f"[TOOL] Parsed nested-XML tool call: {fn_match.group(1)}")
+            return {"function_call": {"name": fn_match.group(1), "arguments": args}}
+
         return None
 
-    def format_tool_calls_for_conversation(self, tool_calls):
-        """Convert tool_calls to proper format."""
-        tool_calls_formatted = []
-        for tool_call in tool_calls:
-            tool_calls_formatted.append({
-                "id": tool_call.id,
-                "type": "function",
-                "function": {
-                    "name": tool_call.function.name,
-                    "arguments": tool_call.function.arguments
-                }
-            })
-        return tool_calls_formatted
-
-    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None):
+    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None, image_sink=None):
         """
         Execute tool calls and add results to messages array AND history.
+
+        image_sink: optional ChatSessionManager used ONLY for tool-image DB
+        writes when history is None (ExecutionContext lanes). Never used for
+        add_tool_result — those lanes persist via new_messages at the caller,
+        and a live-history write here would double or mis-target the transcript.
 
         Key behaviors:
         - Tool results sent to LLM have UI markers STRIPPED (clean context)
@@ -392,17 +498,27 @@ class ToolCallingEngine:
 
         for tool_call in tool_calls:
             function_name = tool_call["function"]["name"]
+            # Loop guard: count every attempt this turn (success, throw, or bad JSON).
+            self.function_manager.bump_loop_count(loop_counts, function_name)
 
+            raw_args = tool_call["function"].get("arguments", "")
+            # Empty string is valid for no-arg tools — Claude/Anthropic sends
+            # arguments='' (not '{}') when a tool has no params. Streaming got
+            # this guard 2026-05-15; the engine copy never did, so agent-lane
+            # no-arg calls failed with "Invalid JSON arguments". 2026-08-17.
             try:
-                function_args = json.loads(tool_call["function"]["arguments"])
+                function_args = json.loads(raw_args) if raw_args not in ("", None) else {}
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse tool arguments: {tool_call['function']['arguments']}")
+                logger.error(f"Failed to parse tool arguments: {raw_args!r}")
                 error_result = "Error: Invalid JSON arguments."
+                # Loop-warn goes to the LLM message only — history keeps the raw error
+                # (else the warning persists and replays every future turn).
+                llm_result = error_result + self.function_manager.loop_warn_suffix(function_name, loop_counts)
 
                 if provider:
-                    wrapped_msg = provider.format_tool_result(tool_call["id"], function_name, error_result)
+                    wrapped_msg = provider.format_tool_result(tool_call["id"], function_name, llm_result)
                 else:
-                    wrapped_msg = wrap_tool_result(tool_call["id"], function_name, error_result)
+                    wrapped_msg = wrap_tool_result(tool_call["id"], function_name, llm_result)
                 messages.append(wrapped_msg)
 
                 if history:
@@ -416,12 +532,15 @@ class ToolCallingEngine:
                 function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
 
             # Extract images if tool returned structured result
-            result_str, images = _extract_tool_images(function_result, history, provider)
+            result_str, images = _extract_tool_images(function_result, history or image_sink, provider, function_name)
             if images:
                 tool_images.extend(images)
                 logger.info(f"[TOOL] {function_name} returned {len(images)} image(s)")
 
-            clean_result = strip_ui_markers(result_str)
+            # No history ⇒ the wire copy IS the persisted copy (wire_to_canonical
+            # at the caller) — keep IMG markers so the transcript renders images.
+            clean_result = strip_ui_markers(result_str, keep_img=(history is None))
+            clean_result += self.function_manager.loop_warn_suffix(function_name, loop_counts)
 
             if provider:
                 wrapped_msg = provider.format_tool_result(tool_call["id"], function_name, clean_result)
@@ -444,7 +563,7 @@ class ToolCallingEngine:
 
         return tools_executed, tool_images
 
-    def execute_text_based_tool_call(self, function_call_data, filtered_content, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None):
+    def execute_text_based_tool_call(self, function_call_data, filtered_content, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None, image_sink=None):
         """
         Execute text-based function call (LM Studio compatibility).
         
@@ -460,6 +579,8 @@ class ToolCallingEngine:
         tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
         function_name = function_call_data["function_call"]["name"]
         function_args = function_call_data["function_call"]["arguments"]
+        # Loop guard: count this attempt toward the per-turn total.
+        self.function_manager.bump_loop_count(loop_counts, function_name)
 
         # Some text-based-tool-call providers deliver `arguments` as an already-
         # JSON-encoded string; others as a dict. json.dumps on a string would
@@ -488,16 +609,31 @@ class ToolCallingEngine:
         if history:
             history.add_assistant_with_tool_calls(filtered_content, tool_calls_formatted)
 
+        # Executors expect a dict, but text formats can deliver `arguments` as
+        # a JSON-encoded string (common from local models). Unparsed, every
+        # tool on this path dies with "'str' object has no attribute 'get'"
+        # and the model retry-spirals. History above keeps the raw string.
+        if isinstance(function_args, str):
+            try:
+                parsed = json.loads(function_args)
+                function_args = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                logger.warning(f"[TOOL] Unparseable string arguments for {function_name}; executing with empty args")
+                function_args = {}
+
         try:
             function_result = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot)
         except Exception as tool_error:
             logger.error(f"Text-based tool failed for {function_name}: {tool_error}")
             function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
 
-        result_str, tool_images = _extract_tool_images(function_result, history, provider)
+        result_str, tool_images = _extract_tool_images(function_result, history or image_sink, provider, function_name)
         if tool_images:
             logger.info(f"[TOOL] {function_name} returned {len(tool_images)} image(s) (text-based)")
-        clean_result = strip_ui_markers(result_str)
+        # Same keep_img rationale as execute_tool_calls: no history ⇒ wire
+        # copy is the persisted copy.
+        clean_result = strip_ui_markers(result_str, keep_img=(history is None))
+        clean_result += self.function_manager.loop_warn_suffix(function_name, loop_counts)
 
         if provider:
             wrapped_msg = provider.format_tool_result(tool_call_id, function_name, clean_result)

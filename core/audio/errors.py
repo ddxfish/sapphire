@@ -74,6 +74,17 @@ def classify_audio_error(e: Exception) -> str:
             "This is unusual - check if device supports audio input."
         )
     
+    # No sound server (PulseAudio/PipeWire): headless boxes, VMs, or the
+    # socket not up yet at boot. PortAudio >= 19.7 (Ubuntu 26.04) aborts
+    # Pa_Initialize entirely in this case (upstream #900). 2026-09-06.
+    if "can't connect to server" in err_str or 'pulseaudio_initialize' in err_str:
+        return (
+            "No audio server reachable (PulseAudio/PipeWire). Headless box or VM: "
+            "'systemctl --user start pipewire-pulse.socket' (apt install pipewire-pulse "
+            "if missing), then re-open Settings > Audio to re-detect. Ignore if this "
+            "machine has no speaker/mic -- browser voice is unaffected."
+        )
+
     # PortAudio not initialized / not found
     if any(x in err_str for x in ['portaudio', 'not initialized', 'pa_', 'libportaudio']):
         return (

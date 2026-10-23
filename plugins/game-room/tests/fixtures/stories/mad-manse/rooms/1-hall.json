@@ -1,0 +1,31 @@
+{
+  "id": 1,
+  "title": "The Hall",
+  "template": "A dusty hall. My {relationship} stands beside me.",
+  "player_desc": "A dusty entrance hall.",
+  "exits": [
+    {"label": "the parlor", "to": 2,
+     "condition": {"flag": "chest_opened"},
+     "blocked_message": "The parlor door is sealed until the chest opens."}
+  ],
+  "objects": {
+    "chest": {
+      "desc": "An old chest with a brass dial.",
+      "interactions": {
+        "open": {"message": "The chest creaks open. The house exhales.",
+                 "set": {"chest_opened": true}}
+      }
+    },
+    "ghost_bell": {
+      "desc": "A small bell that should not be ringing.",
+      "condition": {"flag": "chest_opened"},
+      "interactions": {
+        "ring": {"message": "The bell answers from somewhere upstairs."}
+      }
+    },
+    "warm_feeling": {
+      "desc": "A warmth in the air, undeniable.",
+      "condition": {"flag_gte": {"love": 50}}
+    }
+  }
+}

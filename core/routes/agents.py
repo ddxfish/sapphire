@@ -45,7 +45,9 @@ async def agent_status(chat: str = Query('', description="Filter by chat name"),
     system = get_system()
     if not hasattr(system, 'agent_manager'):
         return {"agents": []}
-    return {"agents": system.agent_manager.check_all(chat_name=chat)}
+    # '' (the query default) = unfiltered, matching the old route contract;
+    # check_all itself now treats '' as the chatless-agents filter.
+    return {"agents": system.agent_manager.check_all(chat_name=chat or None)}
 
 
 @router.get("/api/agents/providers")
@@ -111,7 +113,10 @@ async def workspace_run(req: RunRequest, _=Depends(require_login)):
     try:
         popen_kwargs = dict(
             shell=True, cwd=workspace,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            # DEVNULL, not PIPE: nothing ever drained the pipe, so any run
+            # emitting >64KB blocked forever on write() and then reported
+            # "already_running" until restart (negspace N20, 2026-08-31).
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
         )
         if not _IS_WINDOWS:
@@ -145,10 +150,15 @@ async def workspace_stop(req: RunRequest, _=Depends(require_login)):
 
     try:
         if _IS_WINDOWS:
-            proc.terminate()
+            # shell=True means proc.pid is cmd.exe — terminate() kills the
+            # shell and ORPHANS the real python/node child, which keeps the
+            # port while we report "stopped". taskkill /T walks the tree
+            # (the killpg equivalent; console apps have no graceful TERM).
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True)
         else:
             os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, OSError):
         pass
     try:
         proc.wait(timeout=3)

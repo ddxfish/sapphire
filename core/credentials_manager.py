@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 from core.setup import CONFIG_DIR, SOCKS_CONFIG_FILE, CLAUDE_API_KEY_FILE
 from core.settings_manager import _fsync_file, _fsync_dir
+from core.fs_utils import replace_with_retry
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -69,6 +70,8 @@ DEFAULT_CREDENTIALS = {
     "bitcoin_wallets": {},
     "gcal_accounts": {},
     "github_accounts": {},
+    "twilio_accounts": {},
+    "discord_accounts": {},
     "ssh": {
         "servers": []
     },
@@ -186,7 +189,7 @@ class CredentialsManager:
         # Migrate SOCKS credentials from socks_config file
         if SOCKS_CONFIG_FILE.exists():
             try:
-                lines = SOCKS_CONFIG_FILE.read_text().splitlines()
+                lines = SOCKS_CONFIG_FILE.read_text(encoding='utf-8-sig').splitlines()
                 if len(lines) >= 2:
                     username = self._parse_legacy_line(lines[0])
                     password = self._parse_legacy_line(lines[1])
@@ -201,7 +204,9 @@ class CredentialsManager:
         # Migrate Claude API key from dedicated file
         if CLAUDE_API_KEY_FILE.exists():
             try:
-                api_key = CLAUDE_API_KEY_FILE.read_text().strip()
+                # utf-8-sig: a PowerShell-written key file carries a BOM, and
+                # .strip() does NOT remove U+FEFF — the key 401s pointing nowhere.
+                api_key = CLAUDE_API_KEY_FILE.read_text(encoding='utf-8-sig').strip()
                 if api_key:
                     self._credentials['llm']['claude']['api_key'] = api_key
                     logger.info(f"Migrated Claude API key from {CLAUDE_API_KEY_FILE}")
@@ -269,7 +274,7 @@ class CredentialsManager:
                 with open(tmp, 'w', encoding='utf-8') as f:
                     json.dump(user_settings, f, indent=2)
                     _fsync_file(f)
-                tmp.replace(settings_file)
+                replace_with_retry(tmp, settings_file)
                 _fsync_dir(settings_file.parent)
                 logger.info("Cleared stale API keys from settings.json")
 
@@ -335,7 +340,7 @@ class CredentialsManager:
                 with open(tmp, 'w', encoding='utf-8') as f:
                     json.dump(user_settings, f, indent=2)
                     _fsync_file(f)
-                tmp.replace(settings_file)
+                replace_with_retry(tmp, settings_file)
                 _fsync_dir(settings_file.parent)
                 logger.info("Cleared service API keys from settings.json")
 
@@ -423,7 +428,7 @@ class CredentialsManager:
                 if sys.platform != 'win32':
                     os.chmod(tmp_path, 0o600)
 
-                tmp_path.replace(CREDENTIALS_FILE)
+                replace_with_retry(tmp_path, CREDENTIALS_FILE)
                 _fsync_dir(CREDENTIALS_FILE.parent)
 
                 logger.info(f"Saved credentials to {CREDENTIALS_FILE}")
@@ -431,7 +436,84 @@ class CredentialsManager:
             except Exception as e:
                 logger.error(f"Failed to save credentials to {CREDENTIALS_FILE}: {e}")
                 return False
-    
+
+    # =========================================================================
+    # Backup encryption password — scrambled at rest in credentials.json
+    # (~/.config/sapphire), never inside the user/ backup archive.
+    # =========================================================================
+
+    def set_backup_password(self, password: str) -> bool:
+        """Store (or clear with '') the backup-encryption password."""
+        with self._lock:
+            try:
+                self._credentials['backup_password'] = self._scramble(password) if password else ''
+                if not self._save():
+                    return False
+                logger.info("Backup encryption password " + ("set" if password else "cleared"))
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set backup password: {e}")
+                return False
+
+    def get_backup_password(self) -> str:
+        """Plaintext backup password (machine-bound unscramble), or '' if unset."""
+        raw = (self._credentials or {}).get('backup_password', '')
+        return self._unscramble(raw) if raw else ''
+
+    def has_backup_password(self) -> bool:
+        return bool((self._credentials or {}).get('backup_password'))
+
+    def backup_password_status(self) -> str:
+        """'missing' (none stored), 'unreadable' (stored but won't decrypt — salt
+        lost / machine moved), or 'ok'. Lets the UI shout when encryption is on but
+        the saved password can no longer be read (silent-plaintext guard)."""
+        raw = (self._credentials or {}).get('backup_password', '')
+        if not raw:
+            return 'missing'
+        try:
+            self._unscramble_strict(raw)
+            return 'ok'
+        except Exception:
+            return 'unreadable'
+
+    # =========================================================================
+    # Remembrance offsite-backup vault — connection lives here (api_key scrambled),
+    # never inside user/ backups. Single vault (v1).
+    # =========================================================================
+
+    def get_offsite_account(self) -> dict:
+        """Vault connection with api_key unscrambled. Empty strings if unset."""
+        acct = (self._credentials or {}).get('offsite_account', {})
+        return {
+            'server_url': acct.get('server_url', ''),
+            'tenant_id': acct.get('tenant_id', ''),
+            'api_key': self._unscramble(acct.get('api_key', '')),
+        }
+
+    def set_offsite_account(self, server_url: str, tenant_id: str, api_key: str = '') -> bool:
+        """Store the vault connection; api_key scrambled. An empty api_key keeps the
+        existing one (so URL/tenant can be edited without re-entering the secret)."""
+        with self._lock:
+            try:
+                existing = self._credentials.get('offsite_account', {})
+                stored_key = existing.get('api_key', '') if not api_key else self._scramble(api_key)
+                self._credentials['offsite_account'] = {
+                    'server_url': (server_url or '').strip().rstrip('/'),
+                    'tenant_id': (tenant_id or '').strip(),
+                    'api_key': stored_key,
+                }
+                if not self._save():
+                    return False
+                logger.info("Set Remembrance offsite account")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set offsite account: {e}")
+                return False
+
+    def has_offsite_account(self) -> bool:
+        acct = (self._credentials or {}).get('offsite_account', {})
+        return bool(acct.get('server_url') and acct.get('tenant_id') and acct.get('api_key'))
+
     # =========================================================================
     # Scramble (reversible encryption for sensitive fields)
     # =========================================================================
@@ -598,8 +680,22 @@ class CredentialsManager:
                 return False
     
     def clear_llm_api_key(self, provider: str) -> bool:
-        """Clear API key for an LLM provider."""
-        return self.set_llm_api_key(provider, '')
+        """Remove the stored credential entry for an LLM provider (not just blank it),
+        so a deleted provider leaves no dangling entry behind."""
+        with self._lock:
+            try:
+                llm = self._credentials.get('llm', {})
+                if provider not in llm:
+                    return True  # nothing stored — already clear
+                del llm[provider]
+                if not self._save():
+                    logger.error(f"Failed to persist credential removal for '{provider}'")
+                    return False
+                logger.info(f"Removed stored credential for provider '{provider}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to clear API key for '{provider}': {e}")
+                return False
     
     def has_llm_api_key(self, provider: str) -> bool:
         """Check if provider has an API key (from either stored or env)."""
@@ -793,6 +889,162 @@ class CredentialsManager:
             })
         return result
 
+    # ── Twilio voice accounts (multi-number SIP) ──────────────────────────────
+    def get_twilio_account(self, scope: str = 'default') -> dict:
+        """Get a Twilio SIP account by scope. Secrets are unscrambled on read."""
+        acct = self._credentials.get('twilio_accounts', {}).get(scope, {})
+        return {
+            'sip_domain': acct.get('sip_domain', ''),
+            'sip_user': acct.get('sip_user', ''),
+            'sip_pass': self._unscramble(acct.get('sip_pass', '')),
+            'number': acct.get('number', ''),
+            'chat': acct.get('chat', 'default'),
+            'greeting': acct.get('greeting', ''),
+            'account_sid': acct.get('account_sid', ''),
+            'auth_token': self._unscramble(acct.get('auth_token', '')),
+            'transport': acct.get('transport', 'tls'),
+            'call_provider': acct.get('call_provider', ''),
+            'call_model': acct.get('call_model', ''),
+            'elevate_key': self._unscramble(acct.get('elevate_key', '')),
+            'elevate_toolset': acct.get('elevate_toolset', ''),
+        }
+
+    def set_twilio_account(self, scope: str, sip_domain: str, sip_user: str,
+                           sip_pass: str, number: str = '', chat: str = 'default',
+                           greeting: str = '', account_sid: str = '',
+                           auth_token: str = '', transport: str = 'tls',
+                           call_provider: str = '', call_model: str = '',
+                           elevate_key: str = '', elevate_toolset: str = '') -> bool:
+        """Create/update a Twilio account. sip_pass and auth_token (the REST
+        API secret for outbound calls) are scrambled before save."""
+        with self._lock:
+            try:
+                if 'twilio_accounts' not in self._credentials:
+                    self._credentials['twilio_accounts'] = {}
+                self._credentials['twilio_accounts'][scope] = {
+                    'sip_domain': sip_domain,
+                    'sip_user': sip_user,
+                    'sip_pass': self._scramble(sip_pass) if sip_pass else '',
+                    'number': number,
+                    'chat': chat,
+                    'greeting': greeting,
+                    'account_sid': account_sid,
+                    'auth_token': self._scramble(auth_token) if auth_token else '',
+                    'transport': transport if transport in ('tls', 'udp') else 'tls',
+                    'call_provider': call_provider,
+                    'call_model': call_model,
+                    'elevate_key': self._scramble(elevate_key) if elevate_key else '',
+                    'elevate_toolset': elevate_toolset,
+                }
+                if not self._save():
+                    logger.error(f"Failed to persist twilio account '{scope}'")
+                    return False
+                logger.info(f"Set twilio account for scope '{scope}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set twilio account '{scope}': {e}")
+                return False
+
+    def delete_twilio_account(self, scope: str) -> bool:
+        """Remove a Twilio account by scope."""
+        with self._lock:
+            accounts = self._credentials.get('twilio_accounts', {})
+            if scope not in accounts:
+                return False
+            del accounts[scope]
+            if not self._save():
+                logger.error(f"Failed to persist deletion of twilio account '{scope}'")
+                return False
+            logger.info(f"Deleted twilio account '{scope}'")
+            return True
+
+    # ── Discord bot accounts (plugins/discord, 2026-09-22): label → bot token ──
+
+    def get_discord_account(self, name: str) -> dict:
+        """One Discord bot account by its label; the token is unscrambled on read.
+        Empty dict when unknown."""
+        acct = self._credentials.get('discord_accounts', {}).get(name)
+        if not acct:
+            return {}
+        return {
+            'name': name,
+            'token': self._unscramble(acct.get('token', '')),
+            'bot_name': acct.get('bot_name', ''),
+            'bot_id': acct.get('bot_id', ''),
+            'created_at': acct.get('created_at', 0.0),
+        }
+
+    def set_discord_account(self, name: str, *, token: str = None, bot_name: str = None,
+                            bot_id: str = None, created_at: float = None) -> bool:
+        """Create or update a Discord bot account. Fields left None keep their
+        stored value; the token is scrambled before save; created_at is set once."""
+        import time as _time
+        with self._lock:
+            try:
+                accounts = self._credentials.setdefault('discord_accounts', {})
+                acct = dict(accounts.get(name) or {})
+                if token is not None:
+                    acct['token'] = self._scramble(token) if token else ''
+                if bot_name is not None:
+                    acct['bot_name'] = str(bot_name)
+                if bot_id is not None:
+                    acct['bot_id'] = str(bot_id)
+                if not acct.get('created_at'):
+                    acct['created_at'] = float(created_at) if created_at else _time.time()
+                accounts[name] = acct
+                if not self._save():
+                    logger.error(f"Failed to persist discord account '{name}'")
+                    return False
+                logger.info(f"Set discord account '{name}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set discord account '{name}': {e}")
+                return False
+
+    def delete_discord_account(self, name: str) -> bool:
+        with self._lock:
+            accounts = self._credentials.get('discord_accounts', {})
+            if name not in accounts:
+                return False
+            del accounts[name]
+            if not self._save():
+                logger.error(f"Failed to persist deletion of discord account '{name}'")
+                return False
+            logger.info(f"Deleted discord account '{name}'")
+            return True
+
+    def list_discord_accounts(self) -> list:
+        """Discord bot accounts (no tokens) — for the accounts page and the scope dropdown."""
+        accounts = self._credentials.get('discord_accounts', {})
+        return [{'name': name, 'bot_name': acct.get('bot_name', ''), 'bot_id': acct.get('bot_id', ''),
+                 'created_at': acct.get('created_at', 0.0)} for name, acct in sorted(accounts.items())]
+
+    def list_twilio_accounts(self) -> list:
+        """List Twilio accounts (no secrets) — for the account dropdown + UI."""
+        accounts = self._credentials.get('twilio_accounts', {})
+        result = []
+        for scope, acct in accounts.items():
+            result.append({
+                'scope': scope,
+                'name': scope,
+                'value': scope,
+                'label': acct.get('number') or acct.get('sip_user') or scope,
+                'number': acct.get('number', ''),
+                'sip_domain': acct.get('sip_domain', ''),
+                'sip_user': acct.get('sip_user', ''),
+                'chat': acct.get('chat', 'default'),
+                'greeting': acct.get('greeting', ''),
+                'configured': bool(acct.get('sip_domain') and acct.get('sip_user') and acct.get('sip_pass')),
+                'account_sid': acct.get('account_sid', ''),
+                'rest_configured': bool(acct.get('account_sid') and acct.get('auth_token')),
+                'transport': acct.get('transport', 'tls'),
+                'call_provider': acct.get('call_provider', ''),
+                'call_model': acct.get('call_model', ''),
+                'elevate_configured': bool(acct.get('elevate_key')),
+                'elevate_toolset': acct.get('elevate_toolset', ''),
+            })
+        return result
+
     def set_email_oauth_account(self, scope: str, address: str,
                                 imap_server: str, smtp_server: str,
                                 imap_port: int, smtp_port: int,
@@ -956,12 +1208,20 @@ class CredentialsManager:
             'refresh_token': self._unscramble(acct.get('refresh_token', '')),
             'calendar_id': acct.get('calendar_id', 'primary'),
             'label': acct.get('label', scope),
+            'auth_mode': acct.get('auth_mode', 'byo'),
+            'relay_url': acct.get('relay_url', ''),
         }
 
     def set_gcal_account(self, scope: str, client_id: str, client_secret: str,
                          calendar_id: str = 'primary', refresh_token: str = '',
-                         label: str = '') -> bool:
-        """Set Google Calendar account for a scope. Secrets are scrambled before save."""
+                         label: str = '', auth_mode: str = 'byo',
+                         relay_url: str = '') -> bool:
+        """Set Google Calendar account for a scope. Secrets are scrambled before save.
+
+        auth_mode 'byo' = user's own Google client (client_id/secret stored
+        here); 'relay' = easy connect — no local client creds, token exchange
+        and refresh go through relay_url (frozen at connect time, same as
+        client creds are for byo)."""
         with self._lock:
             try:
                 if 'gcal_accounts' not in self._credentials:
@@ -973,6 +1233,8 @@ class CredentialsManager:
                     'refresh_token': self._scramble(refresh_token) if refresh_token else '',
                     'calendar_id': calendar_id or 'primary',
                     'label': label or scope,
+                    'auth_mode': auth_mode or 'byo',
+                    'relay_url': relay_url,
                 }
 
                 if not self._save():
@@ -1060,9 +1322,12 @@ class CredentialsManager:
         return result
 
     def has_gcal_account(self, scope: str = 'default') -> bool:
-        """Check if gcal account exists and has a refresh token."""
+        """Check if gcal account exists and has a refresh token.
+        Relay (easy-connect) accounts have no local client_id by design."""
         acct = self.get_gcal_account(scope)
-        return bool(acct['client_id'] and acct['refresh_token'])
+        if not acct['refresh_token']:
+            return False
+        return bool(acct['client_id']) or acct['auth_mode'] == 'relay'
 
     # =========================================================================
     # GitHub

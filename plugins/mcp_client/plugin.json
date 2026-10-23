@@ -1,5 +1,6 @@
 {
   "name": "mcp_client",
+  "short_display_name": "MCP Client",
   "version": "1.0.0",
   "description": "MCP Client \u2014 connect to Model Context Protocol servers",
   "author": "sapphire",

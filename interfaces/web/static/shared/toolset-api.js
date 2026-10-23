@@ -1,5 +1,5 @@
 // API functions for Toolset Manager
-import { getInitData } from './init-data.js';
+import { getInitData, refreshInitData } from './init-data.js';
 import { fetchWithTimeout } from './fetch.js';
 
 let _initialLoad = true;
@@ -59,7 +59,9 @@ export async function saveCustomToolset(name, functionList) {
     body: JSON.stringify({ name, functions: functionList })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const data = await res.json();
+  refreshInitData();  // bust cached toolset list so persona/chat dropdowns see the change
+  return data;
 }
 
 export async function deleteToolset(name) {
@@ -67,7 +69,9 @@ export async function deleteToolset(name) {
     method: 'DELETE'
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const data = await res.json();
+  refreshInitData();  // bust cached toolset list so persona/chat dropdowns see the deletion
+  return data;
 }
 
 export async function setToolsetEmoji(name, emoji) {
@@ -77,5 +81,7 @@ export async function setToolsetEmoji(name, emoji) {
     body: JSON.stringify({ emoji })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const data = await res.json();
+  refreshInitData();  // bust cached toolset list so the emoji updates in dropdowns
+  return data;
 }

@@ -174,8 +174,16 @@ def _ensure_loaded():
             logger.info(f"[VIBES] Loading CLIP ({CLIP_MODEL_NAME}) — first load may download ~600MB...")
             from transformers import CLIPModel, CLIPProcessor
             import torch
-            _model = CLIPModel.from_pretrained(CLIP_MODEL_NAME)
-            _processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
+            # Local-first (negspace E5): a warm cache loads with zero
+            # network — transformers otherwise pings huggingface.co on
+            # every load. Missing files -> one retry online to download.
+            try:
+                _model = CLIPModel.from_pretrained(CLIP_MODEL_NAME, local_files_only=True)
+                _processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME, local_files_only=True)
+            except (OSError, EnvironmentError):
+                logger.info("[VIBES] CLIP not in local cache — downloading (~600MB)")
+                _model = CLIPModel.from_pretrained(CLIP_MODEL_NAME)
+                _processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
             _model.eval()
 
             # Flatten vocab and remember category boundaries

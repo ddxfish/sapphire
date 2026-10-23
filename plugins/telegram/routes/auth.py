@@ -112,6 +112,8 @@ async def start_bot_auth(**kwargs):
         state.update_with_lock("accounts", _add, default={})
 
         logger.info(f"[TELEGRAM] Bot '{account_name}' authenticated as @{me.username or me.first_name}")
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "telegram", "action": "added", "name": account_name})
 
         # Hot-connect to running daemon
         try:
@@ -260,12 +262,22 @@ async def delete_account(**kwargs):
             await client.disconnect()
         except Exception:
             pass
+        # disconnect() does not close the SQLite session file — on Windows
+        # the open handle would make the unlink below raise PermissionError.
+        try:
+            client.session.close()
+        except Exception:
+            pass
         _clients.pop(account_name, None)
 
-    # Remove session file
+    # Remove session file (best-effort: a locked file must not block the
+    # metadata removal — the account still deletes, the file orphans)
     session_path = SESSION_DIR / f"{account_name}.session"
-    if session_path.exists():
-        session_path.unlink()
+    try:
+        if session_path.exists():
+            session_path.unlink()
+    except OSError as e:
+        logger.warning(f"[TELEGRAM] Could not remove session file {session_path}: {e}")
 
     # Remove metadata atomically
     state = _get_state()
@@ -276,6 +288,8 @@ async def delete_account(**kwargs):
     state.update_with_lock("accounts", _remove, default={})
 
     logger.info(f"[TELEGRAM] Deleted account '{account_name}'")
+    from core.event_bus import publish, Events
+    publish(Events.SCOPE_CHANGED, {"kind": "telegram", "action": "deleted", "name": account_name})
     return {"status": "deleted", "account_name": account_name}
 
 
@@ -287,6 +301,12 @@ async def _finalize_auth(account_name, client, phone):
 
     me = await client.get_me()
     await client.disconnect()
+    # Close the SQLite session file before moving it — a live handle makes
+    # shutil.move truncate/fail on Windows.
+    try:
+        client.session.close()
+    except Exception:
+        pass
 
     # Move temp session to permanent
     temp_path = SESSION_DIR / f"_{account_name}.session"
@@ -313,6 +333,8 @@ async def _finalize_auth(account_name, client, phone):
     _pending_auth.pop(account_name, None)
 
     logger.info(f"[TELEGRAM] Account '{account_name}' authenticated as @{me.username or me.first_name}")
+    from core.event_bus import publish, Events
+    publish(Events.SCOPE_CHANGED, {"kind": "telegram", "action": "added", "name": account_name})
 
     # Try to connect in the running daemon
     try:

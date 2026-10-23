@@ -1,5 +1,6 @@
 {
   "name": "github",
+  "short_display_name": "GitHub",
   "version": "1.0.0",
   "description": "GitHub — repos, files, issues, search. PAT-authenticated, scope-aware multi-account.",
   "author": "sapphire",

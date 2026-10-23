@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import re
 import tempfile
 import threading
 import logging
@@ -14,6 +15,8 @@ from fastapi.responses import JSONResponse, Response
 import config
 from core.auth import require_login, check_endpoint_rate
 from core.api_fastapi import get_system
+from core.fs_utils import replace_with_retry
+from core.settings_manager import _fsync_file, _fsync_dir
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,80 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
 
 _install_lock = threading.Lock()
+
+
+def _move_dir(src, dst):
+    """Directory move for the install swap: rename when possible, copy-move
+    when user/ spans filesystems (symlinked setups)."""
+    try:
+        os.rename(src, dst)
+    except OSError:
+        import shutil
+        shutil.move(str(src), str(dst))
+
+
+def _staging_signature_gate(staging_dir):
+    """(ok, message) — would this plugin tree be allowed to LOAD?
+
+    Mirrors the loader's gate (plugin_loader.py _load_plugin): failed
+    signature always blocks; unsigned blocks unless ALLOW_UNSIGNED_PLUGINS,
+    except managed mode which strict-validates the code instead. Run against
+    the staged replacement BEFORE the working copy is touched (C2, 2026-08-06
+    hunt) — the old flow deleted first and let rescan discover the corpse:
+    "Updated ✓" toast, plugin silently dark, old copy gone.
+    """
+    from core.plugin_verify import verify_plugin
+    verified, verify_msg, _meta = verify_plugin(staging_dir)
+    if verified:
+        return True, "verified"
+    if verify_msg != "unsigned":
+        return False, f"signature verification failed ({verify_msg})"
+    try:
+        allow_unsigned = bool(config.ALLOW_UNSIGNED_PLUGINS)
+    except Exception:
+        allow_unsigned = False
+    if allow_unsigned:
+        return True, "unsigned (sideloading enabled)"
+    from core.settings_manager import settings
+    if settings.is_managed():
+        from core.code_validator import validate_plugin_files
+        ok, err = validate_plugin_files(staging_dir, strictness='strict')
+        if ok:
+            return True, "unsigned but passed strict validation"
+        return False, f"failed code validation ({err})"
+    return False, ("unsigned and sideloading is disabled — the plugin would be "
+                   "blocked at load (sign it, or enable ALLOW_UNSIGNED_PLUGINS)")
+
+
+def _sync_toolset_after_change(action):
+    """Re-apply the active toolset + notify the frontend after a plugin
+    install/uninstall/revert. Active chat's extra_toolsets ride along — a
+    by-name-only re-apply strips them (extras-decay class, 2026-08-05).
+    Best-effort: files already changed; a sync hiccup shouldn't fail the call.
+    """
+    try:
+        system = get_system()
+        if not (system and system.llm_chat):
+            return
+        fm = system.llm_chat.function_manager
+        current = fm.current_toolset_name
+        if current:
+            extras = None
+            try:
+                extras = (system.llm_chat.session_manager.get_chat_settings()
+                          or {}).get('extra_toolsets') or None
+            except Exception:
+                pass
+            fm.update_enabled_functions([current], extra_toolsets=extras)
+        from core.event_bus import publish, Events
+        toolset_info = fm.get_current_toolset_info()
+        publish(Events.TOOLSET_CHANGED, {
+            "name": current or "custom",
+            "action": action,
+            "function_count": toolset_info.get("function_count", 0)
+        })
+    except Exception:
+        pass
 
 
 def _safe_emoji_icon(icon):
@@ -183,6 +260,49 @@ def _get_merged_plugins():
     return _enforce_locked(merged)
 
 
+def _is_core_essential(name: str) -> bool:
+    """True when a plugin declares essential: true (boolean). Those are core
+    plugins: hidden from the manager UI and refused by the toggle route.
+    A group-STRING essential (alternates like memory/mindpalace) is not core —
+    the pair must stay user-switchable."""
+    try:
+        from core.plugin_loader import plugin_loader
+        info = plugin_loader.get_plugin_info(name)
+        if info and info.get("manifest", {}).get("essential") is True:
+            return True
+    except Exception:
+        pass
+    # Static core-ui plugins carry the flag in their plugins.json meta
+    try:
+        merged = _get_merged_plugins()
+        return merged.get("plugins", {}).get(name, {}).get("essential") is True
+    except Exception:
+        return False
+
+
+def _cap_title(s: str, n: int = 40) -> str:
+    s = (s or "").strip()
+    return (s[:n].rstrip() + "…") if len(s) > n else s
+
+
+def _plugin_display_title(fields: dict, name: str) -> str:
+    """Resolve a plugin's SHORT display title — never a paragraph.
+
+    Precedence: short_display_name → display_name → short_name → title →
+    (description's first clause, TRUNCATED) → name. The truncation is the safety
+    net: a legacy/third-party plugin that only set a long `description` gets a
+    clipped, readable title instead of a screen-eating run-on. New authors set
+    `short_display_name` — the single documented field. 2026-06-21."""
+    for key in ("short_display_name", "display_name", "short_name", "title"):
+        v = (fields.get(key) or "").strip()
+        if v:
+            return _cap_title(v)
+    desc = (fields.get("description") or "").strip()
+    if desc:
+        return _cap_title(desc.split("—")[0])
+    return name
+
+
 @router.get("/api/webui/plugins")
 async def list_plugins(request: Request, _=Depends(require_login)):
     """List all plugins (core-ui + backend plugins)."""
@@ -196,16 +316,17 @@ async def list_plugins(request: Request, _=Depends(require_login)):
             "name": name,
             "enabled": name in enabled_set,
             "locked": name in LOCKED_PLUGINS,
-            "title": meta.get("title", name),
+            "title": _plugin_display_title(meta, name),
             "showInSidebar": meta.get("showInSidebar", True),
             "collapsible": meta.get("collapsible", True),
-            "settingsUI": "core"
+            "settingsUI": "core",
+            "essential": meta.get("essential", False)
         })
         seen.add(name)
 
     # Include backend plugins discovered by plugin_loader
     try:
-        from core.plugin_loader import plugin_loader
+        from core.plugin_loader import plugin_loader, PLUGIN_PREV_DIR
         for info in plugin_loader.get_all_plugin_info():
             if info["name"] not in seen:
                 manifest = info.get("manifest", {})
@@ -229,11 +350,7 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "name": info["name"],
                     "enabled": info.get("enabled", info["name"] in enabled_set),
                     "locked": False,
-                    "title": (
-                        manifest.get("display_name")
-                        or manifest.get("short_name")
-                        or manifest.get("description", info["name"]).split("—")[0].strip()
-                    ),
+                    "title": _plugin_display_title(manifest, info["name"]),
                     "showInSidebar": False,
                     "collapsible": True,
                     "settingsUI": settings_ui,
@@ -245,24 +362,82 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "url": _safe_http_url(manifest.get("url")),
                     "version": manifest.get("version"),
                     "author": manifest.get("author"),
+                    "description": (manifest.get("description") or ""),
                     "icon": _safe_emoji_icon(manifest.get("icon")),
                     "band": info.get("band"),
                     "has_script": has_script,
                     "sidebar_accordion": manifest.get("capabilities", {}).get("sidebar_accordion"),
+                    # plugin surfaces (2026-08-23): manifest default + the
+                    # effective list (user override wins); None = everywhere
+                    "surfaces": manifest.get("surfaces") if isinstance(manifest.get("surfaces"), list) else None,
+                    "surfaces_active": plugin_loader.effective_surfaces(info["name"], manifest),
                     "missing_deps": info.get("missing_deps", []),
                     "essential": manifest.get("essential", False),
+                    "env": info.get("env"),
+                    "has_prev": (info.get("band") == "user"
+                                 and (PLUGIN_PREV_DIR / info["name"] / "plugin.json").exists()),
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        # A throw mid-loop truncates the listing to core-UI entries only —
+        # if that ever happens the user must at least see why in the log.
+        logger.warning(f"[PLUGINS] Backend plugin listing failed mid-loop: {e}", exc_info=True)
 
-    return {"plugins": result, "locked": LOCKED_PLUGINS}
+    from core.hooks import SURFACES
+    return {"plugins": result, "locked": LOCKED_PLUGINS,
+            "surfaces": [{"id": s, "label": l} for s, l in SURFACES]}
+
+
+@router.put("/api/plugins/{plugin_name}/surfaces")
+async def set_plugin_surfaces(plugin_name: str, request: Request, _=Depends(require_login)):
+    """Where this plugin's presence injections show up (Plugins page
+    'Show in' strip). Body {"surfaces": [...]} stores a per-plugin override;
+    {"surfaces": null} returns to the manifest default. Only plugins that
+    declare `surfaces` in their manifest have anything to override."""
+    from core.hooks import SURFACES
+    from core.plugin_loader import plugin_loader
+    info = plugin_loader._plugins.get(plugin_name)
+    if not info:
+        raise HTTPException(status_code=404, detail="Plugin not found")
+    if not isinstance((info.get("manifest") or {}).get("surfaces"), list):
+        raise HTTPException(status_code=400, detail="Plugin does not declare surfaces")
+    body = await request.json()
+    chosen = body.get("surfaces")
+    if chosen is not None:
+        if not isinstance(chosen, list):
+            raise HTTPException(status_code=400, detail="surfaces must be a list or null")
+        known = {s for s, _ in SURFACES}
+        chosen = [s for s in chosen if isinstance(s, str) and s in known]
+    eff = plugin_loader.set_surfaces_override(plugin_name, chosen)
+    return {"success": True, "surfaces_active": eff}
 
 
 @router.put("/api/webui/plugins/toggle/{plugin_name}")
-async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
+def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
+    # Plain def on purpose — FastAPI runs sync handlers in its threadpool.
+    # This route was skipped by the 2026-08-06 C3 fix (which covered
+    # install/revert) and stalled chat/voice/SSE for up to 5s per toggle
+    # (daemon thread.join, full module exec, re-hash, key fetch) — negspace
+    # N8, 2026-08-31.
     """Toggle a plugin."""
     if plugin_name in LOCKED_PLUGINS:
         raise HTTPException(status_code=403, detail=f"Cannot disable locked plugin: {plugin_name}")
+
+    # essential: true (boolean, not a group string) = core plugin — hidden
+    # from the manager UI. Refuse only the OFF direction: a core plugin that
+    # ended up disabled (e.g. unsigned-policy auto-disable) must stay
+    # re-enable-able or it's UI-unrecoverable. Group-string essential
+    # (e.g. "memory" on the memory/mindpalace alternates) stays toggleable.
+    if _is_core_essential(plugin_name):
+        currently_on = True  # unknown state → keep the old refuse-everything behavior
+        try:
+            from core.plugin_loader import plugin_loader as _pl_ess
+            _info_ess = _pl_ess.get_plugin_info(plugin_name)
+            if _info_ess is not None:
+                currently_on = bool(_info_ess.get("enabled"))
+        except Exception:
+            pass
+        if currently_on:
+            raise HTTPException(status_code=403, detail=f"Cannot disable core plugin: {plugin_name}")
 
     # Per-plugin lock prevents double-click races
     with _toggle_locks_guard:
@@ -332,7 +507,12 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
             tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(user_data, f, indent=2)
-            tmp_path.replace(USER_PLUGINS_JSON)
+                # fsync like settings/credentials got 2026-05-07: a power cut
+                # between rename and pagecache flush zeroes this file — every
+                # plugin then reverts to default_enabled on next boot.
+                _fsync_file(f)
+            replace_with_retry(tmp_path, USER_PLUGINS_JSON)
+            _fsync_dir(USER_PLUGINS_JSON.parent)
 
         # Live load/unload — no restart needed for backend plugins
         reload_required = True
@@ -360,6 +540,11 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                         except Exception as _verr:
                             logger.warning(f"[PLUGINS] toggle re-verify failed for {plugin_name}: {_verr}")
                         loaded = plugin_loader._load_plugin(plugin_name)
+                        if loaded:
+                            # Manifest-only registration just replaced whatever
+                            # the plugin had rendered at runtime — let it
+                            # re-assert (Sapph-not-Rose toggle leg, 2026-08-05).
+                            plugin_loader._fire_plugins_ready("toggle")
                         if not loaded:
                             # Load failed (verification/deps). Leave plugins.json
                             # alone — user intent (enabled) survives so a fix +
@@ -373,7 +558,20 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                             elif "hash mismatch" in verify_msg or "tamper" in verify_msg.lower():
                                 detail = "Plugin signature is invalid — files were modified after signing"
                             else:
-                                detail = f"Plugin blocked: {verify_msg}"
+                                # A VERIFIED plugin refused at load (tool-name
+                                # collision, deps) used to report "Plugin
+                                # blocked: verified" — the real reason went to
+                                # the bus, not the 403 the user is staring at.
+                                # This is the memory<->mindpalace swap flow.
+                                # (negspace N15, 2026-08-31)
+                                _errs = [le for le in plugin_loader._load_errors
+                                         if le.get("plugin") == plugin_name]
+                                if _errs:
+                                    detail = _errs[-1].get("error") or f"Plugin blocked: {verify_msg}"
+                                    if _errs[-1].get("hint"):
+                                        detail += f" — {_errs[-1]['hint']}"
+                                else:
+                                    detail = f"Plugin blocked: {verify_msg}"
                             raise HTTPException(status_code=403, detail=detail)
                     else:
                         plugin_loader.unload_plugin(plugin_name)
@@ -387,7 +585,18 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                     if system and hasattr(system, 'llm_chat'):
                         toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
                         toolset_name = toolset_info.get("name", "custom")
-                        system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+                        # Carry extra_toolsets through — a by-name-only re-apply
+                        # strips them from the enabled set, so toggling ANY
+                        # plugin mid-story cost her story_act: she narrates but
+                        # nothing advances (extras-decay site #6, 2026-08-05).
+                        extras = None
+                        try:
+                            extras = (system.llm_chat.session_manager.get_chat_settings()
+                                      or {}).get('extra_toolsets') or None
+                        except Exception:
+                            pass
+                        system.llm_chat.function_manager.update_enabled_functions(
+                            [toolset_name], extra_toolsets=extras)
                         from core.event_bus import publish, Events
                         publish(Events.TOOLSET_CHANGED, {
                             "name": toolset_name,
@@ -401,19 +610,22 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
         except Exception as e:
             logger.warning(f"Live plugin toggle failed for {plugin_name}: {e}")
 
-        # Check for missing deps after toggle-on
+        # Check for missing deps + env status after toggle-on
         missing_deps = []
+        env_info = None
         if new_state:
             try:
                 from core.plugin_loader import plugin_loader
                 p_info = plugin_loader.get_plugin_info(plugin_name)
                 if p_info:
                     missing_deps = p_info.get("missing_deps", [])
+                    env_info = p_info.get("env")
             except Exception:
                 pass
 
         return {"status": "success", "plugin": plugin_name, "enabled": new_state,
-                "reload_required": reload_required, "missing_deps": missing_deps}
+                "reload_required": reload_required, "missing_deps": missing_deps,
+                "env": env_info}
     finally:
         lock.release()
 
@@ -423,7 +635,7 @@ async def list_apps(_=Depends(require_login)):
     """List available plugin apps (plugins with an app/ directory)."""
     from core.plugin_loader import plugin_loader
     apps = []
-    for name, info in plugin_loader._plugins.items():
+    for name, info in list(plugin_loader._plugins.items()):
         if not info.get("loaded"):
             continue
         manifest = info.get("manifest", {})
@@ -444,64 +656,261 @@ async def list_apps(_=Depends(require_login)):
     return {"apps": apps}
 
 
+@router.get("/api/games")
+async def list_registered_games(_=Depends(require_login)):
+    """List games registered via capabilities.games (see core/games_registry).
+    Consumed by game HOST plugins (game-room library tiles); empty when no
+    game plugins are enabled — core stays game-agnostic."""
+    from core.games_registry import list_games, generation
+    return {"games": list_games(), "generation": generation()}
+
+
+# ── Themes v2 (plan: tmp/themes-v2-plan.md) ────────────────────────────────
+# The validation floor: manifest JSON (themes.json AND third-party plugin
+# manifests) is never trusted as core-authored data. Every field is shape-
+# checked here so one malformed entry degrades to a skip-and-log, never a 500
+# (chaos hunt T5), and hostile values never reach client sinks (T1/T3/T4).
+
+_THEME_ID_RE = re.compile(r'^[a-z0-9_-]{1,50}$')
+_COLOR_VALUE_RE = re.compile(r'^(#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%]+\))$')
+_ALLOWED_SETTING_TYPES = {'select', 'boolean', 'checkbox', 'range', 'text'}
+
+
+def _clean_preview(p):
+    """Keep only string color values matching a strict color shape (T4)."""
+    if not isinstance(p, dict):
+        return {}
+    return {k: v.strip() for k, v in p.items()
+            if isinstance(k, str) and isinstance(v, str) and _COLOR_VALUE_RE.match(v.strip())}
+
+
+def _clean_settings(defs):
+    """Normalize theme setting declarations (T6/T7): valid key shape, reserved
+    sapphire* namespace refused, type whitelisted, options coerced to a list."""
+    out = []
+    if not isinstance(defs, list):
+        return out
+    for s in defs:
+        if not isinstance(s, dict):
+            continue
+        key = s.get('key')
+        if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', key):
+            continue
+        if key.lower().startswith('sapphire'):
+            logger.warning(f"theme setting key {key!r} uses reserved namespace, skipped")
+            continue
+        stype = s.get('type') if s.get('type') in _ALLOWED_SETTING_TYPES else 'text'
+        entry = {'key': key, 'type': stype,
+                 'label': str(s.get('label', key)), 'help': str(s.get('help', '')),
+                 'default': s.get('default', '')}
+        if stype == 'select':
+            opts = s.get('options')
+            entry['options'] = [o for o in opts if isinstance(o, (str, dict))] if isinstance(opts, list) else []
+        if stype == 'range':
+            for k in ('min', 'max', 'step'):
+                if k in s:
+                    entry[k] = s[k]
+        out.append(entry)
+    return out
+
+
+def _safe_rel_path(p):
+    """Relative plugin-web path: no absolute, no traversal segments."""
+    return (isinstance(p, str) and p and not p.startswith('/')
+            and '..' not in p.split('/') and not p.startswith('\\'))
+
+
 @router.get("/api/themes")
 async def list_themes(_=Depends(require_login)):
     """List all available themes — core + plugin manifest themes."""
+    from core.api_fastapi import BOOT_VERSION  # lazy: avoid circular import
     themes = []
+    default_theme = 'dark'
 
-    # 1. Core themes (static/themes/)
+    # 1. Core themes (static/themes/themes.json — v2 object entries; bare
+    #    strings stay legal and get preview regex-extracted as before)
     themes_dir = PROJECT_ROOT / "interfaces" / "web" / "static" / "themes"
     themes_json = themes_dir / "themes.json"
-    core_names = []
+    core_entries = []
     if themes_json.exists():
         try:
             data = json.loads(themes_json.read_text(encoding='utf-8'))
-            core_names = data.get("themes", [])
+            core_entries = data.get("themes", [])
+            if isinstance(data.get("default"), str) and _THEME_ID_RE.match(data["default"]):
+                default_theme = data["default"]
         except Exception:
             pass
 
-    for name in core_names:
-        css_path = themes_dir / f"{name}.css"
-        preview = _extract_css_preview(css_path) if css_path.exists() else {}
+    for entry in core_entries if isinstance(core_entries, list) else []:
+        if isinstance(entry, str):
+            entry = {"id": entry}
+        if not isinstance(entry, dict):
+            logger.warning(f"themes.json: skipping malformed theme entry {entry!r}")
+            continue
+        tid = entry.get("id")
+        if not isinstance(tid, str) or not _THEME_ID_RE.match(tid):
+            logger.warning(f"themes.json: skipping theme with bad id {tid!r}")
+            continue
+        css_path = themes_dir / f"{tid}.css"
+        preview = _clean_preview(entry.get("preview"))
+        if not preview and css_path.exists():
+            preview = _extract_css_preview(css_path)
         themes.append({
-            "id": name,
-            "name": name.replace('-', ' ').replace('_', ' ').title(),
+            "id": tid,
+            "name": str(entry.get("name") or tid.replace('-', ' ').replace('_', ' ').title()),
+            "description": str(entry.get("description", "")),
             "source": "core",
-            "css": f"/static/themes/{name}.css",
+            # Versioned URL — the live-switch path used to serve unversioned
+            # CSS and eat hour-stale edits (lifecycle #6 / chaos T10).
+            "css": f"/static/themes/{tid}.css?v={BOOT_VERSION}",
             "scripts": [],
             "preview": preview,
+            "font": entry.get("font") if isinstance(entry.get("font"), str) else None,
+            # Version local bg assets like the CSS — unversioned URLs served
+            # the stale cached texture after regeneration (same class as T10).
+            "bg": (f"{entry['bg']}?v={BOOT_VERSION}"
+                   if isinstance(entry.get("bg"), str) and entry["bg"].startswith("/static/")
+                   else (entry.get("bg") if isinstance(entry.get("bg"), str) else None)),
+            "motion": entry.get("motion") if isinstance(entry.get("motion"), str) else None,
+            "settings": _clean_settings(entry.get("settings")),
         })
 
     # 2. Plugin manifest themes (capabilities.themes)
     from core.plugin_loader import plugin_loader
-    for pname, info in plugin_loader._plugins.items():
-        if not info.get("loaded"):
+    # list() snapshot: rescan/uninstall mutate _plugins mid-iteration
+    # (RuntimeError → 500 → the frontend registry silently stays empty).
+    for pname, info in list(plugin_loader._plugins.items()):
+        if not info.get("loaded") or not info.get("enabled"):
             continue
         manifest = info.get("manifest", {})
-        theme_defs = manifest.get("capabilities", {}).get("themes", [])
+        capabilities = manifest.get("capabilities", {})
+        theme_defs = capabilities.get("themes", []) if isinstance(capabilities, dict) else []
+        if not isinstance(theme_defs, list):
+            logger.warning(f"Plugin '{pname}': capabilities.themes is not a list, skipping")
+            theme_defs = []
         for td in theme_defs:
+            if not isinstance(td, dict):
+                logger.warning(f"Plugin '{pname}': skipping non-dict theme entry {td!r}")
+                continue
             tid = td.get("id", "")
-            if not tid:
+            if not isinstance(tid, str) or not _THEME_ID_RE.match(tid):
                 continue
             css_path = td.get("css", "")
             scripts = td.get("scripts", [])
-            # Resolve paths relative to plugin web serving
-            css_url = f"/plugin-web/{pname}/{css_path}" if css_path else ""
-            script_urls = [f"/plugin-web/{pname}/{s}" for s in scripts]
+            if not isinstance(scripts, list):
+                scripts = []
+            css_url = f"/plugin-web/{pname}/{css_path}" if _safe_rel_path(css_path) else ""
+            script_urls = [f"/plugin-web/{pname}/{s}" for s in scripts if _safe_rel_path(s)]
+            bg = td.get("bg")
+            bg_url = f"/plugin-web/{pname}/{bg}?v={BOOT_VERSION}" if _safe_rel_path(bg) else None
+            motion = td.get("motion") if isinstance(td.get("motion"), str) else None
+            # A bare id naming a motion THIS plugin ships resolves to its
+            # namespaced mint; anything else passes through (core motion ids).
+            if motion:
+                own_motions = capabilities.get("motions", []) if isinstance(capabilities, dict) else []
+                if isinstance(own_motions, list) and any(
+                        isinstance(m, dict) and m.get("id") == motion for m in own_motions):
+                    motion = f"plugin:{pname}:{motion}"
             themes.append({
-                "id": f"plugin-{pname}-{tid}",
-                "name": td.get("name", tid.title()),
-                "icon": td.get("icon", ""),
-                "description": td.get("description", ""),
+                # `:` separator — the old plugin-{name}-{id} mint collided
+                # (foo/bar-baz == foo-bar/baz, chaos T11) and `:` can't appear
+                # in either part. Zero shipped plugin themes = free rename.
+                "id": f"plugin:{pname}:{tid}",
+                "name": str(td.get("name", tid.title())),
+                # Same sanitizer as /api/plugins — /api/themes missed the
+                # 2026-05-07 day-ruiner sweep (chaos hunt T1 2026-08-16).
+                "icon": _safe_emoji_icon(td.get("icon", "")),
+                "description": str(td.get("description", "")),
                 "source": "plugin",
                 "plugin": pname,
-                "css": css_url,
+                "css": f"{css_url}?v={BOOT_VERSION}" if css_url else "",
                 "scripts": script_urls,
-                "preview": td.get("preview", {}),
-                "settings": td.get("settings", []),
+                "preview": _clean_preview(td.get("preview")),
+                "font": td.get("font") if isinstance(td.get("font"), str) else None,
+                "bg": bg_url,
+                "motion": motion,
+                "settings": _clean_settings(td.get("settings")),
             })
 
-    return {"themes": themes}
+    return {"themes": themes, "default": default_theme}
+
+
+def collect_motions():
+    """Ambient motion registry (themes-v2 P3) — core motions + plugin
+    capabilities.motions. Same validation floor as /api/themes: registry and
+    manifest JSON are never trusted; bad entries skip-and-log, never 500.
+    Shared by /api/motions and the set_motion tool (functions/meta.py)."""
+    from core.api_fastapi import BOOT_VERSION  # lazy: avoid circular import
+    motions = []
+
+    motions_dir = PROJECT_ROOT / "interfaces" / "web" / "static" / "motions"
+    entries = []
+    motions_json = motions_dir / "motions.json"
+    if motions_json.exists():
+        try:
+            entries = json.loads(motions_json.read_text(encoding='utf-8')).get("motions", [])
+        except Exception:
+            pass
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            logger.warning(f"motions.json: skipping malformed entry {entry!r}")
+            continue
+        mid = entry.get("id")
+        if not isinstance(mid, str) or not _THEME_ID_RE.match(mid):
+            logger.warning(f"motions.json: skipping motion with bad id {mid!r}")
+            continue
+        if not (motions_dir / mid / "motion.js").exists():
+            logger.warning(f"motions.json: '{mid}' has no motion.js, skipped")
+            continue
+        motions.append({
+            "id": mid,
+            "name": str(entry.get("name") or mid.replace('-', ' ').title()),
+            "description": str(entry.get("description", "")),
+            "source": "core",
+            "script": f"/static/motions/{mid}/motion.js?v={BOOT_VERSION}",
+            # Declared per-motion settings ride to mount() — motions.js
+            # spreads entry.settings; without this the key never existed.
+            **({"settings": entry["settings"]}
+               if isinstance(entry.get("settings"), dict) else {}),
+        })
+
+    from core.plugin_loader import plugin_loader
+    # list() snapshot: this also runs on LLM worker threads now (set_motion),
+    # racing rescan/uninstall mid-iteration.
+    for pname, info in list(plugin_loader._plugins.items()):
+        if not info.get("loaded") or not info.get("enabled"):
+            continue
+        capabilities = info.get("manifest", {}).get("capabilities", {})
+        motion_defs = capabilities.get("motions", []) if isinstance(capabilities, dict) else []
+        if not isinstance(motion_defs, list):
+            logger.warning(f"Plugin '{pname}': capabilities.motions is not a list, skipping")
+            continue
+        for md in motion_defs:
+            if not isinstance(md, dict):
+                logger.warning(f"Plugin '{pname}': skipping non-dict motion entry {md!r}")
+                continue
+            mid = md.get("id", "")
+            script = md.get("script", "")
+            if not isinstance(mid, str) or not _THEME_ID_RE.match(mid) or not _safe_rel_path(script):
+                logger.warning(f"Plugin '{pname}': skipping invalid motion entry {md!r}")
+                continue
+            motions.append({
+                "id": f"plugin:{pname}:{mid}",  # same collision-proof mint as themes
+                "name": str(md.get("name", mid.title())),
+                "description": str(md.get("description", "")),
+                "source": "plugin",
+                "plugin": pname,
+                "script": f"/plugin-web/{pname}/{script}?v={BOOT_VERSION}",
+                **({"settings": md["settings"]}
+                   if isinstance(md.get("settings"), dict) else {}),
+            })
+
+    return motions
+
+
+@router.get("/api/motions")
+async def list_motions(_=Depends(require_login)):
+    return {"motions": collect_motions()}
 
 
 def _extract_css_preview(css_path):
@@ -525,7 +934,8 @@ def _extract_css_preview(css_path):
 
 
 @router.post("/api/plugins/rescan")
-async def rescan_plugins(_=Depends(require_login)):
+def rescan_plugins(_=Depends(require_login)):
+    # Plain def — blocking work in threadpool, off the event loop (C3/N8 2026-08-31).
     """Scan for new/removed plugin folders without restart."""
     try:
         from core.plugin_loader import plugin_loader
@@ -536,7 +946,8 @@ async def rescan_plugins(_=Depends(require_login)):
 
 
 @router.post("/api/plugins/{plugin_name}/reload")
-async def reload_plugin(plugin_name: str, _=Depends(require_login)):
+def reload_plugin(plugin_name: str, _=Depends(require_login)):
+    # Plain def — blocking work in threadpool, off the event loop (C3/N8 2026-08-31).
     """Hot-reload a plugin (unload + load). For development."""
     from core.plugin_loader import plugin_loader
     info = plugin_loader.get_plugin_info(plugin_name)
@@ -552,21 +963,30 @@ async def reload_plugin(plugin_name: str, _=Depends(require_login)):
 
 
 @router.post("/api/plugins/install")
-async def install_plugin(
+def install_plugin(
     request: Request,
     url: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     force: bool = Form(False),
     source: Optional[str] = Form(None),
     store_slug: Optional[str] = Form(None),
+    expected_name: Optional[str] = Form(None),
     _=Depends(require_login),
 ):
     """Install a plugin from GitHub URL or zip upload.
+
+    Plain `def` on purpose — download + extract + copy + rescan is seconds of
+    blocking work; FastAPI runs sync handlers in its threadpool so the event
+    loop (chat/voice WS) stays live (2026-08-06 hunt, C3).
 
     Optional store-provenance fields (used by the in-app Plugin Store):
     - source: free-form origin tag, e.g. "store"
     - store_slug: catalog slug for cross-reference on update checks
     Both are persisted to plugin_state when provided; absence is fine.
+
+    expected_name: update flows pass the plugin they think they're updating —
+    409 if the downloaded manifest names a different plugin (C4: a renamed
+    repo manifest used to install as a NEW plugin under the update toast).
     """
     from core.settings_manager import settings
     # Block zip uploads in managed mode (GitHub installs OK — signing gate handles security)
@@ -592,6 +1012,7 @@ async def install_plugin(
         url_install_method = None  # 'github_url' | 'gitlab_url' | 'zip_url' (set below)
         if url:
             import requests as req
+            from core import net
             from urllib.parse import urlparse
             clean_url = url.strip()
             # Parse once and reuse. The path-only checks below let URLs with
@@ -627,7 +1048,7 @@ async def install_plugin(
                 # allow_redirects=False — a 302 from an attacker's https URL to an
                 # internal http://127.0.0.1:... would otherwise bypass the localhost
                 # and https-only SSRF guards above.
-                r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                 if r.status_code != 200:
                     raise HTTPException(status_code=400, detail=f"Failed to download zip (HTTP {r.status_code})")
             else:
@@ -644,18 +1065,18 @@ async def install_plugin(
                     zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
                     url_install_method = 'github_url'
                     # GitHub serves the zip via 302 -> codeload.github.com; explicit allowlist.
-                    r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code in (301, 302, 303, 307, 308):
                         loc = r.headers.get('Location', '')
                         if loc.startswith('https://codeload.github.com/'):
-                            r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                            r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code == 404:
                         zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
-                        r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                        r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                         if r.status_code in (301, 302, 303, 307, 308):
                             loc = r.headers.get('Location', '')
                             if loc.startswith('https://codeload.github.com/'):
-                                r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                                r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code != 200:
                         raise HTTPException(status_code=400, detail=f"Failed to download from GitHub (HTTP {r.status_code})")
                 elif m_gl:
@@ -668,25 +1089,28 @@ async def install_plugin(
                     # preserve the SSRF guard pattern from the GitHub branch.
                     zip_url = f"https://gitlab.com/{full_path}/-/archive/main/{gl_repo}-main.zip"
                     url_install_method = 'gitlab_url'
-                    r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                     # GitLab may redirect within gitlab.com (e.g. moved repos).
                     # Allow only same-host redirects.
                     if r.status_code in (301, 302, 303, 307, 308):
                         loc = r.headers.get('Location', '')
                         if loc.startswith('https://gitlab.com/'):
-                            r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                            r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code == 404:
                         zip_url = f"https://gitlab.com/{full_path}/-/archive/master/{gl_repo}-master.zip"
-                        r = req.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                        r = net.get(zip_url, stream=True, timeout=30, allow_redirects=False)
                         if r.status_code in (301, 302, 303, 307, 308):
                             loc = r.headers.get('Location', '')
                             if loc.startswith('https://gitlab.com/'):
-                                r = req.get(loc, stream=True, timeout=30, allow_redirects=False)
+                                r = net.get(loc, stream=True, timeout=30, allow_redirects=False)
                     if r.status_code != 200:
                         raise HTTPException(status_code=400, detail=f"Failed to download from GitLab (HTTP {r.status_code})")
                 else:
                     raise HTTPException(status_code=400, detail="Invalid URL format. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo>, or a direct https:// .zip URL")
-            content_length = int(r.headers.get("Content-Length", 0))
+            try:
+                content_length = int(r.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                content_length = 0  # garbage header — the streamed cap below still guards
             if content_length > MAX_ZIP_SIZE:
                 raise HTTPException(status_code=400, detail=f"Zip too large ({content_length // 1024 // 1024}MB, max 50MB)")
             fd, tmp_path = tempfile.mkstemp(suffix=".zip")
@@ -699,14 +1123,23 @@ async def install_plugin(
                         raise HTTPException(status_code=400, detail="Zip exceeds 50MB limit")
                     f.write(chunk)
         else:
-            # File upload
+            # File upload — streamed in chunks with a running cap. The old
+            # `await file.read()` pulled the ENTIRE upload into one bytes
+            # object before the size check: a fat-fingered 4GB zip = OOM
+            # (2026-08-06 hunt, H9).
             fd, tmp_path = tempfile.mkstemp(suffix=".zip")
-            os.close(fd)
             tmp_zip = Path(tmp_path)
-            content = await file.read()
-            if len(content) > MAX_ZIP_SIZE:
-                raise HTTPException(status_code=400, detail=f"Zip too large ({len(content) // 1024 // 1024}MB, max 50MB)")
-            tmp_zip.write_bytes(content)
+            written = 0
+            with os.fdopen(fd, "wb") as out:
+                while True:
+                    chunk = file.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_ZIP_SIZE:
+                        raise HTTPException(status_code=400,
+                                            detail="Zip too large (max 50MB)")
+                    out.write(chunk)
 
         # ── Extract ──
         if not zipfile.is_zipfile(tmp_zip):
@@ -783,9 +1216,17 @@ async def install_plugin(
         if total_size > MAX_EXTRACTED_SIZE:
             raise HTTPException(status_code=400, detail=f"Extracted content too large ({total_size // 1024 // 1024}MB, max 100MB)")
 
+        # ── C4: refuse a bait-and-switch manifest ──
+        if expected_name and name != expected_name:
+            raise HTTPException(status_code=409, detail=(
+                f"Repository now contains plugin '{name}' but this update targeted "
+                f"'{expected_name}'. Nothing was changed — reinstall deliberately "
+                "if the rename is intentional."))
+
         # ── Check for existing plugin (replace flow) ──
         # Lock prevents two concurrent installs from corrupting the same plugin
         with _install_lock:
+            from core.plugin_loader import PLUGIN_PREV_DIR, _rmtree_robust
             dest = USER_PLUGINS_DIR / name
             is_update = dest.exists()
             old_version = None
@@ -812,6 +1253,25 @@ async def install_plugin(
                         "existing_author": old_author,
                     })
 
+            # ── C2: stage + verify BEFORE the working copy is touched ──
+            # Stage under user/ (same filesystem as user/plugins, outside the
+            # scanner's reach) so activation is a rename, then gate the staged
+            # tree exactly as the loader would at load time.
+            PLUGIN_PREV_DIR.mkdir(parents=True, exist_ok=True)
+            staging = PLUGIN_PREV_DIR / f".staging-{name}"
+            if staging.exists():
+                _rmtree_robust(staging)
+            shutil.copytree(plugin_root, staging, symlinks=False)
+
+            gate_ok, gate_msg = _staging_signature_gate(staging)
+            if not gate_ok:
+                _rmtree_robust(staging)
+                raise HTTPException(status_code=400, detail=(
+                    f"Refusing to {'update' if is_update else 'install'} {name}: {gate_msg}."
+                    + (" The existing version was left untouched." if is_update else "")))
+
+            prev = PLUGIN_PREV_DIR / name
+            if is_update:
                 # Unload before replacing
                 info = plugin_loader.get_plugin_info(name)
                 if info and info.get("loaded"):
@@ -821,14 +1281,21 @@ async def install_plugin(
                 with plugin_loader._lock:
                     plugin_loader._plugins.pop(name, None)
 
-                # Delete old plugin dir (state preserved separately).
-                # Uses the plugin_loader helper for Windows read-only tolerance.
-                from core.plugin_loader import _rmtree_robust
-                _rmtree_robust(dest)
-
-            # ── Install ──
-            USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(plugin_root, dest, symlinks=False)
+                # Swap: live → plugin_prev/<name> (one generation retained =
+                # per-plugin Revert), staging → live. The working copy is
+                # never deleted before its verified replacement is in place.
+                if prev.exists():
+                    _rmtree_robust(prev)
+                _move_dir(dest, prev)
+                try:
+                    _move_dir(staging, dest)
+                except Exception:
+                    _move_dir(prev, dest)  # restore the working copy
+                    raise
+            else:
+                # ── Install ──
+                USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+                _move_dir(staging, dest)
 
         # ── Write install metadata to plugin state ──
         from datetime import datetime
@@ -855,22 +1322,7 @@ async def install_plugin(
         plugin_loader.rescan()
 
         # ── Sync active toolset so new tools are immediately available ──
-        system = get_system()
-        if system and system.llm_chat:
-            fm = system.llm_chat.function_manager
-            current = fm.current_toolset_name
-            if current:
-                fm.update_enabled_functions([current])
-            try:
-                from core.event_bus import publish, Events
-                toolset_info = fm.get_current_toolset_info()
-                publish(Events.TOOLSET_CHANGED, {
-                    "name": current or "custom",
-                    "action": "plugin_install",
-                    "function_count": toolset_info.get("function_count", 0)
-                })
-            except Exception:
-                pass
+        _sync_toolset_after_change("plugin_install")
 
         return {
             "status": "ok",
@@ -879,6 +1331,7 @@ async def install_plugin(
             "author": author,
             "is_update": is_update,
             "old_version": old_version,
+            "prev_kept": is_update,
         }
 
     except HTTPException:
@@ -896,7 +1349,8 @@ async def install_plugin(
 
 
 @router.delete("/api/plugins/{plugin_name}/uninstall")
-async def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
+def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
+    # Plain def — rmtree + unload in threadpool, off the event loop (C3/N8 2026-08-31).
     """Uninstall a user plugin — remove all files, settings, and state."""
     from core.plugin_loader import plugin_loader
     info = plugin_loader.get_plugin_info(plugin_name)
@@ -904,33 +1358,75 @@ async def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
         raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
     if info.get("band") != "user":
         raise HTTPException(status_code=403, detail="Cannot uninstall system plugins")
+    from core import plugin_envs
+    if plugin_envs.build_state(plugin_name).get("state") == "building":
+        raise HTTPException(status_code=409,
+                            detail="Environment build in progress — wait for it to finish before uninstalling")
     try:
         plugin_loader.uninstall_plugin(plugin_name)
-        # Sync toolset and notify frontend
-        try:
-            system = get_system()
-            if system and system.llm_chat:
-                fm = system.llm_chat.function_manager
-                current = fm.current_toolset_name
-                if current:
-                    fm.update_enabled_functions([current])
-                from core.event_bus import publish, Events
-                toolset_info = fm.get_current_toolset_info()
-                publish(Events.TOOLSET_CHANGED, {
-                    "name": current or "custom",
-                    "action": "plugin_uninstall",
-                    "function_count": toolset_info.get("function_count", 0)
-                })
-        except Exception:
-            pass
+        _sync_toolset_after_change("plugin_uninstall")
         return {"status": "ok", "plugin": plugin_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/api/plugins/{plugin_name}/revert")
+def revert_plugin_update(plugin_name: str, _=Depends(require_login)):
+    """Swap a plugin back to the version retained by its last update.
+
+    Updates keep one generation in user/plugin_prev/<name> (C2, 2026-08-06
+    hunt). Revert swaps live and retained copies, so reverting again toggles
+    back — nothing is destroyed either way.
+    """
+    from core.plugin_loader import (plugin_loader, USER_PLUGINS_DIR,
+                                    PLUGIN_PREV_DIR, _rmtree_robust)
+    info = plugin_loader.get_plugin_info(plugin_name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    if info.get("band") != "user":
+        raise HTTPException(status_code=403, detail="Only user plugins can be reverted")
+    prev = PLUGIN_PREV_DIR / plugin_name
+    if not (prev / "plugin.json").exists():
+        raise HTTPException(status_code=404, detail="No previous version retained for this plugin")
+
+    dest = USER_PLUGINS_DIR / plugin_name
+    with _install_lock:
+        if info.get("loaded"):
+            plugin_loader.unload_plugin(plugin_name)
+        with plugin_loader._lock:
+            plugin_loader._plugins.pop(plugin_name, None)
+
+        if not dest.exists():
+            # Live copy missing (mangled by something outside us) — restore is
+            # a plain move, nothing to park.
+            _move_dir(prev, dest)
+        else:
+            parked = PLUGIN_PREV_DIR / f".reverting-{plugin_name}"
+            if parked.exists():
+                _rmtree_robust(parked)
+            _move_dir(dest, parked)
+            try:
+                _move_dir(prev, dest)
+            except Exception:
+                _move_dir(parked, dest)  # put the live copy back
+                raise HTTPException(status_code=500,
+                                    detail="Revert failed — current version restored")
+            _move_dir(parked, prev)  # live copy becomes the new retained one
+
+        plugin_loader.rescan()
+        _sync_toolset_after_change("plugin_revert")
+
+    new_info = plugin_loader.get_plugin_info(plugin_name)
+    version = (new_info or {}).get("manifest", {}).get("version")
+    return {"status": "ok", "plugin": plugin_name, "version": version}
+
+
 @router.get("/api/plugins/{plugin_name}/check-update")
-async def check_plugin_update(plugin_name: str, _=Depends(require_login)):
-    """Check if a newer version is available on GitHub or GitLab."""
+def check_plugin_update(plugin_name: str, _=Depends(require_login)):
+    """Check if a newer version is available on GitHub or GitLab.
+
+    Plain `def` — up to four sequential 10s network fetches; threadpool keeps
+    the event loop live (C3)."""
     import re
     from core.plugin_loader import plugin_loader
 
@@ -949,58 +1445,85 @@ async def check_plugin_update(plugin_name: str, _=Depends(require_login)):
     _src_parsed = urlparse(source_url_stripped)
     _src_for_match = f"{_src_parsed.scheme}://{_src_parsed.netloc}{_src_parsed.path}"
 
-    # Build the list of raw-manifest URLs to try (main + master, GitHub or
-    # GitLab). 2026-04-26 — GitLab support added alongside GitHub.
-    manifest_urls = []
     m_gh = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', _src_for_match)
     m_gl = re.match(r'https?://gitlab\.com/(.+?)/([^/]+?)(?:\.git)?/?$', _src_for_match)
-    if m_gh:
-        owner, repo = m_gh.group(1), m_gh.group(2)
-        for branch in ("main", "master"):
-            manifest_urls.append(f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/plugin.json")
-    elif m_gl:
-        gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
-        full_path = f"{gl_path}/{gl_repo}"
-        for branch in ("main", "master"):
-            manifest_urls.append(f"https://gitlab.com/{full_path}/-/raw/{branch}/plugin.json")
-    else:
-        return {"update_available": False, "reason": "unsupported_source"}
 
     current_version = info.get("manifest", {}).get("version", "0.0.0")
 
-    import requests as req
+    # Fetch the remote manifest (root plugin.json, main then master).
+    # 2026-04-26 — GitLab support added alongside GitHub.
     remote_manifest = None
-    for url in manifest_urls:
-        try:
-            r = req.get(url, timeout=10)
-            if r.status_code == 200:
-                remote_manifest = r.json()
+    if m_gh:
+        # Contents-API-first — raw.githubusercontent lags pushes by ~5 min,
+        # which read as "no updates available" right after a release.
+        from core.github_files import fetch_github_file
+        owner, repo = m_gh.group(1), m_gh.group(2)
+        for branch in ("main", "master"):
+            text = fetch_github_file(f"{owner}/{repo}", branch, "plugin.json")
+            if text is not None:
+                try:
+                    remote_manifest = json.loads(text)
+                except Exception:
+                    remote_manifest = None
                 break
-        except Exception:
-            continue
+    elif m_gl:
+        import requests as req
+        from core import net
+        gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
+        full_path = f"{gl_path}/{gl_repo}"
+        for branch in ("main", "master"):
+            try:
+                r = net.get(f"https://gitlab.com/{full_path}/-/raw/{branch}/plugin.json", timeout=10)
+                if r.status_code == 200:
+                    remote_manifest = r.json()
+                    break
+            except Exception:
+                continue
+    else:
+        return {"update_available": False, "reason": "unsupported_source"}
 
+    if not isinstance(remote_manifest, dict):
+        remote_manifest = None
     if not remote_manifest:
-        return {"update_available": False, "reason": "fetch_failed"}
+        return {"update_available": False, "reason": "fetch_failed",
+                "current_version": current_version}
 
-    remote_version = remote_manifest.get("version", "0.0.0")
+    from core.versions import parse_version, is_newer
+    remote_version = str(remote_manifest.get("version", "") or "")
     remote_author = remote_manifest.get("author", "unknown")
 
-    def _ver_tuple(v):
-        """Parse version string into comparable tuple (e.g. '1.2.3' → (1, 2, 3))."""
-        try:
-            return tuple(int(x) for x in v.split('.'))
-        except (ValueError, AttributeError):
-            return (0,)
-
-    update = _ver_tuple(remote_version) > _ver_tuple(current_version)
+    if parse_version(remote_version) is None or parse_version(current_version) is None:
+        # Never guess from garbage — report it instead of "Up to date".
+        return {
+            "update_available": False,
+            "reason": "version_unparseable",
+            "current_version": current_version,
+            "remote_version": remote_version,
+            "remote_author": remote_author,
+            "source_url": source_url,
+        }
 
     return {
-        "update_available": update,
+        "update_available": is_newer(remote_version, current_version),
         "current_version": current_version,
         "remote_version": remote_version,
         "remote_author": remote_author,
         "source_url": source_url,
     }
+
+
+def _conda_env_name():
+    """Name of the conda env this interpreter lives in, or None. CONDA_DEFAULT_ENV
+    only exists after `conda activate`; a launcher that runs the env's python.exe
+    directly has no such var, so the old check called a conda env "system Python"
+    and refused auto-install. conda envs always carry a conda-meta/ dir."""
+    import sys
+    name = os.environ.get("CONDA_DEFAULT_ENV")
+    if name:
+        return name
+    if os.path.isdir(os.path.join(sys.prefix, "conda-meta")):
+        return os.path.basename(sys.prefix)
+    return None
 
 
 @router.get("/api/plugins/{plugin_name}/check-deps")
@@ -1018,7 +1541,7 @@ async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
     missing = plugin_loader._check_dependencies(manifest)
 
     # Detect environment type
-    conda_env = os.environ.get("CONDA_DEFAULT_ENV")
+    conda_env = _conda_env_name()
     in_venv = sys.prefix != sys.base_prefix
     if conda_env:
         env_type, env_name = "conda", conda_env
@@ -1028,7 +1551,7 @@ async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
         env_type, env_name = "system", "system"
 
     can_auto = env_type in ("conda", "venv")
-    command = f"pip install {' '.join(missing)}" if missing else None
+    command = plugin_loader.pip_hint(missing) if missing else None
 
     return {
         "deps": deps, "missing": missing, "installed": [d for d in deps if d not in missing],
@@ -1038,7 +1561,7 @@ async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
 
 
 @router.post("/api/plugins/{plugin_name}/install-deps")
-async def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
+def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
     """Install missing pip dependencies for a plugin.
 
     Only runs inside conda or venv — refuses on bare system Python.
@@ -1057,12 +1580,12 @@ async def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
         return {"status": "ok", "message": "All dependencies already installed", "installed": []}
 
     # Environment safety gate
-    conda_env = os.environ.get("CONDA_DEFAULT_ENV")
+    conda_env = _conda_env_name()
     in_venv = sys.prefix != sys.base_prefix
     if not conda_env and not in_venv:
         raise HTTPException(status_code=400, detail=(
             "Sapphire is running in system Python — auto-install disabled for safety. "
-            f"Run manually: pip install {' '.join(missing)}"
+            f"Run manually: {plugin_loader.pip_hint(missing)}"
         ))
 
     env_label = f"conda:{conda_env}" if conda_env else f"venv:{os.path.basename(sys.prefix)}"
@@ -1082,7 +1605,7 @@ async def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
     if result.returncode != 0:
         return JSONResponse(status_code=500, content={
             "status": "error", "message": "pip install failed",
-            "output": result.stderr or result.stdout, "command": f"pip install {' '.join(missing)}",
+            "output": result.stderr or result.stdout, "command": plugin_loader.pip_hint(missing),
         })
 
     # Verify deps are now importable
@@ -1103,6 +1626,66 @@ async def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
         "output": result.stdout,
         "env": env_label,
     }
+
+
+# ── Per-plugin conda environments (core/plugin_envs.py) ──
+
+@router.post("/api/plugins/{plugin_name}/build-env")
+async def build_plugin_env(plugin_name: str, _=Depends(require_login)):
+    """Build (or rebuild) a plugin's dedicated conda env in the background."""
+    from core.plugin_loader import plugin_loader
+    from core import plugin_envs
+
+    info = plugin_loader.get_plugin_info(plugin_name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    env_spec = info.get("manifest", {}).get("environment")
+    if not env_spec:
+        raise HTTPException(status_code=400, detail=f"{plugin_name} declares no environment")
+    if not plugin_envs.find_conda():
+        raise HTTPException(status_code=400, detail=(
+            "conda not found — install Miniconda to build plugin environments"))
+
+    def _on_done(ok: bool):
+        if ok:
+            try:
+                plugin_loader.reload_plugin(plugin_name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] Env built but reload failed for {plugin_name}: {e}")
+
+    if not plugin_envs.start_build(plugin_name, env_spec, on_done=_on_done):
+        raise HTTPException(status_code=409, detail="Build already in progress")
+    return {"status": "building", "env_name": plugin_envs.env_name(plugin_name)}
+
+
+@router.get("/api/plugins/{plugin_name}/env-status")
+async def plugin_env_status(plugin_name: str, _=Depends(require_login)):
+    """Env build/readiness status + build log tail (polled by the UI)."""
+    from core.plugin_loader import plugin_loader
+    from core import plugin_envs
+
+    if not plugin_loader.get_plugin_info(plugin_name):
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    status = plugin_loader.get_env_status(plugin_name)
+    status["log_tail"] = plugin_envs.tail_log(plugin_name, lines=15)
+    return status
+
+
+@router.delete("/api/plugins/{plugin_name}/env")
+async def remove_plugin_env(plugin_name: str, _=Depends(require_login)):
+    """Remove a plugin's conda env (its services stop; rebuild any time)."""
+    from core.plugin_loader import plugin_loader
+    from core import plugin_envs
+
+    if not plugin_loader.get_plugin_info(plugin_name):
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    if plugin_envs.build_state(plugin_name).get("state") == "building":
+        raise HTTPException(status_code=409, detail="Build in progress")
+    # conda env remove can run tens of seconds — keep it off the event loop.
+    await asyncio.to_thread(plugin_loader._stop_services, plugin_name)
+    if not await asyncio.to_thread(plugin_envs.remove_env, plugin_name):
+        raise HTTPException(status_code=500, detail="conda env remove failed")
+    return {"status": "ok"}
 
 
 def _require_known_plugin(plugin_name: str):
@@ -1193,22 +1776,101 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
         try:
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(merged, f, indent=2)
-            tmp_path.replace(settings_file)
+            replace_with_retry(tmp_path, settings_file)
         finally:
             if tmp_path.exists():
                 try: tmp_path.unlink()
                 except Exception: pass
 
+    _propagate_settings_change(plugin_name, merged)
+
     return {"status": "success", "plugin": plugin_name, "settings": merged}
+
+
+def _propagate_settings_change(plugin_name: str, effective: dict):
+    """Push a just-changed settings state to every live consumer, without a
+    restart. Shared by save (PUT) and reset (DELETE) — a reset that skipped
+    this would leave stale tool schemas/schedules live until reboot."""
+    # Rebuild any settings-aware tool schemas (e.g. dynamic tool descriptions)
+    # so the plugin's tools reflect the change immediately, without a reload.
+    # No-op for plugins whose tool modules don't define get_tools().
+    try:
+        system = get_system()
+        if system and getattr(system, 'llm_chat', None):
+            system.llm_chat.function_manager.refresh_plugin_tools(plugin_name)
+    except Exception as e:
+        logger.warning(f"Tool schema refresh failed for '{plugin_name}': {e}")
+
+    # Re-resolve settings-linked schedule tasks (time_setting/enabled_setting)
+    # so a changed nightly time or toggle applies without a restart.
+    try:
+        from core.plugin_loader import plugin_loader
+        plugin_loader.resync_plugin_schedules(plugin_name)
+    except Exception as e:
+        logger.warning(f"Schedule resync failed for '{plugin_name}': {e}")
+
+    # Settings-saved hook: notify the active provider(s) so a plugin can react to
+    # its own settings change (e.g. pre-download a newly selected model off the
+    # request path). Opt-in + generic — only providers that define
+    # on_settings_saved(plugin_name, settings) react; all others are a no-op.
+    # Runs AFTER the atomic write/unlink and is fully isolated, so a provider
+    # bug can never lose the just-persisted settings. (Added 2026-06-16.)
+    try:
+        system = get_system()
+        # The three swappable providers are NOT addressed the same way:
+        #   tts: a client that wraps .provider
+        #   stt: whisper_client IS the provider (no .provider)
+        #   embedder: a module singleton — read it WITHOUT creating one (get_embedder
+        #             is lazy-create; calling it here would force-load a model per save)
+        targets = []
+        _tts = getattr(system, "tts", None)
+        if _tts is not None:
+            targets.append(getattr(_tts, "provider", None))
+        targets.append(getattr(system, "whisper_client", None))
+        try:
+            import core.embeddings as _emb_mod
+            targets.append(getattr(_emb_mod, "_embedder", None))  # active singleton or None
+        except Exception:
+            pass
+        for prov in targets:
+            if prov is not None and hasattr(prov, "on_settings_saved"):
+                try:
+                    # dict(effective) — a provider can't mutate the caller's dict.
+                    prov.on_settings_saved(plugin_name, dict(effective))
+                except Exception as e:
+                    logger.warning(f"[{plugin_name}] provider on_settings_saved failed: {e}")
+    except Exception as e:
+        logger.debug(f"settings-saved provider notify skipped: {e}")
+
+    # Daemon plugins were never told their settings changed — a value read at
+    # construct time stayed frozen until restart (Discord hunt 2.13.0, row 80).
+    # Opt-in, same shape as the provider hook: daemon.on_settings_saved(settings).
+    try:
+        from core.plugin_loader import plugin_loader as _pl
+        _info = _pl.get_plugin_info(plugin_name) or {}
+        _daemon = _info.get("daemon_module")
+        if _daemon is not None and hasattr(_daemon, "on_settings_saved"):
+            _daemon.on_settings_saved(dict(effective))
+    except Exception as e:
+        logger.warning(f"[{plugin_name}] daemon on_settings_saved failed: {e}")
 
 
 @router.delete("/api/webui/plugins/{plugin_name}/settings")
 async def reset_plugin_settings(plugin_name: str, request: Request, _=Depends(require_login)):
-    """Reset plugin settings."""
+    """Reset plugin settings to manifest defaults (delete the stored file)."""
     _require_known_plugin(plugin_name)
     settings_file = USER_PLUGIN_SETTINGS_DIR / f"{plugin_name}.json"
-    if settings_file.exists():
-        settings_file.unlink()
+    # Same lock as PUT — otherwise a concurrent save can resurrect the file
+    # mid-reset and the reset silently loses.
+    with _get_settings_lock(plugin_name):
+        if settings_file.exists():
+            settings_file.unlink()
+    try:
+        from core.plugin_loader import plugin_loader
+        effective = plugin_loader.get_plugin_settings(plugin_name)
+    except Exception:
+        effective = {}
+    _propagate_settings_change(plugin_name, effective)
     return {"status": "success", "plugin": plugin_name, "message": "Settings reset"}
 
 
@@ -1216,43 +1878,6 @@ async def reset_plugin_settings(plugin_name: str, request: Request, _=Depends(re
 async def get_plugins_config(request: Request, _=Depends(require_login)):
     """Get full plugins config."""
     return _get_merged_plugins()
-
-
-@router.post("/api/webui/plugins/image-gen/test-connection")
-async def test_sdxl_connection(request: Request, _=Depends(require_login)):
-    """Test SDXL connection."""
-    data = await request.json() or {}
-    url = data.get('url', '').strip()
-    if not url:
-        return {"success": False, "error": "No URL provided"}
-    if not url.startswith(('http://', 'https://')):
-        return {"success": False, "error": "URL must start with http:// or https://"}
-
-    def _test():
-        import requests as req
-        try:
-            response = req.get(url, timeout=5)
-            return {"success": True, "status_code": response.status_code, "message": f"Connected (HTTP {response.status_code})"}
-        except req.exceptions.Timeout:
-            return {"success": False, "error": "Connection timed out (5s)"}
-        except req.exceptions.ConnectionError as e:
-            return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
-        except Exception as e:
-            return {"success": False, "error": f"Error: {str(e)[:100]}"}
-
-    return await asyncio.to_thread(_test)
-
-
-@router.get("/api/webui/plugins/image-gen/defaults")
-async def get_image_gen_defaults(request: Request, _=Depends(require_login)):
-    """Get image-gen defaults."""
-    return {
-        'api_url': 'http://localhost:5153',
-        'negative_prompt': 'ugly, deformed, noisy, blurry, distorted, grainy, low quality, bad anatomy, jpeg artifacts',
-        'static_keywords': 'wide shot',
-        'character_descriptions': {'me': '', 'you': ''},
-        'defaults': {'height': 1024, 'width': 1024, 'steps': 23, 'cfg_scale': 3.0, 'scheduler': 'dpm++_2m_karras'}
-    }
 
 
 @router.get("/api/webui/plugins/homeassistant/defaults")
@@ -1284,9 +1909,10 @@ async def test_ha_connection(request: Request, _=Depends(require_login)):
 
     def _test():
         import requests as req
+        from core import net
         try:
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            response = req.get(f"{url}/api/", headers=headers, timeout=10)
+            response = net.get(f"{url}/api/", headers=headers, timeout=10)
             if response.status_code == 200:
                 return {"success": True, "message": response.json().get('message', 'Connected')}
             elif response.status_code == 401:
@@ -1328,10 +1954,11 @@ async def test_ha_notify(request: Request, _=Depends(require_login)):
 
     def _test():
         import requests as req
+        from core import net
         try:
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
             payload = {"message": "Test notification from Sapphire", "title": "Sapphire"}
-            response = req.post(
+            response = net.post(
                 f"{url}/api/services/notify/{notify_service}",
                 headers=headers, json=payload, timeout=15
             )
@@ -1392,10 +2019,11 @@ async def get_ha_entities(request: Request, _=Depends(require_login)):
 
     def _fetch():
         import requests as req
+        from core import net
         import fnmatch
         try:
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            response = req.get(f"{url}/api/states", headers=headers, timeout=15)
+            response = net.get(f"{url}/api/states", headers=headers, timeout=15)
             if response.status_code != 200:
                 return {"success": False, "error": f"HTTP {response.status_code}"}
 
@@ -1404,7 +2032,7 @@ async def get_ha_entities(request: Request, _=Depends(require_login)):
             # Get areas via template API
             areas = []
             try:
-                tmpl = req.post(f"{url}/api/template", headers=headers,
+                tmpl = net.post(f"{url}/api/template", headers=headers,
                     json={"template": "{% for area in areas() %}{{ area_name(area) }}||{% endfor %}"},
                     timeout=10)
                 if tmpl.status_code == 200:
@@ -1605,6 +2233,8 @@ async def set_email_account(scope: str, request: Request, _=Depends(require_logi
         app_password = existing.get('app_password', '')
 
     if credentials.set_email_account(scope, address, app_password, imap_server, smtp_server, imap_port, smtp_port):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "email", "action": "saved", "name": scope})
         return {"success": True}
     raise HTTPException(status_code=500, detail="Failed to save email account")
 
@@ -1614,6 +2244,8 @@ async def delete_email_account(scope: str, request: Request, _=Depends(require_l
     """Delete an email account."""
     from core.credentials_manager import credentials
     if credentials.delete_email_account(scope):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "email", "action": "deleted", "name": scope})
         return {"success": True}
     raise HTTPException(status_code=404, detail=f"Email account '{scope}' not found")
 
@@ -1716,6 +2348,8 @@ async def set_bitcoin_wallet(scope: str, request: Request, _=Depends(require_log
         raise HTTPException(status_code=400, detail=f"Invalid WIF key: {e}")
 
     if credentials.set_bitcoin_wallet(scope, wif, label):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "bitcoin", "action": "saved", "name": scope})
         return {"success": True, "address": address}
     raise HTTPException(status_code=500, detail="Failed to save bitcoin wallet")
 
@@ -1725,6 +2359,8 @@ async def delete_bitcoin_wallet(scope: str, request: Request, _=Depends(require_
     """Delete a bitcoin wallet."""
     from core.credentials_manager import credentials
     if credentials.delete_bitcoin_wallet(scope):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "bitcoin", "action": "deleted", "name": scope})
         return {"success": True}
     raise HTTPException(status_code=404, detail=f"Bitcoin wallet '{scope}' not found")
 
@@ -1852,8 +2488,9 @@ async def set_gcal_account(scope: str, request: Request, _=Depends(require_login
         existing = credentials.get_gcal_account(scope)
         client_secret = existing.get('client_secret', '')
 
-    if not client_id:
-        raise HTTPException(status_code=400, detail="Client ID is required")
+    # Empty client_id is legal since easy connect (2026-07-30): a credential-
+    # less row is "use the relay" intent — the Connect button's easy path
+    # creates the relay account at claim time.
 
     # Preserve existing refresh token if present — strict-decrypt to detect
     # the same wipe scenario as above. Refresh tokens are EVEN more painful
@@ -1872,8 +2509,17 @@ async def set_gcal_account(scope: str, request: Request, _=Depends(require_login
         )
     existing = credentials.get_gcal_account(scope)
     refresh_token = existing.get('refresh_token', '')
+    # Preserve easy-connect (relay) accounts across routine edits (e.g. the
+    # user changing calendar_id) — otherwise the default would silently
+    # demote them to 'byo' and refreshes would break. Entering a client_id
+    # IS an explicit switch to byo.
+    auth_mode = 'byo' if client_id else existing.get('auth_mode', 'byo')
+    relay_url = '' if client_id else existing.get('relay_url', '')
 
-    if credentials.set_gcal_account(scope, client_id, client_secret, calendar_id, refresh_token, label):
+    if credentials.set_gcal_account(scope, client_id, client_secret, calendar_id, refresh_token, label,
+                                    auth_mode=auth_mode, relay_url=relay_url):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "gcal", "action": "saved", "name": scope})
         return {"success": True}
     raise HTTPException(status_code=500, detail="Failed to save gcal account")
 
@@ -1883,6 +2529,8 @@ async def delete_gcal_account(scope: str, request: Request, _=Depends(require_lo
     """Delete a Google Calendar account."""
     from core.credentials_manager import credentials
     if credentials.delete_gcal_account(scope):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "gcal", "action": "deleted", "name": scope})
         return {"success": True}
     raise HTTPException(status_code=404, detail=f"Google Calendar account '{scope}' not found")
 
@@ -1918,6 +2566,8 @@ async def set_github_account(scope: str, request: Request, _=Depends(require_log
         raise HTTPException(status_code=400, detail="Personal access token is required")
 
     if credentials.set_github_account(scope, username, pat, label):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "github", "action": "saved", "name": scope})
         return {"success": True}
     raise HTTPException(status_code=500, detail="Failed to save github account")
 
@@ -1927,6 +2577,8 @@ async def delete_github_account(scope: str, request: Request, _=Depends(require_
     """Delete a GitHub account."""
     from core.credentials_manager import credentials
     if credentials.delete_github_account(scope):
+        from core.event_bus import publish, Events
+        publish(Events.SCOPE_CHANGED, {"kind": "github", "action": "deleted", "name": scope})
         return {"success": True}
     raise HTTPException(status_code=404, detail=f"GitHub account '{scope}' not found")
 
@@ -2025,7 +2677,7 @@ def _check_plugin_bearer(plugin_name: str, request: Request) -> bool:
     if not key_file.exists():
         return False
     try:
-        expected = json.loads(key_file.read_text()).get('key', '')
+        expected = json.loads(key_file.read_text(encoding='utf-8')).get('key', '')
     except Exception:
         return False
     if not expected:
@@ -2079,13 +2731,20 @@ async def plugin_route_dispatch(plugin_name: str, path: str, request: Request):
 
     handler, path_params = result
 
-    # Parse request body for POST/PUT (skip for multipart — handler reads form directly)
+    # Parse request body for POST/PUT/DELETE (skip for multipart — handler
+    # reads form directly). DELETE included 2026-07-19: confirm tokens ride
+    # DELETE bodies (scope-api.js sends {confirm:'DELETE'}) and were being
+    # silently dropped here — handlers could never check them.
     body = {}
     content_type = request.headers.get("content-type", "")
-    if request.method in ("POST", "PUT") and "multipart" not in content_type:
+    if request.method in ("POST", "PUT", "DELETE") and "multipart" not in content_type:
         try:
             body = await request.json()
         except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            # A JSON list/string/number body would 500 every handler's
+            # body.get() — normalize to empty dict (fixer-scout, 2026-07-19).
             body = {}
 
     # Build handler kwargs: path params + body + settings + credentials + query params + request

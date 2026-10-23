@@ -56,14 +56,10 @@ def test_append_waits_for_active_chat_stream_to_end(session_manager_tmp):
 
     assert elapsed >= 0.5, f"expected append to wait ~0.5s, waited {elapsed}"
     assert elapsed < 2.0, f"waited too long ({elapsed}s), polling may be broken"
-    # The cron message actually landed
-    msgs = sm.read_chat_messages('trinity') if hasattr(sm, 'read_chat_messages') else None
-    # Backup check via DB if read_chat_messages isn't exposed
-    import sqlite3, json
-    conn = sqlite3.connect(sm._db_path)
-    row = conn.execute("SELECT messages FROM chats WHERE name='trinity'").fetchone()
-    conn.close()
-    stored = json.loads(row[0])
+    # The cron message actually landed. Format-aware read — chats are born
+    # 'rows' post rowify step 2, so probing the blob column directly would
+    # always see '[]' regardless of whether the append worked.
+    stored = sm.read_chat_messages('trinity')
     assert any(m.get('content') == 'cron msg' for m in stored), \
         "cron message not persisted after stream released"
 

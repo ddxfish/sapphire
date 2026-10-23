@@ -1,0 +1,57 @@
+{
+  "id": 2,
+  "slug": "goblin-den",
+  "title": "The Goblin Den",
+  "template": "Low ceiling, bone piles, and the sour-milk smell of goblin. A lone guard sprawls across the passage south, snoring in ragged bursts, a rusted cleaver loose in its fist. Beyond it, a barred door of black iron — the vault the tunnels whisper about. The way back up is behind you.",
+  "on_enter": {
+    "emotions": [
+      "dread"
+    ],
+    "emotions_remove": [
+      "wary"
+    ]
+  },
+  "exits": [
+    {
+      "to": 1,
+      "label": "back up the tunnel",
+      "desc": "the stooped passage back to the cave mouth"
+    },
+    {
+      "to": 3,
+      "label": "the iron door",
+      "desc": "black iron, barred, a keyhole crusted with rust",
+      "condition": {
+        "has": "rusty_key"
+      },
+      "blocked_message": "The iron door is locked — the keyhole is crusted but real. Something opens it."
+    }
+  ],
+  "objects": {
+    "guard": {
+      "desc": "a sleeping goblin guard — each snore hitches when anyone drifts toward the iron door",
+      "interactions": {
+        "sneak": {
+          "set": {
+            "passed_guard": true
+          },
+          "message": "Held breath, soft steps — the guard snorts, rolls over, and does not wake. The player reaches the iron door's shadow."
+        }
+      }
+    }
+  },
+  "ghost_hints": [
+    {
+      "after_turns": 3,
+      "whisper": "If the player is stuck: the door wants a key, and nobody has searched the cave mouth. The guard's snoring covers the sound of leaving."
+    }
+  ],
+  "player_desc": "The den proper — goblins, clutter, and at least one thing worth stealing. Watch what's sleeping.",
+  "player_hints": [
+    {
+      "after_turns": 4,
+      "text": "The iron door wants a key. If you don't have one, the cave mouth rewarded a good search."
+    }
+  ],
+  "backdrop": "goblin-den.jpg"
+}

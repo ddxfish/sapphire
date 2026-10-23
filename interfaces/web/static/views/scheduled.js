@@ -1,6 +1,7 @@
 // views/scheduled.js - Triggers › Scheduled. One-off & recurring tasks at set
 // times. Two columns: what YOU scheduled vs what Sapphire scheduled herself
-// (source === "ai_scheduled"). + scheduled timeline.
+// (source === "ai_scheduled") or her plugins declared (source "plugin:<name>").
+// + scheduled timeline.
 import { renderSectionHeader, bindSectionHeader } from '../shared/section-header.js';
 import { helpPills } from '../features/video-link.js';
 import * as TR from '../shared/trigger-common.js';
@@ -64,8 +65,9 @@ function update() {
     const scrollEl = container?.querySelector('.view-scroll');
     const scrollTop = scrollEl?.scrollTop || 0;
 
-    const ai = tasks.filter(t => t.source === 'ai_scheduled');
-    const user = tasks.filter(t => t.source !== 'ai_scheduled');
+    const isSapphire = t => t.source === 'ai_scheduled' || (t.source || '').startsWith('plugin:');
+    const ai = tasks.filter(isSapphire);
+    const user = tasks.filter(t => !isSapphire(t));
 
     const tl = container?.querySelector('#sc-timeline');
     if (tl) tl.innerHTML = TR.renderTimeline(timeline, tasks);
@@ -80,6 +82,6 @@ function update() {
     const statusEl = container?.querySelector('.section-status');
     if (statusEl) statusEl.innerHTML = TR.statusRow({
         enabled, total: tasks.length, running: status.running,
-        desc: 'Tasks at set times — yours, and the ones Sapphire sets for herself.'
+        desc: 'Tasks at set times — yours, and the ones Sapphire and her plugins set.'
     });
 }

@@ -4,30 +4,58 @@ import * as ui from '../ui.js';
 import * as eventBus from '../core/event-bus.js';
 import { getElements, getIsProc } from '../core/state.js';
 import { updateScene, updateSendButtonLLM } from '../features/scene.js';
-import { applyTrimColor } from '../features/chat-settings.js';
+import { applyTrimColor, applyBackground } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData, refreshInitData, getInitDataSync } from '../shared/init-data.js';
+import { updateSettingsBatch } from '../shared/settings-api.js';
 import { switchView } from '../core/router.js';
 import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
 import { initAgentStatus } from '../features/agent-status.js';
+import { mountScenePicker } from '../shared/scene-picker.js';
+import { setupModalClose } from '../shared/modal.js';
+import { getMotions, setChatMotion, chatMotionId } from '../core/motions.js';
+import { initAccordions } from '../shared/accordion.js';
 import {
     renderScopeDropdowns,
     fetchScopeData,
     populateScopeOptions,
     readScopeSettings
 } from '../shared/scope-dropdowns.js';
+import { deferWhileEditing, editableFocused } from '../shared/dom-guard.js';
 
 let sidebarLoaded = false;
+let _saveInFlight = 0;
 let saveTimer = null;
 let pendingSaveChatName = null;  // captured at debounce schedule time, not fire time
+let pendingPatch = {};           // {key: value} the user actually changed, captured at gesture time
 let llmProviders = [];
 let llmMetadata = {};
 let personasList = [];
 let defaultPersonaName = '';
+let _trimColor = '';   // active chat's own accent ('' = riding the global default); seeds the Appearance modal
 let _docClickHandler = null;
 let _personaHandler = null;
 
 const SAVE_DEBOUNCE = 500;
+// One label for a prompt asleep in the locked vault — the name itself never
+// renders while sealed (personas.js / trigger editor use the same string).
+const SEALED_PROMPT_LABEL = '\u{1F5DD} vault prompt (locked)';
+
+// Soft sidebar refresh for bus ECHOES (DOM-refresh hunt, 2026-09-08). Seven
+// doors repainted the sidebar — her prompt_edit / switch_model tools publish
+// without an origin, a second tab's autosave echoes every 500 ms, spice /
+// scope / plugin / prompt events — and setVal wrote the server copy straight
+// over whatever the user was typing in Custom Context. Held while a sidebar
+// editable has focus OR a save is pending / in flight (the Bobby class: a
+// refetch mid-debounce repaints the OLD copy and the debounce persists it);
+// catches up on focusout / save completion. User-driven paints
+// (chat-activated after a switch) still call loadSidebar() directly — the
+// cursor is not a veto on a chat switch. Safe to defer: debouncedSave binds
+// its chat name at schedule time, so a late repaint can't cross-chat-write.
+const softSidebar = deferWhileEditing(
+    () => document.getElementById('view-chat')?.querySelector('.chat-sidebar'),
+    () => loadSidebar(),
+    { busy: () => !!saveTimer || _saveInFlight > 0 });
 
 export default {
     init(container) {
@@ -53,12 +81,20 @@ export default {
         // file-lookup path which 404s because chats live in SQLite, not JSON files.
         const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
         if (chatSelect) {
-            chatSelect.addEventListener('chat-activated', () => loadSidebar());
+            // chat-activated carries {chat, settings} from the activate
+            // response — paint straight from that truth (fix C); a re-GET
+            // can lose a race it doesn't need to run. chat-list-ready has
+            // no settings; it stays on the fetch path.
+            chatSelect.addEventListener('chat-activated',
+                (e) => loadSidebar(e.detail?.settings || null, e.detail?.chat || null));
             chatSelect.addEventListener('chat-list-ready', () => loadSidebar());
         }
 
-        // Refresh toolset dropdown count when tools change (e.g. tool_load)
-        eventBus.on(eventBus.Events.TOOLSET_CHANGED, async () => {
+        // Refresh toolset dropdown count when tools change (e.g. tool_load).
+        // When Sapphire switches her own toolset (switch_toolset publishes
+        // {name}), select that toolset — otherwise the pill would snap back to
+        // the pre-switch value and lie about which toolset is live.
+        eventBus.on(eventBus.Events.TOOLSET_CHANGED, async (data) => {
             await refreshInitData();
             const container = document.getElementById('view-chat');
             const toolsetSel = container?.querySelector('#sb-toolset');
@@ -70,14 +106,15 @@ export default {
                     .filter(t => t.type !== 'module')
                     .map(t => `<option value="${t.name}">${t.name} (${t.function_count})</option>`)
                     .join('');
-                toolsetSel.value = currentVal;
+                toolsetSel.value = data?.name || currentVal;
             }
         });
 
         // Refresh voice dropdown when TTS provider changes
-        eventBus.on('settings_changed', (data) => {
+        eventBus.on('settings_changed', async (data) => {
             if (data?.key === 'TTS_PROVIDER') refreshVoiceDropdown();
-            if (data?.key === 'LLM_PROVIDERS' || data?.key === 'LLM_CUSTOM_PROVIDERS') loadSidebar();
+            if (data?.key === 'LLM_PROVIDERS' || data?.key === 'LLM_CUSTOM_PROVIDERS') softSidebar();
+            if (data?.key === 'PERSONA_FAVORITES') { await refreshInitData(); softSidebar(); }
         });
 
         // Refresh prompt dropdown when a user actually saves/deletes a prompt.
@@ -90,20 +127,65 @@ export default {
         // PUT for the OLD chat fires PROMPT_CHANGED:loaded via SSE, which arrived before
         // activateChat had switched the backend. loadSidebar's GET for the NEW chat name
         // hit the non-active-chat file-lookup path and 404'd.
-        eventBus.on(eventBus.Events.PROMPT_CHANGED, (data) => {
+        eventBus.on(eventBus.Events.PROMPT_CHANGED, async (data) => {
             if (data?.action === 'loaded') return;  // side effect, not user-initiated
-            loadSidebar();
+            // Await the cache bust BEFORE painting (same pattern as the
+            // TOOLSET_CHANGED handler above) — module listener order isn't
+            // guaranteed, so an un-awaited loadSidebar could paint from the
+            // stale init cache (vault names lingering after a lock).
+            await refreshInitData();
+            softSidebar();
         });
-        eventBus.on(eventBus.Events.PROMPT_DELETED, () => loadSidebar());
+        eventBus.on(eventBus.Events.PROMPT_DELETED, async () => {
+            await refreshInitData();
+            softSidebar();
+        });
 
         // Refresh spice dropdown when spice sets change
-        eventBus.on(eventBus.Events.SPICE_CHANGED, () => loadSidebar());
+        eventBus.on(eventBus.Events.SPICE_CHANGED, () => softSidebar());
+
+        // Sapphire's set_scene tool changes the chat background live (publishes {background}).
+        // Her switch_model tool publishes {settings:{llm_primary}} — resync the sidebar
+        // model dropdown + send-button badge from truth, or the UI keeps showing the old
+        // model after she moves herself to a different (e.g. cloud/paid) provider.
+        eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, (data) => {
+            if (!data) return;
+            // Foreign-chat guard (hunt 2026-08-17): publishes carry `chat`;
+            // a background lane's write (phone/cron/agent) must not repaint
+            // the chat the operator is looking at. No chat key = legacy
+            // payload — apply as before.
+            const cur = document.getElementById('chat-select')?.value;
+            const foreign = typeof data.chat === 'string' && data.chat
+                && cur && data.chat !== cur;
+            // Tools publish top-level {background|motion}; the settings PUT
+            // route and set_voice publish nested {settings:{...}} — read
+            // both, so a scene-modal change in one tab reaches the others.
+            const s = (data.settings && typeof data.settings === 'object') ? data.settings : {};
+            const bg = typeof data.background === 'string' ? data.background
+                : (typeof s.background === 'string' ? s.background : null);
+            const motion = typeof data.motion === 'string' ? data.motion
+                : (typeof s.motion === 'string' ? s.motion : null);
+            if (!foreign) {
+                if (bg !== null) applyBackground(bg);
+                if (motion !== null) setChatMotion(motion);
+            }
+            // Foreign lane's write never repaints THIS chat's sidebar either
+            // (the guard above covered background/motion but not this leg).
+            if (s.llm_primary && !foreign) {
+                // The badge itself — loadSidebar repaints dropdowns but never
+                // touches #send-btn, so a switch made elsewhere (her
+                // switch_model tool, another tab, a room-sidebar save) left
+                // the tint on the old provider (Krem 2026-08-23).
+                updateSendButtonLLM(s.llm_primary, s.llm_model || '');
+                softSidebar();
+            }
+        });
 
         // Refresh sidebar scope dropdowns when scopes are created/deleted in
         // the Mind view. Without this, users see stale options until a full
         // page refresh — or worse, select a scope in the sidebar that the
         // backend no longer knows about and silently fall through to 'default'.
-        eventBus.on('scope_changed', () => loadSidebar());
+        eventBus.on('scope_changed', () => softSidebar());
 
         // Backend transient notices (dangling toolset detected, empty-content
         // fallback after tool calls, etc.) — surfaced as toasts so the user
@@ -120,22 +202,24 @@ export default {
         // data so newly-loaded plugin scope_declarations land.
         document.addEventListener('sapphire:plugin_toggled', async () => {
             try { await refreshInitData(); } catch (e) { /* fail-soft */ }
-            loadSidebar();
+            softSidebar();
         });
 
-        // Accordion headers in sidebar (event delegation — handles core + plugin accordions)
-        // Persists open/closed state to localStorage so the user's choices
-        // (especially "Avatar always open") survive across reloads. 2026-04-30.
-        const sbFull = container.querySelector('.sb-full-content');
-        if (sbFull) sbFull.addEventListener('click', e => {
-            const header = e.target.closest('.sidebar-accordion-header');
-            if (!header) return;
-            const content = header.nextElementSibling;
-            const open = header.classList.toggle('open');
-            content.style.display = open ? 'block' : 'none';
-            const section = header.closest('.sidebar-accordion');
-            if (section) _persistAccordionOpen(section, open);
-        });
+        // Accordion behavior + persisted open-state — shared/accordion.js
+        // (Phase 1 extraction; replaces the local delegate + persistence).
+        // One-time migration: the old storage key's entries ("core:<title>" /
+        // "plugin:<name>") match the data-acc ids exactly, so state carries.
+        try {
+            const old = localStorage.getItem('sapphire_sb_accordion_state');
+            if (old) {
+                if (!localStorage.getItem('accordion-state:chat-sidebar')) {
+                    localStorage.setItem('accordion-state:chat-sidebar', old);
+                }
+                localStorage.removeItem('sapphire_sb_accordion_state');
+            }
+        } catch { /* localStorage unavailable — persistence is a nicety */ }
+        const sbRoot = container.querySelector('.chat-sidebar');
+        if (sbRoot) initAccordions(sbRoot, 'chat-sidebar');
 
         // Sidebar chat picker
         const sbPicker = container.querySelector('#sb-chat-picker');
@@ -148,30 +232,15 @@ export default {
             const sbDropdown = container.querySelector('#sb-chat-picker-dropdown');
             if (sbDropdown) {
                 sbDropdown.addEventListener('click', async e => {
-                    // "New Private" button creates a private chat
-                    const privBtn = e.target.closest('[data-action="new-private"]');
-                    if (privBtn) {
-                        sbPicker.classList.remove('open');
-                        const name = prompt('Private chat name:');
-                        if (!name?.trim()) return;
-                        try {
-                            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-                            const res = await fetch('/api/chats/private', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-                                body: JSON.stringify({ name: name.trim() })
-                            });
-                            if (res.ok) {
-                                const { populateChatDropdown, handleChatChange } = await import('../features/chat-manager.js');
-                                await populateChatDropdown();
-                                await handleChatChange();
-                            }
-                        } catch (err) { console.error('Failed to create private chat:', err); }
-                        return;
-                    }
-
                     const item = e.target.closest('.chat-picker-item');
                     if (!item) return;
+                    // "See more" tail item → Chat Manager (the full list)
+                    if (item.classList.contains('chat-picker-more')) {
+                        sbPicker.classList.remove('open');
+                        const { switchView } = await import('../core/router.js');
+                        switchView('chat-manage');
+                        return;
+                    }
                     const chatName = item.dataset.chat;
                     if (!chatName) return;
 
@@ -199,20 +268,71 @@ export default {
                     // Sync hidden select and trigger change
                     const chatSelect = getElements().chatSelect;
                     if (chatSelect) chatSelect.value = chatName;
+                    // handleChatChange dispatches chat-activated → the
+                    // override paint. A second loadSidebar here would
+                    // supersede it and turn fix C into a no-op.
                     await handleChatChange();
-                    await loadSidebar();
                 });
             }
         }
 
         // Sidebar new/delete chat
         container.querySelector('#sb-new-chat')?.addEventListener('click', async () => {
-            await handleNewChat();
-            await loadSidebar();
+            await handleNewChat();  // chat-activated inside paints the sidebar
         });
         container.querySelector('#sb-delete-chat')?.addEventListener('click', async () => {
             await handleDeleteChat();
             await loadSidebar();
+        });
+
+        // The eyeball — VAULT TOGGLE, one job (Krem's ruling 2026-08-14:
+        // "10 pounds of options in a 1 pound toggle switch" — no more).
+        // Locked → unlock dialog. Unlocked → lock (server evicts a private
+        // active chat itself). No vault → setup dialog. The eyeball NEVER
+        // touches any chat's private flag: membership is stamped by TALKING
+        // while the vault is open (server-side, chat_streaming) and unmade
+        // only in Chat Manager. Paint lives in scene.js (vault state).
+        const eyeBtn = container.querySelector('#sb-privacy-eye');
+        if (eyeBtn && window.__managed) eyeBtn.style.display = 'none';
+
+        eyeBtn?.addEventListener('click', async () => {
+            try {
+                const { vaultSetup, vaultUnlock, vaultLock, vaultStatus } =
+                    await import('../shared/vault-api.js');
+                const { keyPrompt } = await import('../shared/key-prompt.js');
+                const v = await vaultStatus();
+                if (!v) {
+                    ui.showToast("Sapphire isn't reachable right now — vault state unknown", 'error');
+                    return;
+                }
+                if (!v.exists) {
+                    const res = await keyPrompt({
+                        title: 'Set up your vault',
+                        message: 'Private mode lives behind an encrypted vault. Pick a passphrase.',
+                        mode: 'setup',
+                        validate: async (key) => { await vaultSetup(key); return ''; }
+                    });
+                    if (!res?.key) return;
+                    ui.showToast('Vault created — private mode ON. Talking in a chat marks it private.', 'success');
+                } else if (!v.unlocked) {
+                    const res = await keyPrompt({
+                        title: 'Unlock the vault',
+                        message: 'Enter your vault passphrase.',
+                        validate: async (key) => { await vaultUnlock(key); return ''; }
+                    });
+                    if (!res?.key) return;
+                    ui.showToast('Private mode ON — talking in a chat marks it private', 'success');
+                } else {
+                    await vaultLock();
+                    ui.showToast('Vault locked', 'success');
+                }
+                const { populateChatDropdown } = await import('../features/chat-manager.js');
+                await populateChatDropdown();
+                await updateScene();
+            } catch (err) {
+                console.error('Vault toggle failed:', err);
+                ui.showToast(err?.message || 'Vault toggle failed', 'error');
+            }
         });
 
         // Close sidebar picker on outside click (added/removed in show/hide)
@@ -222,15 +342,17 @@ export default {
             }
         };
 
-        // Toggle buttons (Spice, Date/Time)
+        // Toggle buttons (Spice, Date/Time) — PER-CHAT (saved via debouncedSave).
         container.querySelectorAll('.sb-toggle').forEach(btn => {
             btn.addEventListener('click', () => {
                 const active = btn.dataset.active !== 'true';
                 btn.dataset.active = active;
                 btn.classList.toggle('active', active);
-                debouncedSave(container);
+                debouncedSave(container, keysFor(btn));
             });
         });
+
+        // Conversation mode moved to the composer's mic flyout (features/convo.js).
 
         // Auto-save on any sidebar input change.
         // EVENT DELEGATION: bind ONCE to the chat-sidebar parent so dynamically-added
@@ -260,72 +382,48 @@ export default {
                 if (el.id === 'sb-llm-primary') {
                     updateModelSelector(container, el.value, '');
                 }
-                if (el.id === 'sb-trim-color') {
-                    el.dataset.cleared = 'false';
-                    applyTrimColor(el.value);
-                }
                 if (el.id === 'sb-spice-turns') {
                     const toggle = container.querySelector('#sb-spice-toggle');
                     if (toggle) toggle.textContent = `Spice \u00b7 ${el.value}`;
                 }
-                debouncedSave(container);
+                debouncedSave(container, keysFor(el));
             };
             // Both 'change' (selects, checkboxes, color) and 'input' (range sliders, textareas)
             sidebarRoot.addEventListener('change', handleSidebarInput);
             sidebarRoot.addEventListener('input', handleSidebarInput);
         }
 
-        // Accent circle: double-click to reset to global default
-        const accentCircle = container.querySelector('#sb-trim-color');
-        if (accentCircle) {
-            accentCircle.addEventListener('dblclick', () => {
-                const globalTrim = localStorage.getItem('sapphire-trim') || '#4a9eff';
-                accentCircle.value = globalTrim;
-                accentCircle.dataset.cleared = 'true';
-                applyTrimColor('');
-                debouncedSave(container);
-            });
+        // Appearance: one modal for accent color + scene + motion (2026-08-29;
+        // was a color circle + a scene button crowding the header row).
+        const appearanceBtn = container.querySelector('#sb-appearance-btn');
+        if (appearanceBtn && !appearanceBtn.dataset.bound) {
+            appearanceBtn.dataset.bound = '1';
+            appearanceBtn.addEventListener('click', openAppearanceModal);
         }
 
         // "Go to Mind" buttons are now wired by the shared/scope-dropdowns.js renderer
         // via the onNavigate callback in loadSidebar(). Don't bind here at init() time —
         // the buttons don't exist in the DOM yet (rendered dynamically with each loadSidebar).
 
-        // "Go to view" buttons — navigate to Prompts/Toolsets with selection
+        // "Go to view" buttons — navigate to Prompts/Toolsets with selection.
+        // data-tab targets a specific Settings tab (e.g. provider → Settings > LLM).
         container.querySelectorAll('.sb-goto-view').forEach(btn => {
             btn.addEventListener('click', () => {
                 const selectId = btn.dataset.select;
                 const val = selectId && container.querySelector(`#${selectId}`)?.value;
                 if (val) window._viewSelect = val;
+                if (btn.dataset.tab) window._settingsTab = btn.dataset.tab;
                 switchView(btn.dataset.view);
             });
         });
 
         // Sidebar mode tabs (Easy/Full)
-        initSidebarModes(container);
+        initPersonaStrip(container);
 
         // Listen for persona-loaded events (added/removed in show/hide)
         _personaHandler = () => loadSidebar();
 
         // Save As New Persona button
-        const saveAsPersonaBtn = container.querySelector('#sb-save-as-persona');
-        if (saveAsPersonaBtn) {
-            saveAsPersonaBtn.addEventListener('click', async () => {
-                const name = prompt('Name for the new persona:');
-                if (!name?.trim()) return;
-                try {
-                    const res = await createFromChat(name.trim());
-                    if (res?.name) {
-                        ui.showToast(`Persona "${res.name}" created`, 'success');
-                    } else {
-                        ui.showToast(res?.detail || 'Failed to create persona', 'error');
-                    }
-                } catch (e) {
-                    ui.showToast(e.message || 'Failed', 'error');
-                }
-            });
-        }
-
         // Document upload handler
         const docUpload = container.querySelector('#sb-doc-upload');
         if (docUpload) {
@@ -382,6 +480,7 @@ export default {
     async show() {
         if (_docClickHandler) document.addEventListener('click', _docClickHandler);
         if (_personaHandler) window.addEventListener('persona-loaded', _personaHandler);
+        await steerOffGameChat();
         await refreshInitData();
         await loadSidebar();
     },
@@ -391,6 +490,36 @@ export default {
         if (_personaHandler) window.removeEventListener('persona-loaded', _personaHandler);
     }
 };
+
+// Game/story sessions belong to their plugin surface (isolation ruling
+// 2026-08-03 — renderChatDropdown already hides them from the picker).
+// Refreshing or navigating into Chat while a game session is still the
+// SERVER-active chat must not render it here: steer to the most recent
+// regular chat instead (the list is updated_at DESC). No eligible target,
+// or a turn mid-stream → leave things alone; the picker still hides it.
+async function steerOffGameChat() {
+    try {
+        const data = await api.fetchChatList();
+        const active = (data.chats || []).find(c => c.name === data.active_chat);
+        if (!active || active.mode !== 'game') return;
+        // !c.mode, not just !=='game' — the picker's filter. mode:limbo
+        // ('backrooms', freshest after its landing wipe bumps updated_at)
+        // must never be the steer target.
+        const target = (data.chats || []).find(c => !c.mode && !c.archived);
+        if (!target || getIsProc()) return;
+        const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
+        if (!chatSelect) return;
+        if (![...chatSelect.options].some(o => o.value === target.name)) {
+            const opt = document.createElement('option');
+            opt.value = opt.textContent = target.name;
+            chatSelect.appendChild(opt);
+        }
+        chatSelect.value = target.name;
+        await handleChatChange();
+    } catch (e) {
+        console.warn('[CHAT] game-chat steer failed:', e);
+    }
+}
 
 function toggleSidebar(container) {
     const sidebar = container.querySelector('.chat-sidebar');
@@ -432,59 +561,8 @@ async function loadDocuments(container, chatName) {
 // stored map (smaller storage, default-closed for new accordions).
 // 2026-04-30 — addresses "I keep forgetting to open the avatar."
 
-const _ACCORDION_STATE_KEY = 'sapphire_sb_accordion_state';
-
-function _accordionKey(section) {
-    if (section.dataset.pluginAccordion) {
-        return `plugin:${section.dataset.pluginAccordion}`;
-    }
-    const header = section.querySelector('.sidebar-accordion-header');
-    if (!header) return '';
-    // First non-arrow span carries the human-readable label
-    const titleSpan = header.querySelector('span:not(.accordion-arrow)');
-    const text = (titleSpan?.textContent || header.textContent || '').trim();
-    return text ? `core:${text}` : '';
-}
-
-function _loadAccordionState() {
-    try {
-        return JSON.parse(localStorage.getItem(_ACCORDION_STATE_KEY) || '{}') || {};
-    } catch {
-        return {};
-    }
-}
-
-function _saveAccordionState(state) {
-    try {
-        localStorage.setItem(_ACCORDION_STATE_KEY, JSON.stringify(state));
-    } catch {
-        // localStorage full / disabled — silently skip; failure is harmless.
-    }
-}
-
-function _persistAccordionOpen(section, open) {
-    const key = _accordionKey(section);
-    if (!key) return;
-    const state = _loadAccordionState();
-    if (open) state[key] = true;
-    else delete state[key];  // closed = absence
-    _saveAccordionState(state);
-}
-
-function _restoreAccordionStates(container) {
-    const state = _loadAccordionState();
-    const sections = container.querySelectorAll('.sidebar-accordion');
-    sections.forEach(section => {
-        const key = _accordionKey(section);
-        if (!key || !state[key]) return;
-        const header = section.querySelector('.sidebar-accordion-header');
-        const content = section.querySelector('.sidebar-accordion-content');
-        if (header && content) {
-            header.classList.add('open');
-            content.style.display = 'block';
-        }
-    });
-}
+// Accordion open-state persistence moved to shared/accordion.js (Phase 1,
+// tmp/chat-surface-plan.md) — data-acc ids preserve the old key format.
 
 async function _loadPluginAccordions(container, init) {
     const slot = container.querySelector('#sb-plugin-accordions');
@@ -515,6 +593,7 @@ async function _loadPluginAccordions(container, init) {
         const section = document.createElement('div');
         section.className = 'sidebar-section sidebar-accordion';
         section.dataset.pluginAccordion = plugin.name;
+        section.dataset.acc = `plugin:${plugin.name}`;   // accordion.js persistence id
 
         const header = document.createElement('div');
         header.className = 'sidebar-accordion-header';
@@ -558,13 +637,24 @@ async function _loadPluginAccordions(container, init) {
     await Promise.all(pending);
 }
 
-async function loadSidebar() {
+let _sbPaintSeq = 0;
+
+async function loadSidebar(overrideSettings = null, overrideChat = null) {
     const container = document.getElementById('view-chat');
     if (!container) return;
 
     const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
     const chatName = chatSelect?.value;
     if (!chatName) return;
+    const mySeq = ++_sbPaintSeq;
+
+    // Paint VALUES straight from the caller's settings (the activate
+    // response) when offered. Guard hard: an empty or mismatched override
+    // falls through to the fetch path — a malformed activate response
+    // (`result?.settings || {}`) would otherwise paint pure defaults that
+    // the next debouncedSave WRITES to the chat (silent-default class).
+    const useOverride = !!(overrideSettings && typeof overrideSettings === 'object'
+        && Object.keys(overrideSettings).length && overrideChat === chatName);
 
     try {
         // Get init data first so we know which scope_declarations to fetch.
@@ -573,21 +663,34 @@ async function loadSidebar() {
         const initEarly = await initDataPromise;
         const scopeDeclarations = initEarly?.scope_declarations || [];
 
-        const [settingsResp, initData, llmResp, scopeDataResp, spiceSetsResp, personasResp, ttsVoicesResp, toolsetCurrentResp] = await Promise.allSettled([
-            api.getChatSettings(chatName),
+        const [settingsResp, initData, llmResp, scopeDataResp, spiceSetsResp, personasResp, ttsVoicesResp] = await Promise.allSettled([
+            useOverride ? Promise.resolve({ settings: overrideSettings }) : api.getChatSettings(chatName),
             initDataPromise,
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
             fetchScopeData(scopeDeclarations),
             fetch('/api/spice-sets').then(r => r.ok ? r.json() : null),
             fetch('/api/personas').then(r => r.ok ? r.json() : null),
-            fetch('/api/tts/voices').then(r => r.ok ? r.json() : null),
-            fetch('/api/toolsets/current').then(r => r.ok ? r.json() : null)
+            fetch('/api/tts/voices').then(r => r.ok ? r.json() : null)
         ]);
 
-        // Guard: if chat changed while fetching, discard stale results
+        // Discard stale paints. The seq is the real guard — monotonic, so a
+        // newer load always supersedes an older one even across A→B→A or two
+        // concurrent loads for the SAME chat (the old name-only check was
+        // blind to both). The name check stays as a belt.
+        if (mySeq !== _sbPaintSeq) return;
         const chatNow = chatSelect?.value;
         if (chatNow !== chatName) {
             console.log(`[SIDEBAR] Chat changed during load (${chatName} → ${chatNow}), discarding`);
+            return;
+        }
+        // softSidebar checked the hold at CALL time; the user may have moved
+        // into a sidebar field (or a save may be pending) during the seven
+        // fetches above. Don't paint under them — re-arm the soft refresh and
+        // let focusout / the save's kick catch up (D1#2, 2026-09-08). The
+        // chat-activated override paint carries the user's own switch: direct.
+        if (!useOverride && (editableFocused(container.querySelector('.chat-sidebar'))
+                             || !!saveTimer || _saveInFlight > 0)) {
+            softSidebar();
             return;
         }
 
@@ -607,13 +710,28 @@ async function loadSidebar() {
         const sbName = container.querySelector('#sb-chat-name');
         if (sbName && selectedOpt) sbName.textContent = selectedOpt.text;
 
-        // Populate prompt dropdown
+        // Eyeball painting moved WHOLLY to scene.js's status poll — it keys
+        // on VAULT state now (the one-job toggle), which settings alone
+        // can't know. Painting the chat flag here fought the poll.
+
+        // Populate prompt dropdown (🗝 = vault entry while unlocked)
         const promptSel = container.querySelector('#sb-prompt');
         if (promptSel && init?.prompts?.list) {
             promptSel.innerHTML = init.prompts.list.map(p =>
-                `<option value="${p.name}">${p.name.charAt(0).toUpperCase() + p.name.slice(1)}</option>`
+                `<option value="${p.name}">${p.name.charAt(0).toUpperCase() + p.name.slice(1)}${p.vault ? ' \u{1F5DD}' : ''}</option>`
             ).join('');
             setSelect(promptSel, settings.prompt || 'sapphire');
+            // Dangling vault name (locked): setSelect synthesized a bare
+            // option — relabel it WITHOUT the name (Krem's ruling 2026-09-15,
+            // amending ruling C: a sealed vault name never renders). The
+            // option VALUE keeps the setting so it heals on unlock; the
+            // per-key save never ships an untouched select.
+            const vrefs = init?.prompts?.vault_refs || {};
+            const cur = settings.prompt;
+            if (cur && cur in vrefs && !init.prompts.list.some(p => p.name === cur)) {
+                const opt = [...promptSel.options].find(o => o.value === cur);
+                if (opt) opt.textContent = SEALED_PROMPT_LABEL;
+            }
         }
 
         // Populate toolset dropdown (exclude raw module entries)
@@ -726,18 +844,15 @@ async function loadSidebar() {
             `Spice \u00b7 ${settings.spice_turns || 3}`);
         setToggle(container, '#sb-datetime-toggle', settings.inject_datetime === true);
 
-        // Trim color
-        const trimInput = container.querySelector('#sb-trim-color');
-        if (trimInput) {
-            if (settings.trim_color) {
-                trimInput.value = settings.trim_color;
-                trimInput.dataset.cleared = 'false';
-            } else {
-                trimInput.value = localStorage.getItem('sapphire-trim') || '#4a9eff';
-                trimInput.dataset.cleared = 'true';
-            }
-            applyTrimColor(settings.trim_color || '');
-        }
+        // Trim color — edited in the Appearance modal, persisted from there
+        _trimColor = settings.trim_color || '';
+        applyTrimColor(_trimColor);
+
+        // Scene background (resolved server-side: chat override > persona default > none)
+        applyBackground(settings.background || '');
+
+        // Per-chat motion (resolution in core/motions.js: chat > global pick > theme)
+        setChatMotion(settings.motion || '');
 
         // Update labels
         const pitchLabel = container.querySelector('#sb-pitch-val');
@@ -751,9 +866,7 @@ async function loadSidebar() {
         if (pitchSlider) updateSliderFill(pitchSlider);
         if (speedSlider) updateSliderFill(speedSlider);
 
-        const firstTab = container.querySelector('.sb-mode-tab[data-mode="easy"]');
-        if (firstTab) firstTab.textContent = 'Persona';
-        updateEasyMode(container, settings, init);
+        renderPersonaStrip(container, settings, init);
 
         // RAG context level
         setVal(container, '#sb-rag-context', settings.rag_context || 'normal');
@@ -766,9 +879,10 @@ async function loadSidebar() {
 
         // Restore each accordion's open/closed state from localStorage.
         // Runs after plugin accordions are in the DOM so it covers core
-        // AND plugin sections in one pass. The user's "Avatar open"
-        // preference now survives reloads. 2026-04-30.
-        _restoreAccordionStates(container);
+        // AND plugin sections in one pass (initAccordions restores every
+        // call; its click delegate binds once). 2026-04-30 / 2026-08-02.
+        const sbRootNow = container.querySelector('.chat-sidebar');
+        if (sbRootNow) initAccordions(sbRootNow, 'chat-sidebar');
 
         sidebarLoaded = true;
     } catch (e) {
@@ -776,14 +890,60 @@ async function loadSidebar() {
     }
 }
 
-function debouncedSave(container) {
-    clearTimeout(saveTimer);
-    // CAPTURE the chat name NOW, before any chat switch. When the debounce fires
-    // (or flushPendingSave runs during a chat switch), chatSelect.value may have
-    // already moved to the new chat, but the save belongs to the OLD chat.
+// The setting key(s) a sidebar control owns. A save ships ONLY the keys the
+// user touched, with the values captured at the gesture — never a snapshot
+// of the whole sidebar (Prime, 2026-09-15): after the vault-lock eviction
+// chat-select had already moved to the landing chat while the seven-fetch
+// repaint hadn't landed, so the first click shipped the evicted PRIVATE
+// chat's paint (prompt name, custom context, ghost context) onto the public
+// landing chat. R5 couldn't catch it — the target name was right; the
+// VALUES were another chat's. Unmapped controls (plugin accordions) save
+// nothing here — they own their own writes.
+const _KEY_BY_ID = {
+    'sb-prompt': ['prompt'], 'sb-toolset': ['toolset'], 'sb-spice-set': ['spice_set'],
+    'sb-voice': ['voice'], 'sb-pitch': ['pitch'], 'sb-speed': ['speed'],
+    'sb-spice-toggle': ['spice_enabled'], 'sb-spice-turns': ['spice_turns'],
+    'sb-datetime-toggle': ['inject_datetime'],
+    'sb-custom-context': ['custom_context'], 'sb-ghost-context': ['ghost_context'],
+    'sb-llm-primary': ['llm_primary', 'llm_model'],
+    'sb-llm-model': ['llm_model'], 'sb-llm-model-custom': ['llm_model'],
+    'sb-rag-context': ['rag_context'],
+};
+function keysFor(el) {
+    const id = el?.id || '';
+    if (_KEY_BY_ID[id]) return _KEY_BY_ID[id];
+    const m = /^sb-(.+)-scope$/.exec(id);   // shared/scope-dropdowns.js ids
+    return m ? [`${m[1]}_scope`] : [];
+}
+
+function debouncedSave(container, keys = []) {
+    if (!keys.length) return;
+    // CAPTURE NOW — the chat name (R8) AND the changed values. The fire
+    // sends this patch as captured, never a re-read of the DOM: a repaint
+    // between schedule and fire must not change what the gesture meant.
     const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
-    pendingSaveChatName = chatSelect?.value || null;
-    saveTimer = setTimeout(() => saveSettings(container, pendingSaveChatName), SAVE_DEBOUNCE);
+    const chatNow = chatSelect?.value || null;
+    if (saveTimer && pendingSaveChatName && chatNow !== pendingSaveChatName) {
+        // The chat moved under an armed window (a remote switch, an
+        // eviction). The old chat's sub-second patch is dropped rather than
+        // written anywhere it could land wrong.
+        console.warn(`[SIDEBAR] pending save for '${pendingSaveChatName}' dropped — chat moved to '${chatNow}'`);
+        pendingPatch = {};
+    }
+    clearTimeout(saveTimer);
+    pendingSaveChatName = chatNow;
+    Object.assign(pendingPatch, pickSettings(container, keys));
+    // Vault hunt R8: clear the pair AT fire time. A fired timer that left
+    // saveTimer/pendingSaveChatName standing let a later flushPendingSave
+    // re-fire a payload at a name captured chats ago.
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        const n = pendingSaveChatName;
+        const patch = pendingPatch;
+        pendingSaveChatName = null;
+        pendingPatch = {};
+        saveSettings(container, n, patch);
+    }, SAVE_DEBOUNCE);
 }
 
 /** Cancel any pending debounced save — called on chat switch to prevent cross-chat writes */
@@ -791,25 +951,120 @@ export function cancelPendingSave() {
     clearTimeout(saveTimer);
     saveTimer = null;
     pendingSaveChatName = null;
+    pendingPatch = {};
 }
 
 /** Flush any pending debounced save — fires the save synchronously for the OLD chat
- *  before a chat switch proceeds. Uses the chat name captured at debounce-schedule
- *  time, NOT the current chatSelect.value (which may already point at the new chat). */
+ *  before a chat switch proceeds. Uses the chat name AND the patch captured at
+ *  debounce-schedule time, NOT the current DOM (which may already show the new chat). */
 export async function flushPendingSave() {
     if (!saveTimer) return;
     clearTimeout(saveTimer);
     saveTimer = null;
     const chatName = pendingSaveChatName;
+    const patch = pendingPatch;
     pendingSaveChatName = null;
+    pendingPatch = {};
     const container = document.getElementById('view-chat');
     if (container && chatName) {
-        try { await saveSettings(container, chatName); }
+        try { await saveSettings(container, chatName, patch); }
         catch (e) { console.warn('Flush-pending save failed:', e); }
     }
 }
 
-async function saveSettings(container, chatNameOverride = null) {
+function openAppearanceModal() {
+    const current = document.getElementById('chatbg')?.dataset.scene || '';
+    const globalTrim = localStorage.getItem('sapphire-trim') || '#4a9eff';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+        <div class="modal-base">
+            <div class="modal-header"><h3>Appearance</h3><button class="close-btn modal-x" type="button">&times;</button></div>
+            <div class="modal-body">
+                <div class="appearance-accent-row">
+                    <input type="color" id="appearance-trim" value="${escapeHtml(_trimColor || globalTrim)}" title="Accent color">
+                    <button class="btn btn-secondary btn-sm" id="appearance-trim-reset" type="button">Reset</button>
+                    <span class="appearance-accent-help" id="appearance-trim-help"></span>
+                </div>
+                <div id="scene-picker-mount"></div>
+                <div class="scene-motion-sect">
+                    <h4>Motion</h4>
+                    <div id="scene-motion-row" class="motion-row"></div>
+                    <div class="scene-motion-help">A per-chat animation. Default follows your pick in Settings &gt; Visual; a chat pick runs even when your system prefers reduced motion.</div>
+                </div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary modal-close" type="button">Done</button></div>
+        </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('active'));  // .modal-overlay is display:none until .active
+    const close = () => { overlay.classList.remove('active'); setTimeout(() => overlay.remove(), 300); };
+    overlay.querySelector('.modal-x')?.addEventListener('click', close);
+    overlay.querySelector('.modal-close')?.addEventListener('click', close);
+    setupModalClose(overlay, close);
+
+    // Accent: live-apply on every input tick, persist on change (a color
+    // picker drag fires dozens of 'input' events — one PUT per commit).
+    // Same direct-PUT path as scene/motion below; trim_color left the
+    // sidebar's collectSettings, so ordinary sidebar saves can't clobber it.
+    const trimInput = overlay.querySelector('#appearance-trim');
+    const trimHelp = overlay.querySelector('#appearance-trim-help');
+    const paintHelp = () => { trimHelp.textContent = _trimColor ? 'This chat\'s accent' : 'Default accent'; };
+    const persistTrim = (color) => {
+        _trimColor = color;
+        applyTrimColor(color);
+        paintHelp();
+        const chatName = document.getElementById('chat-select')?.value;
+        if (chatName) api.updateChatSettings(chatName, { trim_color: color })
+            .catch(() => ui.showToast('Accent shown but not saved — the chat refused the write', 'error', 4000));
+    };
+    paintHelp();
+    trimInput.addEventListener('input', () => applyTrimColor(trimInput.value));
+    trimInput.addEventListener('change', () => persistTrim(trimInput.value));
+    overlay.querySelector('#appearance-trim-reset').addEventListener('click', () => {
+        trimInput.value = globalTrim;
+        persistTrim('');
+    });
+
+    mountScenePicker(overlay.querySelector('#scene-picker-mount'), {
+        current,
+        onSelect: (name) => {
+            // Apply live (instant preview behind the modal) + persist as a per-chat override.
+            applyBackground(name);
+            const chatName = document.getElementById('chat-select')?.value;
+            // Optimistic apply, but never a SILENT persist failure — a vault
+            // refusal here left the user seeing a scene that reverts on the
+            // next chat load.
+            if (chatName) api.updateChatSettings(chatName, { background: name })
+                .catch(() => ui.showToast('Scene shown but not saved — the chat refused the write', 'error', 4000));
+        }
+    });
+    _renderModalMotionRow(overlay);
+}
+
+// Per-chat motion cards in the scene modal. 'Default' clears the override
+// (falls through to the global Settings > Visual pick / theme default).
+// Registry is already loaded — main.js runs initMotions() at boot.
+function _renderModalMotionRow(overlay) {
+    const row = overlay.querySelector('#scene-motion-row');
+    if (!row) return;
+    const chatPick = chatMotionId();
+    const cards = [{ id: '', name: 'Default' }, ...getMotions()].map(mo => {
+        const active = (mo.id || '') === chatPick;
+        return `<div class="motion-card${active ? ' active' : ''}" data-motion="${escapeHtml(mo.id)}" title="${escapeHtml(mo.description || '')}">${escapeHtml(mo.name)}</div>`;
+    }).join('');
+    row.innerHTML = cards;
+    row.querySelectorAll('.motion-card').forEach(c => c.addEventListener('click', () => {
+        const id = c.dataset.motion || '';
+        // Apply live (visible behind the modal) + persist on the chat row.
+        setChatMotion(id);
+        const chatName = document.getElementById('chat-select')?.value;
+        if (chatName) api.updateChatSettings(chatName, { motion: id })
+            .catch(() => ui.showToast('Motion shown but not saved — the chat refused the write', 'error', 4000));
+        _renderModalMotionRow(overlay);
+    }));
+}
+
+async function saveSettings(container, chatNameOverride = null, patch = null) {
     // Prefer the override (set by debouncedSave / flushPendingSave) over the live
     // chatSelect.value — the override is the chat the user was on when they made
     // the change, which may differ from the current chat if they switched fast.
@@ -817,11 +1072,17 @@ async function saveSettings(container, chatNameOverride = null) {
     const chatName = chatNameOverride || chatSelect?.value;
     if (!chatName) return;
 
-    const settings = collectSettings(container);
+    // Per-key writes only (2026-09-15): the server MERGES a settings PUT, so
+    // a patch is complete on its own. No patch = nothing changed = no write.
+    const settings = patch || {};
+    if (!Object.keys(settings).length) return;
+    _saveInFlight++;
 
     try {
         const result = await api.updateChatSettings(chatName, settings);
-        updateSendButtonLLM(settings.llm_primary, settings.llm_model);
+        if ('llm_primary' in settings || 'llm_model' in settings) {
+            updateSendButtonLLM(getVal(container, '#sb-llm-primary') || 'auto', getSelectedModel(container));
+        }
 
         // Sync toolset dropdown directly from save response.
         // The PUT response returns live toolset/function state so we update
@@ -840,13 +1101,16 @@ async function saveSettings(container, chatNameOverride = null) {
         }
     } catch (e) {
         console.warn('Auto-save failed:', e);
+        // Never a silent persist failure: a refused prompt (asleep in the
+        // locked vault), a vanished chat, a 500 — the user hears why.
+        ui.showToast(e?.message || 'Setting not saved', 'error', 4000);
+    } finally {
+        _saveInFlight--;
+        softSidebar.kick();   // run the echo refresh this save held back
     }
 }
 
 function collectSettings(container) {
-    const trimInput = container.querySelector('#sb-trim-color');
-    const trimColor = trimInput?.dataset.cleared === 'true' ? '' : (trimInput?.value || '');
-
     // Pull scope values from the shared renderer's dropdowns.
     // Init data is cached after the first /api/init call, so getInitDataSync()
     // returns the same scope_declarations the renderer was built from.
@@ -870,10 +1134,17 @@ function collectSettings(container) {
         ghost_context: getVal(container, '#sb-ghost-context'),
         llm_primary: getVal(container, '#sb-llm-primary') || 'auto',
         llm_model: getSelectedModel(container),
-        trim_color: trimColor,
         ...scopeValues,
         rag_context: getVal(container, '#sb-rag-context') || 'normal'
     };
+}
+
+/** The subset of collectSettings() a gesture owns — what a save ships. */
+function pickSettings(container, keys) {
+    const all = collectSettings(container);
+    const out = {};
+    for (const k of keys) if (k in all) out[k] = all[k];
+    return out;
 }
 
 function updateModelSelector(container, providerKey, currentModel) {
@@ -927,27 +1198,11 @@ function getSelectedModel(container) {
     return '';
 }
 
-// === Easy/Full sidebar mode ===
+// === Faces strip ===
 
-function initSidebarModes(container) {
-    const tabs = container.querySelectorAll('.sb-mode-tab');
-    const easyContent = container.querySelector('.sb-easy-content');
-    const fullContent = container.querySelector('.sb-full-content');
-    if (!tabs.length || !easyContent || !fullContent) return;
-
-    // Restore saved mode
-    const saved = localStorage.getItem('sapphire-sidebar-mode') || 'full';
-    setSidebarMode(container, saved);
-
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            const mode = tab.dataset.mode;
-            setSidebarMode(container, mode);
-            localStorage.setItem('sapphire-sidebar-mode', mode);
-        });
-    });
-
-    // Easy mode persona grid clicks
+function initPersonaStrip(container) {
+    // ↗ anchored top-right of the strip → full roster
+    container.querySelector('#sb-personas-goto')?.addEventListener('click', () => switchView('personas'));
     container.querySelector('#sb-persona-grid')?.addEventListener('click', async e => {
         const cell = e.target.closest('.sb-pgrid-cell');
         if (!cell) return;
@@ -979,43 +1234,6 @@ function initSidebarModes(container) {
         } catch (e) {
             ui.showToast(e.message || 'Failed', 'error');
         }
-    });
-
-    // Easy mode detail: accordion toggles, nav links, edit button (delegated, bound once)
-    container.querySelector('#sb-persona-detail')?.addEventListener('click', e => {
-        // Nav links inside accordion headers
-        const navLink = e.target.closest('.sb-pdetail-acc-link');
-        if (navLink) {
-            e.stopPropagation();
-            const view = navLink.dataset.nav;
-            if (view) switchView(view);
-            return;
-        }
-        const header = e.target.closest('.sb-pdetail-acc-header');
-        if (header) {
-            const content = header.nextElementSibling;
-            const open = header.classList.toggle('open');
-            content.style.display = open ? '' : 'none';
-            return;
-        }
-        if (e.target.closest('.sb-pdetail-edit')) {
-            const name = container.querySelector('.sb-pdetail-name')?.textContent?.trim();
-            if (name) window._pendingPersonaSelect = name;
-            switchView('personas');
-        }
-    });
-}
-
-function setSidebarMode(container, mode) {
-    const easyContent = container.querySelector('.sb-easy-content');
-    const fullContent = container.querySelector('.sb-full-content');
-    if (!easyContent || !fullContent) return;
-
-    easyContent.style.display = mode === 'easy' ? '' : 'none';
-    fullContent.style.display = mode === 'full' ? '' : 'none';
-
-    container.querySelectorAll('.sb-mode-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.mode === mode);
     });
 }
 
@@ -1070,136 +1288,99 @@ async function refreshVoiceDropdown() {
         // Update speed slider range for new provider
         _updateSpeedRange(container, data);
         // Save the new voice to chat so backend TTS uses it immediately
-        if (voiceChanged) {
-            if (saveTimer) clearTimeout(saveTimer);
-            saveTimer = setTimeout(() => saveSettings(container), 100);
-        }
+        // One save path (was a hand-rolled R8 twin): the voice key only,
+        // captured now, name-bound like every other gesture.
+        if (voiceChanged) debouncedSave(container, ['voice']);
     } catch (e) {
         console.warn('[chat] Failed to refresh voice dropdown:', e);
     }
 }
 
-function updateEasyMode(container, settings, init) {
+function renderPersonaStrip(container, settings, init) {
     const gridEl = container.querySelector('#sb-persona-grid');
-    const detailEl = container.querySelector('#sb-persona-detail');
+    if (!gridEl) return;
     const personaName = settings.persona;
 
-    // Build persona grid
-    if (gridEl) {
-        gridEl.innerHTML = personasList.map(p => `
-            <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}">
-                ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}
-                <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
-            </div>
-        `).join('') + `
-            <div class="sb-pgrid-cell sb-pgrid-new" data-action="new">
-                <span class="sb-pgrid-new-icon">+</span>
-                <span class="sb-pgrid-name">New...</span>
-            </div>`;
-    }
-
-    // Build detail section
-    if (!detailEl) return;
-    if (!personaName) {
-        detailEl.innerHTML = '<div class="sb-pdetail-empty">No persona loaded</div>';
-        return;
-    }
-
-    // Look up prompt preset components
-    const presets = init?.prompts?.presets || {};
-    const presetData = presets[settings.prompt] || {};
-    const pretty = s => s ? s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'None';
-
-    // Prompt pieces
-    const promptRows = ['character', 'location', 'relationship', 'goals', 'format', 'scenario']
-        .filter(k => presetData[k] && presetData[k] !== 'none')
-        .map(k => `<div class="sb-pdetail-row"><span>${k}</span><span>${pretty(presetData[k])}</span></div>`)
-        .join('') || '<div class="sb-pdetail-row"><span>preset</span><span>' + pretty(settings.prompt) + '</span></div>';
-
-    const extras = (presetData.extras || []).map(pretty);
-    const emotions = (presetData.emotions || []).map(pretty);
-
-    // Build tools list grouped by module
-    const toolsetName = settings.toolset || 'all';
-    const tsData = (init?.toolsets?.list || []).find(t => t.name === toolsetName);
-    const enabledFuncs = new Set(tsData?.functions || []);
-    const modules = init?.functions?.modules || {};
-    let toolsHtml = `<div class="sb-pdetail-row"><span>active</span><span>${pretty(toolsetName)}</span></div>`;
-    const moduleEntries = Object.entries(modules)
-        .map(([mod, info]) => {
-            const active = (info.functions || []).filter(f => enabledFuncs.has(f.name));
-            return [mod, info, active];
-        })
-        .filter(([, , active]) => active.length > 0)
-        .sort(([a], [b]) => a.localeCompare(b));
-    if (moduleEntries.length) {
-        toolsHtml += '<div class="sb-pdetail-tools">';
-        for (const [mod, info, active] of moduleEntries) {
-            const emoji = info.emoji || '\u{1F527}';
-            toolsHtml += `<div class="sb-pdetail-tool-group"><span class="sb-pdetail-tool-mod">${emoji} ${pretty(mod)}</span>`;
-            toolsHtml += active.map(f => `<span class="sb-pdetail-tool">${f.name.replace(/_/g, ' ')}</span>`).join('');
-            toolsHtml += '</div>';
+    // Favorites curate the strip: PERSONA_FAVORITES (ordered) picks + orders
+    // the faces. Empty list = show all (fresh installs unchanged). The ⭐
+    // default and the ACTIVE persona always show even when unfavorited.
+    const favs = init?.settings?.PERSONA_FAVORITES || [];
+    let shown = personasList;
+    if (favs.length) {
+        const byName = new Map(personasList.map(p => [p.name, p]));
+        shown = favs.map(n => byName.get(n)).filter(Boolean);
+        if (defaultPersonaName && byName.has(defaultPersonaName)
+                && !shown.some(p => p.name === defaultPersonaName)) {
+            shown.unshift(byName.get(defaultPersonaName));
         }
-        toolsHtml += '</div>';
+        if (personaName && byName.has(personaName)
+                && !shown.some(p => p.name === personaName)) {
+            shown.push(byName.get(personaName));
+        }
     }
 
-    // Build detail HTML
-    const activePd = personasList.find(p => p.name === personaName);
-    detailEl.innerHTML = `
-        <div class="sb-pdetail-header">
-            ${activePd ? avatarImg(activePd.name, activePd.trim_color, 'sb-pdetail-avatar', activePd.avatar) : ''}
-            <div class="sb-pdetail-info">
-                <span class="sb-pdetail-name">${escapeHtml(personaName)}</span>
-                <span class="sb-pdetail-tagline" id="sb-pdetail-tagline"></span>
-            </div>
-            <button class="sb-pdetail-edit" title="Edit persona" data-view="personas">\u270E</button>
+    gridEl.innerHTML = shown.map(p => `
+        <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}" title="${escapeHtml(p.name)} — drag to reorder" draggable="true">
+            ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}${p.name === defaultPersonaName ? '<span class="sb-pgrid-default" title="Default persona">&#x2B50;</span>' : ''}
+            <span class="sb-pgrid-name">${escapeHtml(p.name)}</span>
         </div>
-        ${easyAccordion('Prompt', `
-            ${promptRows}
-            ${extras.length ? `<div class="sb-pdetail-wrap-row"><span>extras</span><span>${extras.join(', ')}</span></div>` : ''}
-            ${emotions.length ? `<div class="sb-pdetail-wrap-row"><span>emotions</span><span>${emotions.join(', ')}</span></div>` : ''}
-        `, { desc: 'Character & scenario', view: 'prompts' })}
-        ${easyAccordion('Toolset', toolsHtml, { desc: 'AI capabilities', view: 'toolsets' })}
-        ${easyAccordion('Spice', `
-            <div class="sb-pdetail-row"><span>set</span><span>${pretty(settings.spice_set)}</span></div>
-            <div class="sb-pdetail-row"><span>enabled</span><span>${settings.spice_enabled !== false ? 'Yes' : 'No'}</span></div>
-            <div class="sb-pdetail-row"><span>turns</span><span>${settings.spice_turns || 3}</span></div>
-        `, { desc: 'Style & flavor', view: 'spices' })}
-        ${easyAccordion('TTS', `
-            <div class="sb-pdetail-row"><span>voice</span><span>${_voiceNames[settings.voice] || settings.voice || 'Heart'}</span></div>
-            <div class="sb-pdetail-row"><span>pitch</span><span>${settings.pitch || 0.98}</span></div>
-            <div class="sb-pdetail-row"><span>speed</span><span>${settings.speed || 1.3}</span></div>
-        `, { desc: 'Voice synthesis' })}
-        ${easyAccordion('Mind', `
-            <div class="sb-pdetail-row"><span>memory</span><span>${pretty(settings.memory_scope)}</span></div>
-            <div class="sb-pdetail-row"><span>goals</span><span>${pretty(settings.goal_scope)}</span></div>
-            <div class="sb-pdetail-row"><span>knowledge</span><span>${pretty(settings.knowledge_scope)}</span></div>
-            <div class="sb-pdetail-row"><span>people</span><span>${pretty(settings.people_scope)}</span></div>
-        `, { desc: 'Memory & knowledge' })}
-        ${easyAccordion('Model', `
-            <div class="sb-pdetail-row"><span>provider</span><span>${pretty(settings.llm_primary)}</span></div>
-            ${settings.llm_model ? `<div class="sb-pdetail-row"><span>model</span><span>${settings.llm_model}</span></div>` : ''}
-        `, { desc: 'LLM backend' })}
-    `;
+    `).join('') + `
+        <div class="sb-pgrid-cell sb-pgrid-new" data-action="new" title="New persona from this chat">
+            <span class="sb-pgrid-new-icon">+</span>
+            <span class="sb-pgrid-name">New...</span>
+        </div>`;
 
-    // Fetch tagline
-    fetch(`/api/personas/${encodeURIComponent(personaName)}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(p => {
-            const el = container.querySelector('#sb-pdetail-tagline');
-            if (p?.tagline && el) el.textContent = p.tagline;
-        })
-        .catch(() => {});
+    _bindStripDnD(gridEl);
+    // Keep the active face in view
+    gridEl.querySelector('.sb-pgrid-cell.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
-function easyAccordion(title, content, opts = {}) {
-    const desc = opts.desc ? `<span class="sb-pdetail-acc-desc">${opts.desc}</span>` : '';
-    const link = opts.view ? `<span class="sb-pdetail-acc-link" data-nav="${opts.view}">\u2197</span>` : '';
-    return `
-        <div class="sb-pdetail-acc">
-            <div class="sb-pdetail-acc-header"><span class="accordion-arrow">\u25B6</span> ${title}${desc}${link}</div>
-            <div class="sb-pdetail-acc-content" style="display:none">${content}</div>
-        </div>`;
+// Desktop drag-to-reorder (Fork D: v1 is DnD-only — phones inherit the order).
+// On drop, the RENDERED order becomes the new PERSONA_FAVORITES — in show-all
+// mode a drag adopts the full roster in your order; stars later prune it.
+let _stripDragName = null;
+let _stripDragFrom = null;
+function _bindStripDnD(gridEl) {
+    gridEl.querySelectorAll('.sb-pgrid-cell[data-name]').forEach(cell => {
+        // Browsers native-drag <img> — that would hijack the cell drag
+        cell.querySelector('img')?.setAttribute('draggable', 'false');
+        cell.addEventListener('dragstart', e => {
+            _stripDragName = cell.dataset.name;
+            _stripDragFrom = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]')].map(c => c.dataset.name).join(',');
+            cell.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', _stripDragName); } catch { /* IE-era quirk */ }
+        });
+    });
+    if (gridEl.dataset.dndBound) return;   // grid-level listeners survive re-renders
+    gridEl.dataset.dndBound = '1';
+    gridEl.addEventListener('dragover', e => {
+        if (!_stripDragName) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const dragging = gridEl.querySelector('.sb-pgrid-cell.dragging');
+        if (!dragging) return;
+        const cells = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]:not(.dragging)')];
+        const after = cells.find(c => {
+            const r = c.getBoundingClientRect();
+            return e.clientX < r.left + r.width / 2;
+        });
+        gridEl.insertBefore(dragging, after || gridEl.querySelector('.sb-pgrid-new'));
+    });
+    gridEl.addEventListener('drop', e => { if (_stripDragName) e.preventDefault(); });
+    gridEl.addEventListener('dragend', async () => {
+        gridEl.querySelector('.sb-pgrid-cell.dragging')?.classList.remove('dragging');
+        if (!_stripDragName) return;
+        _stripDragName = null;
+        const names = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]')].map(c => c.dataset.name);
+        if (names.join(',') === _stripDragFrom) return;   // no-op drag: don't adopt the roster
+        try {
+            await updateSettingsBatch({ PERSONA_FAVORITES: names });
+            await refreshInitData();
+        } catch (e) {
+            ui.showToast('Order shown but not saved', 'error');
+        }
+    });
 }
 
 function escapeHtml(str) {
@@ -1211,7 +1392,24 @@ function escapeHtml(str) {
 // Helpers
 function getVal(c, sel) { return c.querySelector(sel)?.value || ''; }
 function setVal(c, sel, v) { const el = c.querySelector(sel); if (el) el.value = v; }
-function setSelect(sel, v) { sel.value = v; if (sel.selectedIndex === -1 && sel.options.length) sel.selectedIndex = 0; }
+function setSelect(sel, v) {
+    sel.value = v;
+    if (sel.selectedIndex === -1) {
+        // The saved value isn't among the options (e.g. a stale/missing list).
+        // Inject it as a synthetic option rather than silently snapping to
+        // option 0 — that snap is the "wrong-prompt" class of bug. Empty/null
+        // values keep the old fall-to-first behavior.
+        if (v != null && v !== '') {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            sel.insertBefore(opt, sel.firstChild);
+            sel.value = v;
+        } else if (sel.options.length) {
+            sel.selectedIndex = 0;
+        }
+    }
+}
 function getChecked(c, sel) { return c.querySelector(sel)?.checked || false; }
 function setChecked(c, sel, v) { const el = c.querySelector(sel); if (el) el.checked = v; }
 function getToggle(c, sel) { return c.querySelector(sel)?.dataset.active === 'true'; }

@@ -1,8 +1,17 @@
 // api.js - Backend communication
 import { fetchWithTimeout } from './shared/fetch.js';
 import { dispatch, on, Events } from './core/event-bus.js';
+import { getBoundChat } from './core/bound-chat.js';
 
 export { fetchWithTimeout };
+
+// F1 (2026-09-08): when a room has bound the rail to its session, every
+// history read, turn, cancel and message edit names that chat. Unbound =
+// the active pointer, byte-identical to before.
+const _boundQS = (sep = '?') => {
+    const b = getBoundChat();
+    return b ? `${sep}chat=${encodeURIComponent(b)}` : '';
+};
 
 // Context bar update function
 const updateContextBar = (context) => {
@@ -33,57 +42,84 @@ export const fetchStatus = async () => {
 let _lastHistoryChatName = null;
 export const getLastHistoryChatName = () => _lastHistoryChatName;
 
-export const fetchHistory = async () => {
-    const response = await fetchWithTimeout('/api/history');
+export const fetchHistoryFull = async () => {
+    const response = await fetchWithTimeout('/api/history' + _boundQS());
     // Update context bar if context info is present
     if (response && response.context) {
         updateContextBar(response.context);
     }
     _lastHistoryChatName = response?.chat_name || null;
-    // Return messages array for backward compatibility
-    return response.messages || response;
+    // chat_name rides the SAME response as the messages — painters must
+    // compare against this, not the module-global above, which any
+    // concurrent fetchHistory caller clobbers (hunt 2026-08-17 H12).
+    return { messages: response?.messages || response || [],
+             chat_name: response?.chat_name || null };
 };
 
+export const fetchHistory = async () => (await fetchHistoryFull()).messages;
+
 export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw');
-export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages', {
+export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages' + _boundQS(), {
     method: 'DELETE', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ user_message: userMessage }) 
 }, 10000);
-export const removeLastAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-last-assistant', {
+export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant' + _boundQS(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
-export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ timestamp })
-}, 10000);
-export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}`, {
+export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}` + _boundQS(), {
     method: 'DELETE'
 }, 10000);
 // Legacy - kept for backwards compatibility, prefer fetchStatus
 export const fetchSystemStatus = () => fetchWithTimeout('/api/system/status', {}, 5000);
 
 // Chat management
-export const cancelGeneration = () => fetchWithTimeout('/api/cancel', { 
+export const cancelGeneration = () => fetchWithTimeout('/api/cancel' + _boundQS(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }
 }, 5000);
-export const fetchChatList = (type) => fetchWithTimeout(type ? `/api/chats?type=${type}` : '/api/chats', {}, 10000);
-export const createChat = (name) => fetchWithTimeout('/api/chats', {
-    method: 'POST', 
-    headers: { 'Content-Type': 'application/json' }, 
-    body: JSON.stringify({ name }) 
+// kind (F1, 2026-09-08): server-side filter — 'game' returns only game +
+// story sessions; opts.slim trims each entry's settings to picker keys.
+export const fetchChatList = (kind, opts = {}) => {
+    const p = new URLSearchParams();
+    if (kind) p.set('kind', kind);
+    if (opts.slim) p.set('slim', '1');
+    const q = p.toString();
+    return fetchWithTimeout(q ? `/api/chats?${q}` : '/api/chats', {}, 10000);
+};
+// settings (F1): stamped at birth in the same write — a session never
+// exists untagged for a beat (private_chat is refused there; vault flip).
+export const createChat = (name, settings = null) => fetchWithTimeout('/api/chats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings ? { name, settings } : { name })
 }, 10000);
 export const deleteChat = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}`, { 
     method: 'DELETE' 
 }, 10000);
-export const activateChat = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/activate`, { 
-    method: 'POST' 
-}, 10000);
-export const clearChat = () => fetchWithTimeout('/api/history/messages', {
+// Chat-switch epoch: bumped when an activate STARTS. A chat-list response
+// captured before the bump is stale truth — populateChatDropdown must not
+// adopt its active_chat into #chat-select (the GLM-sidebar race, 2026-08-08).
+// High-water counter, not a boolean: story entry fires two overlapping
+// activates and the Game Room exit handback is un-awaited.
+let _switchEpoch = 0;
+let _pendingActivates = 0;
+export const getSwitchEpoch = () => _switchEpoch;
+export const hasPendingActivate = () => _pendingActivates > 0;
+export const activateChat = async (name) => {
+    _switchEpoch++;
+    _pendingActivates++;
+    try {
+        return await fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/activate`, {
+            method: 'POST'
+        }, 10000);
+    } finally {
+        _pendingActivates--;
+    }
+};
+export const clearChat = () => fetchWithTimeout('/api/history/messages' + _boundQS(), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ count: -1 })
@@ -94,9 +130,56 @@ export const importChat = (messages) => fetchWithTimeout('/api/history/import', 
     body: JSON.stringify({ messages })
 }, 30000);
 
+// Chat Manager (views/chat-manage.js)
+export const fetchChatListStats = () => fetchWithTimeout('/api/chats?stats=1', {}, 15000);
+export const searchChats = (q) => fetchWithTimeout(
+    '/api/chats/search?q=' + encodeURIComponent(q), {}, 15000);
+export const bulkDeleteChats = (names) => fetchWithTimeout('/api/chats/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names })
+}, 30000);
+export const bulkClearChats = (names) => fetchWithTimeout('/api/chats/bulk-clear', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names })
+}, 30000);
+export const bulkExportChats = (names) => fetchWithTimeout('/api/chats/bulk-export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names })
+}, 60000);
+export const exportChatByName = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/export`, {}, 30000);
+export const renameChat = (name, newName) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName })
+}, 10000);
+export const trimChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/trim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts)
+}, 60000);
+export const repairChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/repair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts)
+}, 60000);
+export const compressChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/compress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts)
+}, 15000);
+export const compressStatus = () => fetchWithTimeout('/api/chats/compress/status', {}, 10000);
+export const setChatArchived = (name, archived) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived })
+}, 10000);
+
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {
-    const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
+    const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLlmDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
     
     if (data.type === 'stream_started') {
         if (onStreamStarted) onStreamStarted();
@@ -156,16 +239,10 @@ const processSSEData = (data, handlers) => {
     // Inert when streaming TTS is disabled on the brain — these events
     // simply don't fire. Pass the full payload so audio.js can read
     // `stream_id` for per-stream isolation (2026-05-18 herring #5).
-    if (data.type === 'tts_stream_start') {
-        dispatch('tts_stream_start', data);
-        return {};
-    }
-    if (data.type === 'tts_chunk') {
-        dispatch('tts_stream_chunk', data);
-        return {};
-    }
-    if (data.type === 'tts_stream_end') {
-        dispatch('tts_stream_end', data);
+    // `mute`: a reattached viewer (attachTurn) never plays audio — it gets
+    // none from the server anyway, but a stale tail must not touch the queue.
+    if (data.type === 'tts_stream_start' || data.type === 'tts_chunk' || data.type === 'tts_stream_end') {
+        if (!handlers.mute) dispatch(data.type === 'tts_chunk' ? 'tts_stream_chunk' : data.type, data);
         return {};
     }
 
@@ -179,84 +256,219 @@ const processSSEData = (data, handlers) => {
         return { gotContent: true };
     }
     
+    // LLM half of the turn is over (history row + metrics written server-
+    // side). The body stays open for the streaming-TTS tail — see _readTurn.
+    if (data.type === 'llm_done') {
+        if (onLlmDone) onLlmDone(data);
+        return { llmDone: true };
+    }
+
     if (data.done) {
         console.log('[SSE] Done received');
-        if (onDone) onDone(data.ephemeral || false);
+        if (onDone) onDone(data.ephemeral || false, data);
         return { shouldReturn: true, isDone: true };
     }
     
     return {};
 };
 
-export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) => {
-    onChunk = _wrapChunkWithAvatarScan(onChunk);
-    let reader = null;
+// ---------------------------------------------------------------------------
+// A read that died under us — a network TypeError, or a body that ended
+// before the turn did — is a LOST FEED, not a cancel: the server keeps the
+// turn (server-owned turns, 2026-09-15) and the caller reattaches. Handler
+// bugs (any other TypeError) stay ordinary errors.
+const _feedLost = (msg) => { const e = new Error(msg); e.feedLost = true; return e; };
+const _isNetworkDeath = (e) => e instanceof TypeError && /network|fetch|load failed|connection/i.test(e.message || '');
+
+// /api/chat/stream reader — ONE loop for send / regen / continue.
+//
+// The awaited promise settles at `llm_done`: the LLM half of the turn is
+// over and the server has already written the history row (metrics
+// included). Everything after that on the wire is the streaming-TTS tail —
+// tts_chunk events arriving as synth finishes, which on a slow CPU can be
+// the whole reply's worth of seconds. The tail drains DETACHED: the caller
+// gets Send + metrics back at the last word; audio keeps arriving through
+// the same event-bus dispatches audio.js already listens to. Belts: a
+// `done` with no llm_done before it settles the turn too (tts_streamed
+// unknown → whole-blob lane, the old behavior); a body that closes or
+// faults mid-tail finalizes the audio queue so the mic ⏹ can't stick.
+// 2026-09-08, record tmp/llm-done-split-plan.md.
+// ---------------------------------------------------------------------------
+const _readTurn = async (reader, handlers, onTurnDone, onError) => {
+    const decoder = new TextDecoder();
+    let buffer = '', gotContent = false, turnDone = false, tailId = null;
+    const finishTurn = (data = {}) => {
+        if (turnDone) return;
+        turnDone = true;
+        onTurnDone(data.ephemeral || false, { ttsStreamed: !!data.tts_streamed });
+    };
+    // The belts name THIS turn's pump: an id-less end flagged a NEWER
+    // stream's queue as ended (mic flicker, false "couldn't play" toast) when
+    // a stale tail closed after the next turn began (E1#6).
+    const endTail = () => dispatch('tts_stream_end', tailId ? { stream_id: tailId } : {});
+    handlers.onLlmDone = finishTurn;
+    handlers.onDone = (_ephemeral, data) => finishTurn(data);
     try {
-        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-        const res = await fetch('/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify({ text, prefill, skip_user_message: true }),
-            signal
-        });
-        
-        if (!res.ok) {
-            if (res.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            const err = await res.json().catch(() => ({}));
-            return onError(new Error(err.error || `HTTP ${res.status}`), res.status);
-        }
-        
-        reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '', gotContent = false;
-        
-        const handlers = {
-            onChunk,
-            onToolStart,
-            onToolEnd,
-            onStreamStarted,
-            onIterationStart,
-            onReload: () => setTimeout(() => window.location.reload(), 500),
-            onDone: (ephemeral) => onComplete(ephemeral),
-            onLegacyChunk: onChunk
-        };
-        
         while (true) {
             const { done, value } = await reader.read();
-            if (done) return gotContent ? onComplete(false) : onError(new Error("No content"));
-            
+            if (done) {
+                if (turnDone) { endTail(); return; }   // tail closed without `done`
+                // A body that ends before llm_done/done is a LOST FEED, never a
+                // finished turn: the old success path swapped the bubble with
+                // the last history row — the user's own message (H6, 2026-09-15).
+                return onError(_feedLost(gotContent ? 'Connection dropped mid-reply' : 'Connection dropped'));
+            }
+
             buffer += decoder.decode(value, { stream: true });
             // split(/\r?\n/) handles both LF (uvicorn default) and CRLF
             // (some Win-side proxies normalize). Herring-table #17.
             const lines = buffer.split(/\r?\n/);
             buffer = lines.pop();
-            
+
             for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
-                        if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
-                        
-                        const result = processSSEData(data, handlers);
-                        if (result.gotContent) gotContent = true;
-                        if (result.shouldReturn) {
-                            await reader.cancel();
-                            return;
-                        }
-                    } catch (parseErr) {
-                        console.error('[SSE] Parse error:', parseErr, 'Line:', line);
-                    }
+                if (!line.startsWith('data: ')) continue;
+                let data;
+                try { data = JSON.parse(line.slice(6)); }
+                catch (parseErr) { console.error('[SSE] Parse error:', parseErr, 'Line:', line); continue; }
+                if (typeof data.seq === 'number') handlers.lastSeq = data.seq;   // reattach cursor
+                if (data.type === 'resync') {
+                    // The turn's ring no longer reaches back to our seq: the
+                    // caller repaints from history, then we keep streaming.
+                    if (handlers.onResync) await handlers.onResync();
+                    continue;
                 }
+                // Two error shapes on the wire: {"error": msg} (route
+                // except-handlers, no type field) and {"type":"error",
+                // "text":...} (in-stream refusals like the private-
+                // prompt gate). Both must reach onError or the refusal
+                // is silently swallowed and the caller takes the
+                // success path. The !data.type guard keeps tool_end
+                // (which carries an error:bool flag) off this path.
+                if (data.type === 'error' || (data.error && !data.type)) {
+                    const msg = data.error || data.text || 'Stream error';
+                    if (turnDone) {
+                        // Tail fault: the turn is complete, only audio was lost.
+                        dispatch('chat_notice', { message: `TTS tail failed: ${msg}`, severity: 'warning' });
+                        endTail();
+                        return;
+                    }
+                    return onError(new Error(msg));
+                }
+                if (data.type === 'tts_stream_start') tailId = data.stream_id || tailId;
+                // A cancel that wasn't THIS tab's Stop (second-tab Stop, mic ⏹ in
+                // conversation mode, a barge-in): the route ends the body with a
+                // bare {cancelled} and no `done`. Before the turn settled that's
+                // a cancelled turn — the same path as our own Stop, NOT the
+                // success lane whose whole-blob fallback re-spoke the cut reply
+                // from the top (E1#1, 2026-09-08). After llm_done: audio-only cut.
+                if (data.cancelled && !data.type) {
+                    if (turnDone) { endTail(); return; }
+                    turnDone = true;
+                    endTail();
+                    return onError(new Error('Cancelled'));
+                }
+                const result = processSSEData(data, handlers);
+                if (result.gotContent) gotContent = true;
+                if (result.shouldReturn) return;
             }
         }
     } catch (e) {
-        onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
+        if (turnDone) { endTail(); return; }   // dropped mid-tail: audio only
+        onError(e.name === 'AbortError' ? new Error('Cancelled')
+                : _isNetworkDeath(e) ? _feedLost(e.message) : e);
     } finally {
-        if (reader) try { await reader.cancel(); } catch {}
+        try { await reader.cancel(); } catch {}
     }
+};
+
+const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
+                                   onToolStart = null, onToolEnd = null,
+                                   onStreamStarted = null, onIterationStart = null }) => {
+    onChunk = _wrapChunkWithAvatarScan(onChunk);
+    let res;
+    try {
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        res = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify(body),
+            signal
+        });
+    } catch (e) {
+        return onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
+    }
+    if (!res.ok) {
+        if (res.status === 401) {
+            window.location.href = '/login';
+            return;
+        }
+        const err = await res.json().catch(() => ({}));
+        return onError(new Error(err.error || `HTTP ${res.status}`), res.status);
+    }
+    const handlers = {
+        onChunk,
+        onToolStart,
+        onToolEnd,
+        onStreamStarted,
+        onIterationStart,
+        onReload: () => setTimeout(() => window.location.reload(), 500),
+        onLegacyChunk: onChunk
+    };
+    // Settle at llm_done (or error / no-content / reload); the read loop
+    // itself runs on to the end of the body for the audio tail.
+    await new Promise((settle) => {
+        _readTurn(res.body.getReader(), handlers,
+                  (ephemeral, meta) => { onComplete(ephemeral, meta); settle(); },
+                  (e, code) => { onError(e, code, handlers.lastSeq); settle(); })
+            .finally(settle);
+    });
+};
+
+// In-place Continue: `continue_from` names the assistant turn; the engine
+// resumes the chat's last reply from its own row (no user row is sent or
+// saved, the row is edited on success and untouched on Stop).
+export const streamChatContinue = (timestamp, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) =>
+    _streamTurn({ text: '', continue_from: timestamp },
+                { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
+
+// Reattach to the live turn this tab lost its feed on (server-owned turns,
+// 2026-09-15). `since` = the last seq the tab saw; the server replays exact-
+// once after it and follows live. Resolves {live:true} once the turn ended
+// through the handlers, {live:false} when no turn is live on the chat (it
+// finished while we were away — refresh history), {live:null, error} when the
+// server was unreachable (retry). Text only: audio is never replayed, so the
+// completion reports ttsStreamed=false and the caller speaks the reply once.
+export const attachTurn = async (chat, since, handlers) => {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    let res;
+    try {
+        res = await fetch('/api/chat/attach', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ chat: chat || null, since: typeof since === 'number' ? since : null })
+        });
+    } catch (e) {
+        return { live: null, error: e };
+    }
+    if (res.status === 204) return { live: false };
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return { live: null, error: new Error(err.error || `HTTP ${res.status}`) };
+    }
+    const h = {
+        ...handlers,
+        mute: true,
+        onChunk: _wrapChunkWithAvatarScan(handlers.onChunk),
+        onReload: () => setTimeout(() => window.location.reload(), 500),
+    };
+    h.onLegacyChunk = h.onChunk;
+    await new Promise((settle) => {
+        _readTurn(res.body.getReader(), h,
+                  (ephemeral, meta) => { handlers.onComplete(ephemeral, { ...(meta || {}), ttsStreamed: false }); settle(); },
+                  (e, code) => { handlers.onError(e, code, h.lastSeq); settle(); })
+            .finally(settle);
+    });
+    return { live: true, lastSeq: h.lastSeq };
 };
 
 // Avatar tag scanner — wraps onChunk to detect <<avatar: trackname>> in streamed responses
@@ -347,88 +559,28 @@ function _wrapChunkWithAvatarScan(onChunk) {
     };
 }
 
-export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null) => {
-    onChunk = _wrapChunkWithAvatarScan(onChunk);
-    let reader = null;
-    try {
-        const body = { text };
-        if (prefill) body.prefill = prefill;
-        if (images && images.length > 0) body.images = images;
-        if (files && files.length > 0) body.files = files;
-        
-        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-        const res = await fetch('/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify(body),
-            signal
-        });
-        
-        if (!res.ok) {
-            if (res.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            const err = await res.json().catch(() => ({}));
-            return onError(new Error(err.error || `HTTP ${res.status}`), res.status);
-        }
-        
-        reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '', gotContent = false;
-        
-        const handlers = {
-            onChunk,
-            onToolStart,
-            onToolEnd,
-            onStreamStarted,
-            onIterationStart,
-            onReload: () => setTimeout(() => window.location.reload(), 500),
-            onDone: (ephemeral) => onComplete(ephemeral),
-            onLegacyChunk: onChunk
-        };
-        
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) return gotContent ? onComplete(false) : onError(new Error("No content"));
-            
-            buffer += decoder.decode(value, { stream: true });
-            // split(/\r?\n/) handles both LF (uvicorn default) and CRLF
-            // (some Win-side proxies normalize). Herring-table #17.
-            const lines = buffer.split(/\r?\n/);
-            buffer = lines.pop();
-            
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
-                        if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
-                        
-                        const result = processSSEData(data, handlers);
-                        if (result.gotContent) gotContent = true;
-                        if (result.shouldReturn) {
-                            await reader.cancel();
-                            return;
-                        }
-                    } catch (parseErr) {
-                        console.error('[SSE] Parse error:', parseErr, 'Line:', line);
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
-    } finally {
-        if (reader) try { await reader.cancel(); } catch {}
-    }
+export const streamChat = (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null) => {
+    const body = { text };
+    if (prefill) body.prefill = prefill;
+    if (images && images.length > 0) body.images = images;
+    if (files && files.length > 0) body.files = files;
+    const bound = getBoundChat();
+    if (bound) body.chat = bound;   // F1: a bound rail's turn names its session
+    return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
 };
 
-export const fetchAudio = async (text, signal = null) => {
+export const fetchAudio = async (text, signal = null, opts = null) => {
     try {
+        // opts: {voice, pitch, speed} — task-TTS carries the task's values in
+        // the event payload because global voice is restored before we fetch.
+        const body = { text, output_mode: 'file' };
+        if (opts?.voice) body.voice = opts.voice;
+        if (opts?.pitch != null) body.pitch = opts.pitch;
+        if (opts?.speed != null) body.speed = opts.speed;
         return await fetchWithTimeout('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, output_mode: 'file' }),
+            body: JSON.stringify(body),
             signal
         }, 120000);
     } catch (e) {
@@ -453,7 +605,7 @@ export const postAudio = async (blob) => {
 };
 
 export const editMessage = (role, timestamp, newContent) => 
-  fetchWithTimeout('/api/history/messages/edit', { 
+  fetchWithTimeout('/api/history/messages/edit' + _boundQS(), {
     method: 'POST', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ role, timestamp, new_content: newContent }) 
@@ -475,7 +627,13 @@ export const toggleSpice = async (chatName, enabled) => {
 
 // Local TTS control (server-side speaker playback)
 export const getTtsStatus = () => fetchWithTimeout('/api/tts/status', {}, 2000);
-export const stopLocalTts = () => fetchWithTimeout('/api/tts/stop', { method: 'POST' }, 2000);
+// streamId: the streaming-TTS pump the browser is hearing — the server mutes
+// exactly that one (never the next turn still thinking). 2026-09-08.
+export const stopLocalTts = (streamId = null) => fetchWithTimeout('/api/tts/stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(streamId ? { stream_id: streamId } : {})
+}, 2000);
 
 // Image upload
 export const uploadImage = async (file) => {

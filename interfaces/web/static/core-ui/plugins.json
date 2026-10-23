@@ -6,7 +6,8 @@
     "setup-wizard": {
       "title": "Setup Wizard",
       "showInSidebar": false,
-      "autoShow": true
+      "autoShow": true,
+      "essential": true
     }
   }
 }

@@ -2,7 +2,7 @@
 """
 OpenAI Responses API provider.
 
-Handles the new Responses API format for GPT-5.x reasoning models:
+Handles the new Responses API format for GPT-5.x / GPT-6 reasoning models:
 - Uses /v1/responses endpoint instead of /v1/chat/completions
 - Supports reasoning summaries (visible chain-of-thought)
 - Different message/output structure
@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Optional, Generator
 
 from openai import OpenAI
 
-from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, server_answered, http_status, AUTH_DEAD_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class OpenAIResponsesProvider(BaseProvider):
     
     # Models that should use Responses API (reasoning models)
     RESPONSES_MODELS = {
+        'gpt-6',                      # gpt-6-astra (2026-09): same lane as 5.x
         'gpt-5', 'gpt-5.1', 'gpt-5.2',
         'gpt-5-mini', 'gpt-5-nano',
         'gpt-5.2-codex',
@@ -77,15 +78,26 @@ class OpenAIResponsesProvider(BaseProvider):
     
     @property
     def supports_images(self) -> bool:
-        """Responses API supports multimodal."""
-        return True
+        """Responses API models are vision-capable by default — but the per-
+        provider `supports_images` flag (the vision checkbox) wins when set,
+        like every other provider. 2026-09-10."""
+        override = self.config.get('supports_images')
+        return True if override is None else bool(override)
     
     def health_check(self) -> bool:
-        """Check endpoint health via models.list()."""
+        """Reachability probe via models.list(). ANY HTTP status response (4xx/5xx)
+        counts as reachable — a broken /models doesn't mean completions are down.
+        Only a genuine connection/DNS/timeout error marks it unhealthy."""
         try:
             self._client.models.list(timeout=self.health_check_timeout)
             return True
         except Exception as e:
+            if http_status(e) in AUTH_DEAD_STATUSES:   # refused key = dead (scout F2, 2026-09-20)
+                logger.info(f"Health check: {self.base_url} /models answered {http_status(e)} — key refused, provider skipped")
+                return False
+            if server_answered(e):
+                logger.debug(f"Health check: {self.base_url} /models errored ({e}) but server is reachable")
+                return True
             logger.debug(f"Health check failed for {self.base_url}: {e}")
             return False
     
@@ -153,10 +165,18 @@ class OpenAIResponsesProvider(BaseProvider):
                                     "text": block.get('text', '')
                                 })
                             elif block.get('type') == 'image':
-                                resp_content.append({
-                                    "type": "input_image",
-                                    "image_url": f"data:{block.get('media_type', 'image/jpeg')};base64,{block.get('data', '')}"
-                                })
+                                # Only when the vision checkbox (supports_images) is on —
+                                # a text-only model 400s on an image item (2026-09-10).
+                                if self.supports_images:
+                                    resp_content.append({
+                                        "type": "input_image",
+                                        "image_url": f"data:{block.get('media_type', 'image/jpeg')};base64,{block.get('data', '')}"
+                                    })
+                                else:
+                                    resp_content.append({
+                                        "type": "input_text",
+                                        "text": "[image not sent: this model has no vision]"
+                                    })
                     input_items.append({
                         "type": "message",
                         "role": role,

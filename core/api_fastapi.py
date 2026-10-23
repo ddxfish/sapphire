@@ -1,9 +1,11 @@
 # api_fastapi.py - FastAPI app setup, middleware, page routes, and router includes
 import os
+import re
 import json
 import time
 import secrets
 import logging
+import threading
 from pathlib import Path
 from typing import Optional, Any
 
@@ -21,6 +23,7 @@ from core.auth import (
 from core.setup import get_password_hash, save_password_hash, verify_password, is_setup_complete
 from core.event_bus import publish, Events
 from core import prompts
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -126,31 +129,99 @@ SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
 USER_PLUGINS_DIR_WEB = PROJECT_ROOT / "user" / "plugins"
 
 import mimetypes
+
+# Windows reads MIME types from the registry (HKCR), and common installers
+# rewrite .js to text/plain there — browsers hard-refuse ES modules served
+# that way, blanking every module page with zero server errors. Pin the
+# types the web UI ships; add_type overrides whatever the registry said.
+for _ext, _mt in (('.js', 'text/javascript'), ('.mjs', 'text/javascript'),
+                  ('.css', 'text/css'), ('.json', 'application/json'),
+                  ('.svg', 'image/svg+xml'), ('.wasm', 'application/wasm'),
+                  ('.woff2', 'font/woff2'), ('.html', 'text/html')):
+    mimetypes.add_type(_mt, _ext)
+
+_PLUGIN_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,64}')
+_STORY_ART_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def _serve_contained(file_path: Path, base: Path):
+    """FileResponse for file_path only if it is truly inside base — real path
+    containment, not string prefix (which lets sibling dirs sharing a name
+    prefix, and any `..` that lands back under the prefix, through)."""
+    try:
+        if file_path.is_relative_to(base) and file_path.is_file():
+            content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            return FileResponse(file_path, media_type=content_type)
+    except (OSError, ValueError):
+        # ValueError: embedded null byte (%00 in the path) — refuse, not 500
+        pass
+    return None
+
+
 @app.get("/plugin-web/{plugin_name}/{path:path}")
 async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)):
     """Serve web assets from plugin web/ and app/ directories.
     /plugin-web/{name}/foo.js     → {plugin}/web/foo.js  (existing behavior)
     /plugin-web/{name}/app/foo.js → {plugin}/app/foo.js  (app pages)
+    /plugin-web/{name}/stories/…  → story-pack scene art (IMAGES ONLY)
     """
-    for base_dir in [SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR_WEB]:
-        plugin_dir = (base_dir / plugin_name).resolve()
+    # Plugin names are flat slugs — no dots, no separators. Anything else
+    # (`..`, absolute paths) re-roots the candidate walk; refuse pre-disk.
+    if not _PLUGIN_NAME_RE.fullmatch(plugin_name):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    # Registry first: a user-band plugin can shadow a same-named system plugin,
+    # and the dir scan below (system first) would serve the shadowed copy's
+    # assets. The registry knows which copy actually loaded.
+    candidates = []
+    try:
+        from core.plugin_loader import plugin_loader
+        info = plugin_loader.get_plugin_info(plugin_name)
+        # Disable must be revocation: a known-but-not-running plugin serves
+        # NOTHING — before this, a disabled theme plugin's CSS/JS kept loading
+        # from disk on every boot via stale localStorage URLs (lifecycle #1).
+        # Unknown names still fall through to the dir scan (registry gaps).
+        if info and (not info.get("loaded") or not info.get("enabled")):
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        if info and info.get("path"):
+            candidates.append(Path(info["path"]))
+    except Exception:
+        pass
+    candidates += [SYSTEM_PLUGINS_DIR / plugin_name, USER_PLUGINS_DIR_WEB / plugin_name]
+    for plugin_dir in candidates:
+        try:
+            plugin_dir = plugin_dir.resolve()
 
-        # If path starts with app/, serve from app/ directory directly
-        if path.startswith("app/"):
-            file_path = (plugin_dir / path).resolve()
-            if str(file_path).startswith(str(plugin_dir)) and file_path.exists() and file_path.is_file():
-                content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-                return FileResponse(file_path, media_type=content_type)
-            continue
+            # Each lane is contained to ITS OWN subtree — `app/../` must not
+            # reach the plugin root (room JSONs, engine code, keys live there).
+            # Lane bases are RESOLVED like the candidate, or a symlinked lane
+            # dir can never match its own base (post-fix review 2026-08-05).
+            if path.startswith("app/"):
+                resp = _serve_contained((plugin_dir / path).resolve(),
+                                        (plugin_dir / "app").resolve())
+                if resp:
+                    return resp
+                continue
 
-        # Otherwise serve from web/ subdirectory (existing behavior)
-        web_dir = (plugin_dir / "web").resolve()
-        file_path = (web_dir / path).resolve()
-        if not str(file_path).startswith(str(web_dir)):
+            # Story-pack art: stories/<slug>/backdrops/*.jpg — packs are plugins
+            # with a stories/ dir, and their scene art is web-facing by design.
+            # IMAGES ONLY: the room JSONs beside them carry puzzle solutions and
+            # stay engine-side. 2026-08-03.
+            if path.startswith("stories/"):
+                file_path = (plugin_dir / path).resolve()
+                if file_path.suffix.lower() in _STORY_ART_SUFFIXES:
+                    resp = _serve_contained(file_path, (plugin_dir / "stories").resolve())
+                    if resp:
+                        return resp
+                continue
+
+            # Otherwise serve from web/ subdirectory (existing behavior)
+            web_dir = (plugin_dir / "web").resolve()
+            resp = _serve_contained((web_dir / path).resolve(), web_dir)
+            if resp:
+                return resp
+        except (OSError, ValueError):
+            # embedded null byte / unreadable candidate — try the next one
             continue
-        if file_path.exists() and file_path.is_file():
-            content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-            return FileResponse(file_path, media_type=content_type)
     return JSONResponse({"error": "Not found"}, status_code=404)
 
 # ── CDN cache proxy ─────────────────────────────────────────────────────────
@@ -278,7 +349,7 @@ async def serve_cdn_cache(request: Request, path: str, _=Depends(require_login))
         CDN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = cache_file.with_suffix(".tmp")
         tmp.write_bytes(content)
-        tmp.replace(cache_file)
+        replace_with_retry(tmp, cache_file)
         meta_file.write_text(content_type, encoding="utf-8")
         return _Response(content=content, media_type=content_type)
     except HTTPException:
@@ -308,16 +379,22 @@ async def serve_workspace(project: str, path: str, _=Depends(require_login)):
         ws_dir = settings.get('workspace_dir', '~/claude-workspaces')
     except Exception:
         ws_dir = '~/claude-workspaces'
-    workspace_base = Path(os.path.expanduser(ws_dir)).resolve()
-    project_dir = (workspace_base / project).resolve()
-    if not str(project_dir).startswith(str(workspace_base)):
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    file_path = (project_dir / path).resolve()
-    if not str(file_path).startswith(str(project_dir)):
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    if file_path.exists() and file_path.is_file():
-        content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-        return FileResponse(file_path, media_type=content_type)
+    # Real path containment, not string prefix — the same sibling-prefix bug
+    # fixed in /plugin-web lived on here (verified live: %2e%2e reached a
+    # sibling of the project dir; post-fix review 2026-08-05).
+    try:
+        workspace_base = Path(os.path.expanduser(ws_dir)).resolve()
+        project_dir = (workspace_base / project).resolve()
+        if not project_dir.is_relative_to(workspace_base):
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        file_path = (project_dir / path).resolve()
+        if not file_path.is_relative_to(project_dir):
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        if file_path.is_file():
+            content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            return FileResponse(file_path, media_type=content_type)
+    except (OSError, ValueError):
+        pass
     return JSONResponse({"error": "Not found"}, status_code=404)
 
 # Templates
@@ -364,11 +441,11 @@ def get_shutdown_callback():
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log incoming requests."""
-    if request.url.path.startswith('/static/'):
-        logger.debug(f"REQ: {request.method} {request.url.path}")
-    else:
-        logger.info(f"REQ: {request.method} {request.url.path}")
+    """Log incoming requests; stamp the tab's session id into request context
+    (core/request_context.py) so publishers can mark their events' origin."""
+    from core.request_context import session_origin
+    session_origin.set(request.headers.get('X-Session-ID'))
+    logger.debug(f"REQ: {request.method} {request.url.path}")
     response = await call_next(request)
     if response.status_code >= 400 and not request.url.path.startswith('/static/'):
         logger.warning(f"RSP: {response.status_code} {request.method} {request.url.path}")
@@ -488,7 +565,7 @@ def _get_session_secret():
         if sys.platform != 'win32':
             import os as _os
             _os.chmod(tmp_path, 0o600)
-        tmp_path.replace(secret_file)
+        replace_with_retry(tmp_path, secret_file)
     except Exception:
         pass  # Falls back to ephemeral secret (session won't survive restart)
     return secret
@@ -526,6 +603,19 @@ def _no_cache_html(template: str, context: dict):
     return resp
 
 
+def _default_theme():
+    """Boot-fallback theme id from themes.json 'default' (was dead config —
+    lifecycle #15). Template-stamped into the FOUC guard."""
+    try:
+        data = json.loads((STATIC_DIR / "themes" / "themes.json").read_text(encoding='utf-8'))
+        d = data.get("default")
+        if isinstance(d, str) and re.fullmatch(r'[a-z0-9_-]{1,50}', d):
+            return d
+    except Exception:
+        pass
+    return "dark"
+
+
 @app.get("/")
 async def index(request: Request, _=Depends(require_login)):
     """Main chat page."""
@@ -536,7 +626,8 @@ async def index(request: Request, _=Depends(require_login)):
         "v": BOOT_VERSION,
         "app_version": APP_VERSION,
         "managed": _is_managed(),
-        "import_map": IMPORT_MAP
+        "import_map": IMPORT_MAP,
+        "default_theme": _default_theme(),
     })
 
 
@@ -646,6 +737,10 @@ async def login_submit(request: Request):
         # before we stamp logged_in. 2026-04-22 M5 fix.
         request.session.clear()
         request.session['logged_in'] = True
+        # Salt stamp: require_login accepts this cookie only while the live
+        # hash still carries the same salt (password change / reset evicts
+        # every other session). 2026-09-08.
+        request.session['pw'] = password_hash[:29]
         request.session['username'] = getattr(config, 'AUTH_USERNAME', 'user')
         logger.info(f"Successful login from {client_ip}")
         return RedirectResponse(url="/", status_code=302)
@@ -666,9 +761,41 @@ async def logout(request: Request, _=Depends(require_login)):
 from core.tts.utils import validate_voice as _validate_tts_voice, default_voice as _tts_default_voice
 
 
+# SWITCH MEANS APPLY (2026-08-22): every runtime apply serializes here.
+# Until now all six call sites sat inside async route handlers, so the event
+# loop serialized them by accident; the on_switched hook also fires from the
+# vault's idle-lock Timer thread and the stream-end worker, so the accident
+# becomes a lock. RLock: reapply_if_active → _apply_chat_settings nesting is
+# legal.
+_apply_lock = threading.RLock()
+
+
 def _apply_chat_settings(system, settings: dict):
     """Apply chat settings to the system (TTS, prompt, ability, state engine).
-    Each section is isolated so one failure doesn't skip the rest."""
+    Each section is isolated so one failure doesn't skip the rest.
+    Serialized by _apply_lock (see above)."""
+    with _apply_lock:
+        _apply_chat_settings_unlocked(system, settings)
+
+
+def apply_on_switch(system, name: str, settings: dict, gen: int):
+    """ChatSessionManager.on_switched body — installed post-plugin-scan by
+    sapphire.py. Takes the apply lock FIRST, then re-checks the store's
+    switch generation: two switches racing (story entry fires two
+    overlapping activates; an idle-lock eviction can land under a dropdown
+    click) must apply in order or not at all — a stale apply would leave the
+    store on chat B with the brain on chat A, the exact desync this hook
+    exists to close. `settings` is the snapshot the store captured under its
+    own lock; never re-read it here."""
+    sm = system.llm_chat.session_manager
+    with _apply_lock:
+        if gen != getattr(sm, '_switch_gen', gen):
+            logger.info(f"Switch apply for '{name}' superseded — skipped")
+            return
+        _apply_chat_settings_unlocked(system, settings)
+
+
+def _apply_chat_settings_unlocked(system, settings: dict):
     try:
         if "voice" in settings:
             voice = _validate_tts_voice(settings["voice"])
@@ -691,45 +818,53 @@ def _apply_chat_settings(system, settings: dict):
             # (Sapphire) and made `blank` a no-op. 2026-04-27 fix.
             if isinstance(prompt_data, dict):
                 content = prompt_data.get('content', '') or ''
-                system.llm_chat.set_system_prompt(content)
-                prompts.set_active_preset_name(prompt_name)
-
+                # Pieces BEFORE the live snapshot (C-5): a preset failing
+                # validation keeps the previous prompt and trackers intact.
+                ok = True
                 if hasattr(prompts.prompt_manager, 'scenario_presets') and prompt_name in prompts.prompt_manager.scenario_presets:
-                    prompts.apply_scenario(prompt_name)
-
-                logger.info(f"Applied prompt: {prompt_name}{' (empty content — blank mode)' if not content else ''}")
+                    ok = prompts.apply_scenario(prompt_name)
+                if ok:
+                    system.llm_chat.set_system_prompt(content)
+                    prompts.set_active_preset_name(prompt_name)
+                    logger.info(f"Applied prompt: {prompt_name}{' (empty content — blank mode)' if not content else ''}")
+                else:
+                    logger.error(f"Preset '{prompt_name}' failed to apply — keeping previous prompt")
             else:
-                # Prompt genuinely missing — fall back to 'default' if it
-                # exists, and rewrite chat settings so the next activation
-                # doesn't take the same wrong turn. H3 fix 2026-04-22.
+                # Prompt not registered right now — run on 'default' for THIS
+                # turn, but never rewrite the chat's setting. "Missing" is
+                # usually transient: a plugin-provided prompt (a story costume
+                # rendered at runtime) is absent for the window between a
+                # reload and its re-registration. The old H3 behavior
+                # (2026-04-22) persisted the fallback, which turned that
+                # window into permanent loss of user intent — Sapphire woke up
+                # as 'default' mid-story and the costume could never come back
+                # (Sapph-not-Rose, 2026-08-05). Runtime falls back; the
+                # setting is the user's, and it stays.
                 logger.warning(
-                    f"Chat references unknown prompt '{prompt_name}' "
-                    f"— falling back to 'default' and rewriting chat settings."
+                    f"Chat references unknown prompt '{prompt_name}' — running on "
+                    f"'default' this turn; the chat's setting is left intact so it "
+                    f"heals if the prompt re-registers."
                 )
-                default_data = prompts.get_prompt('default')
-                if isinstance(default_data, dict):
-                    default_content = default_data.get('content', '') or ''
-                    system.llm_chat.set_system_prompt(default_content)
-                    prompts.set_active_preset_name('default')
+                # 'default' is the assembled-mode SENTINEL, not a prompt name —
+                # get_prompt('default') returns None on every stock install, which
+                # made this fallback dead code (post-fix review 2026-08-05: she
+                # silently kept the PREVIOUS chat's prompt). get_current_prompt()
+                # is the one API that resolves the sentinel; set the preset name
+                # first because it reads it.
+                prompts.set_active_preset_name('default')
+                _fb = prompts.get_current_prompt()
+                _fb_content = (_fb or {}).get('content') if isinstance(_fb, dict) else ''
+                system.llm_chat.set_system_prompt(_fb_content or '')
                 try:
-                    chat_name = system.llm_chat.session_manager.get_active_chat_name()
-                    if chat_name:
-                        # update_chat_settings takes ONE dict arg, not two
-                        # (it operates on the active chat). Old 2-arg call
-                        # raised TypeError silently inside the try/except,
-                        # so the chat's prompt setting kept pointing at the
-                        # missing name. 2026-04-27 fix.
-                        system.llm_chat.session_manager.update_chat_settings(
-                            {"prompt": "default"}
-                        )
-                except Exception as e:
-                    logger.debug(f"Could not rewrite chat.prompt after fallback: {e}")
-                try:
+                    # Ephemeral (2026-08-22): a transient notice for live
+                    # tabs, never replayed — this apply now also runs inside
+                    # the vault-lock eviction, three lines after lock()
+                    # cleared the replay ring to keep sealed names out of it.
                     publish(Events.SETTINGS_CHANGED, {
                         "key": "chat_prompt_fallback",
                         "value": "default",
                         "reason": f"missing:{prompt_name}",
-                    })
+                    }, ephemeral=True)
                 except Exception:
                     pass
     except Exception as e:
@@ -774,8 +909,9 @@ def _apply_chat_settings(system, settings: dict):
         toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
         if toolset_key:
             toolset_name = settings[toolset_key]
-            system.llm_chat.function_manager.update_enabled_functions([toolset_name])
-            logger.info(f"Applied toolset: {toolset_name}")
+            extras = settings.get("extra_toolsets") or None
+            system.llm_chat.function_manager.update_enabled_functions([toolset_name], extra_toolsets=extras)
+            logger.info(f"Applied toolset: {toolset_name}" + (f" + extras {extras}" if extras else ""))
             publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
     except Exception as e:
         logger.error(f"Error applying toolset: {e}")
@@ -802,7 +938,8 @@ def reapply_if_active(system, domain: str, name: str):
         if chat_settings.get(domain) != name:
             return
         if domain == 'toolset':
-            system.llm_chat.function_manager.update_enabled_functions([name])
+            system.llm_chat.function_manager.update_enabled_functions(
+                [name], extra_toolsets=chat_settings.get('extra_toolsets') or None)
             publish(Events.TOOLSET_CHANGED, {"name": name})
         elif domain == 'prompt':
             data = prompts.get_prompt(name)
@@ -811,8 +948,18 @@ def reapply_if_active(system, domain: str, name: str):
             # 'blank' prompt) must hot-reload correctly when edited.
             # 2026-04-27 fix.
             if isinstance(data, dict):
-                content = data.get('content', '') or ''
-                system.llm_chat.set_system_prompt(content)
+                # Re-run apply_scenario for assembled presets — setting
+                # content alone left _assembled_state on the OLD pieces, and
+                # the next spice rotation reassembled from them, silently
+                # reverting the edit. Runs BEFORE set_system_prompt (C-5):
+                # a bad edit keeps the previous prompt live instead of
+                # half-applying.
+                if name in prompts.prompt_manager.scenario_presets:
+                    if not prompts.apply_scenario(name):
+                        logger.error(f"Hot-reload: edited preset '{name}' failed "
+                                     f"validation — previous prompt kept")
+                        return
+                system.llm_chat.set_system_prompt(data.get('content', '') or '')
                 publish(Events.PROMPT_CHANGED, {"name": name, "action": "reapplied"})
         elif domain == 'persona':
             # Persona is a bundle; rerun the full apply so prompt/toolset/
@@ -840,6 +987,7 @@ from core.routes.knowledge import router as knowledge_router
 from core.routes.system import router as system_router
 from core.routes.plugins import router as plugins_router
 from core.routes.media import router as media_router
+from core.routes.perception import router as perception_router
 from core.routes.agents import router as agents_router
 from core.routes.docs import router as docs_router
 from core.routes.store import router as store_router
@@ -847,6 +995,10 @@ from core.routes.dashboard import router as dashboard_router
 from core.routes.body import router as body_router
 from core.routes.videos import router as videos_router
 from core.routes.persona_builder import router as persona_builder_router
+from core.routes.backgrounds import router as backgrounds_router
+from core.routes.fonts import router as fonts_router
+from core.routes.conversation import router as conversation_router
+from core.routes.vault import router as vault_router
 
 app.include_router(chat_router)
 app.include_router(tts_router)
@@ -856,6 +1008,7 @@ app.include_router(knowledge_router)
 app.include_router(system_router)
 app.include_router(plugins_router)
 app.include_router(media_router)
+app.include_router(perception_router)
 app.include_router(agents_router)
 app.include_router(docs_router)
 app.include_router(store_router)
@@ -863,4 +1016,8 @@ app.include_router(dashboard_router)
 app.include_router(body_router)
 app.include_router(videos_router)
 app.include_router(persona_builder_router)
+app.include_router(backgrounds_router)
+app.include_router(fonts_router)
+app.include_router(conversation_router)
+app.include_router(vault_router)
 

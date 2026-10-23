@@ -1,6 +1,6 @@
 # Email
 
-Sapphire can read your inbox, send emails, and auto-reply to incoming messages. Supports multiple accounts, OAuth2 for Office 365/Exchange, and a privacy-first design where the AI never sees raw email addresses.
+Sapphire can read, search, send, reply, forward, archive, and delete email, plus auto-reply to incoming messages. Supports multiple accounts, OAuth2 for Office 365/Exchange, and a privacy-first design where the AI never sees raw email addresses.
 
 ## Setup
 
@@ -34,9 +34,12 @@ Sapphire supports OAuth2 (XOAUTH2) for Microsoft accounts. Select OAuth2 as the 
 |------|--------------|
 | `get_inbox` | Fetch latest emails from inbox, sent, or archive (up to 50) |
 | `read_email` | Read the full text of an email by its index |
-| `archive_emails` | Move emails to the Archive folder |
+| `search_emails` | Search a folder by sender, content (subject/body), or date — results load like the inbox |
+| `archive_emails` | Move emails to the real Archive folder (Gmail = All Mail) |
+| `delete_emails` | Move emails to Trash — recoverable from your mail client |
+| `forward_email` | Forward an inbox email to a contact (text only — attachments not carried) |
 | `get_recipients` | List contacts the AI is allowed to email |
-| `send_email` | Send a new email or reply to one |
+| `send_email` | Send a new email or reply to one, with optional CC to contacts |
 
 ### Privacy Design
 
@@ -101,9 +104,13 @@ Auto-reply off. AI extracts invoice details and saves to knowledge.
 
 - "Check my email"
 - "Read email #3"
+- "Find emails from fish last week"
+- "Search my inbox for anything about the invoice"
 - "Reply to that email saying I'll be there at 5"
-- "Send an email to Sarah about the meeting tomorrow"
+- "Send an email to Sarah about the meeting tomorrow, cc Bob"
+- "Forward email #2 to Sarah"
 - "Archive emails 1, 2, and 5"
+- "Delete email #4"
 - "Who can I email?"
 
 ## Troubleshooting
@@ -126,9 +133,12 @@ SETUP:
 AVAILABLE TOOLS:
 - get_inbox(count?, folder?) - fetch emails (1-50, default 20, folders: inbox/sent/archive)
 - read_email(index) - read full email by 1-based index from get_inbox
-- archive_emails(indices) - move emails to archive by index array
+- search_emails(sender?, content?, date?, folder?, count?) - search; sender matches name+address substring (fish->bigfish@example.com), content=subject OR body, date=YYYY-MM-DD returns ~10 each side; results load like get_inbox (use read_email/reply/archive/delete by index)
+- archive_emails(indices) - move to the real Archive folder (Gmail = All Mail) by index array
+- delete_emails(indices) - move to Trash (recoverable); refuses if no Trash folder found
+- forward_email(index, recipient_id?, address?, note?) - forward an inbox email to a contact; text only, attachments not carried
 - get_recipients() - list whitelisted contacts (names only, no addresses)
-- send_email(recipient_id?, reply_to_index?, subject, body) - send or reply
+- send_email(recipient_id?, reply_to_index?, subject, body, cc?) - send or reply; cc=[contact ids]
 
 PRIVACY:
 - AI never sees raw email addresses

@@ -3,7 +3,14 @@ import sys
 import faulthandler
 import logging
 import shutil
+from pathlib import Path
 from logging.handlers import TimedRotatingFileHandler
+
+# Anchor everything to the repo root — a launch from another CWD (Windows
+# shortcut, service unit without WorkingDirectory) used to scatter a fresh
+# user/ tree wherever the shell happened to be. Same anchor pattern as
+# prompt_manager (no .resolve(): keep symlinked checkouts on their own path).
+_ROOT = Path(__file__).parent.parent
 
 # Reconfigure stdout/stderr to utf-8 with errors='replace' BEFORE any handler
 # is attached. Without this, Windows cmd.exe defaults to cp1252 — a single
@@ -22,14 +29,25 @@ for _stream in (sys.stdout, sys.stderr):
 # Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
 faulthandler.enable()
 
+# Pytest imports this module transitively (and test_log_level_hot_reload
+# directly). Without a guard, the TEST process attaches the SAME
+# user/logs/sapphire.log handler as the live service — test records
+# interleave with production lines (2026-07-19: mock ExecCtx retries and a
+# test traceback landed in the live log mid-drain-autopsy, and a stray
+# traceback there can false-trip the health script's "zero errors since
+# boot" check). Tests keep the console handler (pytest captures stdout);
+# only the production log files are off-limits.
+_UNDER_PYTEST = 'pytest' in sys.modules or 'PYTEST_CURRENT_TEST' in os.environ
+
 # Early stderr capture - ensures ANY errors get logged
 _startup_log = None
-try:
-    os.makedirs('user/logs', exist_ok=True)
-    _startup_log = open('user/logs/startup_errors.log', 'a', encoding='utf-8')
-    _startup_log.write(f"\n--- Startup attempt ---\n")
-except Exception:
-    pass
+if not _UNDER_PYTEST:
+    try:
+        os.makedirs(_ROOT / 'user/logs', exist_ok=True)
+        _startup_log = open(_ROOT / 'user/logs/startup_errors.log', 'a', encoding='utf-8')
+        _startup_log.write(f"\n--- Startup attempt ---\n")
+    except Exception:
+        pass
 
 def _log_startup_error(msg):
     """Log critical startup errors before main logging is ready."""
@@ -55,14 +73,14 @@ _USER_DIRS = [
 ]
 try:
     for d in _USER_DIRS:
-        os.makedirs(d, exist_ok=True)
+        os.makedirs(_ROOT / d, exist_ok=True)
 except Exception as e:
     _log_startup_error(f"Failed to create user dirs: {e}")
 
 # Copy default avatars if none exist in user dir
 def _init_avatars():
-    avatar_dir = 'user/public/avatars'
-    static_dir = 'interfaces/web/static/users'
+    avatar_dir = str(_ROOT / 'user/public/avatars')
+    static_dir = str(_ROOT / 'interfaces/web/static/users')
 
     # Check if ANY avatar already exists (any format)
     for role in ('user', 'assistant'):
@@ -93,14 +111,16 @@ _init_avatars()
 # (em-dash, smart quote, emoji) in a log record raises UnicodeEncodeError
 # inside emit(), which logging.handleError() swallows but the message is
 # lost. Companion fix to the stdout reconfigure above.
-file_handler = TimedRotatingFileHandler(
-    'user/logs/sapphire.log',
-    when='midnight',
-    interval=1,
-    backupCount=30,
-    encoding='utf-8',
-)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+file_handler = None
+if not _UNDER_PYTEST:
+    file_handler = TimedRotatingFileHandler(
+        _ROOT / 'user/logs/sapphire.log',
+        when='midnight',
+        interval=1,
+        backupCount=30,
+        encoding='utf-8',
+    )
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
 # Colored console formatter
 class ColoredFormatter(logging.Formatter):
@@ -119,9 +139,16 @@ class ColoredFormatter(logging.Formatter):
         msg = super().format(record)
         return f"{color}{msg}{self.RESET}" if color else msg
 
-# Console handler for terminal output
+# Console handler for terminal output. Windows: cmd.exe ships with VT
+# processing OFF, so raw ANSI renders as ←[97m garbage on every line —
+# plain formatter there (main.py strips its own ANSI for the same reason).
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+if sys.platform == 'win32':
+    console_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+else:
+    console_handler.setFormatter(
+        ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
 # Configure root logger
 root_logger = logging.getLogger()
@@ -131,28 +158,50 @@ root_logger.setLevel(logging.INFO)
 for handler in root_logger.handlers[:]:
     root_logger.removeHandler(handler)
 
-# Add both handlers
-root_logger.addHandler(file_handler)
+# Add both handlers (file only outside pytest — see _UNDER_PYTEST above)
+if file_handler is not None:
+    root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
-# Quiet down noisy loggers
-logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+# Quiet down noisy third-party loggers. These flood with wire-level chatter —
+# httpx/httpcore request bytes, telethon MTProto keepalive PINGs (~every 20-30s),
+# discord gateway heartbeats — that drowns Sapphire's own diagnostics and, at
+# volume on slow disks, turns logging into a syscall storm (every record is
+# flushed to disk + stdout). WARNING still surfaces real errors (disconnects,
+# auth failures). Pinned independently of the root level so they stay quiet even
+# when the user flips LOG_LEVEL=DEBUG to debug Sapphire itself.
+_NOISY_LOGGERS = ('uvicorn.access', 'telethon', 'httpx', 'httpcore', 'discord')
+
+def _quiet_noisy_loggers():
+    # LOG_LEVEL=DEBUG lifts the pin: py-cord's gateway/heartbeat lines are the
+    # diagnostics a stuck login needs, and they were unreachable from the UI
+    # (Discord hunt 2.13.0, row 83). Any other level keeps the libraries quiet.
+    # uvicorn.access stays pinned at every level — one line per HTTP request
+    # would drown the diagnostics the user flipped to DEBUG to see.
+    if logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+        for _name in _NOISY_LOGGERS:
+            logging.getLogger(_name).setLevel(logging.WARNING if _name == 'uvicorn.access' else logging.NOTSET)
+        return
+    for _name in _NOISY_LOGGERS:
+        logging.getLogger(_name).setLevel(logging.WARNING)
+
+_quiet_noisy_loggers()
 
 
 def set_log_level(level_name):
     """Hot-apply root logger level. Called on boot with config.LOG_LEVEL and
     via settings reload callback when the user changes the setting.
 
-    uvicorn.access stays pinned at WARNING regardless — HTTP access log noise
-    bleeding back at DEBUG would drown the actual diagnostic content the user
-    flipped to DEBUG to see."""
+    The noisy third-party loggers (_NOISY_LOGGERS) stay pinned at WARNING
+    regardless — their wire-level chatter bleeding back at DEBUG would drown the
+    diagnostic content the user flipped to DEBUG to see."""
     name = (level_name or "INFO").upper()
     level = getattr(logging, name, None)
     if not isinstance(level, int):
         root_logger.warning(f"Unknown log level {level_name!r}; keeping current")
         return
     root_logger.setLevel(level)
-    logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+    _quiet_noisy_loggers()
     root_logger.info(f"Log level set to {name}")
 
 # Windows: asyncio ProactorEventLoop logs harmless ConnectionResetError on socket cleanup

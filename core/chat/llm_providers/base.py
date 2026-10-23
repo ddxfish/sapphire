@@ -24,6 +24,34 @@ RETRY_STATUS_CODES = {429, 529}  # Rate limit codes (429 standard, 529 Anthropic
 T = TypeVar('T')
 
 
+def server_answered(exc: Exception) -> bool:
+    """True if an API-client exception means the HOST RESPONDED with an HTTP status
+    (4xx/5xx) — i.e. the server is REACHABLE even if the probed endpoint (e.g.
+    /models) is broken. False for connection/DNS/timeout errors (genuinely
+    unreachable). Health checks use this so a flaky side-endpoint (e.g. Fireworks'
+    /models returning 500) doesn't falsely mark a working provider dead — the
+    actual completion is the real source of truth. 2026-06-21."""
+    try:
+        import openai
+        return isinstance(exc, openai.APIStatusError)
+    except Exception:
+        return False
+
+
+# HTTP statuses that mean "this key/account is refused". A provider answering
+# one of these on its probe is DEAD for fallback purposes: a refused key never
+# fixes itself mid-turn, and the old any-status-is-alive verdict selected such
+# a provider every turn in Auto mode while everything behind it in the order
+# never ran (scout F2, 2026-09-20).
+AUTH_DEAD_STATUSES = {401, 402, 403}
+
+
+def http_status(exc: Exception):
+    """The HTTP status an API-client exception carries, or None."""
+    code = getattr(exc, 'status_code', None)
+    return code if isinstance(code, int) else None
+
+
 def retry_on_rate_limit(func: Callable[..., T], *args, **kwargs) -> T:
     """
     Execute a function with exponential backoff retry on rate limit errors.
@@ -165,7 +193,7 @@ class BaseProvider(ABC):
         self.base_url = llm_config.get('base_url', '')
         self.api_key = llm_config.get('api_key', '')
         self.model = llm_config.get('model', '')
-        self.health_check_timeout = llm_config.get('timeout', 0.5)
+        self.health_check_timeout = llm_config.get('timeout', 3.0)
         self.request_timeout = request_timeout
         self._client = None
     
@@ -176,7 +204,17 @@ class BaseProvider(ABC):
     
     @property
     def supports_images(self) -> bool:
-        """Whether this provider supports image inputs. Override in subclasses."""
+        """Whether this provider supports image inputs.
+
+        The per-provider config override `supports_images` (the vision 👁
+        checkbox on custom providers) wins when set — True/False forces it;
+        None/unset falls through to the subclass default (False here).
+        Subclasses for known-vision APIs (claude, gemini, responses) override
+        with unconditional True; openai_compat layers name/host heuristics.
+        """
+        override = self.config.get('supports_images')
+        if override is not None:
+            return bool(override)
         return False
     
     @abstractmethod
@@ -309,7 +347,7 @@ class BaseProvider(ABC):
             Tools in provider-specific format
         """
         # Strip internal fields that APIs don't accept
-        internal_fields = {'network', 'is_local'}
+        internal_fields = {'network', 'is_local', 'loop_warn_after', 'loop_warn_message', 'hidden'}
         cleaned = []
         for tool in tools:
             clean_tool = {k: v for k, v in tool.items() if k not in internal_fields}

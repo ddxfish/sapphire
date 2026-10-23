@@ -21,7 +21,10 @@ class TestScopeRegistry:
 
     def test_all_scopes_present(self):
         expected = {'memory', 'goal', 'knowledge', 'people', 'email',
-                    'bitcoin', 'gcal', 'telegram', 'discord', 'rag', 'private'}
+                    'bitcoin', 'gcal', 'telegram', 'discord', 'rag', 'private',
+                    # tool_context: v3-metadata plumbing ContextVar (setting=None) —
+                    # rides the scope registry to carry chat/persona/model to tools.
+                    'tool_context'}
         assert set(SCOPE_REGISTRY.keys()) == expected
 
     def test_each_entry_has_required_keys(self):

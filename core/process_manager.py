@@ -44,13 +44,22 @@ def kill_process_on_port(port: int) -> bool:
                 capture_output=True, text=True, timeout=5,
                 encoding='utf-8', errors='replace',
             )
+            killed = False
+            # "TCP  0.0.0.0:5012  0.0.0.0:0  LISTENING  1234" — compare the port
+            # EXACTLY: the old substring test on ':5012' also matched :50120-9,
+            # taskkilled a stranger, then returned before reaching the real orphan.
             for line in result.stdout.splitlines():
-                if f':{port}' in line and 'LISTENING' in line:
-                    pid = int(line.strip().split()[-1])
-                    if pid > 0:
-                        subprocess.run(['taskkill', '/F', '/PID', str(pid)], timeout=5)
-                        logger.info(f"Killed orphan process {pid} on port {port}")
-                        return True
+                parts = line.split()
+                if len(parts) < 5 or parts[3] != 'LISTENING':
+                    continue
+                if parts[1].rsplit(':', 1)[-1] != str(port):
+                    continue
+                pid = int(parts[-1])
+                if pid > 0:
+                    subprocess.run(['taskkill', '/F', '/PID', str(pid)], timeout=5)
+                    logger.info(f"Killed orphan process {pid} on port {port}")
+                    killed = True
+            return killed
         except Exception:
             pass
         return False
@@ -107,7 +116,7 @@ class ProcessManager:
     """A generic class to manage the lifecycle of an external script process."""
     
     def __init__(self, script_path: Path, log_name: str, base_dir: Path, command_args: list = None,
-                 env_callback=None):
+                 env_callback=None, python_exe=None):
         """
         Initializes the ProcessManager.
         Args:
@@ -123,20 +132,27 @@ class ProcessManager:
                 (current default — unchanged behavior). Added 2026-04-21 to
                 replace the ProcessManager.start() monkey-patch pattern used by
                 qwen3-tts / f5-tts plugins.
+            python_exe (str|Path, optional): Interpreter used for .py scripts.
+                Defaults to sys.executable (the main Sapphire env). Plugin
+                services with their own conda env pass that env's python here.
         """
         self.process = None
         self.script_path = script_path
         self.log_file = base_dir / "user" / "logs" / f"{log_name}.log"
         self.command = command_args or [str(self.script_path)]
+        self._explicit_command = command_args is not None
+        self._python_exe = str(python_exe) if python_exe else None
         self._monitor_thread = None
         self._monitor_running = False
         self._env_callback = env_callback
 
     def start(self):
         """Starts the external script."""
-        # Prepend python interpreter for .py files
-        if self.script_path.suffix == '.py':
-            self.command = [sys.executable, str(self.script_path)]
+        # Prepend python interpreter for .py files (unless the caller gave an
+        # explicit command — historically this branch silently clobbered
+        # command_args for .py scripts).
+        if self.script_path.suffix == '.py' and not self._explicit_command:
+            self.command = [self._python_exe or sys.executable, str(self.script_path)]
         elif not self.script_path.exists():
             logger.error(f"Manager Error: Script not found at {self.script_path}")
             return False
@@ -169,6 +185,15 @@ class ProcessManager:
             # restarted at each Sapphire boot — there's no long-lived log needed,
             # and the append path was growing the file unboundedly (Scout 1
             # finding 2026-04-19, measured 2.1MB already, linear per-utterance).
+            # BUT keep ONE previous generation: truncate-per-spawn erased the
+            # crash traceback the respawn was reacting to — the evidence
+            # self-destructed on a 12-second timer during crash loops
+            # (X1 F6 / negspace N21, 2026-08-31).
+            try:
+                if self.log_file.exists() and self.log_file.stat().st_size > 0:
+                    self.log_file.replace(self.log_file.with_name(self.log_file.name + ".prev"))
+            except OSError:
+                pass
             with open(self.log_file, "w") as log:
                 if IS_WINDOWS:
                     # Windows: no process groups, just start the process
@@ -251,22 +276,39 @@ class ProcessManager:
         
         def _monitor():
             logger.info(f"Monitor started for '{self.script_path.name}' (interval: {check_interval}s)")
-            
+            retry_warns = 0  # throttle for the never-started branch (wave-3 A2)
+
             while self._monitor_running:
                 time.sleep(check_interval)
                 
                 if not self._monitor_running:
                     break
                 
-                if self.process and self.process.poll() is not None:
-                    exit_code = self.process.returncode
-                    logger.info(f"Process '{self.script_path.name}' died (exit code {exit_code}), restarting...")
-                    
+                if self.process is None or self.process.poll() is not None:
+                    if self.process is not None:
+                        exit_code = self.process.returncode
+                        logger.info(f"Process '{self.script_path.name}' died (exit code {exit_code}), restarting...")
+                    else:
+                        # Initial start() failed -> self.process stayed None and
+                        # the old `if self.process and ...` condition was False
+                        # FOREVER: monitor alive, child never retried, TTS just
+                        # silently off (X1 F5 / negspace N21, 2026-08-31).
+                        # Throttled: a permanently-failing service would
+                        # otherwise WARN every interval (~5,700/day). First 3,
+                        # then every 20th — still visible, no longer a firehose
+                        # (wave-3 A2).
+                        retry_warns += 1
+                        if retry_warns <= 3 or retry_warns % 20 == 0:
+                            logger.warning(f"Process '{self.script_path.name}' has no live process "
+                                           f"(initial start failed?) — retrying start "
+                                           f"(attempt {retry_warns})...")
+
                     # Brief delay before restart
                     time.sleep(2)
                     
                     if self._monitor_running:
-                        self.start()
+                        if self.start():
+                            retry_warns = 0  # healthy again — reset throttle
             
             logger.info(f"Monitor stopped for '{self.script_path.name}'")
         

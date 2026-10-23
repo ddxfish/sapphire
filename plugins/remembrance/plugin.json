@@ -1,0 +1,35 @@
+{
+  "name": "remembrance",
+  "short_display_name": "Remembrance",
+  "version": "1.1.0",
+  "description": "Offsite encrypted backups to the zero-knowledge Remembrance vault. The app encrypts before upload; the server never sees your data or password.",
+  "author": "Trinity (Krem, Claude, Sapphire)",
+  "url": "https://remembrance.sapphireblue.dev",
+  "icon": "🛰️",
+  "priority": 50,
+  "default_enabled": false,
+  "capabilities": {
+    "tools": ["tools/remembrance.py"],
+    "schedule": [
+      {
+        "name": "Remembrance offsite backup",
+        "cron": "0 * * * *",
+        "handler": "schedule.py",
+        "enabled": true,
+        "description": "Hourly check — uploads an offsite backup at the configured hour when auto-backup is on."
+      }
+    ],
+    "routes": [
+      {"method": "GET", "path": "config", "handler": "routes/manage.py:get_config"},
+      {"method": "PUT", "path": "account", "handler": "routes/manage.py:put_account"},
+      {"method": "PUT", "path": "password", "handler": "routes/manage.py:put_password"},
+      {"method": "PUT", "path": "config", "handler": "routes/manage.py:put_config"},
+      {"method": "GET", "path": "status", "handler": "routes/manage.py:status"},
+      {"method": "GET", "path": "download/{backup_id}", "handler": "routes/manage.py:download_blob"},
+      {"method": "POST", "path": "backup", "handler": "routes/manage.py:do_backup"},
+      {"method": "POST", "path": "restore", "handler": "routes/manage.py:restore"},
+      {"method": "DELETE", "path": "backup/{backup_id}", "handler": "routes/manage.py:del_backup"},
+      {"method": "POST", "path": "test", "handler": "routes/manage.py:test"}
+    ]
+  }
+}

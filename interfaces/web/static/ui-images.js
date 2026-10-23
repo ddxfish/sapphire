@@ -227,6 +227,7 @@ function await_createCodeBlock() {
 
 // Image modal functions (defined before createUserImageThumbnails which uses them)
 let modalGalleryImages = [];
+let modalFallbacks = [];
 let modalCurrentIndex = -1;
 
 const updateModalNav = () => {
@@ -255,7 +256,7 @@ const navigateModal = (delta) => {
     if (newIndex < 0 || newIndex >= modalGalleryImages.length) return;
     modalCurrentIndex = newIndex;
     const modalImg = document.getElementById('image-modal-img');
-    if (modalImg) modalImg.src = modalGalleryImages[modalCurrentIndex];
+    if (modalImg) modalImg.src = modalGalleryImages[modalCurrentIndex];   // onerror → fallback
     updateModalNav();
 };
 
@@ -266,17 +267,25 @@ export const closeImageModal = () => {
     modal.style.display = 'none';
     document.body.style.overflow = '';
     modalGalleryImages = [];
+    modalFallbacks = [];
     modalCurrentIndex = -1;
 };
 
-export const openImageModal = (src, galleryImages = null, currentIndex = -1) => {
+// fallbacks: one per galleryImages entry — shown when the full-size source
+// won't load (a web host refusing the proxied original; the tile is ours).
+export const openImageModal = (src, galleryImages = null, currentIndex = -1, fallbacks = null) => {
     const modal = document.getElementById('image-modal');
     const modalImg = document.getElementById('image-modal-img');
     if (!modal || !modalImg) return;
 
-    modalImg.src = src;
     modalGalleryImages = galleryImages || [];
+    modalFallbacks = fallbacks || [];
     modalCurrentIndex = currentIndex;
+    modalImg.onerror = () => {
+        const fb = modalFallbacks[modalCurrentIndex];
+        if (fb && modalImg.src !== fb && !modalImg.src.endsWith(fb)) modalImg.src = fb;
+    };
+    modalImg.src = src;
 
     modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
@@ -311,7 +320,10 @@ export const createUserImageThumbnails = (images) => {
     
     images.forEach(img => {
         const imgEl = document.createElement('img');
-        imgEl.src = `data:${img.media_type};base64,${img.data}`;
+        // Stored images (image upgrade 2026-09-10) come as {id}; the live send
+        // and legacy rows still carry base64.
+        imgEl.src = img.id ? `/api/tool-image/${encodeURIComponent(img.id)}`
+                           : `data:${img.media_type};base64,${img.data}`;
         imgEl.className = 'user-image-thumb';
         imgEl.alt = 'Attached image';
         imgEl.onclick = (e) => {
@@ -325,6 +337,10 @@ export const createUserImageThumbnails = (images) => {
     return container;
 };
 
+// Never forced from here: a forced snap re-arms sticky, so an image landing
+// in a background re-render yanked a reader who had scrolled up (the
+// sticky-v2 + keepTop fixes never reached this owner; pre-push hunt
+// 2026-09-08, D3-B2). Chat load/switch force themselves before images load.
 export const scheduleScrollAfterImages = (scrollCallback, force = false) => {
     if (scrollAfterImagesTimeout) {
         clearTimeout(scrollAfterImagesTimeout);
@@ -345,11 +361,18 @@ export const scheduleScrollAfterImages = (scrollCallback, force = false) => {
  * @returns {HTMLImageElement}
  */
 export const createImageElement = (imageId, isHistoryRender = false, scrollCallback = null) => {
+    if (!imageId.startsWith('tool:')) {
+        // Pre-2026-09 SDXL markers pointed at a live proxy route to the SDXL box —
+        // those bytes never lived inside Sapphire and the route is gone. One
+        // honest placeholder, no fetch, no 20-retry loop.
+        const gone = document.createElement('span');
+        gone.dataset.imageGone = 'true';
+        gone.dataset.imageId = imageId;
+        gone.textContent = 'image no longer available';
+        return gone;
+    }
     const img = document.createElement('img');
-    const isToolImage = imageId.startsWith('tool:');
-    const imgUrl = isToolImage
-        ? `/api/tool-image/${imageId.slice(5)}`
-        : `/api/sdxl-image/${imageId}`;
+    const imgUrl = `/api/tool-image/${imageId.slice(5)}`;
     img.src = imgUrl;
     img.className = 'inline-image';
     img.alt = 'Generated image';
@@ -357,7 +380,7 @@ export const createImageElement = (imageId, isHistoryRender = false, scrollCallb
     img.dataset.retryCount = '0';
 
     // Tool images are in the DB — no generation delay, minimal retries
-    const MAX_RETRIES = isToolImage ? 2 : 20;
+    const MAX_RETRIES = 2;
 
     // Track this image if it's from history render
     if (isHistoryRender) {
@@ -370,7 +393,7 @@ export const createImageElement = (imageId, isHistoryRender = false, scrollCallb
             if (isHistoryRender && pendingImages.has(imageId)) {
                 pendingImages.delete(imageId);
                 if (scrollCallback) {
-                    scheduleScrollAfterImages(scrollCallback, true);
+                    scheduleScrollAfterImages(scrollCallback);   // follow only while stuck (D3-B2)
                 }
             }
 
@@ -390,7 +413,7 @@ export const createImageElement = (imageId, isHistoryRender = false, scrollCallb
             if (isHistoryRender && pendingImages.has(imageId)) {
                 pendingImages.delete(imageId);
                 if (scrollCallback) {
-                    scheduleScrollAfterImages(scrollCallback, true);
+                    scheduleScrollAfterImages(scrollCallback);   // follow only while stuck (D3-B2)
                 }
             }
             return;

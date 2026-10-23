@@ -7,73 +7,68 @@ from unittest.mock import patch, MagicMock
 
 
 class TestGetConfigDir:
-    """Test platform-specific config directory resolution."""
-    
+    """Test platform-specific config directory resolution.
+
+    get_config_dir() reads sys.platform / os.environ / Path.home() at CALL
+    time, so the patches apply without reloading the module. The old
+    `importlib.reload(core.setup)` under a patched Path.home rebound the
+    module-level CONFIG_DIR to /home/test for the rest of the session —
+    core.api_tokens (imported lazily) then bound ITS config dir to it and
+    test_api_tokens failed 12 tests whenever this file ran first (pre-push
+    hunt 2026-09-08, E4#2)."""
+
     def test_windows_uses_appdata(self):
         """Windows should use %APPDATA%/Sapphire."""
+        from core.setup import get_config_dir
         with patch.object(sys, 'platform', 'win32'):
             with patch.dict(os.environ, {'APPDATA': 'C:\\Users\\Test\\AppData\\Roaming'}):
-                # Re-import to pick up patches
-                import importlib
-                import core.setup as setup_module
-                importlib.reload(setup_module)
-                
-                result = setup_module.get_config_dir()
-                
+                result = get_config_dir()
                 assert 'Sapphire' in str(result)
                 assert 'AppData' in str(result) or 'Roaming' in str(result)
-    
+
     def test_windows_fallback_without_appdata(self):
         """Windows should fallback to home directory if APPDATA not set."""
+        from core.setup import get_config_dir
         with patch.object(sys, 'platform', 'win32'):
             with patch.dict(os.environ, {}, clear=True):
                 with patch.object(Path, 'home', return_value=Path('C:/Users/Test')):
-                    import importlib
-                    import core.setup as setup_module
-                    importlib.reload(setup_module)
-                    
-                    result = setup_module.get_config_dir()
-                    
+                    result = get_config_dir()
                     assert 'Sapphire' in str(result)
-    
+
     def test_macos_uses_library(self):
         """macOS should use ~/Library/Application Support/Sapphire."""
+        from core.setup import get_config_dir
         with patch.object(sys, 'platform', 'darwin'):
             with patch.object(Path, 'home', return_value=Path('/Users/test')):
-                import importlib
-                import core.setup as setup_module
-                importlib.reload(setup_module)
-                
-                result = setup_module.get_config_dir()
-                
+                result = get_config_dir()
                 assert 'Library' in str(result)
                 assert 'Application Support' in str(result)
                 assert 'Sapphire' in str(result)
-    
+
     def test_linux_uses_xdg_config(self):
         """Linux should use XDG_CONFIG_HOME/sapphire if set."""
+        from core.setup import get_config_dir
         with patch.object(sys, 'platform', 'linux'):
             with patch.dict(os.environ, {'XDG_CONFIG_HOME': '/custom/config'}):
-                import importlib
-                import core.setup as setup_module
-                importlib.reload(setup_module)
-                
-                result = setup_module.get_config_dir()
-                
+                result = get_config_dir()
                 assert '/custom/config' in str(result) or 'sapphire' in str(result).lower()
-    
+
     def test_linux_fallback_to_dotconfig(self):
         """Linux should fallback to ~/.config/sapphire."""
+        from core.setup import get_config_dir
         with patch.object(sys, 'platform', 'linux'):
             with patch.dict(os.environ, {}, clear=True):
                 with patch.object(Path, 'home', return_value=Path('/home/test')):
-                    import importlib
-                    import core.setup as setup_module
-                    importlib.reload(setup_module)
-                    
-                    result = setup_module.get_config_dir()
-                    
+                    result = get_config_dir()
                     assert '.config' in str(result) or 'sapphire' in str(result).lower()
+
+    def test_module_constants_survive_this_file(self):
+        """Regression guard for the order pollution: no test here may rebind
+        core.setup.CONFIG_DIR (it is an import-time constant every reader
+        binds at ITS import)."""
+        import core.setup as setup_module
+        assert '/home/test' not in str(setup_module.CONFIG_DIR)
+        assert 'C:/Users/Test' not in str(setup_module.CONFIG_DIR)
 
 
 class TestEnsureConfigDirectory:

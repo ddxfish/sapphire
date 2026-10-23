@@ -268,8 +268,8 @@ def execute(function_name, arguments, config):
 | Export | Type | Default | Purpose |
 |--------|------|---------|---------|
 | `EMOJI` | `str` | — | Display icon (e.g. `'🌤️'`) |
-| `is_local` | `bool` or `str` | `True` | `True` = offline, `False` = needs network, `"endpoint"` = calls external API |
-| `network` | `bool` | `False` | Mark as network-dependent (highlighted in UI, routed through SOCKS proxy) |
+| `is_local` | `bool` or `str` | unset | `True` = fully local, `False` = needs network, `"endpoint"` = calls external API. Unset counts as non-local: private chats refuse the tool (fail-closed) |
+| `network` | `bool` | `False` | Mark as network-dependent — a UI badge only; it does not affect routing or the privacy gate |
 
 ```python
 EMOJI = '🌤️'
@@ -277,7 +277,7 @@ EMOJI = '🌤️'
 TOOLS = [{
     "type": "function",
     "is_local": False,       # uses network
-    "network": True,          # route through SOCKS if configured
+    "network": True,          # network badge in the UI
     "function": { ... }
 }]
 ```
@@ -351,7 +351,7 @@ WORKFLOW: tool_save(name, code) → tool_load() → tool is live
 TEMPLATE:
 ```python
 ENABLED = True
-EMOJI = '🔧'  # Pick an emoji that fits the tool
+EMOJI = '🔧'  # Optional — plugin icon in the UI
 AVAILABLE_FUNCTIONS = ['my_func']
 
 TOOLS = [
@@ -383,9 +383,9 @@ RULES:
 - execute() returns (string, bool) — (result_text, success)
 - plugin_settings = dict of THIS plugin's settings from Settings UI
 - description field is critical — AI uses it to decide WHEN to call
-- EMOJI = required, pick one that fits the tool's purpose
-- is_local: True=offline, False=network
-- network: True = routed through SOCKS proxy
+- EMOJI = optional plugin icon (skipping it just means no icon); pick one that fits the tool's purpose
+- is_local: True=fully local; False/"endpoint"=leaves the machine; UNSET=treated non-local (private chats refuse, fail-closed). network flag = UI badge only, never routing
+- network: True = network badge in the UI only (routing is the net facade's job, not this flag's)
 - Lazy imports for heavy deps (import inside execute, not at top)
 - No parameters: `"properties": {}, "required": []`
 

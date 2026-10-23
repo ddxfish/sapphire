@@ -37,6 +37,7 @@ let ttsEnabled = true;
 let sttEnabled = true;
 let sttReady = true;
 let promptPrivacyRequired = false;
+let convMode = { enabled: false, source: null };   // written by features/convo.js only
 
 // State getters/setters
 export const getHistLen = () => histLen;
@@ -52,8 +53,23 @@ export const getAbortController = () => currentAbortController;
 export const setAbortController = (ctrl) => { currentAbortController = ctrl; };
 export const getIsCancelling = () => isCancelling;
 export const setIsCancelling = (val) => { isCancelling = val; };
+// A tab that lost the feed of its own turn stops being its owner: the
+// controller goes, isProc stays — main.js's typing mirror holds the button and
+// Stop routes through /api/cancel by chat (features/viewer.js, 2026-09-15).
+export const releaseOwnership = () => { currentAbortController = null; isCancelling = false; };
 export const getPromptPrivacyRequired = () => promptPrivacyRequired;
 export const setPromptPrivacyRequired = (val) => { promptPrivacyRequired = val; };
+export const getConvo = () => convMode;
+export const setConvo = (v) => { convMode = { enabled: !!v?.enabled, source: v?.source || null }; };
+
+// The only writer of #send-btn's label. 'send' carries both a word and a
+// glyph; CSS picks one per viewport (mobile shows the glyph).
+export function setSendLabel(kind) {
+    const btn = elements?.sendBtn || document.getElementById('send-btn');
+    if (!btn) return;
+    if (kind === 'send') btn.innerHTML = '<span class="btn-txt">Send</span><span class="btn-ico" aria-hidden="true">\u27A4</span>';
+    else btn.textContent = kind === 'boot' ? '\u23F3' : '...';
+}
 
 export function setProc(proc) {
     isProc = proc;
