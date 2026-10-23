@@ -346,7 +346,8 @@
   },
 
   "setup": {
-    "SETUP_WIZARD_STEP": 0,
-    "_wizard_steps": "0=not started, 1=voice done, 2=audio done, 3=llm done, 4=complete"
+    "SETUP_COMPLETE": false,
+    "SETUP_STEP": "",
+    "SETUP_CONSENT": null
   }
 }

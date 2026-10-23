@@ -84,7 +84,7 @@ export default {
             <div class="system-tools" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
                 <h4 style="margin:0 0 10px;font-size:var(--font-sm)">Tools</h4>
                 <button class="btn-primary" id="sys-setup-wizard">Run Setup Wizard</button>
-                <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Configure LLM, audio, voice, and identity settings step by step.</p>
+                <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Her brain, voice and ears, audio, featured plugins and look, step by step.</p>
             </div>
 
             <div class="integrity-check" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
@@ -177,11 +177,7 @@ export default {
 
     attachListeners(ctx, el) {
         el.querySelector('#sys-setup-wizard')?.addEventListener('click', () => {
-            if (window.sapphireSetupWizard) {
-                window.sapphireSetupWizard.open(true);
-            } else {
-                ui.showToast('Setup wizard plugin not loaded', 'error');
-            }
+            import('../../core/router.js').then(r => r.switchView('setup'));
         });
 
         // ─── Install Integrity ──────────────────────────────────────────

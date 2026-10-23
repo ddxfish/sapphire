@@ -46,10 +46,10 @@ export default {
             ${Object.keys(customProviders).length ? '' : '<p class="text-muted" style="font-size:var(--font-sm)">Connect Fireworks, OpenRouter, LM Studio, and more \u2014 added providers join this list and reorder like the rest.</p>'}
             <div id="add-provider-wizard" style="display:none"></div>
 
-            <div style="margin-top:24px">
+            ${ctx.wizard ? '' : `<div style="margin-top:24px">
                 <h4 style="margin:0 0 12px">General</h4>
                 ${ctx.renderFields(this.generalKeys)}
-            </div>
+            </div>`}
         `;
     },
 

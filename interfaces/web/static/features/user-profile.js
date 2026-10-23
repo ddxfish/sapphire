@@ -55,10 +55,12 @@ export function initUserProfile() {
     }
 
     // Set initial state from cached init data
-    loadInitial();
+    refreshProfileBadge();
 }
 
-async function loadInitial() {
+// Paint the nav badge from init data: boot, and whenever the name may have
+// changed elsewhere (the setup wizard's You step, main.js fullResync).
+export async function refreshProfileBadge() {
     try {
         const data = await getInitData();
         currentUsername = data.settings?.DEFAULT_USERNAME || 'Human Protagonist';

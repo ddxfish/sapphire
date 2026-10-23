@@ -633,10 +633,11 @@ Login required, except the two doors a device opens with its own key.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/setup/provider-status` | Check STT/TTS provider readiness |
-| GET | `/api/setup/check-packages` | Check optional package installation status |
-| GET | `/api/setup/wizard-step` | Get current wizard step |
-| PUT | `/api/setup/wizard-step` | Set wizard step |
+| GET | `/api/setup/state` | Where setup stands: `complete`, the `step` to resume at, `consent` time, the `steps` that apply here, `managed`, `docker`, and `packages` (tts/stt/wakeword sets installed) |
+| PUT | `/api/setup/state` | `{complete?: bool, step?: id, consent?: true}`; the server stamps the consent time; a bad step is a 400 |
+| GET | `/api/setup/featured` | The plugins the wizard offers: title, blurb, icon, enabled, missing packages, settings tab, radio group |
+
+The wizard itself is the `#setup` view: it hosts the real Settings tabs, so provider readiness and model downloads are the provider switch jobs and their notification rows (above). Provider status and package checks have no routes of their own any more.
 
 ### Metrics (Token Usage)
 
@@ -709,7 +710,7 @@ ROUTE MODULES (core/routes/):
 - chat.py: chat + stream (SSE; one turn per chat — 409 if a turn is already live), cancel, events SSE, health/status/init, history editing, chat sessions + lifecycle (rename, archive, trim, repair, compress + status, bulk delete/clear/export, single export, prompt-preview)
 - content.py: prompts, prompt components, piece trash/rename/usage, toolsets, functions, spices, spice sets, personas (PNG character-card export.png / import-card, legacy JSON import)
 - settings.py: settings CRUD, credentials, SOCKS proxy + /api/socks/status, LLM providers + test + test-thinking, custom providers, presets, TTS/STT/embedding provider registries, system status, system prompt (read-only)
-- system.py: backup suite (list/create/delete/download tar.gz/health/estimate/restore/restore-upload/restore-result), audio devices, continuity tasks, setup wizard, avatars, restart/shutdown, update + cancel + last-update-result, integrity verify + repair, metrics, api-tokens, daemon events, dashboard system-info + component-status, runtime true-speech GET/PUT
+- system.py: backup suite (list/create/delete/download tar.gz/health/estimate/restore/restore-upload/restore-result), audio devices, continuity tasks, avatars, restart/shutdown, update + cancel + last-update-result, integrity verify + repair, metrics, api-tokens, daemon events, dashboard system-info + component-status, runtime true-speech GET/PUT
 - plugins.py: plugin listing/toggle/rescan/reload/surfaces, install/uninstall/revert/check-update, deps check/install, per-plugin conda envs (build-env, env-status, env DELETE), apps/games/themes/motions, plugin settings, HA/email/bitcoin/gcal/github/ssh routes
 - knowledge.py: embedding test/integrity/reembed, memory, goals, knowledge tabs/entries/dedup, people, per-chat RAG documents, export/import
 - tts.py: TTS generate/stream/preview/status/stop/test, voices, transcribe, mic active, STT VAD status/test, image upload

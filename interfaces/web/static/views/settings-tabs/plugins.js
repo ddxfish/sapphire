@@ -87,8 +87,6 @@ const DANGER_PLUGINS = {
 };
 
 // Plugins that own a nav-rail view
-const PLUGIN_NAV_MAP = { continuity: 'triggers' };
-
 // Prevent double-click race condition on toggles
 const toggling = new Set();
 
@@ -1312,12 +1310,6 @@ export default {
                     const { unregisterPluginSettings } = await import('../../shared/plugin-registry.js');
                     unregisterPluginSettings(name);
                     ctx.syncDynamicTabs();
-                }
-
-                const navView = PLUGIN_NAV_MAP[name];
-                if (navView) {
-                    const navBtn = document.querySelector(`.nav-item[data-view="${navView}"]`);
-                    if (navBtn) navBtn.style.display = data.enabled ? '' : 'none';
                 }
 
                 // Sync sidebar (settings tab list) — cheap, no grid rerender.

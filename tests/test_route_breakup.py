@@ -35,7 +35,9 @@ class TestRouteRegistration:
         "/api/knowledge/people", "/api/memory/scopes",
         # system.py
         "/api/backup/list", "/api/continuity/tasks",
-        "/api/setup/wizard-step", "/api/avatars",
+        "/api/avatars",
+        # setup.py
+        "/api/setup/state", "/api/setup/featured",
         # plugins.py
         "/api/webui/plugins", "/api/webui/plugins/config",
         "/api/plugins/install", "/api/plugins/rescan",

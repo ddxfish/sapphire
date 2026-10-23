@@ -1,4 +1,4 @@
-# core/routes/system.py - Backup, audio devices, continuity, setup wizard, avatars, system restart/shutdown
+# core/routes/system.py - Backup, audio devices, continuity, avatars, system restart/shutdown
 import asyncio
 import json
 import os
@@ -663,78 +663,6 @@ async def get_continuity_merged_timeline(request: Request, _=Depends(require_log
     hours_back = int(request.query_params.get("hours_back", 12))
     hours_ahead = int(request.query_params.get("hours_ahead", 12))
     return system.continuity_scheduler.get_merged_timeline(hours_back, hours_ahead)
-
-
-# =============================================================================
-# SETUP WIZARD ROUTES
-# =============================================================================
-
-@router.get("/api/setup/provider-status")
-async def provider_status(request: Request, _=Depends(require_login)):
-    """Check if STT/TTS providers are loaded and ready (not null)."""
-    system = get_system()
-    stt_status = "disabled"
-    tts_status = "disabled"
-    stt_provider = getattr(config, 'STT_PROVIDER', 'none')
-    tts_provider = getattr(config, 'TTS_PROVIDER', 'none')
-
-    if stt_provider and stt_provider != 'none':
-        try:
-            if hasattr(system, 'whisper_client') and system.whisper_client.is_available():
-                stt_status = "ready"
-            else:
-                stt_status = "loading"
-        except Exception:
-            stt_status = "loading"
-
-    if tts_provider and tts_provider != 'none':
-        try:
-            if hasattr(system, 'tts') and hasattr(system.tts, '_provider') and system.tts._provider.is_available():
-                tts_status = "ready"
-            else:
-                tts_status = "loading"
-        except Exception:
-            tts_status = "loading"
-
-    return {"stt": stt_status, "tts": tts_status}
-
-
-@router.get("/api/setup/check-packages")
-async def check_packages(request: Request, _=Depends(require_login)):
-    """Check optional packages. Returns format expected by setup wizard UI."""
-    checks = {
-        "tts": {"package": "Kokoro TTS", "requirements": "install/requirements-tts.txt", "mod": "kokoro"},
-        "stt": {"package": "Faster Whisper", "requirements": "install/requirements-stt.txt", "mod": "faster_whisper"},
-        "wakeword": {"package": "OpenWakeWord", "requirements": "install/requirements-wakeword.txt", "mod": "openwakeword"},
-    }
-    packages = {}
-    for key, info in checks.items():
-        try:
-            __import__(info["mod"])
-            installed = True
-        except ImportError:
-            installed = False
-        packages[key] = {"installed": installed, "package": info["package"], "requirements": info["requirements"]}
-    return {"packages": packages}
-
-
-@router.get("/api/setup/wizard-step")
-async def get_wizard_step(request: Request, _=Depends(require_login)):
-    """Get wizard step."""
-    from core.settings_manager import settings as sm
-    managed = sm.is_managed()
-    docker = sm.is_docker()
-    return {"step": getattr(config, 'SETUP_WIZARD_STEP', 'complete'), "managed": managed, "docker": docker}
-
-
-@router.put("/api/setup/wizard-step")
-async def set_wizard_step(request: Request, _=Depends(require_login)):
-    """Set wizard step."""
-    from core.settings_manager import settings
-    data = await request.json()
-    step = data.get('step', 'complete')
-    settings.set('SETUP_WIZARD_STEP', step, persist=True)
-    return {"status": "success", "step": step}
 
 
 # =============================================================================

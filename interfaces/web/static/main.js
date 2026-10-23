@@ -9,13 +9,13 @@ import { initVolumeControls } from './features/volume.js';
 import { initConvo } from './features/convo.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
-import { hasPendingActivate, fetchStatus } from './api.js';
+import { hasPendingActivate, fetchStatus, fetchChatList } from './api.js';
 import { getBoundChat } from './core/bound-chat.js';
-import { updateScene, updateSendButtonLLM } from './features/scene.js';
+import { updateScene, updateSendButtonLLM, resetProviderMeta } from './features/scene.js';
 import { applyTrimColor, setDefaultBackground } from './features/chat-settings.js';
 import { setInstanceColor } from './features/logo.js';
 import { refreshInitData } from './shared/init-data.js';
-import { initUserProfile } from './features/user-profile.js';
+import { initUserProfile, refreshProfileBadge } from './features/user-profile.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 import { setupImageHandlers } from './handlers/send-handlers.js';
 import { setupImageModal } from './ui-images.js';
@@ -23,7 +23,7 @@ import * as eventBus from './core/event-bus.js';
 import { getInitData } from './shared/init-data.js';
 
 // New architecture
-import { registerView, initRouter, getCurrentView } from './core/router.js';
+import { registerView, initRouter, getCurrentView, switchView } from './core/router.js';
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
 import { renderSurface } from './surface/surface.js';
 import { chatMode } from './surface/chat-mode.js';
@@ -62,6 +62,7 @@ const VIEW_MODULES = {
     store:    `./views/store.js${_v}`,
     notifications: `./views/notifications.js${_v}`,
     'video-guide': `./views/video-guide.js${_v}`,
+    setup:    `./views/setup.js${_v}`,
 };
 
 async function loadViews() {
@@ -428,7 +429,12 @@ async function init() {
 
         // Init nav rail + router (after data so chat sidebar loads with correct chat)
         initNavRail();
-        initRouter('chat');
+        // The setup wizard's boot gate (tmp/setup-wizard-plan.md): an unfinished
+        // setup opens the #setup view, and wins over a stale #chat hash. No init
+        // data (the fetch failed) = no gate.
+        const needSetup = initData?.setup?.complete === false;
+        initRouter(needSetup ? 'setup' : 'chat');
+        if (needSetup) switchView('setup');
         initVersionBadge();
 
         // Hide nav items for disabled plugins (non-blocking)
@@ -466,17 +472,6 @@ async function init() {
 
         // Auto-refresh interval (fallback - events handle most updates)
         setInterval(handleAutoRefresh, 30000);
-
-        // Setup wizard auto-show on first launch
-        const wizardStep = initData?.wizard_step;
-        if (typeof wizardStep === 'number' && wizardStep < 3) {
-            setTimeout(async () => {
-                try {
-                    const mod = await import(`./core-ui/setup-wizard/index.js${_v}`);
-                    if (mod.default?.init) await mod.default.init();
-                } catch (e) { console.warn('[Init] Setup wizard failed:', e); }
-            }, 500);
-        }
 
         console.log(`[Init] Complete in ${(performance.now() - t0).toFixed(0)}ms`);
 
@@ -522,10 +517,8 @@ function syncNavWithPlugins() {
         if (!d?.plugins) return;
         for (const [plugin, view] of Object.entries(PLUGIN_NAV_MAP)) {
             const p = d.plugins.find(x => x.name === plugin);
-            if (p && !p.enabled) {
-                const btn = document.querySelector(`.nav-item[data-view="${view}"]`);
-                if (btn) btn.style.display = 'none';
-            }
+            const btn = document.querySelector(`.nav-item[data-view="${view}"]`);
+            if (p && btn) btn.style.display = p.enabled ? '' : 'none';
         }
         // Auto-load plugin scripts (web/main.js) for enabled plugins
         loadPluginScripts(d.plugins);
@@ -568,10 +561,31 @@ function loadPluginScripts(plugins) {
 }
 
 // Re-check for new plugin scripts (called after plugin toggle/reload)
-function reloadPluginScripts() {
-    fetch('/api/webui/plugins').then(r => r.ok ? r.json() : null).then(d => {
-        if (d?.plugins) loadPluginScripts(d.plugins);
-    }).catch(() => {});
+async function resyncTrueSpeech() {
+    try {
+        const r = await fetch('/api/runtime/true-speech');
+        if (r.ok) {
+            const d = await r.json();
+            eventBus.dispatch('conversation_mode_changed',
+                { enabled: d.enabled === true, source: d.source || null });
+        }
+    } catch { /* offline — next resync covers it */ }
+}
+
+// Everything a server restart, an SSE gap or the setup wizard finishing can have
+// changed, painted again from the server: init data, the chat list, history,
+// the scene, conversation mode; then the two things boot paints once (the nav
+// profile badge, the send button's provider roster) and the rail items plugins
+// own. The wizard calls this instead of reloading the page (2026-10-22).
+export async function fullResync() {
+    await refreshInitData();
+    await populateChatDropdown();
+    await refresh(false);
+    await updateScene();
+    await resyncTrueSpeech();
+    refreshProfileBadge();
+    resetProviderMeta();
+    syncNavWithPlugins();
 }
 
 function initEventBus() {
@@ -845,6 +859,8 @@ function initEventBus() {
         if (data?.key === 'AVATARS_IN_CHAT') {
             ui.setAvatarsInChat(data.value !== false && data.value !== 'false');
         }
+        // the send button's provider badge reads a once-loaded roster (found in passing)
+        if (data?.key === 'LLM_PROVIDERS' || data?.key === 'LLM_CUSTOM_PROVIDERS') resetProviderMeta();
         refreshAndUpdateScene();
     });
     // Settings changes can move a chat between dropdown sections (the
@@ -878,7 +894,7 @@ function initEventBus() {
             // tab opening one must not drag this tab's Chat view onto it
             if (![...sel.options].some(o => o.value === name)) {
                 try {
-                    const list = await api.fetchChatList(undefined, { slim: true });
+                    const list = await fetchChatList(undefined, { slim: true });
                     const mode = (list?.chats || []).find(c => c.name === name)?.mode;
                     if (mode && mode !== 'chat') { populateChatDropdown(); return; }
                 } catch (e) { /* no list: adopt as before */ }
@@ -922,9 +938,11 @@ function initEventBus() {
 
     // Plugin reload/toggle — load new scripts
     eventBus.on(eventBus.Events.PLUGIN_RELOADED, (data) => {
-        reloadPluginScripts();
+        syncNavWithPlugins();
     });
-    document.addEventListener('sapphire:plugin_toggled', () => { refreshInitData(); reloadPluginScripts(); });
+    // the rail item a plugin owns (Continuity -> Triggers) follows the toggle here,
+    // whichever page toggled it (Settings > Plugins, the setup wizard's featured step)
+    document.addEventListener('sapphire:plugin_toggled', () => { refreshInitData(); syncNavWithPlugins(); });
 
     // In-place plugin update/revert — the plugin stays enabled throughout, so
     // the Map entry never drops and the OLD ES module survives until a hard
@@ -934,7 +952,7 @@ function initEventBus() {
         const name = e.detail?.plugin;
         if (name) _loadedPluginScripts.delete(name);
         refreshInitData();
-        reloadPluginScripts();
+        syncNavWithPlugins();
     });
 
     // Plugin load errors, task errors and backup alerts (sapphire_health_alert) are
@@ -945,17 +963,6 @@ function initEventBus() {
     // so a conversation_mode_changed fired during a gap is otherwise lost forever —
     // the toggle wedges dark while the mode is ON, and a dark button can never
     // send stop (2026-07-06 herring hunt: the phone one-way-trap reproducer).
-    const resyncTrueSpeech = async () => {
-        try {
-            const r = await fetch('/api/runtime/true-speech');
-            if (r.ok) {
-                const d = await r.json();
-                eventBus.dispatch('conversation_mode_changed',
-                    { enabled: d.enabled === true, source: d.source || null });
-            }
-        } catch { /* offline — next resync covers it */ }
-    };
-
     // Server restart detection — full state resync
     eventBus.on(eventBus.Events.SERVER_RESTARTED, async () => {
         console.log('[Main] Server restarted — full resync');
@@ -963,11 +970,7 @@ function initEventBus() {
         // (nothing to reattach to) and release a mirrored button.
         if (document.getElementById('streaming-message')) ui.detachStreaming();
         if (_mirrored()) { ui.hideStatus(); setProc(false); }
-        await refreshInitData();
-        await populateChatDropdown();
-        await refresh(false);
-        await updateScene();
-        await resyncTrueSpeech();
+        await fullResync();
     });
 
     // SSE reconnect — resync state in case events were missed during disconnect
@@ -978,11 +981,7 @@ function initEventBus() {
             return; // Skip initial connect — state is fresh from page load
         }
         console.log('[Main] SSE reconnected — resyncing state');
-        await refreshInitData();
-        await populateChatDropdown();
-        await refresh(false);
-        await updateScene();
-        await resyncTrueSpeech();
+        await fullResync();
     });
 
     // STT events

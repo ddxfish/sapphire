@@ -891,7 +891,9 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
 
         # Settings
         avatars_in_chat = getattr(config, 'AVATARS_IN_CHAT', False)
-        wizard_step = getattr(config, 'SETUP_WIZARD_STEP', 'complete')
+        # The setup wizard's boot gate (views/setup.js, main.js): complete, or the step to resume at
+        setup_state = {"complete": bool(getattr(config, 'SETUP_COMPLETE', False)),
+                       "step": getattr(config, 'SETUP_STEP', '') or ''}
 
         # Avatars
         STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
@@ -1019,7 +1021,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "NOTIFY_TOAST_SECONDS": getattr(config, 'NOTIFY_TOAST_SECONDS', 4),
                 "NOTIFY_TOAST_MIN_LEVEL": getattr(config, 'NOTIFY_TOAST_MIN_LEVEL', 'success') or 'success'
             },
-            "wizard_step": wizard_step,
+            "setup": setup_state,
             "avatars": avatars,
             "plugins_config": plugins_config,
             "scope_declarations": scope_declarations,

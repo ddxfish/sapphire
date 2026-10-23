@@ -47,6 +47,29 @@ EXTRAS = {
                 "Flashing from Chrome or Edge needs none of this.",
         'restart': False,                          # imported when first used: no restart
     },
+    # The voice sets the setup wizard offers (core/routes/setup.py). A provider
+    # is built fresh by the switch job, so none of these needs a restart.
+    'tts': {
+        'label': 'Kokoro, the local voice',
+        'file': 'install/requirements-tts.txt',
+        'modules': ('kokoro',),
+        'note': "the Kokoro speech engine and its audio packages; the voice model itself downloads on first use.",
+        'restart': False,
+    },
+    'stt': {
+        'label': 'Whisper, the local ear',
+        'file': 'install/requirements-stt.txt',
+        'modules': ('faster_whisper',),
+        'note': "Faster Whisper and its runtime; the speech model downloads on first use.",
+        'restart': False,
+    },
+    'wakeword': {
+        'label': 'Wake word listening',
+        'file': 'install/requirements-wakeword.txt',
+        'modules': ('openwakeword',),
+        'note': "openWakeWord, so she can listen for her name.",
+        'restart': False,
+    },
 }
 
 _lock = threading.Lock()

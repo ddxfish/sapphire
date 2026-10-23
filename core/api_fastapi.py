@@ -1004,9 +1004,11 @@ from core.routes.mcp import router as mcp_router
 from core.routes.rooms import router as rooms_router
 from core.routes.worker_door import router as worker_door_router
 from core.routes.notifications import router as notifications_router
+from core.routes.setup import router as setup_router
 
 app.include_router(chat_router)
 app.include_router(notifications_router)
+app.include_router(setup_router)
 app.include_router(tts_router)
 app.include_router(settings_router)
 app.include_router(content_router)

@@ -21,6 +21,14 @@ function _loadProviderMeta() {
         })
         .catch(() => { _providerMetaPending = null; });
 }
+// The roster changed (a provider added, renamed, removed): forget it, and refetch
+// now if a badge is up (it was loaded once and never invalidated, so a new
+// provider showed a prettified key and a cloud tint until reload).
+export function resetProviderMeta() {
+    _providerMeta = null;
+    _providerMetaPending = null;
+    if (_lastBadge) _loadProviderMeta();
+}
 export function setProviderMeta(list) {
     _providerMeta = {};
     for (const p of (list || [])) _providerMeta[p.key] = p;

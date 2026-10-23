@@ -240,6 +240,48 @@ class SettingsManager:
         except Exception as e:
             logger.error(f"[SETTINGS] Failed to persist migration: {e}")
 
+    def _migrate_setup_state(self):
+        """The old setup wizard stored an int step (0-4; 3 = its last required
+        step done, 4 = finished) under SETUP_WIZARD_STEP. The new wizard
+        (2026-10-22, tmp/setup-wizard-plan.md) stores SETUP_COMPLETE /
+        SETUP_STEP / SETUP_CONSENT. An install that reached 3 or 4 is complete;
+        anything else starts the new wizard. The old key leaves the file (and
+        the `_wizard_steps` comment key that was flattened in with it); it is
+        never reused."""
+        if 'SETUP_WIZARD_STEP' not in self._user and '_wizard_steps' not in self._user:
+            return
+        old = self._user.pop('SETUP_WIZARD_STEP', None)
+        self._user.pop('_wizard_steps', None)
+        try:
+            done = int(old) >= 3
+        except (TypeError, ValueError):
+            done = str(old) == 'complete'
+        # A value the new wizard already wrote wins over the old int.
+        set_complete = done and 'SETUP_COMPLETE' not in self._user
+        if set_complete:
+            self._user['SETUP_COMPLETE'] = True
+        logger.info(f"[SETTINGS] Setup wizard state migrated (old step {old!r} -> "
+                    f"{'complete' if done else 'not complete'})")
+        user_path = self.BASE_DIR / 'user' / 'settings.json'
+        try:
+            with open(user_path, 'r', encoding='utf-8-sig') as f:
+                nested = json.load(f)
+            for box in (nested, nested.get('setup') or {}):
+                box.pop('SETUP_WIZARD_STEP', None)
+                box.pop('_wizard_steps', None)
+            if set_complete:
+                nested.setdefault('setup', {})['SETUP_COMPLETE'] = True
+            with self._save_lock:
+                tmp_path = user_path.with_suffix('.json.tmp')
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(nested, f, indent=2)
+                    _fsync_file(f)
+                replace_with_retry(tmp_path, user_path)
+                _fsync_dir(user_path.parent)
+                self._last_mtime = user_path.stat().st_mtime
+        except Exception as e:
+            logger.error(f"[SETTINGS] Failed to persist the setup state migration: {e}")
+
     def _migrate_fireworks_affinity(self):
         """Fireworks session affinity moved from a host-sniff in openai_compat
         (per-API-key `user` field) to the generic `{session}` placeholder in
@@ -271,6 +313,7 @@ class SettingsManager:
         # Run migration before merge
         self._migrate_providers()
         self._migrate_fireworks_affinity()
+        self._migrate_setup_state()
 
         self._config = {**self._defaults, **self._user}
 
@@ -765,8 +808,8 @@ class SettingsManager:
             'BACKUPS_ENABLED', 'BACKUPS_KEEP_DAILY', 'BACKUPS_KEEP_WEEKLY',
             'BACKUPS_KEEP_MONTHLY', 'BACKUPS_KEEP_MANUAL', 'BACKUPS_ENCRYPT_LOCAL', 'BACKUPS_DIR',
             'DEVICE_FIRMWARE_SOURCE', 'DEVICE_FIRMWARE_SOURCES', 'DEVICE_FIRMWARE_SOURCES_OFF',   # read when the Devices page's flasher opens
-            # Setup wizard progress
-            'SETUP_WIZARD_STEP',
+            # Setup wizard state (core/routes/setup.py) - read per request
+            'SETUP_COMPLETE', 'SETUP_STEP', 'SETUP_CONSENT',
             # Conversation (true speech) mode tunables — read fresh on each activation
             'CONVERSATION_VAD_THRESHOLD', 'CONVERSATION_BARGE_HOLD_MS',
             'CONVERSATION_MIN_SPEECH_MS', 'CONVERSATION_ENDPOINT_SILENCE_MS',
