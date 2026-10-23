@@ -1000,6 +1000,7 @@ from core.routes.conversation import router as conversation_router
 from core.routes.vault import router as vault_router
 from core.routes.devices import router as devices_router
 from core.routes.wakeword import router as wakeword_router
+from core.routes.ir import router as ir_router
 from core.routes.mcp import router as mcp_router
 from core.routes.rooms import router as rooms_router
 from core.routes.worker_door import router as worker_door_router
@@ -1028,6 +1029,7 @@ app.include_router(conversation_router)
 app.include_router(vault_router)
 app.include_router(devices_router)
 app.include_router(wakeword_router)
+app.include_router(ir_router)
 app.include_router(mcp_router)
 app.include_router(rooms_router)
 app.include_router(worker_door_router)

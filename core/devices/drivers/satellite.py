@@ -43,7 +43,7 @@ SPEC = {
     'kind': 'Satellite',
     'icon': '\U0001f4e1',
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
-                     'buttons', 'sensors', 'firmware'],
+                     'buttons', 'sensors', 'firmware', 'ir'],
     # it calls Sapphire with its own key (wake, voice, text, events): the
     # address it calls from becomes its url, so a board set up from the
     # browser needs none typed, and a new DHCP lease is followed
@@ -548,6 +548,12 @@ def describe(device, config):
         'restart': {'help': 'restart the whole satellite. Back in about a minute', 'example': ''},
         'shutdown': {'help': 'switch it off. Someone must unplug and replug it to bring it back',
                      'example': ''},
+    }}
+    told['ir'] = {'label': 'IR blaster', 'help': 'send infrared remote codes to a TV or other appliance in that room',
+                  'actions': {
+        'blast': {'help': "send an IR code by name - '<appliance> <command>' from the IR library "
+                          "(e.g. 'tv power', 'tv mute'), or a raw NEC code as two hex bytes 'addr cmd' (04 08)",
+                  'example': 'tv power', 'values': '<appliance command | addr cmd>'},
     }}
     told['screen'] = {'label': 'Screen', 'help': 'its small screen: show puts words on it, picture puts an image on it', 'actions': {
         'show': {'help': 'words in a line across the top of its screen for a while. seconds= how long, 20 if left out. '
@@ -1463,6 +1469,23 @@ def run(device, capability, action, value, config, secrets, call_tool):
                     return f"'{name}' is not a usable sound name.", False
                 _call('POST', f'/audio/effect?name={name}', config, secrets, timeout=60)
                 return f"Played {name}.", True
+        if capability == 'ir' and action == 'blast':
+            v = str(value or '').strip()
+            parts = v.split()
+            if len(parts) == 2 and re.fullmatch(r'[0-9a-fA-F]{1,4}', parts[0]) and re.fullmatch(r'[0-9a-fA-F]{1,2}', parts[1]):
+                addr, cmd = int(parts[0], 16) & 0xffff, int(parts[1], 16) & 0xff   # a raw NEC code (addr up to 16-bit = extended)
+                _call('POST', f'/ir/blast?addr={addr:x}&cmd={cmd:02x}', config, secrets)
+                return f"Sent IR code {addr:x} {cmd:02x}.", True
+            from core.ir import library                                           # a name from the library
+            app, code = library.resolve(v)
+            if not code:
+                known = library.command_names()
+                return (f"No IR code named '{v}'." + (f" I know: {known}." if known else
+                        " The IR library is empty - add codes in Settings, or give a raw NEC code like 04 08.")), False
+            if code.get('protocol') != 'nec':
+                return f"The code for {app['name']} {code['name']} is {code.get('protocol')}, which this board cannot send yet.", False
+            _call('POST', f"/ir/blast?addr={int(code['addr']) & 0xffff:x}&cmd={int(code['cmd']) & 0xff:02x}", config, secrets)
+            return f"Sent {app['name']} {code['name']}.", True
         if capability == 'mic' and action == 'listen':
             return _listen(value, config, secrets)
         if capability == 'mic' and action == 'gain':

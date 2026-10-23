@@ -19,8 +19,10 @@ import { showToast } from '../../shared/toast.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { openFlash } from './device-flash.js';
 import { renderSectionTabs } from '../../shared/section-tabs.js';
+import { mount as mountIr } from './ir.js';
 
-const PANES = [{ id: 'list', label: 'Devices', icon: '\u{1F4E1}' }, { id: 'settings', label: 'Settings', icon: '\u{2699}\u{FE0F}' }];
+const PANES = [{ id: 'list', label: 'Devices', icon: '\u{1F4E1}' }, { id: 'settings', label: 'Settings', icon: '\u{2699}\u{FE0F}' },
+               { id: 'ir', label: 'IR', icon: '\u{1F4FA}' }];
 
 const API = '/api/devices';
 const ICON = String.fromCodePoint(0x1F39B, 0xFE0F);
@@ -58,6 +60,7 @@ function drawPage(container) {
     container.innerHTML = `
         <div id="dev-tabs" style="margin-bottom:14px">${renderSectionTabs(PANES, 'list')}</div>
         <div id="dev-pane-settings" style="display:none"></div>
+        <div id="dev-pane-ir" style="display:none"></div>
         <div id="dev-pane-list">
         <div class="setting-help" style="margin-bottom:12px">Machines and gadgets Sapphire can use by name. Only this page can add or change them.</div>
         <div id="dev-filter"></div>
@@ -83,10 +86,12 @@ function drawPage(container) {
         const tab = e.target.closest('.section-tab');
         if (!tab) return;
         container.querySelectorAll('#dev-tabs .section-tab').forEach(b => b.classList.toggle('active', b === tab));
-        const settings = tab.dataset.view === 'settings';
-        container.querySelector('#dev-pane-list').style.display = settings ? 'none' : '';
-        container.querySelector('#dev-pane-settings').style.display = settings ? '' : 'none';
-        if (settings) drawSettings(container.querySelector('#dev-pane-settings'));
+        const view = tab.dataset.view;
+        container.querySelector('#dev-pane-list').style.display = view === 'list' ? '' : 'none';
+        container.querySelector('#dev-pane-settings').style.display = view === 'settings' ? '' : 'none';
+        container.querySelector('#dev-pane-ir').style.display = view === 'ir' ? '' : 'none';
+        if (view === 'settings') drawSettings(container.querySelector('#dev-pane-settings'));
+        if (view === 'ir') mountIr(container.querySelector('#dev-pane-ir'));
     });
     container.querySelector('#dev-add-btn').addEventListener('click', () => openAdd());
     container.querySelector('#dev-board-btn').addEventListener('click', () => openAdd(true));
