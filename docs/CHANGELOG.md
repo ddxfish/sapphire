@@ -1,3 +1,6 @@
+# 2.15.5 - Setup Wizard
+- Complete rebuild of intro wizard on first boot
+- Added Infrared library for device manager
 # 2.15.4 - Notification Center
 - New System > Notification center
 - Routed all toasts through this
