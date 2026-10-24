@@ -108,7 +108,8 @@ def test_featured_step_toggles_live_and_installs_first():
     assert "const ok = await ensureExtra(`plugin:${p.name}`);" in p
     assert "if (p.enabled === on) return;" in p                     # the route toggles: only when it differs
     assert "for (const other of group) await flip(other, false);" in p
-    assert "w.navigate(b.dataset.setup)" in p
+    assert 'data-setup' not in p and 'navigate' not in p             # nothing on the step leaves the wizard
+    assert "${p.legacy ? ' legacy' : ''}" in p and '<span class="feat-tag">Legacy</span>' in p
     # on by default but not running for want of packages: an Install button, the install reloads it
     assert "const stalled = p => p.enabled && !p.loaded && !!needs(p);" in p
     assert 'data-install="${esc(p.name)}">Install</button>' in p and "if (await ensureExtra(`plugin:${p.name}`)) await load();" in p

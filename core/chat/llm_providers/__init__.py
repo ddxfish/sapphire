@@ -443,7 +443,7 @@ class ProviderRegistry(_BaseRegistry):
 
             provider = self.get_provider_by_key(provider_key, providers_config, request_timeout)
             if not provider:
-                trail.append((provider_key, 'could not be built'))
+                trail.append((provider_key, "couldn't start (check its API key and URL)"))
                 continue
             if require_images:
                 from core.chat.llm_providers.resolve import provider_sees
@@ -467,7 +467,7 @@ class ProviderRegistry(_BaseRegistry):
             # its server what it serves (unprobed lanes use only what is known).
             ensure = getattr(provider, 'ensure_model', None)      # a plugin's provider may not subclass BaseProvider
             if ensure and not ensure(fetch=probe):
-                trail.append((provider_key, 'no model set and none found on its server'))
+                trail.append((provider_key, 'has no model set, and its server named none'))
                 continue
             return (provider_key, provider)
 

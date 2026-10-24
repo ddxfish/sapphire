@@ -41,6 +41,7 @@ core.chat.llm_providers.get_provider_by_key / get_first_available_provider or
 the registry instance's methods keep intercepting.
 """
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -105,6 +106,54 @@ def display_name(key: str, conf: Optional[dict] = None) -> str:
     except Exception:
         meta = {}
     return str(conf.get('display_name') or meta.get('display_name') or key)
+
+
+# ── User words ──────────────────────────────────────────────────────────────
+# Errors here are shown in chat AND spoken in voice: say what happened, where to
+# click (the UI's own labels), fix first and detail last, never a class name.
+# The trail strings stay as they are for the log; these read them.
+
+def health_words(err, timeout=None) -> str:
+    """A failed health probe as a clause: '{name} <this>'."""
+    e = str(err or '').lower()
+    if any(k in e for k in ('http 401', 'http 403', 'authentication', 'permissiondenied')):
+        return "refused its API key (check the key in Settings › LLM)"
+    if 'http 402' in e:
+        return "says the account is out of credits"
+    if 'timeout' in e:
+        t = f" in {timeout} s" if timeout else ""
+        return (f"didn't answer{t} (if it's just slow, raise its Health timeout in Settings › LLM)")
+    if 'connect' in e:
+        return "couldn't be reached (is it running?)"
+    return "didn't answer"
+
+
+def _sick_words(why) -> str:
+    """The trail's 'not answering (APITimeoutError, 0.3s)' as user words."""
+    m = re.match(r"not answering \((.*), ([\d.]+)s\)", why)
+    return health_words(m.group(1), m.group(2)) if m else health_words(why)
+
+
+def auto_words(trail, private=False) -> str:
+    """Auto found nothing: lead with the one fix that matters most."""
+    def named(test):
+        return [display_name(k) for k, w in trail if test(w)]
+    left_out = named(lambda w: w == 'left out of Auto')
+    sick = [(k, w) for k, w in trail if w.startswith('not answering')]
+    if private and named(lambda w: w == 'not local (private chat)'):
+        return ("This chat is private, so Auto only uses providers marked \"Local / private server\". "
+                "Tick that on a local provider in Settings › LLM, or turn off private chat.")
+    if left_out:
+        return (f"Auto skips {', '.join(left_out)} because \"Include in Auto fallback\" is unticked. "
+                f"Tick it in Settings › LLM › {left_out[0]}, or pick it as this chat's provider.")
+    if sick:
+        return "No LLM that's turned on answered: " + '; '.join(
+            f"{display_name(k)} {_sick_words(w)}" for k, w in sick) + "."
+    if all(w in ('off', 'not configured') for _, w in trail):
+        return ("No LLM is turned on, so Auto has nothing to use. Open Settings › LLM and flip "
+                "the switch on the right of a provider's row.")
+    return ("Auto couldn't find an LLM to use. Check your providers in Settings › LLM ("
+            + ' · '.join(f"{display_name(k)}: {w}" for k, w in trail if w != 'off') + ").")
 
 
 def provider_sees(provider) -> bool:
@@ -196,7 +245,8 @@ def _prompt_gate(prompt_name, private: bool) -> None:
         raise
     except Exception as e:
         logger.error(f"Prompt-privacy check failed (defaulting to BLOCK): {e}")
-        raise PrivacyRefused("Prompt-privacy check encountered an error — blocking for safety. Check logs.")
+        raise PrivacyRefused("Couldn't check whether this chat's prompt is private, so the reply was "
+                             "blocked to be safe. Try again; if it keeps happening, re-save the prompt.")
 
 
 def resolve(primary, model: str = '', *, private: bool = False, prompt_name=None,
@@ -220,7 +270,8 @@ def resolve(primary, model: str = '', *, private: bool = False, prompt_name=None
         _prompt_gate(prompt_name, private)
 
     if primary == 'none':
-        raise LLMDisabled("LLM disabled for this chat (llm_primary=none)")
+        raise LLMDisabled("This chat's provider is set to None, so there's no LLM to answer. "
+                          "Pick Auto or a provider in the chat sidebar.")
 
     if primary != 'auto':
         return _pinned(primary, model, cfg, private, timeout, health, require_images, conversation)
@@ -235,17 +286,28 @@ def _pinned(key, model, cfg, private, timeout, health, require_images, conversat
             local = is_local(key, conf)
         except Exception as e:
             logger.error(f"Privacy check failed (defaulting to BLOCK): {e}")
-            raise PrivacyRefused("Privacy check encountered an error — blocking provider for safety. Check logs.")
+            raise PrivacyRefused(f"Couldn't confirm {name} is local, so it's blocked in this private chat "
+                                 f"to be safe. Pick a provider marked \"Local / private server\" in Settings › LLM.")
         if not local:
             raise PrivacyRefused(
-                f"Provider '{name}' is not marked local/private-safe and is blocked in this "
-                f"private chat. Tick 'Local / private server' on the model or turn off private chat.")
+                f"{name} isn't marked \"Local / private server\", so it's blocked in this private chat. "
+                f"Tick that box in Settings › LLM › {name}, or turn off private chat.")
     provider = _lp().get_provider_by_key(key, cfg, timeout, model_override=model)
     if not provider:
-        raise ProviderUnavailable(f"Provider '{name}' not configured or disabled")
+        if key not in cfg:
+            raise ProviderUnavailable(
+                f"This chat uses '{name}', which isn't set up anymore. "
+                f"Pick another provider in the chat sidebar.")
+        if not conf.get('enabled', False):
+            raise ProviderUnavailable(
+                f"This chat uses {name}, which is turned off. Turn it on in Settings › LLM "
+                f"(the switch on the right of its row), or pick another provider in the chat sidebar.")
+        raise ProviderUnavailable(
+            f"{name} couldn't be started. Check its API key and URL in Settings › LLM › {name}.")
     provider.conversation = conversation or None
     if require_images and not provider_sees(provider):
-        raise ProviderUnavailable(f"Provider '{name}' does not support images")
+        raise ProviderUnavailable(f"{name} can't see images. Pick a vision model for this chat, "
+                                  f"or tick \"Vision model\" in Settings › LLM › {name} if it can.")
     if health != 'skip':
         # A pinned provider has no fallback — it just raises — so the probe
         # is pure added latency on every turn; a pass is trusted for
@@ -264,7 +326,9 @@ def _pinned(key, model, cfg, private, timeout, health, require_images, conversat
             why = getattr(provider, 'last_health_error', '') or 'no answer'
             logger.warning(f"Pinned '{key}' for '{conversation or '?'}' not answering ({why}, {getattr(provider, 'health_check_timeout', '?')}s)")
             raise ProviderUnavailable(
-                f"Provider '{name}' is not answering ({why}) - this chat is pinned to it, so nothing else was tried")
+                f"{name} {health_words(why, getattr(provider, 'health_check_timeout', None))}. "
+                f"This chat is set to {name} only, so nothing else was tried. Pick Auto in the "
+                f"chat sidebar to fall back to your other providers.")
     ensure = getattr(provider, 'ensure_model', None)
     if ensure and not ensure(fetch=health != 'skip'):
         logger.warning(f"Pinned '{key}' has no model set and its server named none: sending without one")
@@ -291,10 +355,7 @@ def _auto(cfg, order, private, timeout, health, require_images, conversation=Non
     why = ' · '.join(f"{display_name(k)}: {w}" for k, w in trail)
     if not result:
         logger.warning(f"Auto found no LLM for '{conversation or '?'}' (private={bool(private)}): {why or 'nothing configured'}")
-        raise NoProvidersAvailable(
-            "No LLM providers available"
-            + (" — this turn is private, only providers marked local qualify" if private else "")
-            + (f" ({why})" if why else ""))
+        raise NoProvidersAvailable(auto_words(trail, private))
     key, provider = result
     provider.conversation = conversation or None
     logger.info(f"Auto mode: using '{key}' ({getattr(provider, 'model', '') or 'no model'}) for '{conversation or '?'}'"
@@ -312,6 +373,6 @@ def clear_health_cache(key: Optional[str] = None) -> None:
 
 
 __all__ = ['resolve', 'Selection', 'GLOBAL', 'providers_config', 'is_local', 'display_name',
-           'provider_sees', 'clear_health_cache', 'normalize_pair', 'normalize_pair_patch',
+           'provider_sees', 'clear_health_cache', 'health_words', 'auto_words', 'normalize_pair', 'normalize_pair_patch',
            'ProviderRefused', 'LLMDisabled',
            'PrivacyRefused', 'ProviderUnavailable', 'NoProvidersAvailable']

@@ -336,7 +336,7 @@ class TestProviderPrivacyGate:
                                  'privacy_required': True}):
             # llm_primary='none' raises AFTER the privacy gate — proves the
             # gate itself passed.
-            with pytest.raises(ConnectionError, match='llm_primary=none'):
+            with pytest.raises(ConnectionError, match='set to None'):
                 chat._select_provider()
 
     def test_public_prompt_unaffected(self):
@@ -345,7 +345,7 @@ class TestProviderPrivacyGate:
         with patch('core.prompts.get_prompt',
                    return_value={'type': 'monolith', 'content': 'x',
                                  'privacy_required': False}):
-            with pytest.raises(ConnectionError, match='llm_primary=none'):
+            with pytest.raises(ConnectionError, match='set to None'):
                 chat._select_provider()
 
 

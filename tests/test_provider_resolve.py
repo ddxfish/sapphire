@@ -54,7 +54,7 @@ def test_none_is_loud_everywhere(monkeypatch):
     by_key = MagicMock(); first = MagicMock()
     monkeypatch.setattr(lp, 'get_provider_by_key', by_key)
     monkeypatch.setattr(lp, 'get_first_available_provider', first)
-    with pytest.raises(LLMDisabled, match='llm_primary=none'):
+    with pytest.raises(LLMDisabled, match='set to None'):
         resolve('none')
     assert not by_key.called and not first.called
 
@@ -104,7 +104,7 @@ def test_prompt_gate_unresolvable_name_is_not_private(monkeypatch):
 
 def test_prompt_gate_internal_error_blocks():
     with patch('core.prompts.get_prompt', side_effect=RuntimeError('boom')):
-        with pytest.raises(PrivacyRefused, match='blocking for safety'):
+        with pytest.raises(PrivacyRefused, match='blocked to be safe'):
             resolve('lanbox', prompt_name='secret')
 
 
@@ -133,16 +133,18 @@ def test_is_local_metadata_explosion_fails_closed(monkeypatch):
         def get(self, *a, **k):
             raise RuntimeError('metadata exploded')
     monkeypatch.setattr(lp, 'PROVIDER_METADATA', Boom())
-    with pytest.raises(PrivacyRefused, match='blocking provider for safety'):
+    with pytest.raises(PrivacyRefused, match='to be safe'):
         resolve('claude', private=True)
 
 
 def test_unavailable_pin_raises_and_never_falls_back_to_auto(monkeypatch):
     monkeypatch.setattr(lp, 'get_provider_by_key', MagicMock(return_value=None))
     first = MagicMock(); monkeypatch.setattr(lp, 'get_first_available_provider', first)
-    with pytest.raises(ProviderUnavailable, match='not configured or disabled'):
+    import config
+    monkeypatch.setattr(config, 'LLM_PROVIDERS', {'claude': {'enabled': False}}, raising=False)
+    with pytest.raises(ProviderUnavailable, match='turned off. Turn it on in Settings'):
         resolve('claude')
-    with pytest.raises(ProviderUnavailable):
+    with pytest.raises(ProviderUnavailable, match="isn't set up anymore"):
         resolve('nosuch')
     assert not first.called
 
@@ -169,7 +171,7 @@ def test_pinned_health_verdict_is_cached_and_shared(monkeypatch):
 
 def test_pinned_failed_probe_raises_and_is_never_cached(monkeypatch):
     p = _prov(healthy=False); monkeypatch.setattr(lp, 'get_provider_by_key', MagicMock(return_value=p))
-    with pytest.raises(ProviderUnavailable, match='not answering'):
+    with pytest.raises(ProviderUnavailable, match='set to Claude only'):
         resolve('claude')
     assert 'claude' not in rz._HEALTH_CACHE
 
@@ -184,7 +186,7 @@ def test_health_modes(monkeypatch):
 
 def test_pinned_blind_provider_refused_when_images_required(monkeypatch):
     monkeypatch.setattr(lp, 'get_provider_by_key', MagicMock(return_value=_prov(sees=False)))
-    with pytest.raises(ProviderUnavailable, match='does not support images'):
+    with pytest.raises(ProviderUnavailable, match="can't see images"):
         resolve('claude', require_images=True, health='skip')
     monkeypatch.setattr(lp, 'get_provider_by_key', MagicMock(return_value=_prov(sees=True)))
     assert resolve('claude', require_images=True, health='skip').key == 'claude'
@@ -214,10 +216,8 @@ def test_auto_skip_health_passes_probe_false(monkeypatch):
 
 def test_auto_nothing_available_raises(monkeypatch):
     monkeypatch.setattr(lp, 'get_first_available_provider', MagicMock(return_value=None))
-    with pytest.raises(NoProvidersAvailable, match='No LLM providers available'):
+    with pytest.raises(NoProvidersAvailable, match='No LLM is turned on'):
         resolve('auto')
-    with pytest.raises(NoProvidersAvailable, match='marked local'):
-        resolve('auto', private=True)
 
 
 def test_auto_uses_fallback_order_or_the_map(monkeypatch):
@@ -388,8 +388,29 @@ def test_auto_finding_nothing_says_why_per_provider(monkeypatch):
     with pytest.raises(NoProvidersAvailable) as e:
         resolve('auto')
     msg = str(e.value)
-    assert 'Claude: off' in msg or 'claude: off' in msg
-    assert 'LAN Box: not answering (APITimeoutError, 0.3s)' in msg
+    assert 'APITimeoutError' not in msg                    # class names stay in the log
+    assert "LAN Box didn't answer in 0.3 s" in msg and 'Health timeout' in msg
+
+
+# ── User words: the fix first, in the UI's own labels ───────────────────────
+def test_auto_words_leads_with_the_one_fix():
+    from core.chat.llm_providers.resolve import auto_words
+    off = [('claude', 'off'), ('lmstudio', 'off')]
+    assert auto_words(off).startswith('No LLM is turned on') and 'switch on the right' in auto_words(off)
+    left = off + [('fw', 'left out of Auto')]
+    assert 'Include in Auto fallback' in auto_words(left) and 'Settings › LLM › fw' in auto_words(left)
+    priv = [('claude', 'not local (private chat)')]
+    assert 'Local / private server' in auto_words(priv, private=True)
+    sick = [('lmstudio', 'not answering (APIConnectionError, 0.3s)')]
+    assert auto_words(sick) == "No LLM that's turned on answered: LM Studio couldn't be reached (is it running?)."
+
+
+def test_health_words_never_shows_a_class_name():
+    from core.chat.llm_providers.resolve import health_words
+    assert 'API key' in health_words('AuthenticationError HTTP 401')
+    assert 'out of credits' in health_words('APIStatusError HTTP 402')
+    assert 'running' in health_words('APIConnectionError')
+    assert health_words('') == "didn't answer"
 
 
 def test_auto_skips_a_provider_that_cannot_name_a_model(monkeypatch):

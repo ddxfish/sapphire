@@ -134,11 +134,12 @@ class TestBlockingConsumer:
         assert getattr(s, "suppress_tts", False) is True
 
     def test_raise_returns_friendly_string_never_raises(self):
+        from core.chat.llm_providers.resolve import NoProvidersAvailable
         s = FakeStream([{"type": "content", "text": "st"}],
-                       exc=ConnectionError("no llm providers available"), raise_after=1)
+                       exc=NoProvidersAvailable("No LLM is turned on, so Auto has nothing to use."), raise_after=1)
         obj, end_calls = _consumer(s)
         out = obj.chat("hi")
-        assert "No LLM providers" in out
+        assert out == "No LLM is turned on, so Auto has nothing to use."
         assert end_calls, "end_stream must run even on raise"
 
     def test_privacy_block_message_passes_through_verbatim(self):

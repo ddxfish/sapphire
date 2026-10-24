@@ -126,10 +126,8 @@ def friendly_llm_error(e):
 
     # Connection errors — detect local providers like LM Studio
     if isinstance(e, ConnectionError) or 'ConnectError' in type_name or 'connection' in error_str:
-        if 'no llm' in error_str or 'no providers' in error_str:
-            return "No LLM providers are configured or available. Go to Settings to add an API key and enable a provider."
         if any(h in error_str for h in ('127.0.0.1', 'localhost', '0.0.0.0')):
-            return "Can't reach LM Studio — open LM Studio, load a model, and enable its local server."
+            return "Can't reach your local LLM server (LM Studio, Ollama...). Make sure it's running with a model loaded."
         return "Lost connection to the LLM server. Check that the service is running."
 
     status = getattr(e, 'status_code', None)
@@ -141,8 +139,10 @@ def friendly_llm_error(e):
         return "Context limit exceeded — conversation is too long for this model. Lower CONTEXT_LIMIT in Settings or start a new chat."
 
     if status == 400:
-        if 'model' in error_str and any(k in error_str for k in ('not found', 'not loaded', 'no models loaded', 'does not exist')):
+        if 'no models loaded' in error_str or 'lms load' in error_str:     # LM Studio's own words
             return "Model not found or not loaded. If using LM Studio, make sure a model is loaded and running."
+        if 'model' in error_str and any(k in error_str for k in ('not found', 'not loaded', 'does not exist')):
+            return "The provider doesn't have that model. Check the model name in Settings › LLM."
         if any(k in error_str for k in ('image', 'vision', 'multimodal', 'content_type')):
             return "This model doesn't support images. Load a vision model to use image attachments."
         if 'invalid tool call' in error_str or 'tool call arguments' in error_str:
@@ -152,15 +152,15 @@ def friendly_llm_error(e):
         return f"LLM request rejected (400). {str(e)[:200]}"
 
     if status == 401:
-        return "API key is invalid or missing. Check your API key in Settings."
+        return "The API key was refused or is missing. Check it in Settings › LLM."
 
     if status == 403:
         return "Access denied. Your API key may not have permission for this model or resource."
 
     if status == 404:
         if 'model' in error_str:
-            return "Model not found. Check that the model name is correct in Settings."
-        return f"LLM endpoint not found (404). Check your API URL in Settings."
+            return "The provider doesn't have that model. Check the model name in Settings › LLM."
+        return "The provider's URL is wrong (nothing there). Check the Base URL in Settings › LLM."
 
     if status in (402, 429) and any(k in error_str for k in ('billing', 'quota', 'credit', 'insufficient', 'budget', 'exceeded')):
         return "Account billing limit reached — out of credits or over budget. Check your provider's billing page."
@@ -172,7 +172,7 @@ def friendly_llm_error(e):
         return "Claude's servers are at capacity (529). This is temporary — wait a minute and resend."
 
     if status >= 500:
-        return f"Server error ({status}) from LLM provider. The service may be experiencing issues."
+        return f"The LLM provider had a problem on its end ({status}). It's usually temporary, so try again in a minute."
 
     return None
 
@@ -185,13 +185,13 @@ def fallback_error_text(e):
     if friendly:
         return friendly
     if "timeout" in str(e).lower() or "APITimeoutError" in str(type(e).__name__):
-        return "I ran into a timeout while processing your request. Please try breaking it into smaller parts."
-    if "swarm" in str(e).lower() or (hasattr(e, '__module__') and 'httpx' in str(e.__module__)):
-        return f"Local swarm server connection failed. Error: {str(e)}"
-    if "connection" in str(e).lower() or "ConnectError" in str(type(e).__name__):
-        return "I lost connection to my processing engine. Please check if services are running."
+        return ("The LLM took too long to answer. If it's a slow or local model, raise "
+                "LLM Request Timeout in Settings › LLM › General.")
+    if "connection" in str(e).lower() or "ConnectError" in str(type(e).__name__) or \
+            (hasattr(e, '__module__') and 'httpx' in str(e.__module__)):
+        return "Lost connection to the LLM server. Check that the service is running."
     if "json" in str(e).lower() or "JSON" in str(e):
-        return "I encountered a data formatting issue while processing your request."
+        return "The LLM sent back a reply that couldn't be read. Try again, or try another provider."
     return f"I encountered an unexpected technical issue. Error: {str(e)[:200]}"
 
 

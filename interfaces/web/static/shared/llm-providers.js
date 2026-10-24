@@ -32,7 +32,7 @@ export async function updateProvider(key, updates) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Failed to update provider: ${res.status}`);
+    throw new Error(err.detail || err.error || `the server answered ${res.status}`);   // FastAPI says `detail`
   }
   return await res.json();
 }
@@ -48,7 +48,7 @@ export async function updateFallbackOrder(order) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Failed to update fallback order: ${res.status}`);
+    throw new Error(err.detail || err.error || `the server answered ${res.status}`);
   }
   return await res.json();
 }
@@ -81,7 +81,8 @@ export async function saveGenerationParams(modelName, params, allProfiles) {
     body: JSON.stringify({ value: updated })
   });
   if (!res.ok) {
-    throw new Error('Failed to save generation profiles');
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || err.error || `the server answered ${res.status}`);
   }
   return updated;
 }

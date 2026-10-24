@@ -78,7 +78,7 @@ export default {
                     ctx.commitMerge(_mapFor(ctx, e.target.dataset.provider), e.target.dataset.provider, { enabled: e.target.checked });
                     updateCardEnabledState(e.target.closest('.provider-card'), e.target.checked);
                 } catch (err) {
-                    showToast('Failed to update provider', 'error');
+                    showToast(`Couldn't switch the provider: ${err.message || err}`, 'error');
                     e.target.checked = !e.target.checked;
                 }
             });
@@ -121,7 +121,7 @@ export default {
                     if (field === 'display_name' && nameEl) nameEl.textContent = value;
                     showToast('Provider settings saved', 'success', 2000);
                 } catch (err) {
-                    showToast('Failed to save provider settings', 'error');
+                    showToast(`Not saved: ${err.message || err}`, 'error');
                 }
             });
         });
@@ -147,7 +147,7 @@ export default {
                     ctx.commit('MODEL_GENERATION_PROFILES', generationProfiles);   // render() re-seeds from the snapshot
                     showToast('Model params saved', 'success', 2000);
                 } catch (e) {
-                    showToast('Failed to save model params', 'error');
+                    showToast(`Model params not saved: ${e.message || e}`, 'error');
                 }
             });
         });
@@ -224,7 +224,7 @@ export default {
             } catch (e) {
                 // Fire-and-forget left the UI showing an order the disk never
                 // got — surface the failure so the user re-drags.
-                showToast(`Failed to save provider order: ${e.message}`, 'error');
+                showToast(`Order not saved: ${e.message}`, 'error');
             }
         });
 
@@ -242,7 +242,7 @@ export default {
                     const status = card?.querySelector('.custom-provider-status');
                     if (status) status.textContent = e.target.checked ? '\uD83D\uDFE2' : '\u26AB';
                 } catch (err) {
-                    showToast('Failed to update provider', 'error');
+                    showToast(`Couldn't switch the provider: ${err.message || err}`, 'error');
                     e.target.checked = !e.target.checked;
                 }
             });
@@ -498,7 +498,7 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
             extra_headers: config.extra_headers,
         })}
         <div style="display:flex;gap:8px;align-items:center">
-            <button class="btn btn-primary btn-sm" id="${prefix}-save">${isAdd ? 'Add' : 'Save'}</button>
+            ${isAdd ? `<button class="btn btn-primary btn-sm" id="${prefix}-save">Add</button>` : ''}
             ${isAdd
                 ? `<button class="btn btn-sm" id="${prefix}-cancel">Cancel</button>`
                 : `<button class="btn btn-sm" id="${prefix}-test">Test</button>
@@ -675,10 +675,10 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         } catch (e) { setStatus('✗ ' + e.message, 'var(--error)'); }
     });
 
-    // ── Save: the one real Add/Edit divergence — POST create vs PUT update ──
-    g('save')?.addEventListener('click', async () => {
+    // Everything both flows send. {ok:false, error} on bad JSON in Advanced.
+    const collect = () => {
         const adv = _readAdvancedFields(root, prefix);
-        if (!adv.ok) { setStatus(adv.error, 'var(--error)'); return; }
+        if (!adv.ok) return adv;
 
         const common = {
             base_url: g('url')?.value?.trim(),
@@ -704,16 +704,49 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         if (vision) common.supports_images = true;
         else if (typeof config.supports_images === 'boolean') common.supports_images = false;
 
-        if (key) {
-            // Edit → PUT
+        return { ok: true, common, adv };
+    };
+
+    // ── Edit: every field saves as it changes, like the core cards (one Save
+    // button on the page, and it's the General one). No re-render: the card
+    // stays open where the user is typing.
+    if (key) {
+        let seq = 0;
+        root.addEventListener('change', async e => {
+            if (!e.target.matches('input, select, textarea')) return;
+            const c = collect();
+            if (!c.ok) { setStatus(c.error, 'var(--error)'); return; }
+            const { common, adv } = c;
             common.generation_params = adv.generation_params;
+            const mine = ++seq;
+            setStatus('Saving...');
             try {
                 await updateProvider(key, common);
-                showToast('Provider updated', 'success');
-                ctx.refreshTab();
-            } catch (e) { showToast('Failed to save', 'error'); }
-            return;
-        }
+                const { api_key, ...kept } = common;
+                ctx.commitMerge('LLM_CUSTOM_PROVIDERS', key, kept);
+                if ('supports_images' in common) config.supports_images = common.supports_images;
+                if (api_key && g('key')) { g('key').value = ''; g('key').placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'; }
+                const card = root.closest('.provider-card');
+                if (common.display_name) card?.querySelector('.provider-name')?.replaceChildren(common.display_name);
+                const detail = card?.querySelector('.custom-provider-detail');
+                if (detail) detail.textContent = `${common.model} \u00b7 ${config.template || config.provider || 'openai'}`;
+                const icon = card?.querySelector('.provider-icon');
+                if (icon) icon.textContent = common.is_local ? '\ud83c\udfe0' : '\u2601\ufe0f';
+                const eye = card?.querySelector('.vision-badge');
+                if (common.supports_images && !eye) card?.querySelector('.custom-provider-actions')?.insertAdjacentHTML('afterbegin', '<span class="vision-badge" title="Vision model \u2014 sees images">\ud83d\udc41</span>');
+                else if (common.supports_images === false) eye?.remove();
+                if (mine === seq) setStatus('Saved \u2713', 'var(--success)');
+            } catch (err) {
+                if (mine === seq) setStatus(`Not saved: ${err.message || err}`, 'var(--error)');
+            }
+        });
+    }
+
+    // ── Add: POST create ──
+    g('save')?.addEventListener('click', async () => {
+        const c = collect();
+        if (!c.ok) { setStatus(c.error, 'var(--error)'); return; }
+        const { common, adv } = c;
 
         // Add → POST
         const name = g('name')?.value?.trim();

@@ -43,7 +43,11 @@ const SWITCH_TABS = { STT_PROVIDER: 'stt', TTS_PROVIDER: 'tts', EMBEDDING_PROVID
 // Shared by both shells through host.managedHides(tabId).
 const MANAGED_HIDDEN_TABS = new Set(['audio', 'wakeword', 'system', 'network', 'embedding', 'devices', 'mcp']);
 
-const LABEL_OVERRIDES = { TTS_LOCAL_PLAYBACK: 'Play speech here' };
+const LABEL_OVERRIDES = {
+    TTS_LOCAL_PLAYBACK: 'Play speech here',
+    LLM_REQUEST_TIMEOUT: 'LLM Request Timeout',   // error messages name it; "Llm" read as a typo
+    LLM_MAX_HISTORY: 'LLM Max History',
+};
 
 export function formatLabel(key) {
     if (LABEL_OVERRIDES[key]) return LABEL_OVERRIDES[key];

@@ -11,7 +11,6 @@ manager on load and never reused.
 """
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -38,7 +37,7 @@ PACKAGE_SETS = ('tts', 'stt', 'wakeword')
 # cards wake their plugin (Piper, ElevenLabs...).
 FEATURED = (
     ('mindpalace', 'mind', 'Layered memory: self, events, people and knowledge behind one tool surface.'),
-    ('memory', 'mind', 'The classic long-term memory, knowledge base, goals and people.'),
+    ('memory', 'mind', 'The old memory system, on its way out. Only if you have a memory database from before Mind Palace.'),
     ('discord', None, 'A Discord bot on her conversation engine: chat, images, voice channels.'),
     ('telegram', None, 'Talk to her from Telegram, as a bot or from your own account.'),
     ('email', None, 'She reads and sends mail for you, to a whitelist of people.'),
@@ -47,6 +46,9 @@ FEATURED = (
     ('webcam', None, 'She can look through your camera when you ask.'),
     ('screenshot', None, 'She can grab this screen when you ask.'),
 )
+
+# On their way out: the step dims and tags them, for people with old data only.
+LEGACY = frozenset({'memory'})
 
 
 def step_ids():
@@ -121,18 +123,6 @@ async def put_state(request: Request, _=Depends(require_login)):
     return apply(await request.json())
 
 
-def _has_settings(info):
-    manifest = info.get('manifest') or {}
-    ui = manifest.get('settingsUI', 'auto')
-    if ui is None or ui == 'none':
-        return False
-    if ui in ('plugin', 'manifest', 'core'):
-        return True
-    path = info.get('path') or ''
-    if path and (Path(path) / 'web' / 'index.js').exists():
-        return True
-    return bool((manifest.get('capabilities') or {}).get('settings'))
-
 
 def featured():
     try:
@@ -157,7 +147,7 @@ def featured():
             'enabled': bool(info.get('enabled')),
             'loaded': bool(info.get('loaded')),
             'missing_deps': list(info.get('missing_deps') or []),
-            'has_settings': _has_settings(info),
+            'legacy': name in LEGACY,
         })
     return out
 

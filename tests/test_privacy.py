@@ -181,7 +181,7 @@ def test_privacy_check_internal_error_fails_closed(monkeypatch):
     monkeypatch.setattr('core.chat.llm_providers.PROVIDER_METADATA', Boom())
 
     chat = _chat_skeleton({'private_chat': True, 'llm_primary': 'claude', 'llm_model': ''})
-    with pytest.raises(ConnectionError, match='blocking provider for safety'):
+    with pytest.raises(ConnectionError, match='blocked in this private chat to be safe'):
         chat._select_provider()
 
 

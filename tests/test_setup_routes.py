@@ -90,7 +90,8 @@ def test_featured_follows_the_loader(monkeypatch, tmp_path):
     assert [p['name'] for p in out] == ['mindpalace', 'memory', 'discord']
     mp, mem, dc = out
     assert mp['group'] == 'mind' and mem['group'] == 'mind' and dc['group'] is None
-    assert mp['has_settings'] is False and mem['has_settings'] is True and dc['has_settings'] is True
+    assert 'has_settings' not in dc                                   # nothing on the step leaves the wizard
+    assert mem['legacy'] is True and mp['legacy'] is False and dc['legacy'] is False
     assert mem['enabled'] is True and dc['missing_deps'] == ['py-cord']
     assert mp['title'] == 'Mindpalace' and mp['blurb'] and mp['description'] == 'long words'
 

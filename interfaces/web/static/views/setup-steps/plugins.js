@@ -4,7 +4,9 @@
 // manager's route); missing packages install first under their own row
 // (shared/extras.js asks); a radio group turns the other one off first. A
 // plugin that is on but not running for want of packages gets an Install
-// button (the install reloads it). "set up →" leaves for its Settings tab.
+// button (the install reloads it). Nothing here leaves the wizard: a plugin's
+// own settings wait under Settings › Plugins. A legacy row (the server says
+// which) is dimmed and tagged: for people with old data only.
 import pluginsAPI from '../../shared/plugins-api.js';
 import { ensureExtra } from '../../shared/extras.js';
 import { fetchWithTimeout } from '../../shared/fetch.js';
@@ -20,16 +22,15 @@ export default w => {
     const needs = p => p.missing_deps?.length ? p.missing_deps.map(shortDep).join(', ') : '';
     const stalled = p => p.enabled && !p.loaded && !!needs(p);      // on, but not running: packages missing
     const row = p => `
-        <label class="feat-row${p.enabled ? ' on' : ''}${p.busy ? ' busy' : ''}" data-name="${esc(p.name)}" title="${esc(p.description || '')}">
+        <label class="feat-row${p.enabled ? ' on' : ''}${p.busy ? ' busy' : ''}${p.legacy ? ' legacy' : ''}" data-name="${esc(p.name)}" title="${esc(p.description || '')}">
             <input type="${p.group ? 'radio' : 'checkbox'}" ${p.group ? `name="feat-${esc(p.group)}"` : ''} ${p.enabled ? 'checked' : ''} ${p.busy ? 'disabled' : ''}>
             <span class="feat-icon">${p.icon || '🧩'}</span>
             <span class="feat-text">
-                <span class="feat-title">${esc(p.title)}</span>
+                <span class="feat-title">${esc(p.title)}${p.legacy ? '<span class="feat-tag">Legacy</span>' : ''}</span>
                 <span class="feat-blurb">${esc(p.blurb)}</span>
                 <span class="feat-note">${esc(p.note || (stalled(p) ? `not running: needs ${needs(p)}` : needs(p) ? `installs ${needs(p)} first` : ''))}</span>
             </span>
-            <span class="feat-side">${stalled(p) && !p.busy ? `<button type="button" class="btn-sm" data-install="${esc(p.name)}">Install</button>`
-                : p.enabled && p.has_settings ? `<button type="button" class="btn-link" data-setup="${esc(p.name)}">set up →</button>` : ''}</span>
+            <span class="feat-side">${stalled(p) && !p.busy ? `<button type="button" class="btn-sm" data-install="${esc(p.name)}">Install</button>` : ''}</span>
         </label>`;
 
     function paint() {
@@ -107,11 +108,11 @@ export default w => {
             rowsEl = body.querySelector('.feat-rows');
             rowsEl.addEventListener('change', onChange);
             rowsEl.addEventListener('click', e => {
-                const b = e.target.closest('[data-setup], [data-install]');
+                const b = e.target.closest('[data-install]');
                 if (!b) return;
                 e.preventDefault();
-                if (b.dataset.setup) w.navigate(b.dataset.setup);
-                else { const p = list.find(x => x.name === b.dataset.install); if (p && !p.busy) install(p); }
+                const p = list.find(x => x.name === b.dataset.install);
+                if (p && !p.busy) install(p);
             });
             try { await load(); }
             catch (e) { rowsEl.innerHTML = `<span class="setting-help">The list could not be read: ${esc(e.message)}</span>`; return; }
