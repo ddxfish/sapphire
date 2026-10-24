@@ -386,8 +386,11 @@ def _get_git_branch():
         return ''
 
 
-async def get_full_status(**kwargs):
-    """GET /api/plugin/status/full — comprehensive system snapshot."""
+def get_full_status(**kwargs):
+    """GET /api/plugin/status/full — comprehensive system snapshot.
+    Plain def on purpose: the dispatcher threads sync handlers. This one probes
+    CUDA, Kokoro and runs custom commands — async here blocked the event loop
+    on every 10 s poll (long enough to miss a WebSocket keepalive)."""
     return get_full_status_sync()
 
 
@@ -733,7 +736,7 @@ LOG_PATH = PROJECT_ROOT / "user" / "logs" / "sapphire.log"
 LOG_LEVELS = {'DEBUG': 10, 'INFO': 20, 'WARNING': 30, 'ERROR': 40, 'CRITICAL': 50}
 
 
-async def get_logs(**kwargs):
+def get_logs(**kwargs):                    # plain def: file read, threaded by the dispatcher
     """GET /api/plugin/status/logs?lines=200&level=WARNING&search=telegram"""
     return get_logs_sync(kwargs.get('request'))
 

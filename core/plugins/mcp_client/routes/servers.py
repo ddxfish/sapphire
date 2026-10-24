@@ -75,8 +75,11 @@ async def list_servers(**kwargs):
     return {"servers": servers}
 
 
-async def add_server(**kwargs):
-    """POST /api/plugin/mcp_client/servers — add and connect a new server."""
+def add_server(**kwargs):
+    """POST /api/plugin/mcp_client/servers — add and connect a new server.
+    add/remove/reconnect are plain def ON PURPOSE: they wait up to 30 s on the
+    MCP loop (npx cold start). The dispatcher threads sync handlers; async here
+    froze the whole UI and dropped every WebSocket past the 20 s keepalive."""
     body = kwargs.get("body", {})
     name = body.get("name", "").strip()
     server_type = body.get("type", "stdio")
@@ -163,7 +166,7 @@ async def add_server(**kwargs):
         return {"status": "error", "name": name, "error": str(e)}
 
 
-async def remove_server(**kwargs):
+def remove_server(**kwargs):
     """DELETE /api/plugin/mcp_client/servers/{name} — disconnect and remove."""
     name = kwargs.get("name", "")
     if not name:
@@ -186,7 +189,7 @@ async def remove_server(**kwargs):
     return {"status": "removed", "name": name}
 
 
-async def reconnect_server(**kwargs):
+def reconnect_server(**kwargs):
     """POST /api/plugin/mcp_client/servers/{name}/reconnect — re-discover tools."""
     name = kwargs.get("name", "")
     if not name:

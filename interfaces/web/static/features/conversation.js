@@ -15,9 +15,18 @@
 //             playback_done once local playback goes idle so the server's
 //             sink.wait() can end the turn when SHE'S done talking, not when
 //             the last byte left the socket (pitfall 3).
+// Drops:      `wanted` is the user's intent — only start()/stop() change it, and
+//             every deliberate Off (sidebar, mic button, server bye/replaced)
+//             runs stop(). A close while still wanted is a DROP: the mic stays
+//             warm and only the socket comes back; the server parks the session
+//             (BROWSER_GRACE_S) so a quick return resumes it with no mode flap.
 import * as audio from '../audio.js';
+import { showToast } from '../shared/toast.js';
 
 const TARGET_RATE = 16000;
+const RETRY_MS = [2000, 5000, 10000, 20000, 30000];   // then every 30 s
+const GIVE_UP_MS = 10 * 60 * 1000;
+const REFUSALS = new Set([4401, 4409, 4500]);        // not logged in / local mode / start failed
 
 let ws = null;
 let ctx = null;
@@ -27,21 +36,31 @@ let workletNode = null;
 let lastStreamId = null;
 let turnOpen = false;   // fallback stream tracking when chunks carry no stream_id
 let idlePoll = null;
+let wanted = false;
+let retryTimer = null;
+let retries = 0;
+let droppedAt = 0;
 
 export const isActive = () => !!ws && ws.readyState === WebSocket.OPEN;
 
+// The ONE deliberate exit. Tears down synchronously, so a quick stop()->start()
+// can't have the old socket's late onclose touch the new session.
 export const stop = () => {
-    try { ws?.close(); } catch { /* teardown runs in onclose */ }
+    wanted = false;
+    _teardown();
 };
 
 const _teardown = () => {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     if (idlePoll) { clearInterval(idlePoll); idlePoll = null; }
     try { srcNode?.disconnect(); } catch {}
     try { workletNode?.disconnect(); } catch {}
     srcNode = workletNode = null;
     if (ctx) { try { ctx.close(); } catch {} ctx = null; }
     if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    const w = ws;
     ws = null;
+    try { w?.close(1000, 'off'); } catch {}
 };
 
 // Linear-interp downsample (same approach as the push-to-talk path in audio.js).
@@ -117,7 +136,10 @@ const _onMessage = (msg) => {
 };
 
 export const start = async () => {
-    if (isActive()) return true;
+    if (wanted) {                       // already on — or between retries: reconnect now
+        if (!ws) { clearTimeout(retryTimer); retryTimer = null; _connect(); }
+        return true;
+    }
     try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
@@ -140,32 +162,60 @@ export const start = async () => {
         _teardown();
         return false;
     }
-
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${proto}//${location.host}/ws/conversation`);
-    ws.binaryType = 'arraybuffer';
-
-    ws.onopen = () => {
-        const rate = ctx.sampleRate;
-        workletNode.port.onmessage = (e) => {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            const i16 = _toInt16(_downsample(e.data, rate, TARGET_RATE));
-            try { ws.send(i16.buffer); } catch {}
-        };
-        console.log(`[CONV-WS] connected (capture @${rate}Hz -> 16k)`);
+    const rate = ctx.sampleRate;
+    workletNode.port.onmessage = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;   // dropped: frames go nowhere
+        const i16 = _toInt16(_downsample(e.data, rate, TARGET_RATE));
+        try { ws.send(i16.buffer); } catch {}
     };
-    ws.onmessage = (e) => {
+    wanted = true;
+    retries = 0;
+    droppedAt = 0;
+    _connect();
+    return true;
+};
+
+const _connect = () => {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const sock = new WebSocket(`${proto}//${location.host}/ws/conversation`);
+    sock.binaryType = 'arraybuffer';
+    ws = sock;
+
+    sock.onopen = () => {
+        if (ctx?.state === 'suspended') ctx.resume().catch(() => {});
+        console.log(`[CONV-WS] connected (capture @${ctx?.sampleRate}Hz -> 16k)` +
+                    (droppedAt ? ` after a ${Math.round((Date.now() - droppedAt) / 1000)}s drop` : ''));
+        retries = 0;
+        droppedAt = 0;
+    };
+    sock.onmessage = (e) => {
         if (typeof e.data !== 'string') return;
         let msg;
         try { msg = JSON.parse(e.data); } catch { return; }
         _onMessage(msg);
     };
-    ws.onclose = (e) => {
+    sock.onclose = (e) => {
+        console.log(`[CONV-WS] closed (${e.code}${e.reason ? ' ' + e.reason : ''})`);
+        if (sock !== ws) return;        // stop() already tore this one down
+        ws = null;
         if (e.code === 4401) alert('Not authorized for conversation mode — log in again.');
         if (e.code === 4409) console.warn('[CONV-WS] rejected: local conversation mode is active');
-        _teardown();
-        console.log(`[CONV-WS] closed (${e.code})`);
+        if (!wanted || REFUSALS.has(e.code)) { stop(); return; }
+        _scheduleRetry();
     };
-    ws.onerror = () => { /* onclose follows with the code */ };
-    return true;
+    sock.onerror = () => { /* onclose follows with the code */ };
+};
+
+const _scheduleRetry = () => {
+    if (idlePoll) { clearInterval(idlePoll); idlePoll = null; }
+    turnOpen = false;
+    if (!droppedAt) droppedAt = Date.now();
+    if (Date.now() - droppedAt > GIVE_UP_MS) {
+        stop();
+        showToast('Conversation mode lost its connection — turn it back on when the server is back', 'error');
+        return;
+    }
+    const ms = RETRY_MS[Math.min(retries++, RETRY_MS.length - 1)];
+    console.warn(`[CONV-WS] dropped — reconnecting in ${ms / 1000}s`);
+    retryTimer = setTimeout(() => { retryTimer = null; if (wanted) _connect(); }, ms);
 };

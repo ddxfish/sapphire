@@ -35,6 +35,10 @@ _FRAME_SAMPLES = 512            # silero wants 512-sample 16k frames
 _FRAME_BYTES = _FRAME_SAMPLES * 2
 
 
+def _drop(msg):
+    """send_fn while parked — no socket to send to."""
+
+
 class BrowserConversationSource:
     def __init__(self, driver, gate, send_fn, inbound_max=64):
         self.driver = driver
@@ -70,6 +74,21 @@ class BrowserConversationSource:
             self._thread.join(timeout=2.0)
             self._thread = None
         logger.info("[CONV] browser source closed")
+
+    # ── PARK / RESUME: the socket dropped without an Off (manager holds the grace) ──
+    def detach(self):
+        """Go quiet but stay the session: outbound goes nowhere, the in-flight
+        turn is cut (wait() unblocks, stragglers drop) — the tab may come back."""
+        self._send = _drop
+        self.stop()
+
+    def resume(self, send_fn):
+        """A reconnected tab takes this session over. No frames arrive while
+        parked, so resetting here can't race the worker; it drops the half
+        utterance the drop cut off."""
+        self.gate.reset()
+        self.driver.reset()
+        self._send = send_fn
 
     # ── SOURCE: WS coroutine -> worker thread ───────────────────────────────
     def push_pcm(self, data):

@@ -16,6 +16,10 @@ from core.conversation.driver import ConversationDriver
 
 logger = logging.getLogger(__name__)
 
+# A browser socket that drops without an Off is held this long for the tab to
+# reconnect and resume — no mode exit, no wakeword flap. A dead tab still ends.
+BROWSER_GRACE_S = 45
+
 
 class ConversationManager:
     def __init__(self, system, gate=None, source_factory=None):
@@ -29,6 +33,9 @@ class ConversationManager:
         # ears (and can run local/browser mode concurrently). session_id -> record.
         self.external = {}
         self._external_lock = threading.Lock()     # slot-cap check races endpoint threads
+        self._parked = None                        # browser source waiting out BROWSER_GRACE_S
+        self._park_timer = None
+        self._park_lock = threading.RLock()        # WS loop, the timer, and stop() all touch it
 
     def _default_local_source(self, driver, gate):
         import config
@@ -145,6 +152,49 @@ class ConversationManager:
         logger.info(f"[CONV] start_browser -> {'ON' if ok else 'failed'}")
         return src if ok else None
 
+    def park_browser(self, src):
+        """The browser WS dropped without an Off: keep the mode, hold `src` for
+        BROWSER_GRACE_S. False if src no longer owns the mode (already replaced/off)."""
+        with self._park_lock:
+            if self.system.conversation_session is not src:
+                return False
+            self._unpark()
+            src.detach()
+            self._parked = src
+            self._park_timer = threading.Timer(BROWSER_GRACE_S, self._park_expired, args=(src,))
+            self._park_timer.daemon = True
+            self._park_timer.start()
+        logger.info(f"[CONV] browser session parked — waiting {BROWSER_GRACE_S}s for the tab to reconnect")
+        return True
+
+    def resume_browser(self, send_fn):
+        """A reconnecting tab takes over the parked session. Returns it, or None."""
+        with self._park_lock:
+            src = self._parked
+            if src is None or self.system.conversation_session is not src:
+                return None
+            self._unpark()
+            src.resume(send_fn)
+        logger.info("[CONV] browser session resumed")
+        return src
+
+    def _unpark(self):
+        """Caller holds _park_lock."""
+        if self._park_timer is not None:
+            self._park_timer.cancel()
+        self._parked = self._park_timer = None
+
+    def _park_expired(self, src):
+        # check + stop under one lock: a tab reconnecting right now either
+        # resumed first (we bail) or waits and starts fresh after this stop
+        with self._park_lock:
+            if self._parked is not src:
+                return
+            self._unpark()
+            logger.info(f"[CONV] browser tab didn't reconnect within {BROWSER_GRACE_S}s — ending conversation mode")
+            if self.system.conversation_session is src:
+                self.stop()
+
     def start_external(self, source_ctor, chat_name=None, source_label="external",
                        session_id=None, tuning=None, tts_split=None):
         """Start an external conversation session (a phone call). Each session gets
@@ -222,6 +272,8 @@ class ConversationManager:
         """Exit the OPERATOR's true speech mode and restore wakeword (idempotent).
         External sessions (phone calls) are untouched — they end individually via
         stop_external()."""
+        with self._park_lock:
+            self._unpark()
         self.system.exit_conversation_mode()
         if self.driver is not None:
             self.driver.reset()

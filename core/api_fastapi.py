@@ -1,11 +1,13 @@
 # api_fastapi.py - FastAPI app setup, middleware, page routes, and router includes
 import os
+import asyncio
 import re
 import json
 import time
 import secrets
 import logging
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, Any
 
@@ -73,8 +75,17 @@ IMPORT_MAP = _build_import_map()
 # APP SETUP
 # =============================================================================
 
+@asynccontextmanager
+async def _lifespan(app):
+    from core import loop_watch
+    watch = asyncio.create_task(loop_watch.run())   # logs event-loop stalls (core/loop_watch.py)
+    yield
+    watch.cancel()
+
+
 app = FastAPI(
     title="Sapphire",
+    lifespan=_lifespan,
     docs_url=None,  # Disable swagger UI
     redoc_url=None,  # Disable redoc
     openapi_url=None  # Disable openapi.json

@@ -91,7 +91,7 @@ def test_a_face_still_coming_takes_her_words(server, tmp_path, monkeypatch):
     s.face, s.want = None, str(face)
     server._state["status"] = "ready"
     server.BEAT[0] = server.time.monotonic()
-    monkeypatch.setattr(server, "_queue_speech", lambda s, data: None)
+    monkeypatch.setattr(server, "_queue_speech", lambda s, data, mute=False: None)
     assert _speak(server) == {"taken": True, "why": ""}
     assert s.open
 
@@ -121,3 +121,36 @@ def test_another_computer_never_reads_this_computers_folders(server):
     text = f"[Errno 2] No such file: '{server.ROOT}/user/models/x' or '{Path.home()}/y'"
     shown = server._private(text)
     assert str(server.ROOT) not in shown and str(Path.home()) not in shown
+
+
+def test_only_the_newest_browser_plays_her_voice(server):
+    """Two tabs each played her voice on their own clock: an echo a beat apart."""
+    s = server._session("local")
+    old, new, board = queue.Queue(), queue.Queue(), queue.Queue()
+    s.viewers.update({old: True, new: True, board: False})
+    s.voice = new
+    server._broadcast(s, b"loud", b"quiet")
+    assert (old.get_nowait(), new.get_nowait(), board.get_nowait()) == (b"quiet", b"loud", b"quiet")
+    server._broadcast(s, b"voice only", b"")               # no frames: nothing for the silent ones
+    assert new.get_nowait() == b"voice only" and old.empty() and board.empty()
+
+
+def test_words_played_elsewhere_are_mouthed_in_silence(server, monkeypatch):
+    np = server.np
+    server.P.update(n16=4, n24=6)
+    s = server._session("local")
+    monkeypatch.setattr(server, "_decode", lambda data: (np.ones(4, np.float32), np.ones(6, np.int16)))
+    server._queue_speech(s, b"x", mute=True)
+    a16, a24 = s.speech.get_nowait()
+    assert a16.any() and not a24.any()
+
+
+def test_a_viewers_numbers_make_one_line(server, caplog):
+    import json
+    s = server._session("local")
+    with caplog.at_level("INFO"):
+        server._viewer_log(s, json.dumps({"packets": 40, "gaps": 2, "gap_s": 0.4, "late": 30, "out": 0.04,
+                                          "clock": 1, "evil": "x"}).encode())
+        server._viewer_log(s, b"not json")
+    line = [r.message for r in caplog.records if r.message.startswith("viewer")]
+    assert len(line) == 1 and "late frames 30" in line[0] and "gaps 2 (0.40s)" in line[0]

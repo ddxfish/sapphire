@@ -1253,6 +1253,7 @@ async def toggle_true_speech(request: Request, _=Depends(require_login), system=
         # source close sends "bye" so the tab shuts down cleanly). Browser mode
         # itself engages via the WS connect (/ws/conversation), not this PUT.
         if system.conversation_mode_enabled and getattr(system, "conversation_source", None) == "browser":
+            logger.info("[CONV] local mode requested — ending the browser session")
             mgr.stop()
         ok = mgr.start_local()
         return {
@@ -1260,6 +1261,8 @@ async def toggle_true_speech(request: Request, _=Depends(require_login), system=
             "active": mgr.active,
             "note": "" if ok else "could not acquire mic — wakeword intact",
         }
+    if mgr.active:
+        logger.info(f"[CONV] Off requested over HTTP (source={getattr(system, 'conversation_source', None)})")
     mgr.stop()
     return {"status": "ok", "active": mgr.active}
 
