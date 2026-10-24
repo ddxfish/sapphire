@@ -7,6 +7,7 @@
   "icon": "🧰",
   "url": "https://sapphireblue.dev",
   "priority": 50,
+  "default_enabled": true,
   "managed_hide": true,
   "capabilities": {
     "tools": ["tools/harness.py"],

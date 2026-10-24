@@ -1,5 +1,5 @@
 // settings-tabs/stt.js - Speech-to-text provider settings + VAD tuning
-import { renderProviderTab, attachProviderListeners, mergeRegistryProviders, providerSignature } from '../../shared/provider-selector.js';
+import { renderProviderTab, renderProviderCompact, attachProviderListeners, mergeRegistryProviders, providerSignature } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
 import { gpuNotice } from '../../shared/gpu-notice.js';
 
@@ -49,33 +49,30 @@ const tabConfig = {
 // No type coercion in parseValue. No polling-overrides-user-state. The bug
 // class is structurally eliminated.
 
+const VAD_BADGE = '<span id="vad-status-badge" style="margin-left:12px;font-size:0.7em;opacity:0.8;font-weight:normal">checking…</span>';
+const VAD_TEST = `
+        <div class="settings-field" style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)">
+            <button id="vad-test-btn" type="button" style="padding:6px 14px">Test my voice (5s)</button>
+            <div id="vad-test-result" style="margin-top:10px;font-family:monospace;font-size:0.9em;opacity:0.85"></div>
+        </div>`;
+const CLASSIC_KEYS = [
+    'RECORDER_BACKGROUND_PERCENTILE',
+    'RECORDER_SILENCE_THRESHOLD',
+    'RECORDER_NOISE_MULTIPLIER',
+    'RECORDER_LEVEL_HISTORY_SIZE',
+];
+
 function renderVADSection(ctx) {
     if (window.__managed) return '';   // hosted/Docker — no local mic
 
     // Render Silero enable checkbox via the canonical renderInput path so
     // pendingChanges and the generic change handler work natively.
     const sileroToggleHtml = ctx.renderFields(['STT_VAD_ENABLED']);
-
-    const testButtonHtml = `
-        <div class="settings-field" style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)">
-            <button id="vad-test-btn" type="button" style="padding:6px 14px">Test my voice (5s)</button>
-            <div id="vad-test-result" style="margin-top:10px;font-family:monospace;font-size:0.9em;opacity:0.85"></div>
-        </div>`;
-
     const sileroFields = ctx.renderFields(['STT_VAD_SPEECH_THRESHOLD']);
-
-    const classicKeys = [
-        'RECORDER_BACKGROUND_PERCENTILE',
-        'RECORDER_SILENCE_THRESHOLD',
-        'RECORDER_NOISE_MULTIPLIER',
-        'RECORDER_LEVEL_HISTORY_SIZE',
-    ];
 
     return `
         <div style="margin-top:28px;padding-top:8px;border-top:2px solid rgba(255,255,255,0.12)">
-            <h3 style="margin:8px 0 12px 0">Voice Activity Detection
-                <span id="vad-status-badge" style="margin-left:12px;font-size:0.7em;opacity:0.8;font-weight:normal">checking…</span>
-            </h3>
+            <h3 style="margin:8px 0 12px 0">Voice Activity Detection ${VAD_BADGE}</h3>
             <div class="settings-accordion" data-accordion="stt-silero">
                 <div class="settings-accordion-header" data-accordion-toggle="stt-silero">
                     <span class="accordion-arrow">▼</span>
@@ -84,12 +81,20 @@ function renderVADSection(ctx) {
                 <div class="settings-accordion-body" data-accordion-body="stt-silero">
                     ${sileroToggleHtml}
                     ${sileroFields}
-                    ${testButtonHtml}
+                    ${VAD_TEST}
                 </div>
             </div>
-            ${ctx.renderAccordion('stt-classic', classicKeys, 'Classic VAD (fallback engine — used when Silero is off or unavailable)')}
+            ${ctx.renderAccordion('stt-classic', CLASSIC_KEYS, 'Classic VAD (fallback engine — used when Silero is off or unavailable)')}
         </div>
     `;
+}
+
+// The setup wizard's fold (2026-10-24): the same controls, flat, under "Advanced".
+// Silero is not its own section there: with local STT it is all but required.
+function renderVADFold(ctx) {
+    if (window.__managed) return '';
+    return `<h4 class="setup-fold-head">Voice activity detection ${VAD_BADGE}</h4>`
+        + ctx.renderFields(['STT_VAD_ENABLED', 'STT_VAD_SPEECH_THRESHOLD', ...CLASSIC_KEYS]) + VAD_TEST;
 }
 
 // ── Status badge polling ─────────────────────────────────────────────────────
@@ -162,8 +167,10 @@ export default {
 
     render(ctx) {
         const cfg = _mergedConfig || tabConfig;
-        return renderProviderTab(cfg, ctx) + renderVADSection(ctx)
-            + '<div id="stt-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>';
+        const gpu = '<div id="stt-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>';
+        // The setup wizard (2026-10-24): the cards, one Advanced fold (VAD inside).
+        if (ctx.wizard) return renderProviderCompact(cfg, ctx, { fold: renderVADFold(ctx) }) + gpu;
+        return renderProviderTab(cfg, ctx) + renderVADSection(ctx) + gpu;
     },
 
     async attachListeners(ctx, el) {

@@ -79,7 +79,7 @@ def test_featured_follows_the_loader(monkeypatch, tmp_path):
                    'manifest': {'icon': '🧠', 'capabilities': {'settings': [{'key': 'x'}]}}, 'missing_deps': []},
         'discord': {'name': 'discord', 'enabled': False, 'loaded': False, 'path': str(tmp_path / 'discord'),
                     'manifest': {'icon': '🎮'}, 'missing_deps': ['py-cord']},
-        # telegram, piper, remembrance: not scanned here (managed_hide, or not shipped) -> dropped
+        # telegram, email, homeassistant, coding-harness, webcam, screenshot: not scanned here (managed_hide, or not shipped) -> dropped
     }
     import core.plugin_loader as pl
     import core.routes.plugins as rp
@@ -93,6 +93,21 @@ def test_featured_follows_the_loader(monkeypatch, tmp_path):
     assert mp['has_settings'] is False and mem['has_settings'] is True and dc['has_settings'] is True
     assert mem['enabled'] is True and dc['missing_deps'] == ['py-cord']
     assert mp['title'] == 'Mindpalace' and mp['blurb'] and mp['description'] == 'long words'
+
+
+def test_featured_ship_on_by_default():
+    """2026-10-24: the ungrouped featured plugins arrive ticked on a fresh install
+    (`default_enabled` in their manifests; the loader's disabled list still wins).
+    The memory pair is a radio: one of them ships on, not both."""
+    import json as _json
+    from pathlib import Path as _P
+    root = _P(setup_routes.__file__).resolve().parents[2] / 'core' / 'plugins'
+    names = [n for n, group, _ in setup_routes.FEATURED if group is None]
+    assert names, "the wizard offers something"
+    for n in names:
+        m = _json.loads((root / n / 'plugin.json').read_text(encoding='utf-8'))
+        assert m.get('default_enabled') is True, f"{n} is featured but does not ship on"
+    assert 'piper' not in names and 'remembrance' not in names     # voice providers wake from the Voice step's cards
 
 
 def _manager(tmp_path, user, nested):

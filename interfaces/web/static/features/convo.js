@@ -7,6 +7,8 @@
 // by the conversation_mode_changed SSE event + the boot GET; the segment and
 // the mic button (features/mic.js) only READ it. A phone call is source
 // 'phone' — it lights nothing here (not a mic session on this machine).
+// The switch survives restarts: the server keeps its last choice (and resumes
+// Local itself at boot); a device that chose Browser resumes it on page load.
 import * as state from '../core/state.js';
 import * as eventBus from '../core/event-bus.js';
 import * as conversation from './conversation.js';
@@ -35,7 +37,9 @@ export async function setConvo(mode) {
     const cur = getConvo();
     try {
         if (mode === 'off') {
-            if (cur.source === 'browser') {
+            // this tab's own intent first: an Off clicked before the SSE echo
+            // landed (or mid-retry) used to fall through and leave it on
+            if (cur.source === 'browser' || conversation.isWanted()) {
                 // WS close IS the switch; state stays 'browser' until the SSE
                 // confirms. Painting from state here bounced the segment
                 // off->browser->off on EVERY click (S2 #2) -- let the
@@ -45,7 +49,7 @@ export async function setConvo(mode) {
             }
             if (cur.source === 'local' && cur.enabled) await setLocal(false);
         } else if (mode === 'local') {
-            if (cur.source === 'browser') conversation.stop();
+            if (cur.source === 'browser' || conversation.isWanted()) conversation.stop();
             await setLocal(true);
         } else if (mode === 'browser') {
             if (cur.source === 'local' && cur.enabled) await setLocal(false);
@@ -73,6 +77,15 @@ export function paintSegment(optimistic) {
     seg.querySelectorAll('[data-conv]').forEach(b => b.classList.toggle('active', b.dataset.conv === cur));
 }
 
+// Page load: Browser was the last choice and THIS device made it. Never a
+// permission prompt nobody clicked for -- without a standing grant, just say so.
+async function resumeBrowser() {
+    let perm = 'granted';
+    try { perm = (await navigator.permissions.query({ name: 'microphone' })).state; } catch {}
+    if (perm !== 'granted' || !(await conversation.start({ auto: true })))
+        showToast('Conversation mode was on — pick Browser to resume it', 'info');
+}
+
 export function initConvo() {
     eventBus.on('conversation_mode_changed', (d) => {
         state.setConvo({ enabled: d?.enabled === true, source: d?.source || null });
@@ -80,7 +93,14 @@ export function initConvo() {
     });
     fetch('/api/runtime/true-speech')
         .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d) { state.setConvo({ enabled: d.enabled === true, source: d.source || null }); paintSegment(); } })
+        .then(d => {
+            if (!d) return;
+            state.setConvo({ enabled: d.enabled === true, source: d.source || null });
+            paintSegment();
+            if (d.last_mode !== 'browser') conversation.forget();   // another device or Local chose since
+            // a live session at load is another tab's (a reload's 1001 ends ours) -- never steal it
+            else if (conversation.remembered() && !d.enabled) resumeBrowser();
+        })
         .catch(() => {});
     document.getElementById('conv-seg')?.addEventListener('click', (e) => {
         const b = e.target.closest('[data-conv]');

@@ -114,8 +114,8 @@ class VoiceChatSystem:
         self._processing_lock = threading.Lock()
         self._web_active_count = 0  # Ref-counted wakeword suppression during web UI activity
         self._web_active_stamp = 0.0  # last inc time -- TTL guard against stranded counts (N3)
-        # Conversation mode (v3): ephemeral per-session flag + audio-session handle.
-        # NOT persisted — resets on restart. See enter/exit_conversation_mode.
+        # Conversation mode (v3): live flag + audio-session handle. The switch's
+        # last choice persists as CONVERSATION_LAST_MODE (ConversationManager.resume).
         self.conversation_mode_enabled = False
         self.conversation_session = None
         self.conversation_source = None      # "local" | "browser" | None
@@ -1438,6 +1438,10 @@ def run():
 
         # Inject system into FastAPI app
         set_system(voice_chat, restart_callback=request_restart, shutdown_callback=request_shutdown)
+
+        # Conversation mode comes back the way it was left (local here; a browser tab resumes itself)
+        threading.Thread(target=voice_chat.get_conversation_manager().resume,
+                         daemon=True, name='conv-resume').start()
 
         # Continuity - scheduled autonomous tasks
         from core.continuity import ContinuityScheduler, ContinuityExecutor

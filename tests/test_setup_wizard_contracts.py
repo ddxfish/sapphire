@@ -70,11 +70,28 @@ def test_steps_host_the_real_tabs():
     assert "brain: tabStep('brain', 'Brain', llmTab)," in v and "audio: tabStep('audio', 'Audio', audioTab)," in v
     voice = _src('views/setup-steps/voice.js')
     assert "import ttsTab from '../settings-tabs/tts.js';" in voice and "import sttTab from '../settings-tabs/stt.js';" in voice
-    assert "ctx.renderFields(['WAKE_WORD_ENABLED', 'WAKEWORD_MODEL'])" in voice
+    assert "import wakewordTab from '../settings-tabs/wakeword.js';" in voice
     look = _src('views/setup-steps/look.js')
     assert "import appearanceTab from '../settings-tabs/appearance.js';" in look
     llm = _src('views/settings-tabs/llm.js')
     assert "${ctx.wizard ? '' : `<div style=\"margin-top:24px\">" in llm
+
+
+def test_voice_step_is_cards_plus_one_fold():
+    # 2026-10-24: the voice step was overwhelming. Three sections, each the provider
+    # cards, everything else under ONE Advanced fold; the tabs paint that shape under
+    # ctx.wizard (one module, two densities). Silero rides inside the ears' fold.
+    ps = _src('shared/provider-selector.js')
+    assert "export function renderProviderCompact(tabConfig, ctx, { fold = '', after = '' } = {})" in ps
+    assert '<details class="setup-adv"><summary>' in ps
+    for tab in ('tts', 'stt'):
+        src = _src(f'views/settings-tabs/{tab}.js')
+        assert 'if (ctx.wizard)' in src and 'renderProviderCompact(cfg, ctx, {' in src
+    assert 'fold: renderVADFold(ctx)' in _src('views/settings-tabs/stt.js')
+    ww = _src('views/settings-tabs/wakeword.js')
+    assert 'name="ww-pick"' in ww and "stage(ctx, 'WAKE_WORD_ENABLED', !!v);" in ww
+    voice = _src('views/setup-steps/voice.js')
+    assert 'renderFields' not in voice and 'Memory model' not in voice     # the step paints headings only
 
 
 def test_consent_and_name_guards():
@@ -92,6 +109,9 @@ def test_featured_step_toggles_live_and_installs_first():
     assert "if (p.enabled === on) return;" in p                     # the route toggles: only when it differs
     assert "for (const other of group) await flip(other, false);" in p
     assert "w.navigate(b.dataset.setup)" in p
+    # on by default but not running for want of packages: an Install button, the install reloads it
+    assert "const stalled = p => p.enabled && !p.loaded && !!needs(p);" in p
+    assert 'data-install="${esc(p.name)}">Install</button>' in p and "if (await ensureExtra(`plugin:${p.name}`)) await load();" in p
 
 
 def test_settings_system_button_opens_the_view():

@@ -35,6 +35,11 @@ SEAT = ('room_read', 'room_wait', 'room_post')   # a persona key's seat AT a cha
 # instead, so two Sapphires can never ask each other round and round.
 answering = ContextVar('mcp_answering', default=False)
 
+# Who runs a ticked tool from this door: the persona its token speaks as, or
+# 'client' for a plain token. None means her own turn. A tool that keeps state
+# per caller (the browser plugin's lanes) reads it.
+client = ContextVar('mcp_client', default=None)
+
 _TOOLS = {
     'ask': {
         'name': 'ask',
@@ -428,9 +433,14 @@ def call(system, name, args, where='', persona=None):
     if name not in allowed:
         return f"There is no tool named '{name}' on this door.", False
     fm = system.llm_chat.function_manager
-    result, ok = fm.execute_function(name, args, allowed_tools=allowed, with_success=True)
-    if isinstance(result, dict):               # a picture-taking tool: its words only
-        result = result.get('text') or str(result)
+    token = client.set(persona or 'client')
+    try:
+        result, ok = fm.execute_function(name, args, allowed_tools=allowed, with_success=True)
+    finally:
+        client.reset(token)
+    if isinstance(result, dict):               # a picture-taking tool: its words, its pictures as image blocks
+        images = [p for p in result.get('images') or [] if isinstance(p, dict) and p.get('data')]
+        return str(result.get('text') or ''), bool(ok), ({'images': images} if images else None)
     return str(result if result is not None else ''), bool(ok)
 
 

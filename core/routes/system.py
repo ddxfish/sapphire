@@ -1256,6 +1256,8 @@ async def toggle_true_speech(request: Request, _=Depends(require_login), system=
             logger.info("[CONV] local mode requested — ending the browser session")
             mgr.stop()
         ok = mgr.start_local()
+        if ok:
+            mgr.remember("local")
         return {
             "status": "ok" if ok else "failed",
             "active": mgr.active,
@@ -1264,11 +1266,14 @@ async def toggle_true_speech(request: Request, _=Depends(require_login), system=
     if mgr.active:
         logger.info(f"[CONV] Off requested over HTTP (source={getattr(system, 'conversation_source', None)})")
     mgr.stop()
+    mgr.remember("off")
     return {"status": "ok", "active": mgr.active}
 
 
 @router.get("/api/runtime/true-speech")
 async def get_true_speech(_=Depends(require_login), system=Depends(get_system)):
-    """Current true speech mode state (system-level, ephemeral) — for UI load-state."""
+    """Current true speech mode state (system-level) — for UI load-state.
+    `last_mode` is the switch's remembered choice: a tab that chose Browser resumes from it."""
     return {"enabled": bool(getattr(system, "conversation_mode_enabled", False)),
-            "source": getattr(system, "conversation_source", None)}
+            "source": getattr(system, "conversation_source", None),
+            "last_mode": getattr(config, "CONVERSATION_LAST_MODE", "off")}

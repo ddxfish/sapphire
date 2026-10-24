@@ -90,6 +90,10 @@ class BrowserConversationSource:
         self.driver.reset()
         self._send = send_fn
 
+    def owned_by(self, send_fn):
+        """True while `send_fn`'s socket is the one this session talks to."""
+        return self._send is send_fn
+
     # ── SOURCE: WS coroutine -> worker thread ───────────────────────────────
     def push_pcm(self, data):
         """Called from the WS receive coroutine. Never blocks: drop-oldest on overflow."""

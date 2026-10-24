@@ -31,13 +31,21 @@ PACKAGE_SETS = ('tts', 'stt', 'wakeword')
 # The plugins the wizard offers, in this order: (name, group, one line). A
 # group is a radio pair (enable one, not both). A plugin the loader did not
 # scan (managed_hide, or not shipped) is dropped. Curated here, one place.
+# The ungrouped ones ship ON (`default_enabled` in their manifests, 2026-10-24):
+# a fresh install arrives here with them ticked and unticks what it does not
+# want; an install that turned one off keeps it off (the loader's disabled
+# list wins over the default). Voice providers are not here: the Voice step's
+# cards wake their plugin (Piper, ElevenLabs...).
 FEATURED = (
     ('mindpalace', 'mind', 'Layered memory: self, events, people and knowledge behind one tool surface.'),
     ('memory', 'mind', 'The classic long-term memory, knowledge base, goals and people.'),
     ('discord', None, 'A Discord bot on her conversation engine: chat, images, voice channels.'),
     ('telegram', None, 'Talk to her from Telegram, as a bot or from your own account.'),
-    ('piper', None, 'A fast local voice for CPUs and weak hardware.'),
-    ('remembrance', None, 'Encrypted offsite backups to the Remembrance vault.'),
+    ('email', None, 'She reads and sends mail for you, to a whitelist of people.'),
+    ('homeassistant', None, 'Lights, switches, scenes and the thermostat through Home Assistant.'),
+    ('coding-harness', None, 'File and shell tools fenced to one working folder, for coding with her.'),
+    ('webcam', None, 'She can look through your camera when you ask.'),
+    ('screenshot', None, 'She can grab this screen when you ask.'),
 )
 
 

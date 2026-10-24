@@ -9,7 +9,7 @@
   "url": "https://sapphireblue.dev",
   "icon": "🎮",
   "priority": 50,
-  "default_enabled": false,
+  "default_enabled": true,
   "pip_dependencies": [
     "py-cord[voice] @ git+https://github.com/Pycord-Development/pycord.git@6e71bfffb520f77948ff28544949925a55767ee7",
     "davey>=0.1.4",

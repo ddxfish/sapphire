@@ -2,7 +2,9 @@
 // listen for, as one row with a PC model (openWakeWord, .onnx) and a satellite model (microWakeWord, .tflite),
 // who listens for it, uploads, and removal. Switching is not here: this computer picks from the dropdown above,
 // a board picks on its Wake word tab in Devices. The doors are /api/wakeword/* (core/routes/wakeword.py,
-// core/wakeword/library.py).
+// core/wakeword/library.py). Inside the setup wizard (ctx.wizard) this tab is one card per PC model, "Off"
+// first, in the provider cards' clothes, with the threshold and the advanced keys under one fold.
+import { renderFold } from '../../shared/provider-selector.js';
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import { showToast } from '../../shared/toast.js';
 import { escapeHtml as esc } from '../../shared/modal.js';
@@ -21,6 +23,10 @@ export default {
     advancedKeys: ['WAKEWORD_FRAMEWORK', 'CHUNK_SIZE', 'BUFFER_DURATION', 'WAKE_TONE_DURATION', 'WAKE_TONE_FREQUENCY'],
 
     render(ctx) {
+        if (ctx.wizard) {
+            const on = !!ctx.getValue('WAKE_WORD_ENABLED');
+            return wizardCards(ctx) + (on ? renderFold(ctx.renderFields(['WAKEWORD_THRESHOLD', ...this.advancedKeys])) : '');
+        }
         return ctx.renderFields(this.essentialKeys) + `
             <div class="net-section" id="ww-library">
                 <h4>Library</h4>
@@ -33,6 +39,16 @@ export default {
     },
 
     async attachListeners(ctx, el) {
+        if (ctx.wizard) {
+            el.querySelector('.prov-cards')?.addEventListener('change', e => {
+                const v = e.target.closest('input[name="ww-pick"]')?.value;
+                if (v === undefined) return;
+                stage(ctx, 'WAKE_WORD_ENABLED', !!v);
+                if (v) stage(ctx, 'WAKEWORD_MODEL', v);
+                ctx.refreshTab();                    // the fold follows the pick
+            });
+            return;
+        }
         const body = el.querySelector('#ww-lib-body');
         try { paint(body, await fetchWithTimeout(`${API}/library`), ctx); }
         catch (e) { body.innerHTML = `<span style="color:var(--error)">The library could not be read: ${esc(e.message)}</span>`; }
@@ -40,6 +56,29 @@ export default {
             el.querySelector(`#ww-add-${fam}`)?.addEventListener('click', () => add(ctx, el, fam));
     }
 };
+
+// ── The setup wizard's cards ──
+const phrase = n => n.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+function wizardCards(ctx) {
+    const cur = ctx.getValue('WAKE_WORD_ENABLED') ? String(ctx.getValue('WAKEWORD_MODEL') || '') : '';
+    const names = [...ctx.wakewordModels];
+    if (cur && !names.includes(cur)) names.unshift(cur);     // the saved word stays pickable
+    const card = (value, name, blurb) => `
+        <label class="prov-card${value === cur ? ' selected' : ''}" data-value="${esc(value)}">
+            <input type="radio" name="ww-pick" value="${esc(value)}"${value === cur ? ' checked' : ''}>
+            <span class="prov-card-head"><span class="prov-card-name">${esc(name)}</span></span>
+            ${blurb ? `<span class="prov-card-blurb">${esc(blurb)}</span>` : ''}
+        </label>`;
+    return `<div class="prov-cards">${card('', 'Off', 'Use the mic button, or type.')}${names.map(n => card(n, phrase(n), '')).join('')}</div>`;
+}
+
+// Stage only what differs from the saved value: a pick back to the saved word is
+// no change, not a switch job.
+function stage(ctx, key, value) {
+    if (value === ctx.settings[key]) delete ctx.pendingChanges[key];
+    else ctx.markChanged(key, value);
+}
 
 // One section per family: a heading, the model picker, the manifest picker, Add. The library name is the
 // model file's name (hey_marcus.tflite -> hey_marcus); the spoken phrase comes from the manifest.

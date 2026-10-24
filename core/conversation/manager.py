@@ -80,6 +80,26 @@ class ConversationManager:
                           getattr(config, "CONVERSATION_VAD_THRESHOLD", 0.5))
         return SpeechGate(threshold=threshold)
 
+    def remember(self, mode):
+        """Persist the Off/Local/Browser switch's choice so a restart resumes it.
+        Callers record deliberate choices only — a drop or a dead tab is not 'off'."""
+        import config
+        if getattr(config, "CONVERSATION_LAST_MODE", "off") == mode:
+            return                                 # browser reconnects re-confirm; skip the disk write
+        from core.settings_manager import settings
+        settings.set("CONVERSATION_LAST_MODE", mode, persist=True)
+
+    def resume(self):
+        """Boot: bring local mode back if it was on at shutdown. Browser mode
+        resumes from its own tab (it owns the mic), so there is nothing to do here."""
+        import config
+        if getattr(config, "CONVERSATION_LAST_MODE", "off") != "local":
+            return
+        logger.info("[CONV] resuming local conversation mode (it was on at shutdown)")
+        if not self.start_local():
+            logger.warning("[CONV] local conversation mode did not resume — "
+                           "it needs wakeword on and a free mic; it will try again next boot")
+
     @property
     def active(self):
         return bool(getattr(self.system, "conversation_mode_enabled", False))
@@ -167,15 +187,26 @@ class ConversationManager:
         logger.info(f"[CONV] browser session parked — waiting {BROWSER_GRACE_S}s for the tab to reconnect")
         return True
 
-    def resume_browser(self, send_fn):
-        """A reconnecting tab takes over the parked session. Returns it, or None."""
+    def adopt_browser(self, send_fn):
+        """A new socket takes the browser session over, with no stop/start (no
+        mode or wakeword flap). A parked session resumes. A live one is taken
+        from its socket - another tab, or this tab back before the server saw
+        its old socket die (half-open: the client's retry often wins that
+        race) - which is cut mid-turn and told bye. Returns the session, or
+        None when there is no browser session to adopt."""
+        from core.conversation.browser_source import BrowserConversationSource
         with self._park_lock:
-            src = self._parked
-            if src is None or self.system.conversation_session is not src:
+            src = self.system.conversation_session
+            if not isinstance(src, BrowserConversationSource):
                 return None
+            parked = self._parked is src
             self._unpark()
+            if not parked:
+                old = src._send
+                src.detach()
+                old({"type": "bye"})
             src.resume(send_fn)
-        logger.info("[CONV] browser session resumed")
+        logger.info(f"[CONV] browser session {'resumed' if parked else 'taken over by a new socket'}")
         return src
 
     def _unpark(self):

@@ -1,10 +1,22 @@
 // settings-tabs/tts.js - Text-to-speech provider settings
-import { renderProviderTab, attachProviderListeners, mergeRegistryProviders, providerSignature } from '../../shared/provider-selector.js';
+import { renderProviderTab, renderProviderCompact, attachProviderListeners, mergeRegistryProviders, providerSignature } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
 import { gpuNotice } from '../../shared/gpu-notice.js';
 import { mountWorkerDoor } from '../../shared/worker-door.js';
 
 let _mergedConfig = null;
+
+// Streaming TTS (v2.7.0): kicks in only under a capable provider (Kokoro);
+// the others fall back to the whole-blob path, so the keys are harmless there.
+const STREAMING_KEYS = [
+    'TTS_STREAMING_ENABLED',
+    'TTS_STREAMING_SPLIT_MODE',
+    'TTS_STREAMING_MIN_CHARS',
+    'TTS_STREAMING_MAX_CHARS',
+    'TTS_STREAMING_PAUSE_PARAGRAPH_MS',
+    'TTS_STREAMING_PAUSE_SENTENCE_MS',
+    'TTS_STREAMING_STAGE_PAUSE_STYLE'
+];
 
 const tabConfig = {
     providerKey: 'TTS_PROVIDER',
@@ -40,6 +52,28 @@ export default {
 
     render(ctx) {
         const cfg = _mergedConfig || tabConfig;
+        const test = `
+            <div class="settings-grid" style="margin-top: 1rem;">
+                <div class="setting-row full-width">
+                    <button id="tts-test-btn" class="btn btn-secondary" style="width: auto;">
+                        Test TTS
+                    </button>
+                    <span id="tts-test-result" style="margin-left: 0.75rem; font-size: var(--font-sm);"></span>
+                </div>
+            </div>`;
+        const gpu = `<div id="tts-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>`;
+        // Shared Kokoro (core/worker_door.py): which computers may use it.
+        const door = ctx.settings.TTS_PROVIDER === 'kokoro' && ctx.settings.TTS_SHARE_ENABLED
+            ? `<div id="tts-door" style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);"></div>` : '';
+
+        // The setup wizard (2026-10-24): the cards, one Advanced fold, the test button.
+        if (ctx.wizard) {
+            return renderProviderCompact(cfg, ctx, {
+                fold: ctx.renderFields(['TTS_LOCAL_PLAYBACK', ...STREAMING_KEYS]) + door,
+                after: test,
+            }) + gpu;
+        }
+
         let html = renderProviderTab(cfg, ctx);
 
         // Play speech here (2026-10-17): "make speech" and "play it on this
@@ -50,42 +84,15 @@ export default {
                 ${ctx.renderFields(['TTS_LOCAL_PLAYBACK'])}
             </div>`;
 
-        // Streaming TTS section (v2.7.0). Streaming only kicks in when a
-        // capable provider is active (currently Kokoro); otherwise the
-        // setting is harmless — non-streaming providers fall back to the
-        // whole-blob path automatically.
         // (Don't reuse `.settings-section` — it's `display:none` by default
         // and only shown when `.active` is added; collided 2026-05-18.)
         html += `
             <details style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);" open>
                 <summary style="cursor: pointer; padding: 0.25rem 0;"><strong>Streaming (Kokoro)</strong></summary>
-                ${ctx.renderFields([
-                    'TTS_STREAMING_ENABLED',
-                    'TTS_STREAMING_SPLIT_MODE',
-                    'TTS_STREAMING_MIN_CHARS',
-                    'TTS_STREAMING_MAX_CHARS',
-                    'TTS_STREAMING_PAUSE_PARAGRAPH_MS',
-                    'TTS_STREAMING_PAUSE_SENTENCE_MS',
-                    'TTS_STREAMING_STAGE_PAUSE_STYLE'
-                ])}
+                ${ctx.renderFields(STREAMING_KEYS)}
             </details>`;
 
-        html += `
-            <div class="settings-grid" style="margin-top: 1rem;">
-                <div class="setting-row full-width">
-                    <button id="tts-test-btn" class="btn btn-secondary" style="width: auto;">
-                        Test TTS
-                    </button>
-                    <span id="tts-test-result" style="margin-left: 0.75rem; font-size: var(--font-sm);"></span>
-                </div>
-            </div>
-            <div id="tts-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>`;
-
-        // Shared Kokoro (core/worker_door.py): which computers may use it.
-        if (ctx.settings.TTS_PROVIDER === 'kokoro' && ctx.settings.TTS_SHARE_ENABLED) {
-            html += `<div id="tts-door" style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);"></div>`;
-        }
-        return html;
+        return html + test + gpu + door;
     },
 
     async attachListeners(ctx, el) {

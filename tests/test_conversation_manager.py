@@ -226,3 +226,54 @@ def test_build_driver_honours_a_tuning_start_word():
         assert driver_cls.call_args.kwargs["barge_hold_ms"] == 300
         mgr._build_driver(chat_name="call", tuning={"barge_hold_ms": 90})
         assert driver_cls.call_args.kwargs["start_word"] == str(getattr(config, "CONVERSATION_START_WORD", ""))
+
+
+# ── Remembered switch (CONVERSATION_LAST_MODE survives restarts) ────────────
+def _with_last_mode(monkeypatch, mode):
+    import config
+    from core.settings_manager import settings
+    monkeypatch.setattr(config, "CONVERSATION_LAST_MODE", mode, raising=False)
+    writes = []
+    monkeypatch.setattr(settings, "set", lambda k, v, persist=False: writes.append((k, v, persist)))
+    return writes
+
+
+def test_remember_persists_a_change(monkeypatch):
+    writes = _with_last_mode(monkeypatch, "off")
+    ConversationManager(MagicMock()).remember("local")
+    assert writes == [("CONVERSATION_LAST_MODE", "local", True)]
+
+
+def test_remember_same_mode_skips_the_write(monkeypatch):
+    writes = _with_last_mode(monkeypatch, "browser")
+    ConversationManager(MagicMock()).remember("browser")    # every browser reconnect re-confirms
+    assert writes == []
+
+
+def test_resume_starts_local_when_it_was_local(monkeypatch):
+    _with_last_mode(monkeypatch, "local")
+    system = _system_with_real_handoff()
+    mgr = ConversationManager(system, gate=MagicMock(), source_factory=lambda d, g: MagicMock())
+    mgr.resume()
+    assert mgr.active is True
+
+
+def test_resume_leaves_browser_and_off_to_their_owners(monkeypatch):
+    for mode in ("browser", "off"):
+        _with_last_mode(monkeypatch, mode)
+        built = []
+        mgr = ConversationManager(_system_with_real_handoff(), gate=MagicMock(),
+                                  source_factory=lambda d, g: built.append(1) or MagicMock())
+        mgr.resume()
+        assert mgr.active is False and built == []
+
+
+def test_resume_failure_keeps_the_choice(monkeypatch):
+    """No mic at boot: mode stays off, but 'local' is kept so the next boot tries again."""
+    writes = _with_last_mode(monkeypatch, "local")
+
+    def boom(d, g):
+        raise RuntimeError("no mic")
+    mgr = ConversationManager(_system_with_real_handoff(), gate=MagicMock(), source_factory=boom)
+    mgr.resume()
+    assert mgr.active is False and writes == []

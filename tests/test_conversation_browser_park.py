@@ -52,7 +52,7 @@ def test_resume_reattaches_same_session():
     src, _ = _start(mgr)
     mgr.park_browser(src)
     sent2 = []
-    assert mgr.resume_browser(sent2.append) is src
+    assert mgr.adopt_browser(sent2.append) is src
     assert mgr._park_timer is None                      # grace cancelled
     src.start()                                         # next turn re-arms the sink
     src.finish()
@@ -61,11 +61,25 @@ def test_resume_reattaches_same_session():
     mgr.stop()
 
 
-def test_resume_without_park_returns_none():
-    _, mgr = _browser_mgr()
-    _start(mgr)
-    assert mgr.resume_browser(lambda m: None) is None   # live session -> caller replaces it
+def test_live_session_is_taken_over_without_a_flap():
+    """A new socket while the old one still looks alive (another tab, or the
+    same tab back before the server saw its socket die): adopt, never stop+start."""
+    system, mgr = _browser_mgr()
+    src, sent = _start(mgr)
+    old_send = src._send
+    sent2 = []
+    send2 = sent2.append
+    assert mgr.adopt_browser(send2) is src
+    assert sent[-1] == {"type": "bye"}                  # the old socket is told to shut its side
+    assert src.owned_by(send2) and not src.owned_by(old_send)
+    assert mgr.active is True
+    system.exit_conversation_mode.assert_not_called()
     mgr.stop()
+
+
+def test_adopt_without_a_session_returns_none():
+    _, mgr = _browser_mgr()
+    assert mgr.adopt_browser(lambda m: None) is None
 
 
 def test_grace_expiry_ends_mode(monkeypatch):
@@ -75,7 +89,7 @@ def test_grace_expiry_ends_mode(monkeypatch):
     mgr.park_browser(src)
     mgr._park_timer.join(1.0)
     assert mgr.active is False
-    assert mgr.resume_browser(lambda m: None) is None
+    assert mgr.adopt_browser(lambda m: None) is None
 
 
 def test_stop_while_parked_cancels_grace():
@@ -117,7 +131,7 @@ def test_concurrent_resume_and_expiry_pick_one():
         mgr.park_browser(src)
         mgr._park_timer.cancel()
         got = []
-        a = threading.Thread(target=lambda: got.append(mgr.resume_browser(lambda m: None)))
+        a = threading.Thread(target=lambda: got.append(mgr.adopt_browser(lambda m: None)))
         b = threading.Thread(target=mgr._park_expired, args=(src,))
         a.start(); b.start(); a.join(); b.join()
         assert (got[0] is src) == mgr.active            # resumed and live, or expired and off

@@ -6,7 +6,7 @@
   "author": "sapphire",
   "icon": "🖥️",
   "priority": 50,
-  "default_enabled": false,
+  "default_enabled": true,
   "pip_dependencies": ["mss"],
   "settingsUI": "auto",
   "capabilities": {

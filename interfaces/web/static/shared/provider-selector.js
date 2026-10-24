@@ -15,7 +15,8 @@
  * A DORMANT card is a provider a disabled plugin declares: clicking it installs
  * the plugin's packages if they are missing (shared/extras.js asks first), turns
  * the plugin on, then picks it. The Settings page and the setup wizard both
- * render this through the host (shared/settings-host.js).
+ * render this through the host (shared/settings-host.js); the wizard paints the
+ * compact shape (renderProviderCompact: the cards, one Advanced fold).
  */
 
 const _esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -118,6 +119,35 @@ export function renderProviderTab(tabConfig, ctx) {
     return html;
 }
 
+/**
+ * The setup wizard's shape (2026-10-24): the cards alone, then ONE "Advanced"
+ * fold holding every field (the provider's own, the common ones, the advanced
+ * ones, a plugin provider's form) plus the tab's `fold` html; `after` paints
+ * under the fold (a test button). Off = the cards and the disabled line.
+ */
+export function renderProviderCompact(tabConfig, ctx, { fold = '', after = '' } = {}) {
+    const effective = _filterProviders(tabConfig, ctx);
+    const current = _currentProvider(effective, ctx);
+    const def = effective.providers[current] || effective.providers.none;
+    const cards = _renderCards(effective, current, ctx, true);
+    if (current === 'none') {
+        return cards + `<p class="setting-help" style="padding:12px 0;opacity:0.7">
+            ${effective.disabledMessage || 'Disabled. Select a provider above to enable.'}
+        </p>`;
+    }
+    let inner = def._plugin && !def.essentialKeys?.length
+        ? `<div id="plugin-provider-settings" data-plugin="${_esc(current)}" style="padding:8px 0"></div>` : '';
+    const keys = [...(def.essentialKeys || []), ...(effective.commonKeys || []),
+                  ...(def.advancedKeys || []), ...(effective.commonAdvancedKeys || [])];
+    if (keys.length) inner += ctx.renderFields(keys);
+    return cards + renderFold(inner + fold) + after;
+}
+
+/** One closed <details> named Advanced: what the wizard hides under each section. */
+export function renderFold(inner, title = 'Advanced') {
+    return `<details class="setup-adv"><summary>${_esc(title)}</summary><div class="setup-adv-body">${inner}</div></details>`;
+}
+
 export function attachProviderListeners(tabConfig, ctx, el, tabModule) {
     const key = tabConfig.providerKey;
     const grid = el.querySelector(`.prov-cards[data-key="${key}"]`);
@@ -173,7 +203,7 @@ function _currentProvider(tabConfig, ctx) {
     return ctx.settings[tabConfig.providerKey] || 'none';
 }
 
-function _renderCards(tabConfig, current, ctx) {
+function _renderCards(tabConfig, current, ctx, bare = false) {
     const key = tabConfig.providerKey;
     const h = ctx.help[key];
     const isOverridden = ctx.overrides.includes(key);
@@ -199,6 +229,8 @@ function _renderCards(tabConfig, current, ctx) {
             </label>`;
     }).join('');
 
+    const grid = `<div class="prov-cards" data-key="${key}">${cards}</div>`;
+    if (bare) return grid;
     return `
         <div class="settings-grid">
             <div class="setting-row prov-row${isOverridden ? ' overridden' : ''}" data-key="${key}">
@@ -211,9 +243,7 @@ function _renderCards(tabConfig, current, ctx) {
                     </div>
                     ${h?.short ? `<div class="setting-help">${h.short}</div>` : ''}
                 </div>
-                <div class="setting-input">
-                    <div class="prov-cards" data-key="${key}">${cards}</div>
-                </div>
+                <div class="setting-input">${grid}</div>
             </div>
         </div>
     `;

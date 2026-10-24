@@ -142,6 +142,24 @@ async def require_setup(request: Request):
     return True
 
 
+def mint_session_cookie() -> Optional[str]:
+    """A logged-in `sapphire_session` cookie value, as /login would stamp it -
+    for this machine's own browser (the browser plugin's self-login switch).
+    It dies with the password like any other. None before setup."""
+    import json
+    from base64 import b64encode
+    from itsdangerous import TimestampSigner
+    from core.setup import get_password_hash
+    from core.api_fastapi import _get_session_secret
+    stored = get_password_hash()
+    if not stored:
+        return None
+    import config
+    data = {'logged_in': True, 'pw': stored[:29], 'username': getattr(config, 'AUTH_USERNAME', 'user')}
+    signed = TimestampSigner(str(_get_session_secret())).sign(b64encode(json.dumps(data).encode('utf-8')))
+    return signed.decode('utf-8')
+
+
 def get_client_ip(request: Request) -> str:
     """Get client IP from request. Uses direct connection IP only (X-Forwarded-For is spoofable)."""
     return request.client.host if request.client else '127.0.0.1'

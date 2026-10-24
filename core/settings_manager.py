@@ -813,6 +813,8 @@ class SettingsManager:
             # Conversation (true speech) mode tunables — read fresh on each activation
             'CONVERSATION_VAD_THRESHOLD', 'CONVERSATION_BARGE_HOLD_MS',
             'CONVERSATION_MIN_SPEECH_MS', 'CONVERSATION_ENDPOINT_SILENCE_MS',
+            # the Off/Local/Browser switch's last choice - read once at boot
+            'CONVERSATION_LAST_MODE',
         }
         
         # Everything else requires restart (TTS, STT, modules, etc. are initialized at startup)

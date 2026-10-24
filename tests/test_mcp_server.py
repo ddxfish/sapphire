@@ -217,11 +217,23 @@ def test_a_tool_that_is_not_offered_is_not_run(world):
     world.fm.execute_function.assert_not_called()
 
 
-def test_a_picture_taking_tool_sends_its_words_only(world):
+def test_a_picture_taking_tool_sends_its_pictures_as_image_blocks(world):
     world.fm.execute_function.return_value = ({'text': 'A picture.', 'images': [{'data': 'x'}]}, True)
     out = mcp.handle(world.system, rpc('tools/call', name='device_action', arguments={}))
-    assert out['result']['content'] == [{'type': 'text', 'text': 'A picture.'}]
+    assert out['result']['content'] == [{'type': 'text', 'text': 'A picture.'},
+                                        {'type': 'image', 'data': 'x', 'mimeType': 'image/jpeg'}]
 
+
+
+def test_a_ticked_tool_knows_its_caller(world):
+    """A tool that keeps state per caller (the browser plugin's lanes) reads
+    mcp_server.client: the persona of the caller's key, 'client' for a plain
+    one, and None again once the call is over (her own turns)."""
+    seen = []
+    world.fm.execute_function.side_effect = lambda *a, **k: (seen.append(mcp.client.get()), ('ok', True))[1]
+    mcp.handle(world.system, rpc('tools/call', name='device_action', arguments={}), persona='claude')
+    mcp.handle(world.system, rpc('tools/call', name='device_action', arguments={}))
+    assert seen == ['claude', 'client'] and mcp.client.get() is None
 
 # --- the protocol around it ----------------------------------------------------------
 

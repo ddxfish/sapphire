@@ -4,7 +4,7 @@
   "files": {
     "README.md": "sha256:ae374d9cc7654a2bcc8e0ca062e9207ae5f2c0e32b89f72145df80f541387d11",
     "daemon.py": "sha256:f1d3e12a60fb9700a1c39d6e9f840309e42fa08525b9c8178de9089a0b8e3026",
-    "plugin.json": "sha256:c7adf1fda120d41b0e2081b1119d54b785d252389bdbbfd005dd9d87ab95b3ca",
+    "plugin.json": "sha256:90fd20a0db6d01e6d2eee0b00573e880b56480ab9c2400ffa42b023007c040ae",
     "tests/test_archive_partial_success.py": "sha256:04f3d1e9f3c68a5fbb56ced21656cfc7a55877e54190fe120594113327948470",
     "tests/test_delete_emails.py": "sha256:f3bf4af555fc00f68bc9020521f9cf92e0f017d0ca608de198da5e67310c32b3",
     "tests/test_forward_cc.py": "sha256:53cf70bc4f82e1dfd44eec1b43f7dac91e31e4387346235a1fb61cb63d8c1abc",
@@ -14,5 +14,5 @@
     "tools/email_tool.py": "sha256:7d2b98e49bfb066d00091472568a489fc46e0ed23c4598692ac53cee707c5fd0",
     "web/index.js": "sha256:376002392e2790776e7f286b2129e3d30a812b6a91b2b5f72fa014b16a49448a"
   },
-  "signature": "L/HDo22fCVymcWK9QmxJni+jhOgo7/aw5JHt0SbAOk2kbq0uAcWD0/AmrvLt8zzM7KMvnI6L7/9mVglAIvETDQ=="
+  "signature": "qDYm45sExoAj+nmhM4CrXtUX6IcwYRZZzqNjKLKzRjW2rqd+K8H+UkHLKYuXe1LciKXC6miEUdhBjY9+SM9MDQ=="
 }

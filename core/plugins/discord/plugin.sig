@@ -44,7 +44,7 @@
     "models/settings.py": "sha256:402185c450751a029340841c4148e96721e68dd7ba0dc5f14063fff4062807b3",
     "models/voice.py": "sha256:5c5cdec4397a892bbc00bcce3950ee2149b25d2dd5fd8d6be8a7c5d06af3210b",
     "observability/decisions.py": "sha256:1828cae0ad44e783e890ec2287dac9620d143efccb04c7abaa63ae9528c5ecea",
-    "plugin.json": "sha256:254bbe259a51f183d7f28df1c02acf17675ee0e3fc372802bd566e34a869d301",
+    "plugin.json": "sha256:c94e56180f48c7757cf533e4525dfc7d273764fd11e837858b52bce1e54a48d2",
     "presence.py": "sha256:5d8a67f70951a10d61bcf4637a97d3b48954a0875b63837f39cb8af460be8cd2",
     "reminders.py": "sha256:85951a6cc5400bba259148093d5f2f4acec63ec93690ddbd31ccf16bca873a22",
     "runtime/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -153,5 +153,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:41c824acfb6517d4709f975a96f4176185624d4aad4793ef1179f0f3967b0682"
   },
-  "signature": "YCm9AaYVK5XjG/NVKbmBTC12Tij+c4PMUDC0g0jz0aURKHrmf2/C9PX3pPtEh15IIWsPRstMAveyut54hIjvCA=="
+  "signature": "M3JVeyJIC2tt33h1DXlF9N8mrO2cXeLiACHg6NETBPioeOfDJWcdt1uVewqwDlQVHleKe1hGuLoDpDGgTlMTCw=="
 }

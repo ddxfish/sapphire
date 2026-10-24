@@ -161,6 +161,25 @@ def cert_pem():
         return ''
 
 
+def spki_pin():
+    """The certificate's key as Chromium's SPKI pin (base64 sha256), or None.
+    `--ignore-certificate-errors-spki-list=<pin>` makes a Chromium trust this
+    one self-signed cert and nothing else - never ignore_https_errors."""
+    try:
+        import base64
+        import hashlib
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        if not CERT_FILE.exists():
+            return None
+        key = x509.load_pem_x509_certificate(CERT_FILE.read_bytes()).public_key()
+        der = key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        return base64.b64encode(hashlib.sha256(der).digest()).decode()
+    except Exception as e:
+        logger.warning(f"[SSL] the certificate could not be pinned: {e}")
+        return None
+
+
 def get_cert_info():
     """Get info about the current certificate for display."""
     from cryptography import x509

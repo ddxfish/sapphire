@@ -7,7 +7,7 @@
   "url": "https://sapphireblue.dev",
   "icon": "✈️",
   "priority": 50,
-  "default_enabled": false,
+  "default_enabled": true,
   "pip_dependencies": [
     "telethon"
   ],

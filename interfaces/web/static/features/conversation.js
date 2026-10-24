@@ -20,6 +20,10 @@
 //             runs stop(). A close while still wanted is a DROP: the mic stays
 //             warm and only the socket comes back; the server parks the session
 //             (BROWSER_GRACE_S) so a quick return resumes it with no mode flap.
+// Restarts:   this DEVICE remembers it chose Browser (localStorage FLAG); the
+//             server remembers the switch's last choice. Both = convo.js
+//             resumes it on page load (start({auto})) — only the tab's own
+//             device, never every open tab.
 import * as audio from '../audio.js';
 import { showToast } from '../shared/toast.js';
 
@@ -37,16 +41,25 @@ let lastStreamId = null;
 let turnOpen = false;   // fallback stream tracking when chunks carry no stream_id
 let idlePoll = null;
 let wanted = false;
+
+const FLAG = 'sapphire-convo-browser';
+const _remember = (on) => {
+    try { on ? localStorage.setItem(FLAG, '1') : localStorage.removeItem(FLAG); } catch {}
+};
+export const remembered = () => { try { return localStorage.getItem(FLAG) === '1'; } catch { return false; } };
+export const forget = () => _remember(false);
 let retryTimer = null;
 let retries = 0;
 let droppedAt = 0;
 
 export const isActive = () => !!ws && ws.readyState === WebSocket.OPEN;
+export const isWanted = () => wanted;      // on, or between retries — truer than the SSE echo for this tab
 
 // The ONE deliberate exit. Tears down synchronously, so a quick stop()->start()
 // can't have the old socket's late onclose touch the new session.
 export const stop = () => {
     wanted = false;
+    _remember(false);
     _teardown();
 };
 
@@ -135,7 +148,9 @@ const _onMessage = (msg) => {
     }
 };
 
-export const start = async () => {
+// `auto` = a resume on page load, not a click: failures stay quiet (no alert),
+// and an AudioContext the browser holds suspended until a gesture wakes on one.
+export const start = async ({ auto = false } = {}) => {
     if (wanted) {                       // already on — or between retries: reconnect now
         if (!ws) { clearTimeout(retryTimer); retryTimer = null; _connect(); }
         return true;
@@ -146,6 +161,7 @@ export const start = async () => {
         });
     } catch (e) {
         console.error('[CONV-WS] mic access failed:', e);
+        if (auto) return false;
         alert(e?.name === 'NotFoundError' ? 'No microphone found.' : 'Mic access denied.');
         return false;
     }
@@ -157,6 +173,7 @@ export const start = async () => {
         workletNode = new AudioWorkletNode(ctx, 'conv-capture');
         srcNode.connect(workletNode);
         workletNode.connect(ctx.destination);   // silent output; keeps the graph pulled
+        if (ctx.state === 'suspended') _wakeOnGesture();
     } catch (e) {
         console.error('[CONV-WS] capture setup failed:', e);
         _teardown();
@@ -169,10 +186,24 @@ export const start = async () => {
         try { ws.send(i16.buffer); } catch {}
     };
     wanted = true;
+    _remember(true);
     retries = 0;
     droppedAt = 0;
     _connect();
     return true;
+};
+
+// No click yet this page load: the browser holds audio until one. Any first
+// click or key wakes capture (and her playback with it).
+const _wakeOnGesture = () => {
+    showToast('Conversation mode is back on — click anywhere to wake the mic', 'info');
+    const wake = () => {
+        window.removeEventListener('pointerdown', wake, true);
+        window.removeEventListener('keydown', wake, true);
+        ctx?.resume().catch(() => {});
+    };
+    window.addEventListener('pointerdown', wake, true);
+    window.addEventListener('keydown', wake, true);
 };
 
 const _connect = () => {
@@ -189,7 +220,7 @@ const _connect = () => {
         droppedAt = 0;
     };
     sock.onmessage = (e) => {
-        if (typeof e.data !== 'string') return;
+        if (sock !== ws || typeof e.data !== 'string') return;   // a superseded socket's late "bye" must not stop us
         let msg;
         try { msg = JSON.parse(e.data); } catch { return; }
         _onMessage(msg);
@@ -211,7 +242,9 @@ const _scheduleRetry = () => {
     turnOpen = false;
     if (!droppedAt) droppedAt = Date.now();
     if (Date.now() - droppedAt > GIVE_UP_MS) {
-        stop();
+        wanted = false;                 // not stop(): the server being away isn't the user's Off --
+        _teardown();                    // keep the device flag so a reload once it's back resumes
+
         showToast('Conversation mode lost its connection — turn it back on when the server is back', 'error');
         return;
     }

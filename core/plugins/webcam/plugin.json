@@ -6,6 +6,7 @@
   "author": "sapphire",
   "icon": "📷",
   "priority": 50,
+  "default_enabled": true,
   "capabilities": {
     "tools": ["tools/webcam.py"],
     "routes": [

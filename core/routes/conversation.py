@@ -45,13 +45,14 @@ async def conversation_ws(websocket: WebSocket):
             pass                                     # loop shutting down; teardown handles it
 
     # Mutual exclusion: local mode wins (user is at the box — don't yank it from
-    # a tab). A PARKED browser session (its socket dropped, grace running) is
-    # resumed by whoever connects; a live one is replaced (new tab takes over —
-    # its source's close() sends "bye" so the old tab shuts its side down).
+    # a tab). A browser session is ADOPTED by whoever connects: a parked one
+    # (its socket dropped, grace running) resumes; a live one is taken from its
+    # old socket, which is told "bye" (another tab, or this same tab back before
+    # the server noticed its old socket was dead). Never stop+start: no flap.
     src = None
     if system.conversation_mode_enabled:
         if getattr(system, "conversation_source", None) == "browser":
-            src = mgr.resume_browser(send_fn)
+            src = mgr.adopt_browser(send_fn)
             if src is None:
                 logger.info("[CONV] new browser WS replacing the active one")
                 mgr.stop()
@@ -68,6 +69,7 @@ async def conversation_ws(websocket: WebSocket):
         await websocket.send_json({"type": "error", "msg": "could not start conversation mode"})
         await websocket.close(code=4500)             # a refusal — the client doesn't retry it
         return
+    mgr.remember("browser")
 
     async def _pump_out():
         while True:
@@ -81,6 +83,9 @@ async def conversation_ws(websocket: WebSocket):
     try:
         while True:
             message = await websocket.receive()
+            if not src.owned_by(send_fn):
+                why = "taken over"                   # a newer socket has the session
+                break
             if message.get("type") == "websocket.disconnect":
                 code, why = message.get("code"), message.get("reason") or ""
                 break
@@ -109,10 +114,17 @@ async def conversation_ws(websocket: WebSocket):
     finally:
         sender.cancel()
         logger.info(f"[CONV] browser conversation WS closed (code={code} {why})".rstrip())
-        # Tear down the mode only if WE still own it — a replacing tab may have
-        # already taken over, in which case just make sure our source is dead.
-        if system.conversation_session is src:
+        # Tear down the mode only if WE still own it. A socket that adopted the
+        # session owns it now (nothing of ours to end); a session that is no
+        # longer the mode's just has to be dead.
+        if not src.owned_by(send_fn):
+            pass
+        elif system.conversation_session is src:
             if code in (None, 1000, 1001, 1005) or not mgr.park_browser(src):
+                # only the Off button (1000) or a client bye is a choice; a closed
+                # tab (1001) or an error keeps 'browser' so that tab resumes on load
+                if code == 1000 or why == "client bye":
+                    mgr.remember("off")
                 mgr.stop()
         else:
             try:
