@@ -1,10 +1,10 @@
 {
   "plugin": "mindpalace",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "files": {
     "README.md": "sha256:e8268a919ca1eee89e5d888174e035e525f0da9bf957faddc93ba13f08fe1621",
     "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
-    "plugin.json": "sha256:305d91edbf4fe20da88b1a52aba75f3683b55af48c9757ee30a3cdd9ed504df2",
+    "plugin.json": "sha256:75188d2e2bc59a1b9d170e1edfa1197348e2d8574b0ae3ac89314d8d584e489e",
     "routes/browse.py": "sha256:3102f337a3940e44b9e88af2028622a4a1f64309f4e2459b8b0977c55612accc",
     "routes/goals_routes.py": "sha256:bfe3efe7bbe3795aec4dd89b966888c84d4a17ddacbae5a3352f4ee19c2d3a9d",
     "routes/library_routes.py": "sha256:be93fc914fb528118dcbd4ab29ef80f0112f15e0518dd7a1131e82d3eeee2549",
@@ -72,5 +72,5 @@
     "tools/temporal.py": "sha256:2afc743e103c198973bfb4cd700edd74739ca6040697c3144c3b81abf001d644",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "6Kt+UuotNLbq9or4gzD18sPbgWD0qlJ7d8jldU0L/8tLs2Vqpy55a+tqKfApemiNeOW1Bx1YveXEDqzbwfKCCQ=="
+  "signature": "u+vCLHVzI3BzEDXrxfZZjFyDFj0ObuzdK9iwSeDs1NmVGjPAbA5VNuXd+2tEtImTMjP/TiROHAbtBtqz4AgJBA=="
 }

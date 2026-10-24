@@ -1,10 +1,10 @@
 # Mind Palace — the layered v3 memory engine
 
-Sapphire's opt-in next-generation memory: one database of layered, connected chunks with a librarian that tends it while you sleep. Ships disabled; the classic memory system stays the default.
+Sapphire's opt-in next-generation memory: one database of layered, connected chunks with a librarian that tends it while you sleep. On by default for a fresh install; classic memory stays only where it already holds data.
 
 ## What it is
 
-Sapphire ships two memory engines. **Classic memory** (the `memory` plugin) is the default — proven, simple, and what most installs should stay on. **Mind Palace** (the `mindpalace` plugin, "Mind" in the UI) replaces it with a layered design: one database of chunks and metadata organized into layers — events (memories), self, entities, knowledge (the Library), and goals — plus a graph of connections between them and a **librarian**: LLM passes that date, link, deduplicate, sort, and tend what accumulates.
+Sapphire ships two memory engines. **Mind Palace** (the `mindpalace` plugin, "Mind" in the UI) is the default. **Classic memory** (the `memory` plugin, "Memory (legacy)" in the UI) is the old one: an upgrade keeps it on where it holds data, and Mind Palace imports that data when you switch. Mind Palace replaces it with a layered design: one database of chunks and metadata organized into layers — events (memories), self, entities, knowledge (the Library), and goals — plus a graph of connections between them and a **librarian**: LLM passes that date, link, deduplicate, sort, and tend what accumulates.
 
 **The two engines are mutually exclusive by design.** They register the same tool names (`save_memory`, `search_memory`, ...), so enabling the second refuses to load with an error toast. You run one or the other, never both.
 
@@ -115,7 +115,7 @@ Wipes and layer clears live in **Admin → Danger**, each gated by typing the sc
 
 ## Reference for AI
 
-Mind Palace = opt-in v3 memory engine (plugin `mindpalace`); mutually exclusive with plugin `memory` (same tool names; second engine refuses to load). Data: one palace DB per install under user/memory/; layers: events/self/entities/knowledge/goals; connection graph. Classic DBs opened read-only; palace-era rows invisible to classic (no reverse export). Scopes keep names across engines; per-chat scope in sidebar Mind section.
+Mind Palace = the default v3 memory engine (plugin `mindpalace`; classic plugin `memory` = legacy, kept where it holds data); mutually exclusive with plugin `memory` (same tool names; second engine refuses to load). Data: one palace DB per install under user/memory/; layers: events/self/entities/knowledge/goals; connection graph. Classic DBs opened read-only; palace-era rows invisible to classic (no reverse export). Scopes keep names across engines; per-chat scope in sidebar Mind section.
 
 TOOLS (palace surface):
 - save_memory / search_memory / get_recent_memories / update_memory / delete_memory — over-cap saves TRIM at last whitespace + return receipt with dropped text (see MEMORY.md); entity= resolves nicknames to the card, a partial overlap saves + asks "did you mean"

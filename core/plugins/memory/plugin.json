@@ -1,13 +1,13 @@
 {
   "name": "memory",
-  "short_display_name": "Memory",
-  "short_name": "Memory System",
-  "version": "1.0.1",
-  "description": "Long-term memory, knowledge base, goals, and people \u2014 Sapphire's Mind",
+  "short_display_name": "Memory (legacy)",
+  "short_name": "Memory System (legacy)",
+  "version": "1.0.2",
+  "description": "The old memory system: memories, knowledge base, goals and people. Legacy: kept for installs with data from before Mind Palace, which imports it.",
   "author": "sapphire",
   "icon": "\ud83e\udde0",
   "priority": 0,
-  "default_enabled": true,
+  "default_enabled": false,
   "essential": "memory",
   "capabilities": {
     "tools": [

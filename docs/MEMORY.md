@@ -1,5 +1,7 @@
 # Memory
 
+> **Legacy engine.** This page describes the classic `memory` plugin, "Memory (legacy)" in the UI. A fresh install runs the [Mind Palace](MIND-PALACE.md), which has the same Memories tab and imports classic data.
+
 Short snippets Sapphire saves about you and your world — facts, preferences, events — captured automatically during conversation and recalled when they're relevant. Memories live in the **Mind** view (brain icon in the nav bar) → **Memories** tab.
 
 <img width="50%" alt="sapphire-memories" src="https://github.com/user-attachments/assets/348f1628-5f0c-4ce3-948e-2e0c1385bc75" />

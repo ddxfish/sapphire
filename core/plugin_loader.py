@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import threading
 from pathlib import Path
@@ -66,6 +67,35 @@ def _version_tuple(text) -> Optional[tuple]:
             break
         parts.append(int(digits.group()))
     return tuple(parts) if parts else None
+
+
+# The classic memory engine's own rows. Per-chat RAG documents (knowledge tabs in
+# `__rag__:<chat>` scopes) are not counted: core keeps those under either engine.
+CLASSIC_MEMORY_COUNTS = (
+    ("memory.db", "SELECT COUNT(*) FROM memories"),
+    ("knowledge.db", "SELECT COUNT(*) FROM knowledge_entries e JOIN knowledge_tabs t ON t.id = e.tab_id "
+                     "WHERE substr(t.scope, 1, 8) != '__rag__:'"),
+    ("knowledge.db", "SELECT COUNT(*) FROM people"),
+    ("goals.db", "SELECT COUNT(*) FROM goals"),
+)
+
+
+def classic_memory_rows(user_dir: Path) -> int:
+    """How many rows the classic memory engine holds for this install (read-only)."""
+    n = 0
+    for db, sql in CLASSIC_MEMORY_COUNTS:
+        path = user_dir / db
+        if not path.exists():
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                n += conn.execute(sql).fetchone()[0]
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.debug(f"[PLUGINS] classic memory count skipped ({db}): {e}")
+    return n
 
 
 def core_name_collision(name: str):
@@ -340,6 +370,10 @@ class PluginLoader:
         except Exception as e:
             logger.debug(f"[PLUGINS] band-move tripwires skipped: {e}")
         self._plugins.clear()
+        try:
+            self._pin_memory_engine_once()
+        except Exception as e:
+            logger.warning(f"[PLUGINS] memory engine pin skipped: {e}")
         enabled_list = self._get_enabled_list()
         disabled_list = self._get_disabled_list()
 
@@ -593,6 +627,55 @@ class PluginLoader:
     def _get_disabled_list(self) -> list:
         """Read explicitly-disabled plugins (overrides default_enabled)."""
         return self._read_plugins_json("disabled")
+
+    def _append_plugins_json(self, pins: dict):
+        """Add names to the lists of user/webui/plugins.json (created if absent)."""
+        data = {}
+        if USER_PLUGINS_JSON.exists():
+            data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8"))
+        for key, names in pins.items():
+            cur = list(data.get(key, []))
+            data[key] = cur + [n for n in names if n not in cur]
+        USER_PLUGINS_JSON.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        replace_with_retry(tmp_path, USER_PLUGINS_JSON)
+
+    def _pin_memory_engine_once(self):
+        """2026-10: Mind Palace became the shipped default memory engine and
+        classic memory went legacy (both manifests' default_enabled flipped).
+        Only a FRESH install takes the new default. An existing install keeps
+        what it runs: classic explicitly on, or on by the old default with
+        data -> classic stays on and the palace is pinned off; classic
+        explicitly off -> no engine, as before. The pin is an explicit choice
+        in the lists, so the defaults never apply to that install again. The
+        palace already in a list (chosen either way) -> nothing to do."""
+        enabled, disabled = self._get_enabled_list(), self._get_disabled_list()
+        if "mindpalace" in enabled or "mindpalace" in disabled:
+            return
+        if "memory" in disabled:
+            classic_on = False
+        elif "memory" in enabled:
+            classic_on = True
+        else:
+            classic_on = classic_memory_rows(USER_PLUGINS_JSON.parent.parent) > 0
+            if not classic_on:
+                return                                  # a fresh install
+        pins = {"disabled": ["mindpalace"]}
+        if classic_on and "memory" not in enabled:
+            pins["enabled"] = ["memory"]
+        self._append_plugins_json(pins)
+        logger.info("[PLUGINS] memory engine pinned for an existing install: Mind Palace off"
+                    + (", Memory (legacy) on" if classic_on else ""))
+        if classic_on:
+            try:
+                from core import notify
+                notify.notify("Mind Palace is the new default memory", source="plugins",
+                              key="memory-engine-pin", once=True,
+                              body="This install stays on Memory (legacy) because it holds your data. "
+                                   "Settings \u203a Plugins switches engines; Mind Palace imports the old data.")
+            except Exception as e:
+                logger.debug(f"[PLUGINS] engine pin notice skipped: {e}")
 
     def _install_pkg_alias(self, name: str, plugin_dir: Path, info: dict):
         """Make a user-band plugin importable as `plugins.<name>`.

@@ -57,7 +57,7 @@ Make Sapphire act on her own initiative. This is where the substrate becomes a b
 
 1. **Spawn an agent** to research something absurdly specific — *"research swiss cheese"* — and watch her come back with findings. Agents run in parallel and report back when done.
 2. **Save knowledge during a conversation** and search for it later. The Mind group fills up. The AI can save entities, knowledge entries, goals.
-3. **Turn on the Mind Palace.** The opt-in next-generation memory engine — layered, connected chunks with a librarian that tends them while you sleep. Memory that maintains itself is the difference between a notebook and a mind.
+3. **Meet the Mind Palace.** The default memory engine — layered, connected chunks with a librarian that tends them while you sleep. Memory that maintains itself is the difference between a notebook and a mind.
 4. **Use the toolmaker.** Ask Sapphire to build a custom tool you'd find useful. She writes it, validates it, and installs it at runtime — its settings appear in the UI.
 5. **Play in the Game Room.** Games and interactive stories where she runs the world — and you see just how far personas, prompts, and tools stack.
 6. **Create a system service.** `systemd --user` unit so Sapphire boots with your machine and stays alive. She becomes ambient, not session-bound.
@@ -107,7 +107,7 @@ TOPIC → DOC:
 - Personas: PERSONAS.md · Spice: SPICE.md
 - Chats — create, configure, organize, import/export: CHATS.md
 - Appearance — themes, fonts, scenes, motion: APPEARANCE.md
-- Memory (classic): MEMORY.md · Mind Palace (opt-in v3 engine): MIND-PALACE.md
+- Mind Palace (the default engine): MIND-PALACE.md · Memory (legacy): MEMORY.md
 - Knowledge base: KNOWLEDGE.md · Goals: GOALS.md · Entities/contacts: PEOPLE.md · Self sheet: MIND-PALACE.md · Feature list: SELF.md
 - Triggers — heartbeat, scheduled tasks: CONTINUITY.md · daemons, webhooks: DAEMONS-WEBHOOKS.md
 - Agents (background workers): AGENTS.md · Toolmaker (AI-built tools): TOOLMAKER.md

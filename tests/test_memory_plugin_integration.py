@@ -133,7 +133,7 @@ def test_scan_discovers_and_loads_memory_plugin(isolated_memory_loader):
     assert "memory" in loader._plugins, "memory plugin not discovered"
     info = loader._plugins["memory"]
     assert info["loaded"], f"memory plugin not loaded: {info.get('verify_msg')}"
-    assert info["enabled"], "memory plugin not enabled (default_enabled should be True)"
+    assert info["enabled"], "memory plugin not enabled (the fixture lists it as enabled)"
 
 
 def test_memory_plugin_registers_expected_tools(isolated_memory_loader):
