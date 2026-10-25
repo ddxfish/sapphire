@@ -8,6 +8,7 @@ import { MIND_TABS, csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab, sub
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 import { snapScroll } from '../shared/dom-guard.js';
+import { errWords } from '../shared/fetch.js';
 
 const SCOPE_KEY = 'goal_scope';
 const DOMAIN = 'goal';
@@ -172,7 +173,7 @@ function bindGoalActions(el) {
             try {
                 const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) { ui.showToast('Deleted', 'success'); renderGoals(); }
-            } catch (e) { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });
 
@@ -188,7 +189,7 @@ function bindGoalActions(el) {
                 });
                 if (resp.ok) { ui.showToast('Subtask added', 'success'); renderGoals(); }
                 else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-            } catch (e) { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });
 
@@ -204,7 +205,7 @@ function bindGoalActions(el) {
                 });
                 if (resp.ok) { ui.showToast('Note added', 'success'); renderGoals(); }
                 else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-            } catch (e) { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });
 
@@ -213,7 +214,7 @@ function bindGoalActions(el) {
             try {
                 const resp = await fetch(`/api/goals/${btn.dataset.id}`);
                 if (resp.ok) { showGoalModal(await resp.json()); }
-            } catch (e) { ui.showToast('Failed to load goal', 'error'); }
+            } catch (e) { ui.showToast(`Couldn't load goal. ${errWords(e, 'Try again.')}`, 'error'); }
         });
     });
 
@@ -227,7 +228,7 @@ function bindGoalActions(el) {
             try {
                 const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) { ui.showToast('Deleted', 'success'); renderGoals(); }
-            } catch (e) { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });
 }
@@ -241,7 +242,7 @@ async function updateGoalStatus(goalId, status) {
         });
         if (resp.ok) { renderGoals(); }
         else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-    } catch (e) { ui.showToast('Failed', 'error'); }
+    } catch (e) { ui.showToast(errWords(e), 'error'); }
 }
 
 function showGoalModal(goal = null) {
@@ -313,6 +314,6 @@ function showGoalModal(goal = null) {
             }
             if (resp.ok) { close(); ui.showToast(goal ? 'Updated' : 'Created', 'success'); renderGoals(); }
             else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-        } catch (e) { ui.showToast('Failed', 'error'); }
+        } catch (e) { ui.showToast(errWords(e), 'error'); }
     });
 }

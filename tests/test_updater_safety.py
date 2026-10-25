@@ -147,7 +147,7 @@ def test_preflight_refuses_on_dirty_tree(updater_stub, monkeypatch):
         returncode=0, stdout=porcelain, stderr=''))
     ok, msg = u._preflight_check()
     assert not ok
-    assert 'uncommitted' in msg.lower()
+    assert 'were changed on this computer' in msg
     assert 'memory_tools.py' in msg or 'notes.txt' in msg
 
 

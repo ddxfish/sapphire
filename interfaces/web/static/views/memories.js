@@ -10,6 +10,7 @@ import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 import { snapScroll } from '../shared/dom-guard.js';
+import { errWords } from '../shared/fetch.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'memory';
@@ -220,7 +221,7 @@ async function renderMemories(elArg) {
             for (const arr of Object.values(groups)) for (const m of arr) rows.push(m);
             _memCache = { scope, rows };
         } catch (e) {
-            el.innerHTML = `<div class="mind-empty">Failed to load memories: ${e.message}</div>`;
+            el.innerHTML = `<div class="mind-empty">Couldn't load memories. ${escHtml(e.message)}</div>`;
             return;
         }
     }
@@ -371,7 +372,7 @@ function _renderMemoriesFromCache(el) {
             try {
                 const resp = await fetch(url, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) { ui.showToast('Deleted', 'success'); _invalidateMemCache(); await renderMemories(el); }
-            } catch (e) { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });
 
@@ -554,6 +555,6 @@ function showMemoryEditModal(el, memoryId, content) {
             });
             if (resp.ok) { close(); ui.showToast('Memory updated', 'success'); _invalidateMemCache(); await renderMemories(el); }
             else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-        } catch (e) { ui.showToast('Failed', 'error'); }
+        } catch (e) { ui.showToast(errWords(e), 'error'); }
     });
 }

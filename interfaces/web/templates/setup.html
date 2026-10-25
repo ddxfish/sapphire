@@ -173,9 +173,11 @@
                 'empty': 'Please enter a password',
                 'short': 'Password must be at least 10 characters',
                 'mismatch': 'Passwords do not match',
-                'failed': 'Failed to save password. Check server logs.'
+                'failed': "Sapphire couldn't save the password. Check that its folder isn't read-only, then try again.",
+                'rate': 'Too many tries. Wait a minute, then try again.',
+                'csrf': 'This page was open too long. Try again now.'
             };
-            errorDiv.textContent = messages[error] || 'An error occurred';
+            errorDiv.textContent = messages[error] || "Sapphire couldn't set the password. Try again.";
             errorDiv.classList.add('show');
         }
         

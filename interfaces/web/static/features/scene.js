@@ -109,10 +109,13 @@ export async function updateScene() {
                 micBtn.classList.toggle('stt-disabled', !canRecord);
                 micBtn.classList.toggle('stt-needs-restart', needsRestart);
                 // Update title for clarity
+                // the press says these too (mic.js), so a click explains itself
+                micBtn.dataset.sttWhy = status.stt_why || '';
                 if (!status.stt_enabled) {
-                    micBtn.dataset.sttTitle = 'STT disabled';
+                    micBtn.dataset.sttTitle = 'Speech-to-text is off';
                 } else if (!status.stt_ready) {
-                    micBtn.dataset.sttTitle = 'STT loading — downloading speech model';
+                    micBtn.dataset.sttTitle = status.stt_why ? "Speech-to-text couldn't start"
+                        : 'Speech model loading…';
                 } else {
                     micBtn.dataset.sttTitle = 'Hold to record';
                 }

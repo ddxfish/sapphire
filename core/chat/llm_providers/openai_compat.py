@@ -106,6 +106,15 @@ def _notify(message: str, severity: str = 'warning') -> None:
         pass
 
 
+def _join_user(a, b):
+    """Two user contents as one: strings join with a blank line; a multimodal
+    list on either side keeps every part."""
+    if isinstance(a, str) and isinstance(b, str):
+        return f"{a}\n\n{b}".strip()
+    parts = lambda c: c if isinstance(c, list) else ([{"type": "text", "text": c}] if c else [])
+    return parts(a) + parts(b)
+
+
 class OpenAICompatProvider(BaseProvider):
     """
     Provider for OpenAI-compatible APIs.
@@ -645,6 +654,16 @@ class OpenAICompatProvider(BaseProvider):
             # Only the official endpoint; other hosts ignore the field.
             if self._is_deepseek_official() and msg.get('thinking'):
                 clean_msg['reasoning_content'] = msg['thinking']
+
+            # Two user rows in a row (a ghost line, a retry after a failed
+            # turn whose error row the history hides, a task appending its cue)
+            # become one: Gemma/Mistral chat templates in LM Studio, Ollama and
+            # llama.cpp refuse a conversation whose roles don't alternate.
+            prev = clean[-1] if clean else None
+            if (role == 'user' and prev is not None and prev['role'] == 'user'
+                    and not prev.get('name') and not clean_msg.get('name')):
+                prev['content'] = _join_user(prev['content'], clean_msg['content'])
+                continue
 
             clean.append(clean_msg)
 

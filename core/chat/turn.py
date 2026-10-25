@@ -212,8 +212,10 @@ class Turn:
     @staticmethod
     def _friendly(e):
         try:
-            from core.chat.chat import friendly_llm_error
-            return friendly_llm_error(e) or str(e)
+            from core.chat.llm_errors import explain
+            w = explain(e)
+            # a toast has no Details fold: an unknown shape keeps its raw tail, last
+            return w['text'] if w['known'] else f"{w['text']} ({str(e)[:150]})"
         except Exception:
             return str(e)
 

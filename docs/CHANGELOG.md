@@ -1,3 +1,6 @@
+# 2.15.6 - Error Handlers
+- Wrote most errors to human-readable how-to-fix
+- 'Fix it' button to some errors that support it
 # 2.15.5 - Setup Wizard
 - Complete rebuild of intro wizard on first boot
 - Added Infrared library for device manager

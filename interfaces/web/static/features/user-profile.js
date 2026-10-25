@@ -2,7 +2,7 @@
 import { getInitData, refreshInitData } from '../shared/init-data.js';
 import { uploadAvatar, checkAvatar } from '../shared/settings-api.js';
 import { avatarUrl } from '../shared/persona-api.js';
-import { fetchWithTimeout } from '../shared/fetch.js';
+import { fetchWithTimeout, errWords } from '../shared/fetch.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 
@@ -121,7 +121,7 @@ async function openModal() {
         modal.style.display = '';
     } catch (e) {
         console.warn('[Profile] Failed to open:', e);
-        ui.showToast('Failed to load profile', 'error');
+        ui.showToast(`Couldn't load profile. ${errWords(e, 'Try again.')}`, 'error');
     }
 }
 

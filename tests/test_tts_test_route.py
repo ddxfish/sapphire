@@ -32,10 +32,22 @@ def test_reachable_but_no_audio_is_a_failure_with_the_reason():
     system = _system(None)
     system.tts.provider._last_error = "HTTP 404 Voice 'zz' unavailable"
     r = asyncio.run(tts_test_route(None, None, system))
-    assert not r["success"] and "synthesis failed" in r["error"].lower() and "zz" in r["error"]
+    assert not r["success"] and "couldn't make speech" in r["error"] and "zz" in r["error"]
+    assert "HTTP 404" not in r["error"]          # the reason, without its status-code lead
 
 
 def test_unreachable_never_tries_to_speak():
     calls = []
     r = asyncio.run(tts_test_route(None, None, _system(b"x", available=False, calls=calls)))
     assert not r["success"] and calls == []
+
+
+def test_unreachable_says_the_health_checks_own_words():
+    """The health check knows why (kokoro._health_why); a stale sentence
+    failure's raw requests text (HTTPConnectionPool...) is not the answer."""
+    system = _system(b"x", available=False)
+    system.tts.provider._health_why = "not reachable (off, wrong address or port, or a firewall)"
+    system.tts.provider._last_error = "HTTPConnectionPool(host='127.0.0.1', port=5012): Max retries exceeded"
+    r = asyncio.run(tts_test_route(None, None, system))
+    assert r["error"] == ("The voice engine isn't answering: not reachable (off, wrong address or port, "
+                          "or a firewall).")

@@ -131,7 +131,13 @@
         const error = urlParams.get('error');
         if (error) {
             const errorDiv = document.getElementById('error-message');
-            errorDiv.textContent = error === 'invalid' ? 'Invalid password' : 'An error occurred';
+            const messages = {
+                'invalid': "That password didn't match. Try again.",
+                'rate': 'Too many tries. Wait a minute, then try again.',
+                'csrf': 'This page was open too long. Try again now.',
+                'config': 'Sapphire has no password set yet. Restart Sapphire to run setup.',
+            };
+            errorDiv.textContent = messages[error] || "Sapphire couldn't sign you in. Try again.";
             errorDiv.classList.add('show');
         }
     </script>

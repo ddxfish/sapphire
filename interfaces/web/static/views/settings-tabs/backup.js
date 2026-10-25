@@ -1,6 +1,7 @@
 // settings-tabs/backup.js - Backup management
 import * as ui from '../../ui.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
+import { responseError, errorText } from '../../shared/fetch.js';
 
 let backups = { daily: [], weekly: [], monthly: [], manual: [], update: [] };
 let expanded = {};
@@ -113,7 +114,7 @@ export default {
                     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
                     body: JSON.stringify({ password: pw })
                 });
-                if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${r.status}`); }
+                if (!r.ok) throw await responseError(r);
                 pwInput.value = '';
                 pwMsg.textContent = '\u2713 saved \u2014 write it down!';
                 await this.loadHealth(el);
@@ -144,7 +145,7 @@ export default {
                         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
                         body: JSON.stringify({ settings: { BACKUPS_ENCRYPT_LOCAL: enabling } })
                     });
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    if (!r.ok) throw await responseError(r);
                     ctx.commit('BACKUPS_ENCRYPT_LOCAL', enabling);
                     ui.showToast(enabling ? 'Local backups will be encrypted' : 'Local backups stay plain', 'success');
                     await this.loadHealth(el);
@@ -177,7 +178,7 @@ export default {
                         },
                         body: JSON.stringify({ settings: { BACKUPS_EXCLUDE_PATTERNS: lines } })
                     });
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);   // never commit an unconfirmed write
+                    if (!r.ok) throw await responseError(r);   // never commit an unconfirmed write
                     ctx.commit('BACKUPS_EXCLUDE_PATTERNS', lines);
                 } catch (_) { lastSaved = null; }  // allow retry on failure
             };
@@ -263,9 +264,9 @@ export default {
                     ui.showToast(`Backup created: ${data.filename}`, 'success');
                     await this.loadBackups(el);
                 } else {
-                    ui.showToast('Backup failed', 'error');
+                    ui.showToast(`Backup not made. ${await errorText(res)}`, 'error');
                 }
-            } catch (e) { ui.showToast('Backup failed', 'error'); }
+            } catch (e) { ui.showToast(`Backup not made. ${e.message}`, 'error'); }
             finally { btn.disabled = false; btn.textContent = 'Backup Now'; }
         });
 

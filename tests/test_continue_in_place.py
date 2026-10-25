@@ -301,6 +301,24 @@ class TestHistory:
         ts = mgr2.get_messages()[-1]["timestamp"]
         assert mgr2.continue_target(ts) is None     # last row carries tool_calls
 
+    def test_a_failed_turns_row_is_never_continued(self, mgr_factory):
+        """Its words aren't hers: continued, they became her reply and lost the
+        marker, so the model read the error forever after (scouts 2026-10-24)."""
+        mgr = mgr_factory()
+        mgr.add_user_message("hi")
+        mgr.add_assistant_final("Can't reach LM Studio.", metadata={"error": {"detail": "x", "go": None}})
+        assert mgr.continue_target(mgr.get_messages()[-1]["timestamp"]) is None
+
+    def test_editing_a_failed_turns_row_makes_it_a_reply(self, mgr_factory):
+        mgr = mgr_factory()
+        mgr.add_user_message("hi")
+        mgr.add_assistant_final("Can't reach LM Studio.", metadata={"error": {"detail": "x", "go": None}})
+        ts = mgr.get_messages()[-1]["timestamp"]
+        assert mgr.edit_message_by_timestamp("assistant", ts, "Hello!")
+        row = mgr.get_messages()[-1]
+        assert row["content"] == "Hello!" and "error" not in (row.get("metadata") or {})
+        assert mgr.get_messages_for_llm()[-1]["content"] == "Hello!"
+
     def test_unknown_timestamp_refuses(self, mgr_factory):
         mgr = mgr_factory()
         _tool_turn(mgr)
@@ -359,6 +377,6 @@ class TestWiring:
         ui_js = _src("interfaces/web/static/ui.js")
         stream_js = _src("interfaces/web/static/ui-streaming.js")
         assert "export const continueStreaming" in ui_js
-        assert "act === 'continue' && !(role === 'assistant' && idx === total - 1)" in ui_js
+        assert "act === 'continue' && (failed || !(role === 'assistant' && idx === total - 1))" in ui_js
         assert "state.paraBuf = adopt.seed" in stream_js
         assert "if (!adopt) container.appendChild(messageElement)" in stream_js

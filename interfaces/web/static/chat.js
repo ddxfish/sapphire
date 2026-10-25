@@ -195,8 +195,11 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
             async (e, statusCode) => {
                 if (e.message === 'Cancelled') return (console.log('Stream cancelled by user'), streamOk && ui.cancelStreaming());
                 console.error('Stream failed:', e.message);
-                streamOk && ui.cancelStreaming();
+                // not a Stop: the turn failed and saved its own row (words +
+                // Details) — paint that, never a "Cancelled" partial
+                streamOk && ui.detachStreaming();
                 handleError(e, 'stream');
+                if (refreshFn) await refreshFn(false);
             },
             abortController ? abortController.signal : null,
             null,  // prefill
@@ -368,8 +371,9 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     return;
                 }
                 console.error('[REGEN DEBUG] Stream failed:', e.message);
-                streamOk && ui.cancelStreaming();
+                streamOk && ui.detachStreaming();      // a failure, not a Stop (see handleSend)
                 handleError(e, 'regenerate');
+                if (refreshFn) await refreshFn(false);
             },
             abortController ? abortController.signal : null,
             null,  // prefill
@@ -508,8 +512,13 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                     ui.showToast("Connection dropped — she's still working; the reply lands when she finishes", 'warning');
                     return;
                 }
-                ui.cancelStreaming();   // keeps what was rendered; the row on disk is the truth
-                if (e.message === 'Cancelled') return;
+                if (e.message === 'Cancelled') { ui.cancelStreaming(); return; }   // a Stop keeps what was rendered
+                // A failed continuation saved nothing: the bubble still carries
+                // the row's key, so the reconcile would keep the unsaved text
+                // on screen. Drop the key and repaint the row from disk.
+                const live = document.getElementById('streaming-message');
+                if (live) delete live.dataset.key;
+                ui.detachStreaming();
                 if (refreshFn) await refreshFn(true);
                 handleError(e, 'continue');
             },

@@ -1,5 +1,6 @@
 // shared/settings-api.js - Settings API wrapper
 import { fetchWithTimeout } from './fetch.js';
+import { wordsOf } from './fetch.js';
 
 export async function getAllSettings() {
     return await fetchWithTimeout('/api/settings');
@@ -39,7 +40,7 @@ export async function uploadAvatar(role, file) {
     const res = await fetch('/api/avatar/upload', { method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: formData });
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Upload failed: ${res.status}`);
+        throw new Error(wordsOf(err, res.status));
     }
     return await res.json();
 }

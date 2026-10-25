@@ -2,6 +2,7 @@
 // Used by: views/settings-tabs/llm.js, setup-wizard
 
 import { fetchWithTimeout } from './fetch.js';
+import { wordsOf } from './fetch.js';
 
 // ============================================================================
 // API Functions
@@ -32,7 +33,7 @@ export async function updateProvider(key, updates) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || err.error || `the server answered ${res.status}`);   // FastAPI says `detail`
+    throw new Error(wordsOf(err, res.status));
   }
   return await res.json();
 }
@@ -48,7 +49,7 @@ export async function updateFallbackOrder(order) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || err.error || `the server answered ${res.status}`);
+    throw new Error(wordsOf(err, res.status));
   }
   return await res.json();
 }
@@ -82,7 +83,7 @@ export async function saveGenerationParams(modelName, params, allProfiles) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || err.error || `the server answered ${res.status}`);
+    throw new Error(wordsOf(err, res.status));
   }
   return updated;
 }

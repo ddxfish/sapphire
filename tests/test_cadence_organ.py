@@ -736,7 +736,7 @@ def test_a_failed_turn_raises_the_cause_in_words():
                       "developer page or use the 'lms load' command.\", 'param': 'model'}}")
     sysobj, stream, llm = _system(_dies(lms), active='c')
     cadence._system = sysobj
-    with patch('core.cadence.publish'), pytest.raises(RuntimeError, match='^Model not found or not loaded. If using LM Studio'):
+    with patch('core.cadence.publish'), pytest.raises(RuntimeError, match='^LM Studio has no model loaded. Open LM Studio'):
         cadence.run_turn('c', 'cue')
     llm.end_stream.assert_called_once_with('sid', 'c')
     sysobj, stream, llm = _system(_dies(ValueError('the stream broke')), active='c')

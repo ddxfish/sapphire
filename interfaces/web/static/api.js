@@ -2,6 +2,7 @@
 import { fetchWithTimeout } from './shared/fetch.js';
 import { dispatch, on, Events } from './core/event-bus.js';
 import { getBoundChat } from './core/bound-chat.js';
+import { wordsOf } from './shared/fetch.js';
 
 export { fetchWithTimeout };
 
@@ -453,7 +454,7 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
             return;
         }
         const err = await res.json().catch(() => ({}));
-        return onError(new Error(err.error || `HTTP ${res.status}`), res.status);
+        return onError(new Error(wordsOf(err, res.status)), res.status);
     }
     const handlers = {
         onChunk,
@@ -524,7 +525,7 @@ export const attachTurn = async (chat, since, handlers, ticket = null, { audio =
     if (res.status === 404 && ticket) return { live: null, unknown: true };
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        return { live: null, error: new Error(err.error || `HTTP ${res.status}`) };
+        return { live: null, error: new Error(wordsOf(err, res.status)) };
     }
     let hears = false;
     const h = {
@@ -668,8 +669,8 @@ export const fetchAudio = async (text, signal = null, opts = null) => {
             signal
         }, 120000);
     } catch (e) {
-        if (e.message.includes('timeout') && text.length > 500) {
-            throw new Error(`TTS timeout (${text.length} chars)`);
+        if (e.message.startsWith('Sapphire took too long') && text.length > 500) {
+            throw new Error(`Sapphire's voice took too long on a long reply (${text.length} characters). Try Replay, or a shorter reply.`);
         }
         throw e;
     }
@@ -678,14 +679,8 @@ export const fetchAudio = async (text, signal = null, opts = null) => {
 export const postAudio = async (blob) => {
     const form = new FormData();
     form.append('audio', blob, 'recording.wav');
-    try {
-        return await fetchWithTimeout('/api/transcribe', { method: 'POST', body: form }, 120000);
-    } catch (e) {
-        if (e.message.includes('No audio') || e.message.includes('empty')) throw new Error('Audio too small');
-        if (e.message.includes('transcription')) throw new Error('Could not understand audio');
-        if (e.message.includes('timeout')) throw new Error('Processing timeout');
-        throw e;
-    }
+    // the server's words stand (core/routes/tts.py transcribe says each case)
+    return await fetchWithTimeout('/api/transcribe', { method: 'POST', body: form }, 120000);
 };
 
 export const editMessage = (role, timestamp, newContent) => 
@@ -733,7 +728,7 @@ export const uploadImage = async (file) => {
     
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Upload failed: ${res.status}`);
+        throw new Error(wordsOf(err, res.status));
     }
     
     return res.json();

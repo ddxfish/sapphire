@@ -10,6 +10,7 @@ import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 import { helpPills } from '../features/video-link.js';
+import { errWords } from '../shared/fetch.js';
 
 // ── State ──
 let container = null;
@@ -1349,7 +1350,7 @@ async function newDefinition(type) {
 
         renderAccordionBody(type);
         ui.showToast(`Created: ${name.trim()}`, 'success');
-    } catch (e) { ui.showToast('Failed', 'error'); }
+    } catch (e) { ui.showToast(errWords(e), 'error'); }
 }
 
 async function duplicateDefinition(type, key) {
@@ -1373,7 +1374,7 @@ async function duplicateDefinition(type, key) {
 
         renderAccordionBody(type);
         ui.showToast(`Duplicated as: ${newName.trim()}`, 'success');
-    } catch (e) { ui.showToast('Failed', 'error'); }
+    } catch (e) { ui.showToast(errWords(e), 'error'); }
 }
 
 async function deleteDefinition(type, key) {
@@ -1403,7 +1404,7 @@ async function deleteDefinition(type, key) {
         renderAccordionBody(type);
         refreshPreview();
         ui.showToast('Deleted', 'success');
-    } catch (e) { ui.showToast('Failed', 'error'); }
+    } catch (e) { ui.showToast(errWords(e), 'error'); }
 }
 
 // Safe rename (2026-08-19): ONE server call moves the piece in its own

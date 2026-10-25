@@ -154,7 +154,7 @@ class TestBlockingConsumer:
         s = FakeStream(exc=RuntimeError("boom"))
         obj, _ = _consumer(s)
         out = obj.chat("hi")
-        assert "unexpected technical issue" in out
+        assert "Something went wrong talking to" in out
         obj.session_manager.add_assistant_final.assert_not_called()
 
     def test_legacy_string_events_collected_in_fallback(self):

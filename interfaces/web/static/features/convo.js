@@ -13,6 +13,7 @@ import * as state from '../core/state.js';
 import * as eventBus from '../core/event-bus.js';
 import * as conversation from './conversation.js';
 import { showToast } from '../shared/toast.js';
+import { wordsOf } from '../shared/fetch.js';
 
 const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
 
@@ -28,7 +29,8 @@ async function setLocal(enabled) {
     });
     const data = await res.json().catch(() => ({}));
     const on = data.active === true;
-    if (!res.ok || on !== enabled) throw new Error(data.note || 'Could not toggle Conversation mode');
+    if (!res.ok) throw new Error(wordsOf(data, res.status));
+    if (on !== enabled) throw new Error(data.note || "Sapphire couldn't switch Conversation mode. Try again.");
     state.setConvo({ enabled: on, source: on ? 'local' : null });   // SSE confirms
 }
 
@@ -53,8 +55,7 @@ export async function setConvo(mode) {
             await setLocal(true);
         } else if (mode === 'browser') {
             if (cur.source === 'local' && cur.enabled) await setLocal(false);
-            if (!(await conversation.start()))
-                throw new Error('Could not start browser conversation (mic/connection)');
+            if (!(await conversation.start())) { paintSegment(); return; }   // start() said why
             // Browser truth arrives via the SSE; state is still stale here --
             // painting now flashed 'off' after the (slow) mic-permission
             // start (S2 #2b).

@@ -9,6 +9,7 @@ import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 import { snapScroll } from '../shared/dom-guard.js';
+import { errWords } from '../shared/fetch.js';
 
 const DEFAULT_ICONS = {
     default: '\u{1F336}\u{FE0F}', companion: '\u{1F49C}', professional: '\u{1F4BC}',
@@ -189,7 +190,7 @@ function showEmojiPicker() {
             try {
                 await setSpiceSetEmoji(selectedSetName, btn.dataset.emoji);
                 selected.emoji = btn.dataset.emoji;
-            } catch (err) { ui.showToast('Failed to save emoji', 'error'); }
+            } catch (err) { ui.showToast(`Couldn't save emoji. ${errWords(err, 'Try again.')}`, 'error'); }
             render();
         });
     });
@@ -199,7 +200,7 @@ function showEmojiPicker() {
         try {
             await setSpiceSetEmoji(selectedSetName, '');
             selected.emoji = '';
-        } catch (err) { ui.showToast('Failed to save emoji', 'error'); }
+        } catch (err) { ui.showToast(`Couldn't save emoji. ${errWords(err, 'Try again.')}`, 'error'); }
         render();
     });
 
@@ -238,7 +239,7 @@ function bindEvents() {
                 selectedSetName = 'default';
                 await loadData();
                 render();
-            } catch (e) { ui.showToast('Failed to delete', 'error'); }
+            } catch (e) { ui.showToast(`Couldn't delete. ${errWords(e, 'Try again.')}`, 'error'); }
         },
     });
 
@@ -254,7 +255,7 @@ function bindEvents() {
             ui.showToast(`Activated: ${selectedSetName}`, 'success');
             updateScene();
             render();
-        } catch (e) { ui.showToast('Failed to activate', 'error'); }
+        } catch (e) { ui.showToast(`Couldn't activate. ${errWords(e, 'Try again.')}`, 'error'); }
     });
 
     // Export
@@ -506,7 +507,7 @@ function showCatEmojiPicker(anchor, catName) {
                 ui.showToast(`Emoji set for ${catName}`, 'success');
                 await loadData();
                 render();
-            } catch (err) { ui.showToast('Failed', 'error'); }
+            } catch (err) { ui.showToast(errWords(err), 'error'); }
             picker.remove();
         });
     });

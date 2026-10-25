@@ -26,11 +26,17 @@
 //             device, never every open tab.
 import * as audio from '../audio.js';
 import { showToast } from '../shared/toast.js';
+import { micWords } from '../shared/mic-words.js';
 
 const TARGET_RATE = 16000;
 const RETRY_MS = [2000, 5000, 10000, 20000, 30000];   // then every 30 s
 const GIVE_UP_MS = 10 * 60 * 1000;
 const REFUSALS = new Set([4401, 4409, 4500]);        // not logged in / local mode / start failed
+const CLOSE_WORDS = {
+    4401: 'You were signed out. Reload the page and sign in, then turn Conversation mode back on.',
+    4409: "Conversation mode is already on with Sapphire's own mic (Local). Pick Off first, then Browser.",
+    4500: "Sapphire couldn't start Conversation mode. Try again; if it keeps failing, restart Sapphire.",
+};
 
 let ws = null;
 let ctx = null;
@@ -143,7 +149,7 @@ const _onMessage = (msg) => {
             stop();
             break;
         case 'error':
-            console.error('[CONV-WS] server error:', msg.msg);
+            console.error('[CONV-WS] server error:', msg.msg);   // the close code that follows says it
             break;
     }
 };
@@ -162,7 +168,7 @@ export const start = async ({ auto = false } = {}) => {
     } catch (e) {
         console.error('[CONV-WS] mic access failed:', e);
         if (auto) return false;
-        alert(e?.name === 'NotFoundError' ? 'No microphone found.' : 'Mic access denied.');
+        showToast(micWords(e), 'error');
         return false;
     }
     try {
@@ -177,6 +183,7 @@ export const start = async ({ auto = false } = {}) => {
     } catch (e) {
         console.error('[CONV-WS] capture setup failed:', e);
         _teardown();
+        if (!auto) showToast("Conversation mode couldn't start the mic. Reload the page and try again.", 'error');
         return false;
     }
     const rate = ctx.sampleRate;
@@ -229,8 +236,8 @@ const _connect = () => {
         console.log(`[CONV-WS] closed (${e.code}${e.reason ? ' ' + e.reason : ''})`);
         if (sock !== ws) return;        // stop() already tore this one down
         ws = null;
-        if (e.code === 4401) alert('Not authorized for conversation mode — log in again.');
-        if (e.code === 4409) console.warn('[CONV-WS] rejected: local conversation mode is active');
+        const refused = CLOSE_WORDS[e.code];
+        if (refused) showToast(refused, 'error');
         if (!wanted || REFUSALS.has(e.code)) { stop(); return; }
         _scheduleRetry();
     };

@@ -1,6 +1,7 @@
 // API functions for Toolset Manager
 import { getInitData, refreshInitData } from './init-data.js';
 import { fetchWithTimeout } from './fetch.js';
+import { responseError } from './fetch.js';
 
 let _initialLoad = true;
 
@@ -38,7 +39,7 @@ export async function activateToolset(name) {
   const res = await fetch(`/api/toolsets/${encodeURIComponent(name)}/activate`, {
     method: 'POST'
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   return await res.json();
 }
 
@@ -48,7 +49,7 @@ export async function enableFunctions(functionList) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ functions: functionList })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   return await res.json();
 }
 
@@ -58,7 +59,7 @@ export async function saveCustomToolset(name, functionList) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, functions: functionList })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   refreshInitData();  // bust cached toolset list so persona/chat dropdowns see the change
   return data;
@@ -68,7 +69,7 @@ export async function deleteToolset(name) {
   const res = await fetch(`/api/toolsets/${encodeURIComponent(name)}`, {
     method: 'DELETE'
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   refreshInitData();  // bust cached toolset list so persona/chat dropdowns see the deletion
   return data;
@@ -80,7 +81,7 @@ export async function setToolsetEmoji(name, emoji) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ emoji })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   refreshInitData();  // bust cached toolset list so the emoji updates in dropdowns
   return data;

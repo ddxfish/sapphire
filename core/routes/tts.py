@@ -1,4 +1,5 @@
 # core/routes/tts.py - TTS, transcription, and upload routes
+import re
 import asyncio
 import io
 import os
@@ -143,12 +144,12 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
                 if proc.returncode != 0:
                     err = (proc.stderr or b'').decode(errors='replace')[:300]
                     logger.error(f"ffmpeg transcode to {out_format} failed: {err}")
-                    raise HTTPException(status_code=503, detail=f"ffmpeg transcode failed: {err}")
+                    raise HTTPException(status_code=503, detail=f"Sapphire couldn't convert the voice audio for this device ({err[:120]}).")
                 audio_data = proc.stdout
             except subprocess.TimeoutExpired:
-                raise HTTPException(status_code=504, detail="ffmpeg transcode timeout")
+                raise HTTPException(status_code=504, detail="Converting the voice audio took too long. Try again.")
             except FileNotFoundError:
-                raise HTTPException(status_code=503, detail="ffmpeg not available on server")
+                raise HTTPException(status_code=503, detail="This needs ffmpeg, which isn't installed on the computer Sapphire runs on. Install ffmpeg, then restart Sapphire.")
         else:
             content_type = kind or getattr(system.tts, 'audio_content_type', 'audio/ogg')
             ext = 'mp3' if 'mpeg' in content_type else 'wav' if 'wav' in content_type else 'ogg'
@@ -388,6 +389,11 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
 _TTS_TEST_PHRASE = "Testing, one two three."
 
 
+def _bare(reason):
+    """A reason without its status-code lead ("HTTP 500 Synthesis failed: x" -> "Synthesis failed: x")."""
+    return re.sub(r'^HTTP \d{3}\s*', '', str(reason)).strip() or str(reason)
+
+
 @router.post("/api/tts/test")
 async def test_tts(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Test the current TTS provider: reachable, then a real short synthesis
@@ -397,7 +403,8 @@ async def test_tts(request: Request, _=Depends(require_login), system=Depends(ge
     prov_name = getattr(config, 'TTS_PROVIDER', 'none')
     provider = getattr(system.tts, 'provider', None)
     if not provider:
-        return {"success": False, "provider": prov_name, "error": "No TTS provider loaded"}
+        return {"success": False, "provider": prov_name,
+                "error": "No voice engine is loaded. Pick one in Settings › TTS."}
     t0 = time.time()
     try:
         # Force fresh validation for explicit test (bypass cache)
@@ -405,21 +412,27 @@ async def test_tts(request: Request, _=Depends(require_login), system=Depends(ge
             provider._validated = None
         available = await asyncio.to_thread(provider.is_available)
     except Exception as e:
-        return {"success": False, "provider": prov_name, "error": str(e)}
+        logger.warning(f"[TTS] test: health check raised: {e!r}")
+        return {"success": False, "provider": prov_name, "error": f"The voice engine isn't answering ({e})."}
     elapsed = round((time.time() - t0) * 1000)
     if not available:
-        error = getattr(provider, '_last_error', None) or "Provider not available"
+        # the health check's own words first (kokoro._health_why); a stale
+        # sentence failure's raw text only when there are none
+        why = getattr(provider, '_health_why', None) or getattr(provider, '_last_error', None)
+        error = (f"The voice engine isn't answering: {why}." if why
+                 else "The voice engine isn't answering. Check it in Settings › TTS.")
         return {"success": False, "provider": prov_name, "error": error, "ms": elapsed}
     t1 = time.time()
     try:
         audio = await asyncio.to_thread(system.tts.generate_audio_data, _TTS_TEST_PHRASE)
     except Exception as e:
-        return {"success": False, "provider": prov_name, "ms": elapsed, "error": f"Reachable, but synthesis failed: {e}"}
+        return {"success": False, "provider": prov_name, "ms": elapsed,
+                "error": f"The voice engine answered, but couldn't make speech ({_bare(e)})."}
     synth_ms = round((time.time() - t1) * 1000)
     if not audio:
-        reason = getattr(provider, '_last_error', None) or "no audio returned (see the app log)"
+        reason = getattr(provider, '_last_error', None) or "it sent back no audio"
         return {"success": False, "provider": prov_name, "ms": elapsed, "synth_ms": synth_ms,
-                "error": f"Reachable, but synthesis failed: {reason}"}
+                "error": f"The voice engine answered, but couldn't make speech ({_bare(reason)})."}
     return {"success": True, "provider": prov_name, "ms": elapsed, "synth_ms": synth_ms, "bytes": len(audio),
             "served_by": getattr(provider, 'served_by', None)}     # Kokoro: primary or its fallback, and why
 
@@ -501,12 +514,12 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
             )
         except asyncio.TimeoutError:
             logger.warning("Transcription timed out (90s) — model may be too slow on CPU")
-            raise HTTPException(status_code=504, detail="Transcription timed out — try a smaller model or lower beam size in STT settings")
+            raise HTTPException(status_code=504, detail="Turning speech into text took too long. Try a smaller model or a lower beam size in Settings › STT.")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Transcription error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process audio")
+        raise HTTPException(status_code=500, detail="Sapphire couldn't turn that recording into text. Try again.")
     finally:
         system.web_active_dec()
         try:
@@ -515,7 +528,8 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
         except Exception:
             pass
     if transcribed_text is None:
-        raise HTTPException(status_code=500, detail="Transcription failed — check STT provider logs")
+        # None = nothing usable heard (silence, or the hallucination filter): a how-to, not a crash
+        raise HTTPException(status_code=422, detail="Didn't catch any words. Hold the mic button while you talk, a little closer to the mic.")
 
     # post_stt hook — mirror wakeword pipeline. Plugins that correct /
     # translate / normalize transcription need to see ALL STT input, not

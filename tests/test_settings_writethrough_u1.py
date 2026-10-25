@@ -73,7 +73,7 @@ def test_no_hand_patches_of_the_snapshot_remain():
 
 def test_every_inventoried_site_commits():
     llm = _tab('llm')
-    assert llm.count('ctx.commitMerge(') == 5     # core enable, field PUT, model select, custom model, custom enable
+    assert llm.count('ctx.commitMerge(') == 6     # core enable, field PUT, model select, custom model, custom enable, custom card autosave
     assert llm.count("ctx.commit('LLM_FALLBACK_ORDER'") == 2 and "ctx.commit('MODEL_GENERATION_PROFILES'" in llm
     assert "function _mapFor(ctx, key)" in llm
     tools = _tab('tools')
@@ -90,7 +90,7 @@ def test_every_inventoried_site_commits():
 def test_commits_follow_confirmed_writes():
     # backup: the batch PUT is checked before the commit; appearance: commit rides .then()
     b = _tab('backup')
-    assert 'if (!r.ok) throw new Error' in b and b.index('if (!r.ok)') < b.index("ctx.commit('BACKUPS_EXCLUDE_PATTERNS'")
+    assert 'if (!r.ok) throw' in b and b.index('if (!r.ok)') < b.index("ctx.commit('BACKUPS_EXCLUDE_PATTERNS'")
     a = _tab('appearance')
     assert ".then(() => ctx.commit('DEFAULT_BACKGROUND', name))" in a
     # tools: save() rethrows, so a commit after `await save(` is confirmed-only

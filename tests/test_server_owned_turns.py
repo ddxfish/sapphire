@@ -2,6 +2,7 @@
 viewers. Born from a phone locking mid-reply — the SSE socket dropped, the
 route generator was closed, the engine's finally wrote "[Cancelled during
 tool execution]" with nobody pressing Stop. Record: tmp/server-owned-turns-plan.md."""
+import json
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -399,7 +400,8 @@ def test_stream_route_engine_raise_is_an_error_line(client, mock_system):
     mock_system.llm_chat.begin_stream.return_value = (stream, 'sid1', 'trinity')
     r = c.post('/api/chat/stream', json={'text': 'hi'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200
-    assert r.text.rstrip().endswith('{"error": "kaboom", "seq": 2}')
+    last = json.loads(r.text.rstrip().rsplit('data: ', 1)[1])
+    assert last['seq'] == 2 and last['error'].startswith('Something went wrong') and '(kaboom)' in last['error']
     mock_system.llm_chat.end_stream.assert_called_once()
 
 

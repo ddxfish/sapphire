@@ -178,7 +178,7 @@ function showEmojiPicker() {
             try {
                 await setToolsetEmoji(selectedName, val);
                 selected.emoji = val;
-            } catch (err) { ui.showToast('Failed to save emoji', 'error'); }
+            } catch (err) { ui.showToast(`Couldn't save the emoji. ${err.message}`, 'error'); }
             render();
         });
     });
@@ -189,7 +189,7 @@ function showEmojiPicker() {
         try {
             await setToolsetEmoji(selectedName, '');
             selected.emoji = '';
-        } catch (err) { ui.showToast('Failed to save emoji', 'error'); }
+        } catch (err) { ui.showToast(`Couldn't save the emoji. ${err.message}`, 'error'); }
         render();
     });
 
@@ -275,7 +275,7 @@ function bindEvents() {
                 selectedName = name.trim();
                 await loadData();
                 render();
-            } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+            } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
         },
         onDelete: async () => {
             if (!confirm(`Delete toolset "${selectedName}"?`)) return;
@@ -285,7 +285,7 @@ function bindEvents() {
                 selectedName = 'all';
                 await loadData();
                 render();
-            } catch (e) { ui.showToast('Failed to delete', 'error'); }
+            } catch (e) { ui.showToast(`Couldn't delete the toolset. ${e.message}`, 'error'); }
         },
     });
 
@@ -308,7 +308,7 @@ function bindEvents() {
             ui.showToast(`Activated: ${selectedName}`, 'success');
             updateScene();
             render();
-        } catch (e) { ui.showToast('Failed to activate', 'error'); }
+        } catch (e) { ui.showToast(`Couldn't switch to that toolset. ${e.message}`, 'error'); }
     });
 
     // Export

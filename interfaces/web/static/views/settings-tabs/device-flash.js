@@ -24,6 +24,7 @@ import { showToast } from '../../shared/toast.js';
 import { md5 } from '../../shared/md5.js';
 import { ensureExtra } from '../../shared/extras.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
+import { errorText } from '../../shared/fetch.js';
 
 const API = '/api/devices';
 const FLASH_BAUD = 460800;
@@ -141,8 +142,7 @@ class Console {
 async function partBytes(board, p) {
     const r = await fetch(`${API}/firmware/${board.id}/${p.path}`, { credentials: 'same-origin' });
     if (!r.ok) {
-        let why = `HTTP ${r.status}`;
-        try { why = (await r.json()).detail || why; } catch { /* not json */ }
+        const why = await errorText(r);
         fail(`Could not get ${p.path}: ${why}`);
     }
     return { ...p, data: new Uint8Array(await r.arrayBuffer()) };

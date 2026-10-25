@@ -8,6 +8,7 @@ specific route file that consumes it. The single producer is the GET
 frontend's `parseContent` in `interfaces/web/static/ui-parsing.js`.
 """
 from typing import Any, Dict, List
+from core.chat.llm_errors import is_error_row
 
 
 def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -159,6 +160,12 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
             # the roll-up folded every bot of a round into one bubble.
             if current_block is not None and msg.get("speaker") \
                     and current_block.get("speaker") != msg.get("speaker"):
+                display_messages.append(finalize_block(current_block))
+                current_block = None
+            # A failed turn's row is a bubble of its own: folded in, its
+            # metadata took over the block and painted the tool step before
+            # it (real results) as the failure.
+            if current_block is not None and is_error_row(msg):
                 display_messages.append(finalize_block(current_block))
                 current_block = None
             if current_block is None:

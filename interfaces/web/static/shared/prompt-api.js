@@ -1,6 +1,7 @@
 // API functions for Prompt Manager plugin
 import { fetchWithTimeout } from './fetch.js';
 import { refreshInitData } from './init-data.js';
+import { wordsOf } from './fetch.js';
 
 // Fetch fresh components from server (init cache goes stale when AI tools modify components)
 export async function getComponents() {
@@ -89,10 +90,10 @@ export async function loadPrompt(name) {
     headers: { 'Content-Type': 'application/json' }
   });
 
-  const data = await resp.json();
+  const data = await resp.json().catch(() => ({}));
 
   if (!resp.ok) {
-    throw new Error(data.error || `Failed to load prompt '${name}'`);
+    throw new Error(wordsOf(data, resp.status));
   }
 
   return data;

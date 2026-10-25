@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, Response
 
 import config
+from core.http_words import server_error
 from core.auth import require_login, check_endpoint_rate
 from core.api_fastapi import get_system
 from core.fs_utils import replace_with_retry
@@ -555,9 +556,11 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
                                 plugin_loader._plugins[plugin_name]["enabled"] = False
                                 verify_msg = plugin_loader._plugins[plugin_name].get("verify_msg", "unknown")
                             if "unsigned" in verify_msg:
-                                detail = "Unsigned plugin — enable 'Allow Unsigned Plugins' first"
+                                detail = ("This plugin isn't signed, so it's blocked for safety. To run it anyway, "
+                                          "allow unsigned plugins with the switch at the top of Settings › Plugins.")
                             elif "hash mismatch" in verify_msg or "tamper" in verify_msg.lower():
-                                detail = "Plugin signature is invalid — files were modified after signing"
+                                detail = ("This plugin's files changed after it was signed (its signature no longer matches), so it's blocked for safety. "
+                                          "Reinstall it, or ask its author for a fresh copy.")
                             else:
                                 # A VERIFIED plugin refused at load (tool-name
                                 # collision, deps) used to report "Plugin
@@ -943,7 +946,7 @@ def rescan_plugins(_=Depends(require_login)):
         result = plugin_loader.rescan()
         return {"status": "ok", "added": result["added"], "removed": result["removed"]}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("rescan plugins", e)
 
 
 @router.post("/api/plugins/{plugin_name}/reload")
@@ -960,7 +963,7 @@ def reload_plugin(plugin_name: str, _=Depends(require_login)):
         plugin_loader.reload_plugin(plugin_name)
         return {"status": "ok", "plugin": plugin_name}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("reload that plugin", e)
 
 
 @router.post("/api/plugins/install")
@@ -1059,7 +1062,8 @@ def install_plugin(
                     '://172.26.', '://172.27.', '://172.28.', '://172.29.',
                     '://172.30.', '://172.31.',
                 )):
-                    raise HTTPException(status_code=400, detail="Refusing to fetch from localhost / private IP range")
+                    raise HTTPException(status_code=400, detail="Plugins can only be installed from a public web address, "
+                                                                "not this computer or your local network.")
                 zip_url = clean_url
                 url_install_method = 'zip_url'
                 # allow_redirects=False — a 302 from an attacker's https URL to an
@@ -1138,13 +1142,14 @@ def install_plugin(
                     break
 
         if not plugin_root:
-            raise HTTPException(status_code=400, detail="No plugin.json found in zip")
+            raise HTTPException(status_code=400, detail="That zip isn't a Sapphire plugin (it has no plugin.json).")
 
         # ── Validate manifest ──
         try:
             manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid plugin.json: {e}")
+            raise HTTPException(status_code=400, detail=f"That plugin is broken: its plugin.json can't be read ({e}). "
+                                                        f"Ask its author for a fixed version.")
 
         name = manifest.get("name")
         version = manifest.get("version")
@@ -1302,7 +1307,7 @@ def install_plugin(
     except Exception as e:
         logger.error(f"[PLUGINS] Install failed: {e}", exc_info=True)
         _notify.finish(nid, failed=True, title='Plugin install failed', body=str(e), origin=_origin)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("install the plugin", e)
     finally:
         # Cleanup temp files
         import shutil
@@ -1331,7 +1336,7 @@ def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
         _sync_toolset_after_change("plugin_uninstall")
         return {"status": "ok", "plugin": plugin_name}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("uninstall that plugin", e)
 
 
 @router.post("/api/plugins/{plugin_name}/purge")
@@ -1347,7 +1352,7 @@ def purge_plugin_data_endpoint(plugin_name: str, _=Depends(require_login)):
         return {"status": "ok", "plugin": plugin_name,
                 **plugin_loader.purge_plugin_data(plugin_name)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("delete that plugin's data", e)
 
 
 @router.post("/api/plugins/{plugin_name}/revert")

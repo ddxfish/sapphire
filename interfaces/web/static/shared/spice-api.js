@@ -1,6 +1,7 @@
 // spice-api.js - Backend communication for Spice Manager
 import { fetchWithTimeout } from './fetch.js';
 import { getInitData, refreshInitData } from './init-data.js';
+import { responseError } from './fetch.js';
 
 let _initialLoad = true;
 
@@ -91,7 +92,7 @@ export async function getCurrentSpiceSet() {
 
 export async function activateSpiceSet(name) {
   const res = await fetch(`/api/spice-sets/${encodeURIComponent(name)}/activate`, { method: 'POST' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   return await res.json();
 }
 
@@ -101,7 +102,7 @@ export async function saveCustomSpiceSet(name, categories) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, categories })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   refreshInitData();  // bust cached spice-set list so persona/chat dropdowns see the change
   return data;
@@ -109,7 +110,7 @@ export async function saveCustomSpiceSet(name, categories) {
 
 export async function deleteSpiceSet(name) {
   const res = await fetch(`/api/spice-sets/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   refreshInitData();  // bust cached spice-set list so persona/chat dropdowns see the deletion
   return data;
@@ -121,7 +122,7 @@ export async function setSpiceSetEmoji(name, emoji) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ emoji })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await responseError(res);
   const data = await res.json();
   refreshInitData();  // bust cached spice-set list so the emoji updates in dropdowns
   return data;

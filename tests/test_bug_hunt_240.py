@@ -76,5 +76,5 @@ class TestProviderFailureDanglingMessage:
         ce_start = source.find("except ConnectionError")
         ce_end = source.find("except Exception", ce_start + 1)
         ce_body = source[ce_start:ce_end]
-        assert "add_assistant_final" in ce_body, \
+        assert "_save_error_row" in ce_body, \
             "ConnectionError handler must save an assistant message to prevent dangling user message"

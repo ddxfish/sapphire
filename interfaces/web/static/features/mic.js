@@ -2,6 +2,7 @@
 import * as audio from '../audio.js';
 import { getElements, getIsProc, getSttEnabled, getSttReady, getConvo } from '../core/state.js';
 import { setConvo } from './convo.js';
+import { flash, showActionToast, goTo } from '../shared/notify.js';
 
 // Conversation mode owned by THIS machine (local server mic or this browser's
 // mic). A phone call is source 'phone' and doesn't touch the mic button.
@@ -71,8 +72,21 @@ export async function handleMicPress() {
         return;
     }
     
-    // Block recording if STT is disabled or not initialized
-    if (!getSttEnabled() || !getSttReady()) return;
+    // STT off or not ready: say why instead of doing nothing - here, on this
+    // screen only. A press is not news for the bell (every other tab and device
+    // would toast it), and a failed load already has its own row (sapphire.py).
+    const toStt = () => goTo({ view: 'settings', tab: 'stt' });
+    if (!getSttEnabled()) {
+        showActionToast('Speech-to-text is off. Turn it on in Settings › STT to talk with the mic.',
+                        'Open Settings', toStt, 'warning', 6000);
+        return;
+    }
+    if (!getSttReady()) {
+        const why = micBtn.dataset.sttWhy;
+        if (why) showActionToast(why, 'Open Settings', toStt, 'error', 8000);
+        else flash('The speech model is still loading. Try again in a moment.', 'info');
+        return;
+    }
 
     // Normal recording behavior
     await audio.handlePress(micBtn);

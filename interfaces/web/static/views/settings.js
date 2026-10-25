@@ -33,6 +33,7 @@ import videosTab from './settings-tabs/videos-tab.js';
 import storeTab from './settings-tabs/store-tab.js';
 
 import { getRegisteredTabs } from '../shared/plugin-registry.js';
+import { escapeHtml } from '../shared/modal.js';
 
 const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, imagesTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, devicesTab, mcpTab, systemTab, helpTab, videosTab];
 
@@ -140,7 +141,7 @@ function syncDynamicTabs() {
                 const settings = await reg.load();
                 reg.render(box, settings);
             } catch (e) {
-                box.innerHTML = `<p style="color:var(--error)">Failed to load: ${e.message}</p>`;
+                box.innerHTML = `<p style="color:var(--error)">Couldn't load this tab. ${escapeHtml(e.message)}</p>`;
             }
         }
     }));

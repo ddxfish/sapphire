@@ -8,6 +8,7 @@ import {
     handleModelSelectChange, runTestConnection
 } from '../../shared/llm-providers.js';
 import { showToast } from '../../shared/toast.js';
+import { responseError } from '../../shared/fetch.js';
 
 let generationProfiles = {};
 let providerMetadata = {};
@@ -256,8 +257,7 @@ export default {
                 try {
                     const res = await fetch(`/api/llm/custom-providers/${key}`, { method: 'DELETE' });
                     if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.detail || `HTTP ${res.status}`);
+                        throw await responseError(res);
                     }
                     showToast(`Removed: ${key}`, 'success');
                     ctx.refreshTab();

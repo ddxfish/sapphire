@@ -256,7 +256,8 @@ def _turn(system, chat, text, brain):
             elif et == 'error':
                 errored = ev.get('text') or 'stream error'
     except Exception as e:
-        errored = errored or f"{type(e).__name__}: {e}"
+        from core.chat.chat import friendly_llm_error   # words where the shape is known
+        errored = errored or friendly_llm_error(e) or f"{type(e).__name__}: {e}"
     finally:
         timer.cancel()
         if gen is not None:

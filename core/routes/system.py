@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
 import config
+from core.http_words import server_error
 from core.auth import require_login
 from core.api_fastapi import get_system
 
@@ -270,7 +271,8 @@ def _stage_restore_from(source_path, password: str, source_label: str, trusted: 
         try:
             roots = restore_mod.validate_tar(tar_path)
         except (ValueError, tarfile.TarError) as e:
-            raise HTTPException(status_code=400, detail=f"Not a valid Sapphire backup: {e}")
+            raise HTTPException(status_code=400, detail=f"That file isn't a Sapphire backup, or it's damaged. "
+                                                        f"Pick a .sapphirebak file made by Backup Now ({e}).")
 
         restore_mod.request_restore(tar_path, source=source_label, trusted=trusted)
         return roots
@@ -278,7 +280,8 @@ def _stage_restore_from(source_path, password: str, source_label: str, trusted: 
         raise
     except Exception as e:
         # Any unexpected failure (corrupt header, disk, etc.) → clean 400, not 500.
-        raise HTTPException(status_code=400, detail=f"Could not read backup: {e}")
+        raise HTTPException(status_code=400, detail=f"Sapphire couldn't read that backup. It may be damaged, "
+                                                    f"or the disk is full ({e}).")
     finally:
         # Never leak the plaintext staging file on a failure (success moved it away).
         if tar_path.exists():
@@ -492,7 +495,7 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
                     continue
 
             if sample_rate is None:
-                return {'success': False, 'error': 'Device does not support any common sample rate'}
+                return {'success': False, 'error': "That speaker didn't accept any common sample rate. Pick another output device."}
 
             t = np.linspace(0, duration, int(sample_rate * duration), False)
             tone = np.sin(2 * np.pi * frequency * t)
@@ -503,8 +506,18 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
             tone[-fade_samples:] *= fade_out
             tone = (tone * 0.5 * 32767).astype(np.int16)
 
-            sd.play(tone, sample_rate, device=device_index)
-            sd.wait()
+            try:
+                sd.play(tone, sample_rate, device=device_index)
+                # never sd.wait(): a device that vanishes mid-play (a Bluetooth
+                # headset, a USB unplug) can stop the finished callback, and the
+                # wait then held this thread - and the paused wakeword - forever
+                import time as _t
+                _t.sleep(duration + 0.3)
+                sd.stop()
+            except Exception as e:
+                from core.audio.errors import classify_audio_error
+                logger.warning(f"[AUDIO] test-output failed: {e!r}")
+                return {'success': False, 'error': classify_audio_error(e)}
             return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
         finally:
             _resume_wakeword(system, listener_stopped, wakeword_paused)
@@ -1159,7 +1172,7 @@ async def create_api_token(request: Request, _=Depends(require_login)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("save the new token", e)
     # Return the full token + metadata. Frontend MUST show-once.
     return {
         "id": entry["id"],
@@ -1261,7 +1274,8 @@ async def toggle_true_speech(request: Request, _=Depends(require_login), system=
         return {
             "status": "ok" if ok else "failed",
             "active": mgr.active,
-            "note": "" if ok else "could not acquire mic — wakeword intact",
+            "note": "" if ok else ("Sapphire couldn't open the mic on the computer it runs on. Check that one "
+                                   "is plugged in and picked in Settings › Audio."),
         }
     if mgr.active:
         logger.info(f"[CONV] Off requested over HTTP (source={getattr(system, 'conversation_source', None)})")

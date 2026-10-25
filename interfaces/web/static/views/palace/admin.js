@@ -15,6 +15,7 @@ import { csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab } from '../../s
 import { setupModalClose, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, rememberMindScope, recallMindScope } from './common.js';
+import { wordsOf } from '../../shared/fetch.js';
 
 const SCOPE_KEY = 'memory_scope';
 
@@ -246,7 +247,7 @@ async function savePluginSettings(patch) {
         body: JSON.stringify({ settings: patch }),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.detail || data.error || `HTTP ${r.status}`);
+    if (!r.ok) throw new Error(wordsOf(data, r.status));
     settings = data.settings || { ...settings, ...patch };
 }
 

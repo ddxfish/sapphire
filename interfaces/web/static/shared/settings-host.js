@@ -31,6 +31,7 @@ import { setupModalClose } from './modal.js';
 import { snapScroll, editableFocused } from './dom-guard.js';
 import { commitInto, mergeInto } from './settings-commit.js';
 import * as eventBus from '../core/event-bus.js';
+import { errWords } from './fetch.js';
 
 // A provider switch is a job with a row (core/provider_switch.py): the save returns
 // at once and `settings_changed` arrives when the job ends, with the LIVE value and
@@ -534,7 +535,7 @@ export function createHost(shell = {}) {
                     const input = el.querySelector(`#${targetId}`);
                     _showVoicePicker(voices, input, el);
                 } catch (err) {
-                    showToast('Failed to fetch voices', 'error');
+                    showToast(`Couldn't fetch voices. ${errWords(err, 'Try again.')}`, 'error');
                 } finally {
                     browseBtn.disabled = false;
                     browseBtn.textContent = 'Browse';

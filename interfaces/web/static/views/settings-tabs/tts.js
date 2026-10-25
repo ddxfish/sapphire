@@ -3,6 +3,7 @@ import { renderProviderTab, renderProviderCompact, attachProviderListeners, merg
 import { editableFocused } from '../../shared/dom-guard.js';
 import { gpuNotice } from '../../shared/gpu-notice.js';
 import { mountWorkerDoor } from '../../shared/worker-door.js';
+import { responseError } from '../../shared/fetch.js';
 
 let _mergedConfig = null;
 
@@ -130,7 +131,7 @@ export default {
             try {
                 const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
                 const res = await fetch('/api/tts/test', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
-                if (!res.ok) throw new Error(`Server error (${res.status})`);
+                if (!res.ok) throw await responseError(res);
                 const data = await res.json();
                 if (data.success) {
                     const by = data.served_by;
@@ -143,11 +144,11 @@ export default {
                     result.textContent = `${data.provider} — reachable in ${data.ms}ms${spoke}${where}`;
                 } else {
                     result.style.color = 'var(--color-error, #f44336)';
-                    result.textContent = data.error || 'Test failed';
+                    result.textContent = data.error || "The voice engine didn't pass the test.";
                 }
             } catch (e) {
                 result.style.color = 'var(--color-error, #f44336)';
-                result.textContent = `Error: ${e.message}`;
+                result.textContent = e.message;
             }
             btn.disabled = false;
             btn.textContent = 'Test TTS';

@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
+from core.http_words import server_error
 from core.auth import require_login, check_endpoint_rate
 from core.wakeword import library
 
@@ -31,8 +32,7 @@ def _fail(e):
             return HTTPException(status_code=400, detail=str(e))
     except Exception:
         pass
-    logger.error(f"[WAKEWORD] route failed: {e}", exc_info=True)
-    return HTTPException(status_code=500, detail=f"Something went wrong ({type(e).__name__}). The log has the detail.")
+    return server_error("finish that", e, why=False)
 
 
 @router.get("/api/wakeword/library")

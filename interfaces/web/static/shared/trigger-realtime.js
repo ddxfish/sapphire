@@ -16,6 +16,7 @@ import { fetchChatList, createChat } from '../api.js';
 import { getInitData } from './init-data.js';
 import { renderScopeDropdowns, fetchScopeData, populateScopeOptions, readScopeSettingsFromDom } from './scope-dropdowns.js';
 import { showToast } from './toast.js';
+import { responseError } from './fetch.js';
 
 const RT_EMOJIS = ['📞', '⚡', '📡', '🎙️', '☎️', '🗣️', '🤖', '🔴', '📻', '🎧', '💬', '🌐'];
 const RADROW = 'display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:2px 0 8px';
@@ -391,7 +392,7 @@ export async function openRealtimeEditor(task, refresh) {
         if (!name) { mirror.innerHTML = ''; return; }
         try {
             const res = await fetch(`/api/chats/${encodeURIComponent(name)}/settings`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) throw await responseError(res);
             // Route shape is {settings: {...}} — reading the top level made
             // EVERY chat render "tools: none", including armed ones.
             const s = (await res.json()).settings || {};

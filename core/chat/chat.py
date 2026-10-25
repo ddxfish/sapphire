@@ -110,89 +110,18 @@ class ChatBusy(Exception):
         super().__init__(f"chat '{chat_name}' already has a live turn")
 
 
-def friendly_llm_error(e):
-    """Convert LLM provider exceptions to user-friendly messages. Returns None if unrecognized."""
-    error_str = str(e).lower()
-    type_name = type(e).__name__
-
-    # The resolver's refusals ARE the user-facing reason (privacy, LLM off,
-    # a pin not answering, Auto's per-provider why) — never flattened into
-    # "lost connection" or API-key advice for a local LM Studio user.
-    from core.chat.llm_providers.resolve import ProviderRefused
-    if isinstance(e, ProviderRefused):
-        return str(e)
-    if isinstance(e, ConnectionError) and ('privacy' in error_str or 'private' in error_str):
-        return str(e)
-
-    # Connection errors — detect local providers like LM Studio
-    if isinstance(e, ConnectionError) or 'ConnectError' in type_name or 'connection' in error_str:
-        if any(h in error_str for h in ('127.0.0.1', 'localhost', '0.0.0.0')):
-            return "Can't reach your local LLM server (LM Studio, Ollama...). Make sure it's running with a model loaded."
-        return "Lost connection to the LLM server. Check that the service is running."
-
-    status = getattr(e, 'status_code', None)
-    if not status:
-        return None
-
-    # Context size exceeded — catch before status code checks (some providers raise without HTTP status)
-    if any(k in error_str for k in ('context size', 'context length', 'context_length', 'maximum context', 'token limit')):
-        return "Context limit exceeded — conversation is too long for this model. Lower CONTEXT_LIMIT in Settings or start a new chat."
-
-    if status == 400:
-        if 'no models loaded' in error_str or 'lms load' in error_str:     # LM Studio's own words
-            return "Model not found or not loaded. If using LM Studio, make sure a model is loaded and running."
-        if 'model' in error_str and any(k in error_str for k in ('not found', 'not loaded', 'does not exist')):
-            return "The provider doesn't have that model. Check the model name in Settings › LLM."
-        if any(k in error_str for k in ('image', 'vision', 'multimodal', 'content_type')):
-            return "This model doesn't support images. Load a vision model to use image attachments."
-        if 'invalid tool call' in error_str or 'tool call arguments' in error_str:
-            return "This provider rejected a tool call in your chat history (strict tool-call validation). Try starting a new chat, or switch to a more lenient provider (OpenAI, Fireworks)."
-        if 'tool' in error_str and any(k in error_str for k in ('not support', "doesn't support", 'unsupported')):
-            return "This model doesn't support tool calls. Switch to a tool-capable model or disable your toolset."
-        return f"LLM request rejected (400). {str(e)[:200]}"
-
-    if status == 401:
-        return "The API key was refused or is missing. Check it in Settings › LLM."
-
-    if status == 403:
-        return "Access denied. Your API key may not have permission for this model or resource."
-
-    if status == 404:
-        if 'model' in error_str:
-            return "The provider doesn't have that model. Check the model name in Settings › LLM."
-        return "The provider's URL is wrong (nothing there). Check the Base URL in Settings › LLM."
-
-    if status in (402, 429) and any(k in error_str for k in ('billing', 'quota', 'credit', 'insufficient', 'budget', 'exceeded')):
-        return "Account billing limit reached — out of credits or over budget. Check your provider's billing page."
-
-    if status == 429:
-        return "Rate limited — too many requests. Wait 30-60 seconds before trying again."
-
-    if status == 529:
-        return "Claude's servers are at capacity (529). This is temporary — wait a minute and resend."
-
-    if status >= 500:
-        return f"The LLM provider had a problem on its end ({status}). It's usually temporary, so try again in a minute."
-
-    return None
+def friendly_llm_error(e, provider_key=None):
+    """Plain words for a provider failure of a known shape, else None (callers
+    that keep the raw text for an unknown one). The words: core/chat/llm_errors.py."""
+    from core.chat.llm_errors import explain
+    w = explain(e, provider_key)
+    return w['text'] if w['known'] else None
 
 
-def fallback_error_text(e):
-    """The doors' never-raise contract: map ANY exception to a spoken/shown
-    string. friendly_llm_error first; the legacy blocking-lane heuristics
-    (timeout/swarm/connection/json) as the catch-all tail."""
-    friendly = friendly_llm_error(e)
-    if friendly:
-        return friendly
-    if "timeout" in str(e).lower() or "APITimeoutError" in str(type(e).__name__):
-        return ("The LLM took too long to answer. If it's a slow or local model, raise "
-                "LLM Request Timeout in Settings › LLM › General.")
-    if "connection" in str(e).lower() or "ConnectError" in str(type(e).__name__) or \
-            (hasattr(e, '__module__') and 'httpx' in str(e.__module__)):
-        return "Lost connection to the LLM server. Check that the service is running."
-    if "json" in str(e).lower() or "JSON" in str(e):
-        return "The LLM sent back a reply that couldn't be read. Try again, or try another provider."
-    return f"I encountered an unexpected technical issue. Error: {str(e)[:200]}"
+def fallback_error_text(e, provider_key=None):
+    """The doors' never-raise contract: ANY exception -> words to show or speak."""
+    from core.chat.llm_errors import explain
+    return explain(e, provider_key)['text']
 
 
 # Extension → language map for fenced code blocks

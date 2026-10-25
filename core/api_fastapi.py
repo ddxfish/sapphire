@@ -97,7 +97,22 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     """Log unhandled exceptions to app logger instead of just stderr."""
     logger.error(f"Unhandled {type(exc).__name__} on {request.method} {request.url.path}: {exc}", exc_info=True)
     from starlette.responses import JSONResponse
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    from core.http_words import AGAIN
+    return JSONResponse(status_code=500, content={"detail": f"Something went wrong inside Sapphire. {AGAIN}"})
+
+
+from fastapi.exceptions import RequestValidationError
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request_handler(request: Request, exc: RequestValidationError):
+    """422 as one sentence: FastAPI's list-shaped detail read "[object Object]"."""
+    # loc + msg only: an error's `input` is the whole failing value (a key, a password)
+    logger.warning(f"422 on {request.method} {request.url.path}: "
+                   f"{[(e.get('loc'), e.get('msg')) for e in exc.errors()]}")
+    from starlette.responses import JSONResponse
+    from core.http_words import invalid_request
+    return JSONResponse(status_code=422, content={"detail": invalid_request(exc.errors())})
 
 
 # Session middleware added after HTTP middleware decorators below (outermost = LIFO)
@@ -489,7 +504,7 @@ async def csrf_protection(request: Request, call_next):
                 session_token = request.session.get('csrf_token')
                 if not csrf_header or not session_token or csrf_header != session_token:
                     from starlette.responses import JSONResponse
-                    return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+                    return JSONResponse(status_code=403, content={"detail": "This page is out of date. Reload it and try again."})
     return await call_next(request)
 
 

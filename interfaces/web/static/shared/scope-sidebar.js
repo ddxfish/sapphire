@@ -59,7 +59,7 @@ export function bindScopeSidebar(container, { onScopeChange, onChanged, describe
                 const partial = res.done < res.total;
                 ui.showToast(partial ? `Scope "${name}" created in ${res.done}/${res.total} sections (some failed)` : `Scope "${name}" created`, partial ? 'warning' : 'success');
                 onChanged && onChanged(name);
-            } else ui.showToast('Failed to create scope', 'error');
+            } else ui.showToast(`Couldn't create the scope "${name}". Try again.`, 'error');
         },
         onDelete: async () => {
             const sel = container.querySelector('.panel-list-item.active');
@@ -76,7 +76,7 @@ export function bindScopeSidebar(container, { onScopeChange, onChanged, describe
                 const partial = res.done < res.total;
                 ui.showToast(partial ? `Scope "${name}" deleted from ${res.done}/${res.total} sections (some failed)` : `Scope "${name}" deleted`, partial ? 'warning' : 'success');
                 onChanged && onChanged(null);
-            } else ui.showToast('Failed to delete scope', 'error');
+            } else ui.showToast(`Couldn't delete the scope "${name}". Try again.`, 'error');
         },
     });
 }

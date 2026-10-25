@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, Depends, HTTPException
 
 import config
+from core.http_words import server_error
 from core.auth import require_login
 from core.api_fastapi import get_system, _apply_chat_settings
 from core.event_bus import publish, Events
@@ -125,7 +126,7 @@ async def get_all_settings(request: Request, _=Depends(require_login)):
             "unrestricted": settings.is_unrestricted(),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("load settings", e)
 
 
 @router.post("/api/settings/reload")

@@ -129,6 +129,16 @@ class StreamingChat:
             pass
         return self.main_chat.function_manager.enabled_tools
 
+    def _save_error_row(self, e, provider_key):
+        """A failed turn's row: plain words that show, the raw text under its
+        Details fold, marked so it never reaches the LLM (a model repeats the
+        errors it reads). Also keeps history from ending on a dangling user
+        row. Returns the words."""
+        from core.chat.llm_errors import history_row
+        text, meta = history_row(e, provider_key)
+        self.main_chat.session_manager.add_assistant_final(text, metadata=meta)
+        return text
+
     def _cleanup_stream(self):
         """Safely close current stream if it exists."""
         if self.current_stream:
@@ -297,6 +307,7 @@ class StreamingChat:
 
         _brain_token = None   # A1: declared before the try so the finally is always safe
         _reg_chat, _reg_pinned = None, False   # F1: what begin_streaming was told; the finally mirrors it
+        provider_key = None   # named in a failed turn's words (llm_errors)
 
         try:
             # H4 counter, moved to the TOP of the try (vault hunt R3 2026-08-15):
@@ -1427,8 +1438,8 @@ class StreamingChat:
                     yield {
                         "type": "notice",
                         "message": (
-                            f"Generation ended without a reply after {tool_call_count} tool call(s). "
-                            f"A tool likely errored or isn't in the active toolset — check the logs, or rephrase."
+                            f"The reply came back empty after {tool_call_count} tool call(s). "
+                            f"A tool may have failed. Try again, or ask a different way."
                         ),
                         "severity": "warning",
                     }
@@ -1464,9 +1475,8 @@ class StreamingChat:
 
             except Exception as final_error:
                 logger.error(f"[STREAMING] Forced final response failed: {final_error}")
-                error_msg = f"I completed {tool_call_count} tool calls but encountered an error generating the final response."
+                error_msg = self._save_error_row(final_error, provider_key)
                 yield {"type": "content", "text": error_msg}
-                self.main_chat.session_manager.add_assistant_final(error_msg)
                 _forced_text, _forced_error = error_msg, True
 
             if not self.llm_done:   # the except path above saved its row too
@@ -1479,9 +1489,7 @@ class StreamingChat:
             # Save error so history doesn't end with a dangling user message
             # (a Continue's history already ends on the reply row — leave it).
             if not continue_from:
-                self.main_chat.session_manager.add_assistant_final(
-                    f"[Connection error: {e}]"
-                )
+                self._save_error_row(e, provider_key)
             # Synthetic tts_stream_end so the frontend's audio queue can
             # finalize even though we're aborting before flush_and_close.
             # Without this, isStreaming stays true / mute pill orphaned
@@ -1519,9 +1527,7 @@ class StreamingChat:
             # (consecutive user messages break Claude's alternating requirement;
             # a Continue's history already ends on the reply row — leave it).
             if not continue_from:
-                self.main_chat.session_manager.add_assistant_final(
-                    f"[Error: {type(e).__name__}: {e}]"
-                )
+                self._save_error_row(e, provider_key)
             if tts_pump._stream_started and not tts_pump._closed:
                 yield {
                     "type": "tts_stream_end",

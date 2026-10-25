@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 import config
+from core.http_words import server_error
 from core.auth import require_login, check_endpoint_rate
 from core.api_fastapi import get_system, _apply_chat_settings, PROJECT_ROOT
 from core.event_bus import publish, Events
@@ -639,8 +640,7 @@ async def handle_cancel(request: Request, _=Depends(require_login), system=Depen
             "cancelled": count,
         }
     except Exception as e:
-        logger.error(f"Error during cancellation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("stop the reply", e)
 
 
 @router.get("/api/events")
@@ -741,6 +741,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             "stt_enabled": config.STT_ENABLED,
             "stt_provider": getattr(config, 'STT_PROVIDER', 'none'),
             "stt_ready": not isinstance(system.whisper_client, _NullWhisperClient),
+            "stt_why": getattr(system, 'stt_why', None),
             "wakeword_enabled": config.WAKE_WORD_ENABLED,
             "wakeword_ready": not isinstance(system.wake_detector, _NullWakeWordDetector),
             "tts_playing": tts_playing,
@@ -1028,8 +1029,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             "load_errors": _get_load_errors()
         }
     except Exception as e:
-        logger.error(f"Error getting init data: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("load the chat page", e)
 
 
 # =============================================================================
@@ -1081,8 +1081,7 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
         try:
             ok, err = _edit(system, target, 'remove_from_user', user_message)
         except Exception as e:
-            logger.error(f"Error removing from user message: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise server_error("remove those messages", e)
         _edited(ok, err, 404, "User message not found", "Failed to remove")
         return {"status": "success", "message": "Removed from user message"}
 
@@ -1119,7 +1118,7 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
     try:
         ok, err = _edit(system, target, 'remove_last', count)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("remove those messages", e)
     _edited(ok, err, 500, "Failed to remove messages", "Failed to remove messages")
     return {"status": "success", "message": f"Removed {count} messages.", "deleted": count}
 
@@ -1135,7 +1134,7 @@ async def remove_last_assistant(request: Request, _=Depends(require_login), syst
     try:
         ok, err = _edit(system, target, 'remove_last_assistant', timestamp)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("remove that reply", e)
     _edited(ok, err, 500, "Failed to remove", "Failed to remove")
     return {"status": "success", "message": "Removed last assistant"}
 
@@ -1151,7 +1150,7 @@ async def remove_from_assistant(request: Request, _=Depends(require_login), syst
     try:
         ok, err = _edit(system, target, 'remove_from_assistant', timestamp)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("remove those messages", e)
     _edited(ok, err, 404, "Assistant message not found", "Failed to remove")
     return {"status": "success", "message": "Removed from assistant"}
 
@@ -1163,7 +1162,7 @@ async def remove_tool_call(tool_call_id: str, request: Request, _=Depends(requir
     try:
         ok, err = _edit(system, target, 'remove_tool_call', tool_call_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("remove that tool call", e)
     _edited(ok, err, 404, "Tool call not found", "Failed to remove")
     return {"status": "success", "message": "Tool call removed"}
 
@@ -1190,7 +1189,7 @@ async def edit_message(request: Request, _=Depends(require_login), system=Depend
     try:
         ok, err = _edit(system, target, 'edit', role, timestamp, new_content)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("save the edit", e)
     _edited(ok, err, 404, "Message not found", "Failed to edit")
     return {"status": "success", "message": "Message updated"}
 
@@ -1222,7 +1221,7 @@ async def import_history(request: Request, _=Depends(require_login), system=Depe
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("import that chat", e)
 
 
 # =============================================================================
@@ -1843,7 +1842,7 @@ async def get_chat_settings(chat_name: str, request: Request, _=Depends(require_
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("load this chat's settings", e)
 
 
 @router.get("/api/chats/{chat_name}/prompt-preview")
@@ -1891,7 +1890,7 @@ async def chat_prompt_preview(chat_name: str, request: Request, _=Depends(requir
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("build this chat's prompt preview", e)
     finally:
         if token is not None:
             stream_brain.reset_override(token)
@@ -2059,4 +2058,4 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise server_error("save this chat's settings", e)

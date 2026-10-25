@@ -60,8 +60,11 @@ def _text_of(content) -> str:
 
 def render_transcript(msgs: List[Dict[str, Any]]) -> str:
     """Render messages as a plain transcript for the summarizer."""
+    from core.chat.llm_errors import is_error_row
     lines = []
     for m in msgs:
+        if is_error_row(m):
+            continue      # a failed turn's words are for the person, not the summarizer
         role = m.get("role", "?")
         text = _text_of(m.get("content"))
         if role == "assistant" and m.get("tool_calls"):

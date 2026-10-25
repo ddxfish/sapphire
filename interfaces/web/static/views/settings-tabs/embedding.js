@@ -2,6 +2,8 @@
 import { renderProviderTab, attachProviderListeners, mergeRegistryProviders, providerSignature } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
 import { on as onBusEvent, Events as BusEvents } from '../../core/event-bus.js';
+import { responseError } from '../../shared/fetch.js';
+import { escapeHtml } from '../../shared/modal.js';
 
 // Merged config cache — populated by attachListeners on first render so the
 // dropdown includes plugin-registered embedders (e.g. embedder-minilm). Mirrors
@@ -57,7 +59,7 @@ async function loadIntegrityStatus(el) {
         // Re-embed button enabled iff there's something orphaned to process.
         if (reembedBtn) reembedBtn.disabled = orphaned === 0;
     } catch (e) {
-        box.innerHTML = `Integrity check failed: ${e.message}`;
+        box.innerHTML = `Integrity check failed: ${escapeHtml(e.message)}`;
     }
 }
 
@@ -115,8 +117,7 @@ function wireReembedControls(el) {
             const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
             const res = await fetch('/api/embedding/reembed', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
             if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || `HTTP ${res.status}`);
+                throw await responseError(res);
             }
             // Immediate optimistic state; SSE events will update progress
             _renderReembedProgress(el, { running: true, total: 0, done: 0 });

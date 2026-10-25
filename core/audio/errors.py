@@ -43,18 +43,27 @@ def classify_audio_error(e: Exception) -> str:
         Human-readable error message with resolution steps
     """
     err_str = str(e).lower()
-    err_type = type(e).__name__
     
+    # Windows blocks the mic for desktop apps: WASAPI says E_ACCESSDENIED
+    # (-2147024891 = 0x80070005), not "permission denied".
+    if any(x in err_str for x in ['-2147024891', '0x80070005']):
+        return (
+            "Windows is blocking the microphone. Open Windows Settings › Privacy & security › "
+            "Microphone and turn on \"Let desktop apps access your microphone\", then try again."
+        )
+
     # Permission denied
     if any(x in err_str for x in ['permission denied', 'eperm', 'eacces', 'access denied']):
         return (
             "Microphone access denied. "
             "Linux: run 'sudo usermod -aG audio $USER' then logout/login. "
-            "Windows: check Settings > Privacy > Microphone."
+            "Windows: Settings › Privacy & security › Microphone, turn on \"Let desktop apps access your microphone\"."
         )
-    
-    # Device busy
-    if any(x in err_str for x in ['device or resource busy', 'ebusy', 'already in use', 'exclusive']):
+
+    # Device busy (WASAPI: AUDCLNT_E_DEVICE_IN_USE -2004287478 = 0x8889000A;
+    # PortAudio: Device unavailable -9985)
+    if any(x in err_str for x in ['device or resource busy', 'ebusy', 'already in use', 'exclusive',
+                                  '-2004287478', '0x8889000a', 'device unavailable', '-9985']):
         return (
             "Microphone in use by another application. "
             "Close Discord, Zoom, Teams, or other audio apps and retry."
@@ -64,7 +73,7 @@ def classify_audio_error(e: Exception) -> str:
     if any(x in err_str for x in ['invalid sample rate', '-9997', 'sample rate', 'samplerate']):
         return (
             "Device rejected all sample rates. "
-            "Try adding your device's native rate to AUDIO_SAMPLE_RATES in settings."
+            "Add your device's own rate to Audio Sample Rates in Settings › Audio (Advanced)."
         )
     
     # Invalid channel count
@@ -97,15 +106,16 @@ def classify_audio_error(e: Exception) -> str:
     if any(x in err_str for x in ['no such device', 'device not found', 'invalid device']):
         return (
             "Audio device not found. "
-            "Check USB connection or select a different device in settings."
+            "Check its USB cable, or pick a different device in Settings › Audio."
         )
     
     # Timeout / underrun
     if any(x in err_str for x in ['timeout', 'underrun', 'overrun', 'xrun']):
         return (
             "Audio buffer underrun. "
-            "Try increasing buffer size in settings or closing other audio apps."
+            "Close other audio apps, or add a bigger value to Audio Blocksize Fallbacks in Settings › Audio (Advanced)."
         )
     
     # Generic with original error
-    return f"Audio error: {err_type}: {e}"
+    return f"The audio device failed ({e}). Pick another device in Settings › Audio, or try again." if str(e) \
+        else "The audio device failed. Pick another device in Settings › Audio, or try again."

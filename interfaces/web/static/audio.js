@@ -3,6 +3,8 @@ import * as ui from './ui.js';
 import * as api from './api.js';
 import { dispatch, on as busOn, Events } from './core/event-bus.js';
 import { stripThink } from './shared/think.js';
+import { responseError } from './shared/fetch.js';
+import { micWords } from './shared/mic-words.js';
 
 let audioContext, mediaStream, sourceNode, processorNode;
 let audioChunks = [];
@@ -206,7 +208,7 @@ export const playText = async (txt, cacheKey = null, voiceOpts = null) => {
             isStreaming = false;
             ui.hideStatus();
             cleanup();
-            ui.showToast('Audio playback failed — check TTS provider', 'error');
+            ui.showToast("Sapphire's voice couldn't play. Try Test in Settings › TTS.", 'error');
         };
 
         await player.play();
@@ -232,11 +234,11 @@ export const playText = async (txt, cacheKey = null, voiceOpts = null) => {
             ui.showToast('Browser blocked audio — click anywhere on the page, then try again.', 'warning');
         } else if (msg.includes('not audio')) {
             console.warn('[TTS] whole-blob fallback got non-audio response:', msg);
-            ui.showToast('TTS response was not playable audio — check TTS provider / proxy.', 'error');
+            ui.showToast("Sapphire's voice sent something that isn't audio. Try Test in Settings › TTS; a proxy or browser shield can cause this.", 'error');
         } else if (cls.includes('AbortError')) {
-            ui.showToast('Audio playback failed — check system audio output or browser autoplay permissions.', 'warning');
+            ui.showToast("Sapphire's voice couldn't play. Check your speakers, or click the page and try again.", 'warning');
         } else {
-            ui.showToast(`Audio error: ${msg}`, 'error');
+            ui.showToast(`Sapphire's voice couldn't play${msg ? ` (${msg})` : ''}. Try Test in Settings › TTS.`, 'error');
         }
     }
 };
@@ -297,9 +299,7 @@ export const playTextStreaming = async (text, voice = null, chat = null, opts = 
         return false;
     }
     if (!res.ok) {
-        let detail = '';
-        try { detail = (await res.json()).detail || ''; } catch {}
-        throw new Error(`HTTP ${res.status}${detail ? ': ' + detail : ''}`);
+        throw await responseError(res);
     }
     const ct = res.headers.get('content-type') || '';
     if (!ct.startsWith('text/event-stream')) {
@@ -890,10 +890,7 @@ const startRec = async () => {
         return true;
     } catch (e) {
         console.error('Mic access error:', e);
-        const msg = e.name === 'NotFoundError' || e.message?.includes('not be found')
-            ? 'No microphone found. Check your audio device.'
-            : 'Mic access denied';
-        alert(msg);
+        ui.showToast(micWords(e), 'error');
         return false;
     }
 };
@@ -992,8 +989,8 @@ export const handleRelease = async (btn, triggerSendFn) => {
 
                 if (!text || !text.trim()) {
                     const msg = response.quiet
-                        ? 'No audio received — check browser mic selection'
-                        : 'No speech detected';
+                        ? "Sapphire got silence. Check which mic the browser is using (the icon left of the address)."
+                        : "Didn't catch any words. Hold the mic button while you talk.";
                     ui.updateStatus(msg);
                     setTimeout(() => ui.hideStatus(), 3000);
                     return null;
@@ -1005,10 +1002,9 @@ export const handleRelease = async (btn, triggerSendFn) => {
 
             } catch (e) {
                 console.error('Transcription failed:', e);
-                const msg = e.message?.includes('disabled') || e.message?.includes('not initialized')
-                    ? e.message : 'Transcription failed';
-                ui.updateStatus(msg);
-                setTimeout(() => ui.hideStatus(), 2000);
+                // the server's reason (privacy gate, timeout, not ready) is the message
+                ui.hideStatus();
+                ui.showToast(e.message || "Sapphire couldn't turn that recording into text. Try again.", 'error');
                 return null;
             }
         }

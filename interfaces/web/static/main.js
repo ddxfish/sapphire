@@ -27,6 +27,7 @@ import { registerView, initRouter, getCurrentView, switchView } from './core/rou
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
 import { renderSurface } from './surface/surface.js';
 import { chatMode } from './surface/chat-mode.js';
+import { escapeHtml } from './shared/modal.js';
 
 // View modules loaded dynamically — a broken view cannot kill the app
 const _v = window.__v ? `?v=${window.__v}` : '';
@@ -320,7 +321,7 @@ async function init() {
                                     // (rail/composer/#chatbg) — release it before
                                     // painting the error, or Chat is left with no rail.
                                     try { imported?.cleanup?.(); } catch {}
-                                    el.innerHTML = `<div class="view-placeholder"><h2>Failed to load ${appName}</h2><p style="color:var(--text-muted)">${e.message}</p></div>`;
+                                    el.innerHTML = `<div class="view-placeholder"><h2>Failed to load ${appName}</h2><p style="color:var(--text-muted)">${escapeHtml(e.message)}</p></div>`;
                                 }
                             },
                             hide() {

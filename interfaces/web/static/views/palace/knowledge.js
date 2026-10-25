@@ -13,6 +13,7 @@ import { showModal, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { API, PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, rememberMindScope, recallMindScope } from './common.js';
 import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
+import { wordsOf } from '../../shared/fetch.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'knowledge';
@@ -236,7 +237,7 @@ async function renderShelf() {
                 headers: csrfHeaders(), body: fd,
             });
             const data = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+            if (!r.ok) throw new Error(wordsOf(data, r.status));
             const rep = data.report || {};
             const bits = [`${rep.imported ?? 0} imported`,
                           `${rep.skipped ?? 0} skipped`];
@@ -604,7 +605,7 @@ async function uploadFiles(files, data, title) {
             method: 'POST', credentials: 'same-origin', headers: csrfHeaders(), body: form,
         });
         const res = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(res.error || res.detail || `HTTP ${r.status}`);
+        if (!r.ok) throw new Error(wordsOf(res, r.status));
         const n = (res.imported || []).length;
         if (n) ui.showToast(`Importing ${n} file${n !== 1 ? 's' : ''} in the background`, 'success');
         for (const ref of res.refused || []) ui.showToast(`${ref.file}: ${ref.error}`, 'error');

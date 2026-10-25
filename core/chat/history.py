@@ -554,11 +554,22 @@ class ConversationHistory:
         """
         msgs = []
         refs = []          # per llm_msg: the images that message carried live
-        
+        from core.chat.llm_errors import is_error_row
         for msg in self.messages:
             role = msg["role"]
             refs_here = []
-            
+
+            # A failed turn's row is for the person, never the model (it would
+            # repeat the error). Two user rows that end up side by side merge
+            # on the wire (openai_compat._sanitize_messages). One that closed a
+            # tool step leaves a bare stand-in: tool -> user is refused by
+            # strict servers, and the step needs an assistant row to end it.
+            if is_error_row(msg):
+                if msgs and msgs[-1]["role"] == "tool":
+                    msgs.append({"role": "assistant", "content": "(no response)"})
+                    refs.append([])
+                continue
+
             if role == "assistant":
                 # Get clean content (no thinking)
                 content = msg.get("content", "")
@@ -5358,6 +5369,9 @@ class ChatSessionManager:
             content = row.get('content')
             if row.get('tool_calls') or not isinstance(content, str) or not content.strip():
                 return None
+            from core.chat.llm_errors import is_error_row
+            if is_error_row(row):
+                return None     # a failed turn's words are not hers to continue
             return content
 
     def continue_assistant(self, timestamp: str, content: str,
@@ -5433,9 +5447,12 @@ class ChatSessionManager:
                 return False
             
             last_assistant_idx = start_idx
+            from core.chat.llm_errors import is_error_row
             for i in range(start_idx + 1, len(self.current_chat.messages)):
                 if self.current_chat.messages[i].get('role') == 'user':
                     break
+                if is_error_row(self.current_chat.messages[i]):
+                    break       # its own bubble (display_format): not this one's tail
                 if self.current_chat.messages[i].get('role') == 'assistant':
                     last_assistant_idx = i
             
@@ -5448,6 +5465,11 @@ class ChatSessionManager:
             target['content'] = clean
             if thinking:
                 target['thinking'] = thinking
+            # A failed turn's row the person rewrote is theirs now: it shows
+            # as a reply and reaches the model (llm_errors.is_error_row).
+            meta = target.get('metadata')
+            if isinstance(meta, dict) and meta.pop('error', None) is not None and not meta:
+                target.pop('metadata', None)
             self.current_chat._needs_full_resync = True  # in-place edit
             self._save_current_chat()
             logger.info(f"Edited assistant message at index {last_assistant_idx} (turn started at {start_idx})")

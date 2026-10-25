@@ -126,7 +126,7 @@ def test_install_rejects_localhost_or_private_ip_zip_url(client, temp_user_dir, 
         data={'url': bad_url},
     )
     assert r.status_code == 400, f"expected 400 for {bad_url}, got {r.status_code}"
-    assert 'localhost' in r.text.lower() or 'private' in r.text.lower()
+    assert 'public web address' in r.text
 
 
 # ─── 1.8 List endpoint mirrors loader state, not just plugins.json ───────────

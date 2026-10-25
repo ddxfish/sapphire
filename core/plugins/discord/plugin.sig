@@ -140,7 +140,7 @@
     "voice/dave_session.py": "sha256:c90fcee45dd8274fdb8eb39cd368f1a9f140d31090dfe538855acf1e9ce48692",
     "voice/dave_voice_patches.py": "sha256:036b3573216b05db0be184da8b6f55871d9847a4a8451b09fa2677d500c86462",
     "voice/discord_conversation_runner.py": "sha256:a79f631652e9eae10f49fe707880a42cd37f06faa10fd8f86fcc6be1ba031002",
-    "voice/discord_conversation_source.py": "sha256:00561e28a533e5f07c12b87c301a36586753e4039f1c9ffef365d43c4bb39476",
+    "voice/discord_conversation_source.py": "sha256:155827cb6bf3018959d48bc99b78a55ba9279e135dc7d2bc1d8cead0e750b1c2",
     "voice/discord_frame_feed.py": "sha256:96a755145a9fa446e47bb615756e0a425c28c2d43a9c53f52ea36abb4299f652",
     "voice/patch_registry.py": "sha256:0135ee96bbbeac53c619b913a9f79bc61a4d1297ff2786a859c7fca14bb16dfa",
     "voice/pycord_patches.py": "sha256:409bf871f6b0df0612973c32443ac27a64610adb3dfb9ce3a3a7615cea92598d",
@@ -153,5 +153,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:41c824acfb6517d4709f975a96f4176185624d4aad4793ef1179f0f3967b0682"
   },
-  "signature": "M3JVeyJIC2tt33h1DXlF9N8mrO2cXeLiACHg6NETBPioeOfDJWcdt1uVewqwDlQVHleKe1hGuLoDpDGgTlMTCw=="
+  "signature": "iwiINy89VsnCgYtvbVDHiIcNW0ROyXj/SQT0u0O2922/RXnlEz8DOwjYZJTHYk6gjj+NwRMNX9PR14T1CFOJBw=="
 }

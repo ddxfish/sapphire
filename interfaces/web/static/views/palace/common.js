@@ -4,6 +4,7 @@
 import { csrfHeaders, escHtml, timeAgo } from '../../shared/mind-common.js';
 import { showExportDialog, showImportDialog } from '../../shared/import-export.js';
 import { sessionId } from '../../shared/fetch.js';
+import { wordsOf } from '../../shared/fetch.js';
 
 export const API = '/api/plugin/mindpalace';
 export const SCOPE_ENDPOINT = `${API}/scopes`;
@@ -63,7 +64,7 @@ export function recallMindScope() {
 export async function palaceGet(path) {
     const r = await fetch(`${API}/${path}`, { credentials: 'same-origin' });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || data.detail || `HTTP ${r.status}`);
+    if (!r.ok) throw new Error(wordsOf(data, r.status));
     return data;
 }
 
@@ -79,7 +80,7 @@ export async function palaceSend(path, method, body) {
         body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || data.detail || `HTTP ${r.status}`);
+    if (!r.ok) throw new Error(wordsOf(data, r.status));
     return data;
 }
 

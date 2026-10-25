@@ -563,7 +563,7 @@ function bindEvents() {
                 await loadData();
                 render();
                 ui.showToast(`Created: ${name.trim()}`, 'success');
-            } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+            } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
         },
         onDelete: async () => {
             if (!confirm(`Delete persona "${selectedName}"?`)) return;
@@ -574,7 +574,7 @@ function bindEvents() {
                 await loadData();
                 render();
                 ui.showToast('Deleted', 'success');
-            } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+            } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
         },
     });
 
@@ -587,7 +587,7 @@ function bindEvents() {
             updateScene();
             // Refresh sidebar easy mode
             window.dispatchEvent(new CustomEvent('persona-loaded', { detail: { name: selectedName } }));
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+        } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
     });
 
     // Set as default
@@ -602,7 +602,7 @@ function bindEvents() {
             defaultPersona = selectedName;
             render();
             ui.showToast(`${selectedName} set as default`, 'success');
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+        } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
     });
 
     // Clear default
@@ -613,7 +613,7 @@ function bindEvents() {
             defaultPersona = '';
             render();
             ui.showToast('Default cleared', 'success');
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+        } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
     });
 
     // Duplicate
@@ -626,7 +626,7 @@ function bindEvents() {
             await loadData();
             render();
             ui.showToast(`Duplicated`, 'success');
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+        } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
     });
 
     // Export — downloads a PNG character card (avatar pixels + embedded bundle)
@@ -727,7 +727,7 @@ function bindEvents() {
             selectedData.avatar = null;
             render();
             ui.showToast('Avatar removed', 'success');
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+        } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
     });
 
     // TTS test button

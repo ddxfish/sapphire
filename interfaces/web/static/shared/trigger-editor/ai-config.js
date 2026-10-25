@@ -10,6 +10,7 @@ import {
     readScopeSettingsFromDom
 } from '../scope-dropdowns.js';
 import { providerOptions, refreshModelControls, readModel } from '../llm-picker.js';
+import { wordsOf, errWords } from '../fetch.js';
 
 let _ttsVoicesCache = null;
 
@@ -299,8 +300,12 @@ export async function wireAIConfig(modal, t, data) {
                     ));
                     const anyOk = results.some(r => r.status === 'fulfilled' && r.value.ok);
                     if (!anyOk) {
-                        const err = await results[0]?.value?.json?.().catch(() => ({})) || {};
-                        alert(err.error || err.detail || 'Failed');
+                        // the first section that answered with a reason (memory v1 may
+                        // just 404 - the others say what was wrong with the name)
+                        const told = results.find(r => r.status === 'fulfilled' && r.value.status !== 404)
+                                  || results.find(r => r.status === 'fulfilled');
+                        const err = told ? await told.value.json().catch(() => ({})) : {};
+                        alert(told ? wordsOf(err, told.value.status) : "Can't reach Sapphire. Check that it's running, then reload the page.");
                         return;
                     }
                     // Add the new option to every mind-domain scope dropdown and
@@ -316,7 +321,7 @@ export async function wireAIConfig(modal, t, data) {
                         }
                         if (sel) sel.value = clean;
                     }
-                } catch { alert('Failed to create scope'); }
+                } catch (e) { alert(`Couldn't create scope. ${errWords(e, 'Try again.')}`); }
             },
         };
         renderScopeDropdowns(scopeContainer, scopeDeclarations, t, rendererOptions);

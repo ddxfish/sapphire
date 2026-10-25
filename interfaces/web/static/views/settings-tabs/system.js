@@ -2,12 +2,13 @@
 import { resetAllSettings, resetPrompts, mergeUpdates, resetChatDefaults } from '../../shared/settings-api.js';
 import * as ui from '../../ui.js';
 import { updateScene } from '../../features/scene.js';
+import { wordsOf, responseError } from '../../shared/fetch.js';
 
 // \u2500\u2500\u2500 API Tokens helpers (kept local; small surface, no need to break out) \u2500\u2500\u2500
 
 async function listApiTokens() {
     const res = await fetch('/api/system/api-tokens', { credentials: 'same-origin' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw await responseError(res);
     return (await res.json()).tokens || [];
 }
 
@@ -19,8 +20,7 @@ async function createApiToken(name, persona) {
         body: JSON.stringify({ name, persona: persona || null })
     });
     if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        throw await responseError(res);
     }
     return await res.json();
 }
@@ -30,7 +30,7 @@ async function revokeApiToken(id) {
         method: 'DELETE',
         credentials: 'same-origin'
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw await responseError(res);
 }
 
 function _escapeHtml(s) {
@@ -265,7 +265,7 @@ export default {
                     body: JSON.stringify({ current: cur.value, new: nw.value })
                 });
                 const body = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+                if (!res.ok) throw new Error(wordsOf(body, res.status));
                 pwForm.reset();
                 ui.showToast('Password changed — other devices are logged out', 'success');
             } catch (e) {
@@ -353,7 +353,7 @@ export default {
                 await _renderTokenList(listEl);
                 ui.showToast(`Revoked ${name}`, 'success');
             } catch (e) {
-                ui.showToast(`Revoke failed: ${e.message}`, 'error');
+                ui.showToast(`Couldn't revoke the token. ${e.message}`, 'error');
             }
         });
 
@@ -365,7 +365,7 @@ export default {
                 await resetAllSettings();
                 ui.showToast('All settings reset. Restart to apply.', 'success');
                 ctx.refreshTab();
-            } catch { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(`Couldn't reset settings. ${e.message}`, 'error'); }
         });
 
         el.querySelector('#dz-reset-prompts')?.addEventListener('click', async () => {
@@ -376,7 +376,7 @@ export default {
                 await resetPrompts();
                 ui.showToast('Prompts reset', 'success');
                 updateScene();
-            } catch { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(`Couldn't reset prompts. ${e.message}`, 'error'); }
         });
 
         el.querySelector('#dz-merge-updates')?.addEventListener('click', async () => {
@@ -398,7 +398,7 @@ export default {
                 }
                 updateScene();
                 window.dispatchEvent(new CustomEvent('prompts-changed'));
-            } catch { ui.showToast('Import failed', 'error'); }
+            } catch (e) { ui.showToast(`Couldn't import the new prompts and personas. ${e.message}`, 'error'); }
         });
 
         el.querySelector('#dz-reset-chat')?.addEventListener('click', async () => {
@@ -408,7 +408,7 @@ export default {
             try {
                 await resetChatDefaults();
                 ui.showToast('Chat defaults reset', 'success');
-            } catch { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(`Couldn't reset chat defaults. ${e.message}`, 'error'); }
         });
     }
 };

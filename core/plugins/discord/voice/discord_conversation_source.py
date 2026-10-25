@@ -293,6 +293,14 @@ class DiscordConversationSource:
         if sm is None:
             return ''
         try:
+            # The model's view hides a failed turn's row, so the newest reply
+            # there is the one BEFORE the failure: replayed, it answered the
+            # new question with the old answer. A failed latest turn = nothing.
+            from core.chat.llm_errors import is_error_row
+            stored = sm.get_display_messages_for(chat_name) or []
+            last = next((m for m in reversed(stored) if m.get('role') == 'assistant'), None)
+            if last is not None and is_error_row(last):
+                return ''
             messages = sm.read_chat_messages(chat_name) or []
         except Exception:
             return ''

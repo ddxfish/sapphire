@@ -9,6 +9,7 @@ import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 import { snapScroll } from '../shared/dom-guard.js';
+import { errWords } from '../shared/fetch.js';
 
 const SCOPE_KEY = 'people_scope';
 const DOMAIN = 'people';
@@ -129,7 +130,7 @@ async function renderPeople() {
             try {
                 const resp = await fetch(`/api/knowledge/people/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) { ui.showToast('Deleted', 'success'); await renderPeople(); }
-            } catch (e) { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });
 
@@ -228,6 +229,6 @@ function showPersonModal(person = null) {
             });
             if (resp.ok) { overlay.remove(); ui.showToast(person ? 'Updated' : 'Saved', 'success'); await renderPeople(); }
             else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-        } catch (e) { ui.showToast('Failed', 'error'); }
+        } catch (e) { ui.showToast(errWords(e), 'error'); }
     });
 }

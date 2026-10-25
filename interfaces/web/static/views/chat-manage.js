@@ -15,6 +15,7 @@ import { getIsProc } from '../core/state.js';
 import { switchView } from '../core/router.js';
 import { vaultStatus } from '../shared/vault-api.js';
 import { snapScroll } from '../shared/dom-guard.js';
+import { responseError, errWords } from '../shared/fetch.js';
 
 let container = null;
 let chats = [];
@@ -139,7 +140,7 @@ async function refresh() {
         for (const s of [...selected]) if (!names.has(s)) selected.delete(s);
     } catch (e) {
         console.error('[chat-manage] list failed:', e);
-        ui.showToast('Failed to load chat list', 'error');
+        ui.showToast(`Couldn't load chat list. ${errWords(e, 'Try again.')}`, 'error');
         chats = [];
     }
     render();
@@ -306,7 +307,7 @@ async function doBulkExport() {
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
             body: JSON.stringify({ names: pubNames })
         });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (!resp.ok) throw await responseError(resp);
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');

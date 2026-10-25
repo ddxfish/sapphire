@@ -1,5 +1,5 @@
 // settings-tabs/network.js - SOCKS proxy settings
-import { fetchWithTimeout } from '../../shared/fetch.js';
+import { fetchWithTimeout, errWords } from '../../shared/fetch.js';
 import * as ui from '../../ui.js';
 
 export default {
@@ -84,7 +84,7 @@ export default {
                 await fetchWithTimeout('/api/credentials/socks', { method: 'DELETE' });
                 ui.showToast('Cleared', 'success');
                 this.refreshCreds(el);
-            } catch { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     },
 

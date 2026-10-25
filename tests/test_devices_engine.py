@@ -807,7 +807,8 @@ def test_a_crash_is_a_500_without_its_detail(host):
     def boom():
         raise RuntimeError('stack detail with hunter2-long inside')
     code, detail = _status_of(boom)
-    assert code == 500 and 'hunter2-long' not in detail and 'RuntimeError' in detail
+    assert code == 500 and 'hunter2-long' not in detail and 'RuntimeError' not in detail
+    assert detail.startswith("Sapphire couldn't")
 
 
 def test_the_routes_are_all_behind_login():

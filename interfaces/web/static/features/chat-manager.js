@@ -120,9 +120,9 @@ export async function handleNewChat() {
     } catch (e) {
         console.error('Failed to create chat:', e);
         if (e.message.includes('already exists')) {
-            alert(`Chat already exists! Try a different name.`);
+            ui.showToast('A chat with that name already exists. Pick a different name.', 'error');
         } else {
-            alert(`Failed to create chat: ${e.message}`);
+            ui.showToast(`Couldn't create the chat. ${e.message}`, 'error');
         }
     }
 }
@@ -150,7 +150,7 @@ export async function handleDeleteChat() {
         ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
     } catch (e) {
         console.error('Failed to delete chat:', e);
-        alert(`Failed to delete chat: ${e.message}`);
+        ui.showToast(`Couldn't delete the chat. ${e.message}`, 'error');
     }
 }
 
@@ -168,7 +168,7 @@ export async function handleClearChat() {
         ui.showToast('Chat cleared', 'success');
     } catch (e) {
         console.error('Failed to clear chat:', e);
-        ui.showToast('Failed to clear chat', 'error');
+        ui.showToast(`Couldn't clear the chat. ${e.message}`, 'error');
     }
 }
 
@@ -191,7 +191,7 @@ export async function handleExportChat() {
         ui.showToast('Chat exported', 'success');
     } catch (e) {
         console.error('Failed to export chat:', e);
-        ui.showToast('Failed to export chat', 'error');
+        ui.showToast(`Couldn't export the chat. ${e.message}`, 'error');
     }
 }
 
@@ -212,7 +212,7 @@ export async function handleImportFile(e) {
         // Support both raw array and {messages: []} format
         const messages = Array.isArray(data) ? data : data.messages;
         if (!messages || !Array.isArray(messages)) {
-            ui.showToast('Invalid chat format', 'error');
+            ui.showToast("That file isn't a chat export. Pick a .json file saved with Export in the chat menu.", 'error');
             return;
         }
         
@@ -223,7 +223,9 @@ export async function handleImportFile(e) {
         ui.showToast(`Imported ${messages.length} messages`, 'success');
     } catch (e) {
         console.error('Failed to import chat:', e);
-        ui.showToast('Failed to import chat', 'error');
+        ui.showToast(e instanceof SyntaxError
+            ? "That file isn't a chat export. Pick a .json file saved with Export in the chat menu."
+            : `Couldn't import the chat. ${e.message}`, 'error');
     } finally {
         e.target.value = '';
     }
@@ -266,7 +268,7 @@ export async function handleRestart() {
         showRestartingScreen();
     } catch (e) {
         console.error('Restart failed:', e);
-        alert('Restart request failed: ' + e.message);
+        ui.showToast(`Couldn't restart Sapphire. ${e.message}`, 'error');
     }
 }
 

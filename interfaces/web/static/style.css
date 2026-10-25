@@ -4293,6 +4293,38 @@ div.hb-response-summary {
     line-height: 1.4;
 }
 
+.message.llm-error .message-content {
+    border-left: 3px solid var(--error);
+    padding-left: 10px;
+}
+.llm-error-extra {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 6px;
+}
+.llm-error-fix {
+    background: var(--error-light);
+    border: 1px solid var(--error-border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 3px 12px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.9em;
+}
+.llm-error-fix:hover { border-color: var(--error-border-hover); }
+.llm-error-detail { flex-basis: 100%; font-size: 0.85em; color: var(--text-muted); }
+.llm-error-detail summary { cursor: pointer; width: fit-content; }
+.llm-error-detail pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow: auto;
+    margin: 4px 0 0;
+}
+
 .task-validation-notice {
     margin: 0 0 12px;
     padding: 10px 12px;

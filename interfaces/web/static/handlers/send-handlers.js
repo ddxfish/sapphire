@@ -303,8 +303,12 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             return;
         }
         console.error('Stream failed:', e.message);
-        if (ctl.streamOk) ui.cancelStreaming();
+        // not a Stop: the turn failed and saved its own row (words + Details).
+        // Paint THAT now - the bus refresh skips while this send still holds
+        // the busy flag, and a "Cancelled" partial is the wrong story.
+        if (ctl.streamOk) ui.detachStreaming();
         ui.showToast(e.message, 'error');
+        if (!ctl.headless) { release(); await refresh(false); }
     };
     const liveHandlers = { onChunk, onComplete, onError, onToolStart, onToolEnd, onStreamStarted, onIterationStart, onResync };
 

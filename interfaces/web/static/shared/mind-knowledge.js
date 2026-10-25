@@ -7,6 +7,7 @@ import { showExportDialog, showImportDialog } from './import-export.js';
 import { setupModalClose } from './modal.js';
 import * as ui from '../ui.js';
 import { snapScroll } from './dom-guard.js';
+import { errWords } from './fetch.js';
 
 export async function renderKnowledge(el, tabType, scope) {
     if (!el) return;   // a held refresh draining after a palace↔classic engine swap (D1#3)
@@ -61,7 +62,7 @@ export async function renderKnowledge(el, tabType, scope) {
             });
             if (r.ok) { ui.showToast('Category created', 'success'); await renderKnowledge(el, tabType, scope); }
             else { const err = await r.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-        } catch (e) { ui.showToast('Failed', 'error'); }
+        } catch (e) { ui.showToast(errWords(e), 'error'); }
     });
 
     el.querySelectorAll('.mind-del-tab').forEach(btn => {
@@ -73,7 +74,7 @@ export async function renderKnowledge(el, tabType, scope) {
             try {
                 const r = await fetch(`/api/knowledge/tabs/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (r.ok) { ui.showToast('Deleted', 'success'); await renderKnowledge(el, tabType, scope); }
-            } catch (e) { ui.showToast('Failed', 'error'); }
+            } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });
 
@@ -212,7 +213,7 @@ export async function renderKnowledge(el, tabType, scope) {
                             resolveBtn.closest('.mind-dup-group').remove();
                             await renderKnowledge(el, tabType, scope);
                         }
-                    } catch (e) { ui.showToast('Failed to remove', 'error'); }
+                    } catch (e) { ui.showToast(`Couldn't remove. ${errWords(e, 'Try again.')}`, 'error'); }
                 });
             });
         } catch (e) {
@@ -343,7 +344,7 @@ async function loadEntries(inner, tabId, tabType, scope) {
                 try {
                     const r = await fetch(`/api/knowledge/tabs/${btn.dataset.tabId}/file/${encodeURIComponent(fname)}`, { method: 'DELETE', headers: csrfHeaders() });
                     if (r.ok) { ui.showToast(`Deleted ${fname}`, 'success'); inner.dataset.loaded = ''; await loadEntries(inner, tabId, tabType, scope); }
-                } catch (e) { ui.showToast('Failed', 'error'); }
+                } catch (e) { ui.showToast(errWords(e), 'error'); }
             });
         });
 
@@ -365,11 +366,11 @@ async function loadEntries(inner, tabId, tabType, scope) {
                 try {
                     const r = await fetch(`/api/knowledge/entries/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                     if (r.ok) { ui.showToast('Deleted', 'success'); inner.dataset.loaded = ''; await loadEntries(inner, tabId, tabType, scope); }
-                } catch (e) { ui.showToast('Failed', 'error'); }
+                } catch (e) { ui.showToast(errWords(e), 'error'); }
             });
         });
     } catch (e) {
-        inner.innerHTML = `<div class="mind-empty">Error: ${e.message}</div>`;
+        inner.innerHTML = `<div class="mind-empty">Couldn't load this. ${escHtml(e.message)}</div>`;
     }
 }
 
@@ -414,7 +415,7 @@ function showEntryEditModal(inner, tabId, tabType, scope, entryId, content) {
             });
             if (r.ok) { close(); ui.showToast('Entry updated', 'success'); inner.dataset.loaded = ''; await loadEntries(inner, tabId, tabType, scope); }
             else { const err = await r.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-        } catch (e) { ui.showToast('Failed', 'error'); }
+        } catch (e) { ui.showToast(errWords(e), 'error'); }
     });
 }
 
@@ -462,6 +463,6 @@ function showAddEntryModal(inner, tabId, tabType, scope) {
                 inner.dataset.loaded = '';
                 await loadEntries(inner, tabId, tabType, scope);
             } else { const err = await r.json(); ui.showToast(err.detail || 'Failed', 'error'); }
-        } catch (e) { ui.showToast('Failed', 'error'); }
+        } catch (e) { ui.showToast(errWords(e), 'error'); }
     });
 }

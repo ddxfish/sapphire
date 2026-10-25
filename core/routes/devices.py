@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
 
+from core.http_words import server_error
 from core.auth import require_login, check_endpoint_rate, get_client_ip
 
 logger = logging.getLogger(__name__)
@@ -253,9 +254,7 @@ async def _do(fn, *args, missing=404):
         if isinstance(e, _engine().DeviceError):
             gone = str(e).startswith("There is no device named")
             raise HTTPException(status_code=missing if gone else 400, detail=str(e))
-        logger.error(f"[DEVICES] route failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500,
-                            detail=f"Something went wrong ({type(e).__name__}). The log has the detail.")
+        raise server_error("finish that", e, why=False)   # a device error can carry its key
 
 
 @router.get("/api/devices")

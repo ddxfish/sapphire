@@ -5,6 +5,7 @@ import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
 import { thinkSegments, stripThink, isSeedThink } from './shared/think.js';
+import { errWords } from './shared/fetch.js';
 
 let globalThinkCounter = 0;
 
@@ -709,7 +710,7 @@ const addToolDeleteButton = (acc, toolCallId) => {
         } catch (err) {
             console.error('Failed to remove tool call:', err);
             const { showToast } = await import('./ui.js');
-            showToast('Failed to remove tool call', 'error');
+            showToast(`Couldn't remove tool call. ${errWords(err, 'Try again.')}`, 'error');
         }
     });
     

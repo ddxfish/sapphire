@@ -101,6 +101,11 @@ function _drain() {
 }
 
 function _toast(spec) {
+    // A re-fire of a toast on screen shows again (that's the point of a
+    // re-fire); one already WAITING in line is dropped - ten failures in a
+    // row were ten toasts draining for half a minute.
+    const t = String(spec.text);
+    if (_queue.some(q => String(q.text) === t)) return;
     _queue.push(spec);
     _drain();
 }

@@ -5,6 +5,7 @@ import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { setupModalClose } from '../../shared/modal.js';
 import { ensureExtra } from '../../shared/extras.js';
 import pluginsAPI from '../../shared/plugins-api.js';
+import { responseError } from '../../shared/fetch.js';
 
 // Core plugins hidden from the toggle list: manifest/meta "essential": true
 // (boolean — a group STRING like "memory" marks switchable alternates and
@@ -146,8 +147,7 @@ function _bindReloadClick(el, ctx, reloadBtn, name) {
             const res = await fetch(`/api/plugins/${name}/reload`,
                 { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
             if (!res.ok) {
-                const body = await res.json().catch(() => ({}));
-                throw new Error(body.detail || `HTTP ${res.status}`);
+                throw await responseError(res);
             }
             ui.showToast(`Reloaded ${name}`, 'success');
             await ctx.refreshTab();
@@ -925,8 +925,7 @@ export default {
                         method: 'POST', headers: { 'X-CSRF-Token': csrf },
                     });
                     if (!res.ok) {
-                        const body = await res.json().catch(() => ({}));
-                        throw new Error(body.detail || `HTTP ${res.status}`);
+                        throw await responseError(res);
                     }
                     ui.showToast(`Reloaded ${name}`, 'success');
                     await ctx.refreshTab();

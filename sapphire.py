@@ -571,6 +571,7 @@ class VoiceChatSystem:
         
         self.whisper_recorder = WhisperRecorder()
         self.whisper_client = NullWhisperClient()
+        self.stt_why = None          # words for why STT is down (None = off, or still loading)
 
     def stop_components(self):
         if hasattr(self, 'wake_detector') and self.wake_detector:
@@ -850,6 +851,7 @@ class VoiceChatSystem:
         """Hot-swap STT provider at runtime."""
         if not provider_name or provider_name == 'none':
             from core.stt.stt_null import NullAudioRecorder
+            self.stt_why = None          # off by choice: nothing failed
             if not isinstance(self.whisper_client, NullWhisperClient):
                 logger.info("STT stopped, unloading provider")
                 self._quiesce_recorder()
@@ -860,6 +862,7 @@ class VoiceChatSystem:
         try:
             logger.info(f"Hot-loading STT provider: {provider_name}")
             self.whisper_client = get_stt_provider(provider_name)
+            self.stt_why = None
             # Ensure real recorder if switching from disabled (not needed for router)
             from core.stt.stt_null import NullAudioRecorder
             if provider_name == 'sapphire_router':
@@ -1267,17 +1270,24 @@ class VoiceChatSystem:
         return None
 
     def _publish_stt_fallback_event(self, provider_name, exc):
-        """Emit CONTINUITY_TASK_ERROR when STT fell back to null — mirrors the
-        wakeword pattern in init_components so the UI can surface 'STT silently
-        deaf' instead of lying that it's enabled. H7 fix 2026-04-22."""
+        """A notification when STT fell back to null, so the UI surfaces 'STT
+        silently deaf' instead of lying that it's enabled (H7 fix 2026-04-22).
+        The words also stay on stt_why: the mic button says them when pressed."""
+        if isinstance(exc, ImportError):
+            why = "its Python package isn't installed"
+        else:
+            try:
+                from core.hf_words import why as hf_why
+                why = hf_why(exc)
+            except Exception:
+                why = str(exc)
+            why = why.removeprefix("Failed to initialize STT model: ") or "it failed to load"
+        self.stt_why = (f"Speech-to-text couldn't start ({why}). Pick the engine again in "
+                        f"Settings › STT to retry, or pick another one.")
         try:
-            from core.event_bus import publish, Events
-            publish(Events.CONTINUITY_TASK_ERROR, {
-                "task": "STT",
-                "error": f"STT provider '{provider_name}' failed to initialize "
-                         f"({type(exc).__name__}: {exc}). Sapphire fell back to null "
-                         f"— check provider config and reinitialize via settings.",
-            })
+            from core import notify
+            notify.notify("Speech-to-text couldn't start", 'error', self.stt_why, source='stt',
+                          go={'view': 'settings', 'tab': 'stt'}, key='stt-down')
         except Exception:
             pass
 
@@ -1290,6 +1300,7 @@ class VoiceChatSystem:
             logger.info(f"Initializing STT provider: {provider}")
             try:
                 self.whisper_client = get_stt_provider(provider)
+                self.stt_why = None
                 # Router/API providers don't need local mic — audio comes via browser
                 if provider == 'sapphire_router':
                     from core.stt.stt_null import NullAudioRecorder

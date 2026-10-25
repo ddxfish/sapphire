@@ -5,6 +5,7 @@ import * as Parsing from './ui-parsing.js';
 import * as Streaming from './ui-streaming.js';
 import * as api from './api.js';
 import { lockAnsweredAskCards } from './shared/ask-marker.js';
+import { goTo } from './shared/notify.js';
 
 // DOM references. The chat surface is JS-rendered at boot (surface/surface.js)
 // so #chat-container / #chatbg-overlay don't exist at module-eval time —
@@ -242,7 +243,7 @@ const setPersonaAvatar = (img, personaName) => {
     };
 };
 
-const createToolbar = (idx, total, role = 'user') => {
+const createToolbar = (idx, total, role = 'user', failed = false) => {
     const tb = createElem('div', { class: 'toolbar' });
     const buttons = [
         ['trash-btn', 'trash', '\u{1F5D1}\uFE0F', 'Delete'],
@@ -253,8 +254,9 @@ const createToolbar = (idx, total, role = 'user') => {
     ];
 
     buttons.forEach(([cls, act, icon, title]) => {
-        // Continue resumes the chat's LAST reply in place — offered only there.
-        if (act === 'continue' && !(role === 'assistant' && idx === total - 1)) return;
+        // Continue resumes the chat's LAST reply in place — offered only there,
+        // and never on a failed turn's row (its words aren't hers to go on from).
+        if (act === 'continue' && (failed || !(role === 'assistant' && idx === total - 1))) return;
         const btn = createElem('button', { class: cls, 'data-action': act, 'data-message-index': idx }, icon);
         btn.title = title;
         tb.appendChild(btn);
@@ -269,16 +271,17 @@ const updateToolbars = () => {
         if (!toolbar) return;
         
         const role = msg.classList.contains('assistant') ? 'assistant' : 'user';
+        const failed = msg.classList.contains('llm-error');
         const btns = toolbar.querySelectorAll('button');
         
         if (btns.length === 0) {
-            const newToolbar = createToolbar(i, msgs.length, role);
+            const newToolbar = createToolbar(i, msgs.length, role, failed);
             toolbar.replaceWith(newToolbar);
         } else {
             // The Continue button follows the last reply as messages land.
-            const wantCont = role === 'assistant' && i === msgs.length - 1;
+            const wantCont = role === 'assistant' && i === msgs.length - 1 && !failed;
             if (!!toolbar.querySelector('.continue-btn') !== wantCont) {
-                toolbar.replaceWith(createToolbar(i, msgs.length, role));
+                toolbar.replaceWith(createToolbar(i, msgs.length, role, failed));
                 return;
             }
             btns.forEach(btn => {
@@ -346,7 +349,7 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     }
 
     if (idx !== null) {
-        const toolbar = createToolbar(idx, total, role);
+        const toolbar = createToolbar(idx, total, role, !!(role === 'assistant' && msg.metadata?.error));
         tb.replaceWith(toolbar);
     }
     
@@ -364,6 +367,25 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
             `⚠️ ${msg.metadata.degraded_reason}`
         );
         contentDiv.appendChild(note);
+    }
+
+    // A failed turn's row (core/chat/llm_errors.py): its words above, a Fix it
+    // button when there's a place to go, the raw error folded under Details.
+    const failed = role === 'assistant' && msg.metadata?.error;
+    if (failed) {
+        msgEl.classList.add('llm-error');
+        const box = createElem('div', { class: 'llm-error-extra' });
+        if (failed.go) {
+            const fix = createElem('button', { type: 'button', class: 'llm-error-fix' }, 'Fix it');
+            fix.addEventListener('click', () => goTo(failed.go));
+            box.appendChild(fix);
+        }
+        if (failed.detail) {
+            const d = createElem('details', { class: 'llm-error-detail' });
+            d.append(createElem('summary', {}, 'Details'), createElem('pre', {}, failed.detail));
+            box.appendChild(d);
+        }
+        contentDiv.appendChild(box);
     }
 
     // Add metadata footer for assistant messages — compact line + click-to-

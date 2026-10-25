@@ -6,6 +6,7 @@ import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
 import { openImageModal } from './ui-images.js';
 import { nextThinkCloser, nextThinkOpener, isSeedThink } from './shared/think.js';
+import { errWords } from './shared/fetch.js';
 
 // Streaming state
 let streamMsg = null;
@@ -80,7 +81,7 @@ const createToolAccordionElement = (toolName, toolId, args) => {
             } catch (err) {
                 console.error('Failed to remove tool call:', err);
                 const { showToast } = await import('./ui.js');
-                showToast('Failed to remove tool call', 'error');
+                showToast(`Couldn't remove tool call. ${errWords(err, 'Try again.')}`, 'error');
             }
         });
         
@@ -460,7 +461,7 @@ const doStartTool = (toolId, toolName, args, scrollCallback) => {
                 } catch (err) {
                     console.error('Failed to remove tool call:', err);
                     const { showToast } = await import('./ui.js');
-                    showToast('Failed to remove tool call', 'error');
+                    showToast(`Couldn't remove tool call. ${errWords(err, 'Try again.')}`, 'error');
                 }
             });
             existing.summary.appendChild(deleteBtn);

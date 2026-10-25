@@ -1,4 +1,5 @@
 // shared/plugins-api.js - API calls for plugin management
+import { wordsOf } from './fetch.js';
 
 function csrfHeaders(extra = {}) {
   const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -63,7 +64,7 @@ const pluginsAPI = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Failed to save: ${res.status}`);
+      throw new Error(wordsOf(err, res.status));
     }
     return res.json();
   },

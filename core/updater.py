@@ -536,10 +536,10 @@ class Updater:
         try:
             status = _run_git(['status', '--porcelain=v2', '--branch'], timeout=10)
         except Exception as e:
-            return False, f"git status failed: {e}"
+            return False, f"Sapphire couldn't check its own files before updating ({e}). Try again."
         if status.returncode != 0:
             err = (status.stderr or '').strip() or 'unknown error'
-            return False, f"git status failed: {err}"
+            return False, f"Sapphire couldn't check its own files before updating ({err}). Try again."
 
         dirty = []
         detached = False
@@ -572,14 +572,15 @@ class Updater:
         if dirty:
             sample = ', '.join(dirty[:3])
             more = '' if len(dirty) <= 3 else f' (and {len(dirty) - 3} more)'
-            return False, (f"Working tree has uncommitted changes: {sample}{more}. "
-                           "Commit or stash your work before updating.")
+            return False, (f"Some of Sapphire's own files were changed on this computer ({sample}{more}), "
+                           "so updating would overwrite them. Put them back, or commit or stash them with git, "
+                           "then update.")
 
         # Disk space
         try:
             free_mb = shutil.disk_usage(str(REPO_DIR)).free / (1024 * 1024)
             if free_mb < _MIN_FREE_MB:
-                return False, f"Low disk space ({free_mb:.0f} MB free). Need at least {_MIN_FREE_MB} MB."
+                return False, f"Not enough disk space to update ({free_mb:.0f} MB free, {_MIN_FREE_MB} MB needed). Free some space, then try again."
         except Exception:
             pass  # shutil.disk_usage can fail on exotic filesystems; don't block on that
 
@@ -589,12 +590,12 @@ class Updater:
             fetch = _run_git(['fetch', 'origin', self.branch], timeout=30)
         except subprocess.TimeoutExpired:
             _clear_index_lock()
-            return False, "Couldn't reach upstream (fetch timed out). Check your network and retry."
+            return False, "Couldn't reach GitHub to download the update (it timed out). Check your internet connection, then try again."
         except Exception as e:
-            return False, f"fetch failed: {e}"
+            return False, f"Couldn't download the update ({e}). Check your internet connection, then try again."
         if fetch.returncode != 0:
             err = (fetch.stderr or '').strip() or 'unknown'
-            return False, f"Couldn't reach upstream: {err}"
+            return False, f"Couldn't reach GitHub to download the update ({err}). Check your internet connection, then try again."
 
         try:
             rev = _run_git(['rev-parse', f'origin/{self.branch}'], timeout=5)

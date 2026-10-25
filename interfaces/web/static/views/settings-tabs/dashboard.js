@@ -6,6 +6,7 @@
 import * as ui from '../../ui.js';
 import { listStorePlugins } from '../../shared/store-api.js';
 import { isSafeHref } from '../../shared/url-safety.js';
+import { responseError } from '../../shared/fetch.js';
 
 let updateStatus = null;
 
@@ -367,7 +368,7 @@ let _panelRegistry = [];
 async function _fetchUserPanels() {
     try {
         const res = await fetch('/api/dashboard/widgets');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw await responseError(res);
         const data = await res.json();
         return data.panels || [];
     } catch (e) {
@@ -394,8 +395,7 @@ async function _saveUserPanels(panels) {
         body,
     });
     if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        throw await responseError(res);
     }
 }
 
@@ -1055,7 +1055,7 @@ async function loadSystemInfo(el) {
     const nameEl = el.querySelector('#dash-hero-name');
     try {
         const res = await fetch('/api/dashboard/system-info');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw await responseError(res);
         const d = await res.json();
         if (typeof d.disk_pct === 'number') {
             _moodSignals.diskPct = d.disk_pct;
@@ -1309,7 +1309,7 @@ async function loadMetrics(el, ctx) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: cb.checked })
                 });
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                if (!r.ok) throw await responseError(r);
                 ctx?.commit?.('METRICS_ENABLED', cb.checked);   // the route writes this settings key server-side
                 loadMetricsData(metricsEl, cb.checked);
             } catch { cb.checked = !cb.checked; }

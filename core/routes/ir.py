@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from core.http_words import server_error
 from core.auth import require_login, check_endpoint_rate
 from core.ir import library
 
@@ -19,8 +20,7 @@ def _fail(e):
     """A library reason is the person's to read; anything else is logged and said without its detail."""
     if isinstance(e, library.LibraryError):
         return HTTPException(status_code=400, detail=str(e))
-    logger.error(f"[IR] route failed: {e}", exc_info=True)
-    return HTTPException(status_code=500, detail=f"Something went wrong ({type(e).__name__}). The log has the detail.")
+    return server_error("finish that", e, why=False)
 
 
 async def _body(request):

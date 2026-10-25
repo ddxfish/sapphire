@@ -2,6 +2,7 @@
 import { renderProviderTab, renderProviderCompact, attachProviderListeners, mergeRegistryProviders, providerSignature } from '../../shared/provider-selector.js';
 import { editableFocused } from '../../shared/dom-guard.js';
 import { gpuNotice } from '../../shared/gpu-notice.js';
+import { escapeHtml } from '../../shared/modal.js';
 
 let _mergedConfig = null;
 
@@ -115,7 +116,7 @@ async function updateVadStatusBadge(el) {
         badge.textContent = label;
         badge.style.color = color;
     } catch (e) {
-        badge.textContent = '? status check failed';
+        badge.textContent = "? couldn't check — reload the page";
         badge.style.color = '#e07060';
     }
 }
@@ -139,7 +140,7 @@ function attachVadTestListener(el) {
             });
             const data = await resp.json();
             if (!data.ok) {
-                resultEl.innerHTML = `<span style="color:#e07060">✗ ${data.error || 'test failed'}</span>`;
+                resultEl.innerHTML = `<span style="color:#e07060">✗ ${escapeHtml(data.error || "The test didn't finish.")}</span>`;
             } else {
                 const colorMap = { comfortable: '#5fd17a', marginal: '#e0c068', too_high: '#e07060' };
                 const color = colorMap[data.verdict] || '#fff';
@@ -151,7 +152,7 @@ function attachVadTestListener(el) {
                     <div style="margin-top:6px;color:${color}">${data.suggestion}</div>`;
             }
         } catch (e) {
-            resultEl.innerHTML = `<span style="color:#e07060">✗ test request failed: ${e.message}</span>`;
+            resultEl.innerHTML = `<span style="color:#e07060">✗ ${escapeHtml(e.message)}</span>`;
         } finally {
             btn.disabled = false;
             btn.textContent = originalLabel;
