@@ -4,6 +4,7 @@
 # Registers hooks, voice commands, and (later) tools/web/schedule.
 
 import json
+import inspect
 import logging
 import os
 import re
@@ -274,6 +275,10 @@ class PluginLoader:
         self._watcher_thread = None
         # Route registry: {plugin_name: [(method, compiled_regex, param_names, handler_func), ...]}
         self._routes: Dict[str, list] = {}
+        # Socket registry: {plugin_name: {path: async handler}}, and the live
+        # handler tasks per plugin as {task: loop} so unload can end them
+        self._sockets: Dict[str, dict] = {}
+        self._live_sockets: Dict[str, dict] = {}
         # Daemon event source registry: {plugin_name: [source_defs]}
         self._event_sources: Dict[str, list] = {}
         # Daemon reply handlers: {plugin_name: callable(task, event_data_dict, response_text)}
@@ -994,6 +999,11 @@ class PluginLoader:
         if routes:
             self._register_routes(name, plugin_dir, routes)
 
+        # Register WebSockets (/ws/plugin/<name>/<path>)
+        sockets = capabilities.get("sockets", [])
+        if sockets:
+            self._register_sockets(name, plugin_dir, sockets)
+
         # Register providers (TTS, STT, Embedding, LLM)
         providers_decl = capabilities.get("providers", {})
         if providers_decl:
@@ -1350,6 +1360,7 @@ class PluginLoader:
         if self._function_manager:
             self._function_manager.unregister_plugin_tools(name)
         self._unregister_routes(name)
+        self._unregister_sockets(name)
         self._remove_pkg_alias(name, self._plugins.get(name, {}))
 
         # Unregister dashboard widgets contributed by this plugin.
@@ -2431,6 +2442,66 @@ class PluginLoader:
             if name in self._routes:
                 del self._routes[name]
                 logger.debug(f"[PLUGINS] Unregistered routes for: {name}")
+
+    def _register_sockets(self, name: str, plugin_dir: Path, sockets: list):
+        """Register WebSocket handlers declared in the manifest:
+        [{"path": "view", "handler": "routes/view.py:view"}] -> /ws/plugin/<name>/view.
+        A handler is `async def view(websocket, settings)`; core has already
+        checked the login and the Origin and accepted the socket."""
+        found = {}
+        ns_cache = {}
+        for sock in sockets:
+            path = str(sock.get("path", "")).strip("/")
+            ref = sock.get("handler", "")
+            if not path or not ref:
+                logger.warning(f"[PLUGINS] {name}: socket missing path or handler")
+                continue
+            file_path, _, func_name = ref.rpartition(":") if ":" in ref else (ref, "", "handle")
+            handler = self._load_handler(plugin_dir, file_path, func_name, ns_cache=ns_cache)
+            if not handler:
+                logger.warning(f"[PLUGINS] {name}: failed to load socket handler '{ref}'")
+                continue
+            if not inspect.iscoroutinefunction(handler):
+                logger.warning(f"[PLUGINS] {name}: socket handler '{ref}' must be async def")
+                continue
+            found[path] = handler
+            logger.debug(f"[PLUGINS] Registered socket: /ws/plugin/{name}/{path}")
+        if found:
+            with self._lock:
+                self._sockets[name] = found
+
+    def _unregister_sockets(self, name: str):
+        """Drop a plugin's socket handlers and end its live sockets: a
+        disabled or reloading plugin never keeps old code on an open socket."""
+        with self._lock:
+            self._sockets.pop(name, None)
+            live = self._live_sockets.pop(name, {})
+        for task, loop in live.items():
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass                                   # that loop is already gone
+        if live:
+            logger.info(f"[PLUGINS] {name}: closed {len(live)} open socket(s)")
+
+    def get_socket_handler(self, plugin_name: str, path: str) -> Optional[Callable]:
+        with self._lock:
+            return (self._sockets.get(plugin_name) or {}).get(path.strip("/"))
+
+    def socket_opened(self, plugin_name: str, task, loop, cap: int) -> bool:
+        """Count a live socket's handler task in; False when the plugin is at its cap."""
+        with self._lock:
+            if plugin_name not in self._sockets:
+                return False
+            live = self._live_sockets.setdefault(plugin_name, {})
+            if len(live) >= cap:
+                return False
+            live[task] = loop
+            return True
+
+    def socket_closed(self, plugin_name: str, task):
+        with self._lock:
+            (self._live_sockets.get(plugin_name) or {}).pop(task, None)
 
     def get_route_handler(self, plugin_name: str, method: str, path: str) -> Optional[Tuple[Callable, dict, dict]]:
         """Find a matching route handler. Returns (handler_func, path_params,

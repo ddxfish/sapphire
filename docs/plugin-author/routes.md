@@ -139,6 +139,39 @@ def handle_capture(request_id: str, body: dict, **_) -> dict:
 - Handlers can be sync or async — async handlers are awaited directly, sync handlers run in a threadpool
 - Path parameters only match single path segments (no slashes)
 
+## WebSockets
+
+For a live two-way channel (a stream of frames down, a stream of input up) a
+route is the wrong shape: the rate meter would stop it. Declare a socket:
+
+```json
+"capabilities": {
+  "sockets": [{"path": "view", "handler": "routes/view.py:view"}]
+}
+```
+
+It mounts at `/ws/plugin/{plugin_name}/view` (`wss://` when the UI is https).
+Core checks the login (session cookie and same Origin, like conversation mode),
+accepts, and calls your handler, which must be `async`:
+
+```python
+async def view(websocket, settings):
+    await websocket.send_json({"hello": True})
+    while True:
+        msg = await websocket.receive_json()
+        ...
+```
+
+- Return (or let `WebSocketDisconnect` rise) to end it; core closes the socket.
+- Unloading or reloading the plugin cancels every open socket's handler
+  (close code 4410). Clean up in `try/finally`.
+- At most 8 open sockets per plugin; more close with 4429.
+- Close codes from core: 4401 not logged in, 4404 no such socket, 4410 the
+  plugin went away, 1011 the handler raised.
+- No bearer tokens and no CSRF token: the Origin check is the CSRF guard.
+- A socket handler file is its own namespace, separate from your routes'
+  files; share state through your plugin's own modules.
+
 ## Reference for AI
 
 - Declare: `capabilities.routes` = `[{method: GET|POST|PUT|DELETE (default GET), path (supports {param}, single-segment match only), handler: "file.py:function" (default function: handle), media: bool (optional; a file door for <video>/<audio>/<img> — its GETs skip the rate meter)}]`. Mounted at `/api/plugin/{plugin_name}/{path}`.
@@ -149,3 +182,4 @@ def handle_capture(request_id: str, body: dict, **_) -> dict:
 - Enforced, not disableable: session auth (`require_login`), CSRF on POST/PUT/DELETE from browser sessions, rate limit 60 GET / 30 non-GET per minute per plugin (GETs on `media: true` routes exempt — serve the file with a `FileResponse`, which does HTTP Range).
 - Bearer opt-in: `user/plugin_state/{plugin}_mcp_key.json` = `{"key": "..."}` lets a matching `Authorization: Bearer` header bypass session login (rate-bucketed by token hash). Additive only — session CSRF can't be weakened.
 - Routes register on load, drop on unload, re-register on hot reload.
+- Sockets: `capabilities.sockets` = `[{path, handler: "file.py:async_fn"}]` -> `/ws/plugin/{plugin_name}/{path}`; handler `async def fn(websocket, settings)` gets an ACCEPTED Starlette WebSocket; core does login+Origin, cap 8/plugin (4429), 4404 unknown, 4410 on plugin unload (handler task cancelled), 1011 on raise. No bearer, no CSRF header.

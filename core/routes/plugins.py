@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 
 import config
@@ -2633,6 +2633,56 @@ def _check_plugin_bearer(plugin_name: str, request: Request) -> bool:
     if not expected:
         return False
     return secrets.compare_digest(token, expected)
+
+
+SOCKETS_PER_PLUGIN = 8     # open WebSockets one plugin may hold at once
+
+
+@router.websocket("/ws/plugin/{plugin_name}/{path:path}")
+async def plugin_socket(websocket: WebSocket, plugin_name: str, path: str):
+    """A plugin's own WebSocket (manifest `capabilities.sockets`). Core does the
+    door the way /ws/conversation does - session cookie + Origin == Host, no
+    bearer - then hands the accepted socket to `await handler(websocket,
+    settings)`. The handler runs as its own task so unloading the plugin can
+    cancel it (plugin_loader._unregister_sockets). Close codes: 4401 not
+    logged in, 4404 no such socket, 4429 the plugin's sockets are full,
+    4410 the plugin went away mid-socket."""
+    from core.auth import require_login_ws
+    from core.plugin_loader import plugin_loader
+
+    if not await require_login_ws(websocket):
+        return                                           # closed 4401 inside
+    handler = plugin_loader.get_socket_handler(plugin_name, path)
+    await websocket.accept()
+    if handler is None:
+        await websocket.close(code=4404)
+        return
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(handler(websocket, settings=plugin_loader.get_plugin_settings(plugin_name)))
+    if not plugin_loader.socket_opened(plugin_name, task, loop, SOCKETS_PER_PLUGIN):
+        task.cancel()
+        await websocket.close(code=4429)
+        return
+    code = 1000
+    try:
+        await task
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise                                        # the server itself is stopping
+        code = 4410
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning(f"[PLUGINS] {plugin_name} socket '{path}' failed: {e!r}")
+        code = 1011
+    finally:
+        plugin_loader.socket_closed(plugin_name, task)
+        if not task.done():
+            task.cancel()
+    try:
+        await websocket.close(code=code)
+    except Exception:
+        pass                                             # already closed by the peer or the handler
 
 
 @router.api_route("/api/plugin/{plugin_name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
