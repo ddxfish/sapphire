@@ -70,6 +70,12 @@ def _privacy_excluded(rel: str) -> bool:
     # MCP keys above, and local backups are plaintext by design.
     if rel.endswith('sapphire-health.token'):
         return True
+    # browser/ — the browser plugin's Chromium profiles (2026-10-25): live
+    # session cookies for every site she or the user logged into there, plus
+    # history and cache. Same class as the keys above; a restore simply
+    # starts her browser logged out.
+    if rel == 'browser' or rel.startswith('browser/'):
+        return True
     return False
 
 

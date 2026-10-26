@@ -1,4 +1,5 @@
-// setup-steps/look.js - her look: the Visual tab as it is (themes apply live), and the default persona.
+// setup-steps/look.js - her look: the Visual tab in its wizard shape (colors, type and a
+// background in the open, the rest folded; everything applies live), and the default persona.
 import appearanceTab from '../settings-tabs/appearance.js';
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import { refreshInitData } from '../../shared/init-data.js';
@@ -10,12 +11,15 @@ export default w => ({
 
     async render(body) {
         body.innerHTML = `
-            <div class="setup-sub" data-tab="appearance"></div>
+            <section class="setup-sub" data-tab="appearance">
+                <h3>Her look <span class="setup-sub-note">Colors, type and a background. Each applies as you click.</span></h3>
+                <div class="setup-sub-body"></div>
+            </section>
             <section class="setup-sub">
                 <h3>Default persona <span class="setup-sub-note">Who she is in a new chat. Personas are made under Personas; this only picks the default.</span></h3>
                 <select id="setup-persona"><option value="">Loading…</option></select>
             </section>`;
-        w.host.mount(appearanceTab, body.querySelector('[data-tab="appearance"]'));
+        w.host.mount(appearanceTab, body.querySelector('[data-tab="appearance"] .setup-sub-body'));
         const sel = body.querySelector('#setup-persona');
         try {
             const d = await fetchWithTimeout('/api/personas', {}, 15000);
@@ -36,7 +40,7 @@ export default w => ({
     leave: () => w.save(),
 
     unmount(body) {
-        const el = body.querySelector('[data-tab="appearance"]');
+        const el = body.querySelector('[data-tab="appearance"] .setup-sub-body');
         if (el) w.host.unmount(appearanceTab, el);
     },
 });

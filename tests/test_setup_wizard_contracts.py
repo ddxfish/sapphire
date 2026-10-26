@@ -103,6 +103,28 @@ def test_consent_and_name_guards():
     assert "if (v && v !== DEFAULT_NAME && v !== (ctx.settings.DEFAULT_USERNAME || '')) ctx.markChanged('DEFAULT_USERNAME', v);" in y
 
 
+def test_look_step_is_theme_font_background_and_one_fold():
+    a = _src('views/settings-tabs/appearance.js')
+    assert "import { renderFold } from '../../shared/provider-selector.js';" in a
+    assert "if (ctx.wizard) {" in a and "renderFold(themePanel + title('Motion', false) + motion + options)" in a
+    # Settings keeps the full layout from the same module
+    assert "${colors}${themePanel}${type}${title('Background &amp; Motion')}${scene}${motion}${options}" in a
+    look = _src('views/setup-steps/look.js')
+    assert 'Her look' in look
+    assert "w.host.mount(appearanceTab, body.querySelector('[data-tab=\"appearance\"] .setup-sub-body'));" in look
+
+
+def test_next_step_every_door_finishes_first():
+    n = _src('views/setup-steps/next.js')
+    assert "import { burst } from '../../shared/confetti.js';" in n and 'burst();' in n
+    assert 'href=' not in n                                           # no plain links: a door marks setup complete
+    assert "if (b.dataset.door) w.finishTo(DOORS[b.dataset.door]);" in n
+    assert 'data-door="chat"' in n and "prompts: { view: 'prompts' }" in n and "devices: { tab: 'devices' }" in n
+    v = _src('views/setup.js')
+    assert "async function finish(_step, to = {}) {" in v and "finishTo: to => finish(null, to)," in v
+    assert "else if (to.tab) w.navigate(to.tab);" in v and "else switchView(to.view || 'chat');" in v
+
+
 def test_featured_step_toggles_live_and_installs_first():
     p = _src('views/setup-steps/plugins.js')
     assert "const ok = await ensureExtra(`plugin:${p.name}`);" in p

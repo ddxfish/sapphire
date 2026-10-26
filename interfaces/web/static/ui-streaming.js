@@ -4,6 +4,7 @@ import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries }
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
+import { parseStageMarker, buildStageCards } from './shared/stage-marker.js';
 import { openImageModal } from './ui-images.js';
 import { nextThinkCloser, nextThinkOpener, isSeedThink } from './shared/think.js';
 import { errWords } from './shared/fetch.js';
@@ -528,7 +529,9 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     // Players / download buttons ride their own marker (shared/files-marker.js).
     const { groups: fileGroups, text: filesStripped } = parseFilesMarker(galleryStripped);
     // A question card (ask_user) rides its own (shared/ask-marker.js).
-    const { cards: askCards, text: shownResult } = parseAskMarker(filesStripped);
+    const { cards: askCards, text: askStripped } = parseAskMarker(filesStripped);
+    // An app opened beside the chat (open_stage) rides its own (shared/stage-marker.js).
+    const { cards: stageCards, text: shownResult } = parseStageMarker(askStripped);
 
     if (!toolData) {
         // Fallback: create accordion now
@@ -574,6 +577,7 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
         let anchor = gallery || toolData.acc;
         buildFilesRows(fileGroups).forEach(row => { anchor.after(row); anchor = row; });
         buildAskCards(askCards).forEach(card => { anchor.after(card); anchor = card; });
+        buildStageCards(stageCards).forEach(card => { anchor.after(card); anchor = card; });
     }
 
     if (scrollCallback) scrollCallback();

@@ -52,10 +52,26 @@ function initResizer(container) {
     };
 }
 
+// The stage (2026-10-25, tmp/stage-plan.md): one app beside the conversation,
+// left of the rail. A mode opts in with `stage: true` (chat does); the column
+// stays hidden until surface/stage.js mounts a tenant. Its gutter is NOT an
+// .sb-resizer (initResizer takes the first one) and nothing in it has an id:
+// a Surface can be rendered more than once on a page.
+const STAGE = `
+                <section class="chat-stage" hidden data-keeps-focus>
+                    <div class="chat-stage-bar">
+                        <span class="chat-stage-title"></span>
+                        <button type="button" class="sb-icon-btn chat-stage-close" title="Close the stage">&#x2715;</button>
+                    </div>
+                    <div class="chat-stage-mount"></div>
+                </section>
+                <div class="stage-resizer" hidden title="Drag to resize the stage"></div>`;
+
 export function renderSurface(container, mode) {
     if (!container || !mode) return;
     container.innerHTML = `
             <div class="chat-body${mode.cssClass ? ' ' + mode.cssClass : ''}">
+                ${mode.stage ? STAGE : ''}
                 <div class="chat-main">
                     ${mode.mainPane || ''}
                     <div class="form-wrapper">

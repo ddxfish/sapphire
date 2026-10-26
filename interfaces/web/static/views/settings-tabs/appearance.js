@@ -2,12 +2,15 @@
 // Appearance settings use localStorage (client-side only), except data-key rows.
 // P1 of themes-v2 (plan: tmp/themes-v2-plan.md): true miniature theme cards via
 // [data-theme] scoping, font preset cards, scene library surfaced here.
+// Under ctx.wizard (the setup wizard's Look step) the tab paints its compact
+// shape: colors, type and a background in the open, the rest in one Advanced fold.
 
 import { mountScenePicker } from '../../shared/scene-picker.js';
 import { applyBackground, setDefaultBackground } from '../../features/chat-settings.js';
 import { updateSettingsBatch } from '../../shared/settings-api.js';
 import { applyTheme, fetchThemes, currentThemeId, settingKey } from '../../core/theme.js';
 import { FONT_PRESETS, fontStatus, ensureFont } from '../../shared/fonts.js';
+import { renderFold } from '../../shared/provider-selector.js';
 
 let _allThemes = [];
 
@@ -24,14 +27,13 @@ export default {
         const avatars = ctx.getValue('AVATARS_IN_CHAT') ?? true;
         const iconColor = ctx.getValue('ICON_COLOR') || '';
 
-        return `
-        <div class="appearance-page">
+        const colors = `
             <div class="setting-section-title">Colors</div>
             <div class="theme-grid" id="theme-grid">
                 <div class="text-muted" style="font-size:var(--font-sm);padding:12px">Loading themes...</div>
-            </div>
-            <div id="theme-settings-panel" style="display:none"></div>
-
+            </div>`;
+        const themePanel = `<div id="theme-settings-panel" style="display:none"></div>`;
+        const type = `
             <div class="setting-section-title" style="margin-top:20px">Type</div>
             <div class="font-grid" id="font-grid">
                 ${FONT_PRESETS.map(f => `
@@ -42,11 +44,11 @@ export default {
                         <span class="font-dl" hidden title="Downloads on first use (~300KB, OFL)">&#x2913;</span>
                         <div class="theme-check">✓</div>
                     </div>`).join('')}
-            </div>
-
-            <div class="setting-section-title" style="margin-top:20px">Background &amp; Motion</div>
+            </div>`;
+        const scene = `
             <div class="setting-help" style="margin-bottom:8px">Global underlay &mdash; shown whenever a chat has no scene of its own. A chat's scene (set from the chat sidebar) always wins.</div>
-            <div id="visual-scene-mount"></div>
+            <div id="visual-scene-mount"></div>`;
+        const motion = `
             <div class="setting-help" style="margin:14px 0 8px">Ambient motion behind chat &mdash; runs over scenes too, pauses while the tab is hidden.</div>
             <div class="motion-row" id="motion-row"><div class="text-muted" style="font-size:var(--font-sm)">Loading&hellip;</div></div>
             <div class="motion-speed-row">
@@ -62,8 +64,8 @@ export default {
                     <option value="1" selected>Normal</option>
                     <option value="1.75">High</option>
                 </select>
-            </div>
-
+            </div>`;
+        const options = `
             <div class="setting-section-title" style="margin-top:20px">Options</div>
             <div class="settings-grid">
                 <div class="setting-row">
@@ -112,9 +114,8 @@ export default {
                         </label>
                     </div>
                 </div>
-            </div>
-        </div>
-
+            </div>`;
+        const style = `
         <style>
             /* full-width like the other settings tabs (Krem 2026-08-30);
                the auto-fill grids below add columns on wide screens */
@@ -187,6 +188,12 @@ export default {
             .theme-setting-input select, .theme-setting-input input[type="range"] { min-width: 120px; }
             .theme-setting-input input[type="checkbox"] { width: 16px; height: 16px; }
         </style>`;
+        const title = (t, top = true) => `<div class="setting-section-title"${top ? ' style="margin-top:20px"' : ''}>${t}</div>`;
+        if (ctx.wizard) {
+            return `<div class="appearance-page">${colors}${type}${title('Background')}${scene}
+                ${renderFold(themePanel + title('Motion', false) + motion + options)}</div>${style}`;
+        }
+        return `<div class="appearance-page">${colors}${themePanel}${type}${title('Background &amp; Motion')}${scene}${motion}${options}</div>${style}`;
     },
 
     async attachListeners(ctx, el) {

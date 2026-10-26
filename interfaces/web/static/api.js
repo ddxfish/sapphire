@@ -249,6 +249,10 @@ const processSSEData = (data, handlers) => {
     }
     
     if (data.type === 'tool_end') {
+        // open_stage: only the tab running this stream hears it (shared/stage-marker.js)
+        if (Array.isArray(data.stage) && data.stage.length) {
+            document.dispatchEvent(new CustomEvent('sapphire:stage_open', { detail: data.stage }));
+        }
         if (onToolEnd) {
             onToolEnd(data.id, data.name, data.result, data.error);
         } else {

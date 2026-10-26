@@ -83,33 +83,8 @@ def _screen_note():
 
 
 def _no_surface():
-    """Why no card can be drawn for THIS turn, or ''. An agent's run, a
-    chatless background task and a turn that came in over MCP have no chat
-    bubble for the card to land in: the tool used to say "Card shown" to all
-    three and the agent ended its turn waiting for an answer that could never
-    come (seam scout, 2026-10-07)."""
-    try:
-        from core import mcp_server
-        if mcp_server.answering.get():
-            return "this turn came in over MCP - the client sees text, not a card"
-    except Exception:
-        pass
-    try:
-        from core.chat.stream_brain import get_override
-        o = get_override() or {}
-        if o.get('agent'):
-            return "an agent's run has no chat bubble for a card"
-        if o.get('ephemeral'):
-            return "a chatless background turn has no chat bubble for a card"
-    except Exception:
-        pass
-    try:
-        from core.api_fastapi import get_system
-        if not (get_system().llm_chat.session_manager._effective_chat_name() or ''):
-            return "there is no chat for a card to land in"
-    except Exception:
-        pass
-    return ''
+    from core.ui_markers import no_surface
+    return no_surface()
 
 
 def execute(function_name, arguments, config):

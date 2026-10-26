@@ -61,7 +61,9 @@ export function claimOrgans({ railSlot, composerSlot }, ownerId, chatName = null
     _holder = null;
 
     const rail = document.getElementById('chatbg');
-    const formWrap = document.querySelector('#view-chat .form-wrapper');
+    // The chat column's OWN composer: a stage tenant beside it (surface/stage.js)
+    // may carry a .form-wrapper of its own and must never be the one taken.
+    const formWrap = document.querySelector('#view-chat .chat-body > .chat-main > .form-wrapper');
     if (!rail || !formWrap || !railSlot || !composerSlot) return false;
 
     _records.push({ node: rail, parent: rail.parentNode, next: rail.nextSibling });

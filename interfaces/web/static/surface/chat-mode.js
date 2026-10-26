@@ -10,6 +10,7 @@
 export const chatMode = {
     id: 'chat',
     accordionNs: 'chat-sidebar',
+    stage: true,                     // an app may open beside the chat (surface/stage.js)
 
     mainPane: `
                     <div id="chatbg">
@@ -86,6 +87,11 @@ export const chatMode = {
                             </div>
                             </div>
                             <div class="sb-actions-right">
+                            <!-- Stage: open an app beside the chat (surface/stage.js) -->
+                            <div class="sb-stage-pick" id="sb-stage-pick">
+                                <button type="button" id="sb-stage-btn" class="sb-icon-btn" title="Stage &#8212; open an app beside the chat">&#x1F5A5;&#xFE0E;</button>
+                                <div class="sb-stage-menu" id="sb-stage-menu" hidden></div>
+                            </div>
                             <!-- Vault toggle — right-aligned away from the chat tools; glyph
                                  tracks vault state (scene.js poll): sealed U+1F512, open U+1F513 -->
                             <button type="button" id="sb-privacy-eye" class="sb-icon-btn" title="Private mode off &#8212; click to unlock the vault">&#x1F512;&#xFE0E;</button>

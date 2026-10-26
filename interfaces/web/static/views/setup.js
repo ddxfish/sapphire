@@ -67,6 +67,8 @@ const w = {
         switchView('settings');
     },
     repaint: () => stepper?.repaint(),
+    // The last step's doors: setup is complete the moment the user walks through one.
+    finishTo: to => finish(null, to),
 };
 
 // A step that IS one Settings tab.
@@ -142,7 +144,8 @@ function paintDownloads() {
 }
 
 // ── Doors out ──
-async function finish() {
+// `to` = { view } (a nav view, the chat by default) | { tab } (a Settings tab) | { run } (a plugin wizard).
+async function finish(_step, to = {}) {
     try { await w.putState({ complete: true, step: '' }); }
     catch (e) { showToast(`Setup could not be marked complete: ${e.message}`, 'error'); return; }
     eventBus.dispatch('setup_complete', {});
@@ -150,7 +153,9 @@ async function finish() {
         const main = await import('../main.js');
         await main.fullResync();
     } catch (e) { console.warn('[setup] resync after finish failed:', e); }
-    switchView('chat');
+    if (to.run) to.run();
+    else if (to.tab) w.navigate(to.tab);
+    else switchView(to.view || 'chat');
     if (needsRestart) showToast('An audio device changed: that applies after a restart (Settings › System).', 'warning', 8000);
 }
 

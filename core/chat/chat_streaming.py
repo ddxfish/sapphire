@@ -5,6 +5,7 @@ import time
 from typing import Generator, Union, Dict, Any
 import config
 from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text
+from core.ui_markers import stage_cards
 from core import think as _think
 from .llm_providers import LLMResponse, get_generation_params
 from core.event_bus import publish, Events
@@ -1083,13 +1084,17 @@ class StreamingChat:
                             publish(Events.TOOL_COMPLETE, {"name": function_name, "success": True})
 
                             # Emit typed tool_end event
-                            yield {
+                            end = {
                                 "type": "tool_end",
                                 "id": tool_call_id,
                                 "name": function_name,
                                 "result": clean_result[:500] if len(clean_result) > 500 else clean_result,
                                 "error": False
                             }
+                            stage = stage_cards(result_str)       # open_stage: the asking tab opens it now
+                            if stage:
+                                end["stage"] = stage
+                            yield end
 
                             wrapped_msg = provider.format_tool_result(
                                 tool_call_id,

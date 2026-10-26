@@ -4,6 +4,7 @@ import * as Images from './ui-images.js';
 import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
 import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
+import { parseStageMarker, buildStageCards } from './shared/stage-marker.js';
 import { thinkSegments, stripThink, isSeedThink } from './shared/think.js';
 import { errWords } from './shared/fetch.js';
 
@@ -725,7 +726,8 @@ const renderToolResult = (el, part) => {
         parseGalleryMarker(part.content || part.result || '');
     const { groups: fileGroups, text: filesStripped } = parseFilesMarker(galleryStripped);
     // A question card (ask_user) rides its own marker (shared/ask-marker.js).
-    const { cards: askCards, text: fullResult } = parseAskMarker(filesStripped);
+    const { cards: askCards, text: askStripped } = parseAskMarker(filesStripped);
+    const { cards: stageCards, text: fullResult } = parseStageMarker(askStripped);
 
     // Get truncation limit based on tool
     const maxLen = toolName === 'web_search' ? 1000 :
@@ -779,6 +781,7 @@ const renderToolResult = (el, part) => {
         appendGallery(el, galleryEntries, galleryTitle);
         appendFiles(el, fileGroups);
         appendAskCards(el, askCards);
+        buildStageCards(stageCards).forEach(card => el.appendChild(card));
         return;
     }
 
@@ -809,6 +812,7 @@ const renderToolResult = (el, part) => {
     appendGallery(el, galleryEntries, galleryTitle);
     appendFiles(el, fileGroups);
     appendAskCards(el, askCards);
+    buildStageCards(stageCards).forEach(card => el.appendChild(card));
 };
 
 // Players + download buttons — the ONE renderer (shared/files-marker.js).

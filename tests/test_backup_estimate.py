@@ -37,6 +37,8 @@ def test_privacy_floor_always_excluded():
     assert _privacy_excluded("plugins/discord_mcp_key.json")
     assert _privacy_excluded("mcp_client.json")
     assert _privacy_excluded("sapphire-health.token")
+    assert _privacy_excluded("browser/sapphire/Default/Cookies")      # the browser plugin's live sessions
+    assert not _privacy_excluded("browsers.json")
     assert not _privacy_excluded("history/sapphire_history.db")
 
 

@@ -23,6 +23,7 @@ import {
 } from '../shared/scope-dropdowns.js';
 import { deferWhileEditing, editableFocused } from '../shared/dom-guard.js';
 import { providerOptions, refreshModelControls, readModel } from '../shared/llm-picker.js';
+import { initStage, setStageVisible } from '../surface/stage.js';
 
 let sidebarLoaded = false;
 let _saveInFlight = 0;
@@ -62,6 +63,8 @@ export default {
     init(container) {
         // Agent pill bar
         initAgentStatus();
+        // The stage: an app beside the chat (surface/stage.js)
+        initStage(container);
 
         // Sidebar collapse/expand
         const toggle = container.querySelector('#chat-sidebar-toggle');
@@ -479,6 +482,7 @@ export default {
     },
 
     async show() {
+        setStageVisible(true);
         if (_docClickHandler) document.addEventListener('click', _docClickHandler);
         if (_personaHandler) window.addEventListener('persona-loaded', _personaHandler);
         await steerOffGameChat();
@@ -491,6 +495,7 @@ export default {
     },
 
     hide() {
+        setStageVisible(false);
         if (_docClickHandler) document.removeEventListener('click', _docClickHandler);
         if (_personaHandler) window.removeEventListener('persona-loaded', _personaHandler);
     }

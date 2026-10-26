@@ -381,6 +381,8 @@ def _sse_line(event):
     elif t == "tool_end":
         out = {"type": "tool_end", "id": event.get("id"), "name": event.get("name"),
                "result": event.get("result", ""), "error": event.get("error", False)}
+        if event.get("stage"):
+            out["stage"] = event["stage"]                # open_stage payloads (core/ui_markers.stage_cards)
     elif t == "reload":
         out = {"type": "reload"}
     elif t == "notice":

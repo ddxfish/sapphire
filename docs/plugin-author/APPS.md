@@ -163,6 +163,31 @@ Groups: `chat`, `personas`, `triggers`, `mind`, `settings`. An unrecognized grou
 
 **Important:** Do NOT inject nav items via DOM manipulation (`document.createElement`, `insertBefore`, etc.). Use `"nav": true` in your manifest. Sapphire handles nav item creation, view container setup, and router registration automatically.
 
+## The Stage (beside the chat)
+
+An app can also open on the Chat page's **stage**: a column left of the
+conversation, so the user sees it while they talk to her. Opt in with `places`:
+
+```json
+"app": {"label": "Browser", "icon": "🌐", "places": ["apps", "stage"]}
+```
+
+- `places` absent = `["apps"]` (the Apps grid only, as before).
+- The user opens it from the 🖥 picker in the chat sidebar header; Sapphire
+  opens it with the core `open_stage` tool (a card in her reply; the tab that
+  ran her turn opens it at once).
+- The same module mounts there: `render(el, ctx)` returning a cleanup.
+  `ctx.chat` is `{name, private}` of the chat beside it and `ctx.onChange(fn)`
+  tells you when that changes. The Apps page passes no ctx.
+- Core enforces, so you don't have to: a private chat never has a stage (the
+  app is torn down when the chat is or becomes private); the app only runs
+  while the Chat view is on screen; what's open is per browser tab.
+- Your app must not: activate a chat or borrow the chat rail
+  (`surface/organs.js`), capture anything but its own element, or subscribe
+  to content events (`voice_turn_*`) — address a chat by `ctx.chat.name`.
+- The stage holds keyboard focus (`data-keeps-focus`), so the composer won't
+  pull focus away from your app after her turn.
+
 ## How It Works
 
 - The Apps nav item only appears if at least one non-nav plugin has an app
@@ -191,3 +216,4 @@ PLUGIN APPS:
 - nav: absent = Apps grid tile; `true` = own navrail icon (max 3 promoted — overflow falls back to the grid); a group name string = entry in that group's flyout (no rail slot, uncapped). Valid groups: chat, personas, triggers, mind, settings — unknown/malformed falls back to a rail slot. URL hash: `#app-{plugin-name}` (bookmarkable); clicking the nav entry while inside a sub-route (#app-{name}/...) returns to the app home.
 - Apps run inline (not iframed) with full access to Sapphire modules: `/api/*` with session auth; `import { fetchWithTimeout } from '/static/shared/fetch.js'` (ABSOLUTE path — apps load from /plugin-web/, relative ../../ misses); `import * as eventBus from '/static/core/event-bus.js'` for SSE events; `import * as ui from '/static/ui.js'` for toasts; plugin settings via GET/PUT `/api/webui/plugins/{name}/settings` (PUT needs X-CSRF-Token from meta[name="csrf-token"]).
 - Rules: never inject nav items via DOM manipulation (use `nav` in the manifest); clean up intervals/sockets/listeners; use theme CSS variables; keep the app self-contained.
+- places: `["apps"]` default; `"stage"` = may open on the Chat page's stage beside the conversation (surface/stage.js): `render(el, ctx)` with `ctx.chat {name, private}` + `ctx.onChange(fn)`; core tears it down in private chats and when the Chat view hides; open via the 🖥 picker or the core `open_stage` tool (STAGE card marker, core/ui_markers.py). Never activate a chat or claim organs from a stage app.

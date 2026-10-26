@@ -656,8 +656,18 @@ async def list_apps(_=Depends(require_login)):
             "icon": _safe_emoji_icon(app_config.get("icon", manifest.get("emoji", ""))),
             "description": app_config.get("description", manifest.get("description", "")),
             "nav": app_config.get("nav", False),
+            # Where the app may appear: the Apps page and/or the Chat page's
+            # stage, beside the conversation (surface/stage.js, 2026-10-25).
+            "places": _app_places(app_config),
         })
     return {"apps": apps}
+
+
+def _app_places(app_config):
+    places = app_config.get("places")
+    if not isinstance(places, list):
+        return ["apps"]
+    return [p for p in places if p in ("apps", "stage")] or ["apps"]
 
 
 @router.get("/api/games")
