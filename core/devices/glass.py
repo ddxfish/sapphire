@@ -63,8 +63,9 @@ def wanted(part):
     """What this part's screen should show: {'chat', 'scene', 'brain', 'trim'}.
     All empty for a private chat or one that is gone."""
     from core.api_fastapi import get_system
+    from core.chat.history import landing_chat
     sm = get_system().llm_chat.session_manager
-    chat = str((part.get('config') or {}).get('chat') or '').strip() or sm.get_active_chat_name()
+    chat = str((part.get('config') or {}).get('chat') or '').strip() or landing_chat(sm)   # unnamed: where its voice lands (voice.chat_for), the same name
     settings = sm.get_settings_for(chat)
     if settings is None or settings.get('private_chat'):
         return {'chat': '', 'scene': '', 'brain': '', 'trim': ''}

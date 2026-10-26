@@ -332,3 +332,13 @@ def test_the_board_saying_hidden_tells_the_owner_once_and_ends_the_claim():
         time.sleep(0.15)
         assert told == [1]
         glass.stream_end('b')
+
+
+def test_wanted_names_where_voice_lands_not_the_chat_view():
+    class SM:
+        def get_active_chat_name(self): return 'coding'
+        def get_landing_chat_name(self): return 'kitchen room'
+        def get_settings_for(self, chat): return {'background': 'felt', 'trim_color': '', 'llm_primary': 'x', 'llm_model': 'm'}
+    class Sys: llm_chat = type('L', (), {'session_manager': SM()})()
+    with patch('core.api_fastapi.get_system', return_value=Sys()), patch.object(glass, '_brain', return_value='opus'):
+        assert glass.wanted({'config': {}})['chat'] == 'kitchen room'      # a chat room holds the landing: the glass says so, as the voice does

@@ -993,6 +993,44 @@ def pick_chat(device_id, name):
         return {'ok': False, 'error': f"Something went wrong ({type(e).__name__})."}
 
 
+_following = False
+
+
+def follow_chats():
+    """A device's `chat` setting names a chat (typed, or picked on the board): a rename
+    carries the name along and a delete clears it, as core/hooks.py asks of anything
+    keying data by chat name. Else the board talked into a fresh empty chat made under
+    the old name (voice.chat_for). Once; safe to call again."""
+    global _following
+    if _following:
+        return
+    _following = True
+    from core.event_bus import get_event_bus
+    get_event_bus().on(('chat_renamed',), lambda ev: _spawn(_chat_moved, (ev.get('data') or {}).get('old'), (ev.get('data') or {}).get('new')))
+    get_event_bus().on(('chat_deleted',), lambda ev: _spawn(_chat_moved, (ev.get('data') or {}).get('name'), ''))
+
+
+def _chat_moved(old, new):
+    """Every part that talks in `old` talks in `new` now ('': its own setting goes, its
+    voice lands where voice lands), and its glass is brought up to date."""
+    old, new = str(old or '').strip(), str(new or '').strip()
+    if not old or old == new:
+        return
+    try:
+        e = _engine()
+        for row in e.rows().values():
+            parts = {p['driver']: {'chat': new} for p in row.get('parts') or []
+                     if p.get('driver') and str((p.get('config') or {}).get('chat') or '').strip() == old}
+            if not parts:
+                continue
+            e.update(row['id'], parts=parts)
+            from core.devices import glass
+            glass.sync_soon(row['id'])
+            logger.info(f"[DEVICES] {row['id']}: the chat '{old}' it talked in is {'now ' + repr(new) if new else 'gone, its setting is cleared'}")
+    except Exception as ex:
+        logger.warning(f"[DEVICES] following the chat '{old}' into the device settings failed: {ex}")
+
+
 # Emoji on a small screen: the fonts there have none. The common ones become
 # the faces they came from; the rest, with the joiners and variation marks that
 # ride along, are left out. Applied wherever her words go to a board's screen.

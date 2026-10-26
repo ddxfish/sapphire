@@ -793,3 +793,15 @@ def test_a_stop_asked_during_say_all_stops_every_device():
     with patch.object(v, 'stop_all') as everywhere, patch.object(v, 'interrupt', return_value=True):
         assert v._ask_stop({'id': 'board-a'}) == (True, 'Stopped')
         everywhere.assert_not_called()
+
+
+def test_a_renamed_or_deleted_chat_follows_into_the_device_settings(home):
+    engine.update('pi2', parts={'satellite': {'chat': 'kitchen'}})
+    with patch('core.devices.glass.sync_soon') as sync:
+        voice._chat_moved('kitchen', 'kitchen-old')
+        assert engine._part(engine.get('pi2'), 'satellite')['config']['chat'] == 'kitchen-old'
+        voice._chat_moved('other', 'x')                                        # not this board's chat: untouched
+        assert engine._part(engine.get('pi2'), 'satellite')['config']['chat'] == 'kitchen-old'
+        voice._chat_moved('kitchen-old', '')                                   # deleted: its own setting goes, voice lands where it lands
+        assert engine._part(engine.get('pi2'), 'satellite')['config']['chat'] == ''
+        assert sync.call_count == 2

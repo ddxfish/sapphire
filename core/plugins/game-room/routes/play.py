@@ -59,6 +59,17 @@ def _out(engine, state, session=None, seat=True):
     return view
 
 
+def _poke(session):
+    """A move made here while the table is on a glass: the board redraws and she speaks
+    there (the browser stays quiet while `view['glass']` is set). From the glass's own
+    worker, which calls these same functions: nothing (gameroom_glass.poke)."""
+    try:
+        import gameroom_glass
+        gameroom_glass.poke(session)
+    except Exception as e:
+        gc.logger.debug(f'game-room: glass poke: {e}')
+
+
 def _with_last(out, rows, logged):
     """The caption's source (plan A subtitle, 2026-09-09): the pair this call
     put on the transcript — byte-for-byte what the rail shows — so the
@@ -110,6 +121,7 @@ def new_session(game, body=None, query=None, **_):
         rows = gc.table_pair(engine, state, before, 'new_session', cfg=cfg, gcfg=gcfg)
         gc.save_state(game, state, session)
         out = _out(engine, state, session)
+    _poke(session)
     return _with_last(out, rows, gc.append_table(session, rows))
 
 
@@ -133,6 +145,7 @@ def start(game, body=None, query=None, **_):
         rows = gc.table_pair(engine, state, before, 'start', cfg=cfg, gcfg=gcfg)
         gc.save_state(game, state, session)
         out = _out(engine, state, session)
+    _poke(session)
     return _with_last(out, rows, gc.append_table(session, rows))
 
 
@@ -177,6 +190,8 @@ def act(game, body=None, query=None, **_):
             rows = gc.table_pair(engine, state, before, action, args, say[:400], cfg, gcfg)
         gc.save_state(game, state, session)
         out = _out(engine, state, session, seat=not silent)
+    if not silent:
+        _poke(session)
     return _with_last(out, rows, gc.append_table(session, rows))
 
 
@@ -335,6 +350,11 @@ def forget(game, body=None, query=None, **_):
     session = _session(query, body)
     if not session:
         return ({'error': 'session required'}, 400)
+    try:
+        import gameroom_glass
+        gameroom_glass.end(session, why='the session was forgotten')   # a table on a glass goes with it, else the board stayed claimed
+    except Exception as e:
+        gc.logger.debug(f'game-room: forget {session!r}: glass: {e}')
     with gc.session_lock(game, session):
         # v1.3: sessioned saves live on the chat's rows; core also drops
         # them with the chat, but the room deletes save-first by design.
@@ -365,6 +385,7 @@ def banter(game, body=None, query=None, **_):
         rows = gc.table_pair(engine, state, before, 'say', say=say[:400], cfg=cfg, gcfg=gcfg)
         gc.save_state(game, state, session)
         out = _out(engine, state, session)
+    _poke(session)
     return _with_last(out, rows, gc.append_table(session, rows))
 
 

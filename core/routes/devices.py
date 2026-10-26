@@ -16,6 +16,12 @@ from fastapi.responses import StreamingResponse, FileResponse
 from core.http_words import server_error
 from core.auth import require_login, check_endpoint_rate, get_client_ip
 
+try:                                                   # device settings name chats: a rename or a delete reaches them (this module is imported at boot; the engine loads on first use)
+    from core.devices import voice as _voice
+    _voice.follow_chats()
+except Exception as _e:
+    logging.getLogger(__name__).warning(f'[DEVICES] the chat follower is not registered: {_e}')
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()

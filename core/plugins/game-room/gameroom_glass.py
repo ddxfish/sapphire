@@ -46,6 +46,7 @@ REFRESH = 30                  # the frame goes again this often while nothing mo
 IDLE_END = 30 * 60            # a table nobody touched this long is left
 EXIT = 'top'                  # the host's place, every game
 TALK = 'middle'               # the host's place while the game leaves it empty (mid-hand): say something, it rides the next move
+POKE = 'poke'                 # not a place: a move made in the browser (routes/play.py), the board redraws and she speaks there
 LISTEN_S = 8                  # the board's mic listens up to this long; it ends when the talking stops
 STRIP = 22                    # the host's own row across the middle place: its label, the queued words, "thinking..."
 LABEL_H = 22                  # a row of labels along the top edge of the glass and one along the bottom: the small font with room around it
@@ -159,7 +160,17 @@ def _press(session, zone, how):
     with _lock:
         g = _glasses.get(session)
     if g:
-        g.presses.put((zone, how))
+        g.presses.put((zone, how, time.monotonic()))      # stamped: a press for a frame that is gone is never replayed on the next
+
+
+def poke(session):
+    """A move made in the browser while the table is on a glass: the board redraws and
+    she speaks there (room-host.js stays quiet while a table is on a glass). Called
+    from the glass's own worker (the same route functions, in process): nothing."""
+    with _lock:
+        g = _glasses.get(session)
+    if g and threading.current_thread() is not g.thread:
+        g.presses.put((POKE, '', time.monotonic()))
 
 
 def _changed(g):
@@ -180,6 +191,7 @@ class _Glass:
         self.presses = queue.Queue()
         self.alive = True
         self.touched = time.monotonic()
+        self.shown_at = 0.0           # when the frame on the glass went out: a press from before it was for a frame that is gone
         self.spoken = None            # her talk seq already spoken (None: baseline at the first frame)
         self.thread = threading.Thread(target=self._run, daemon=True, name=f'glass-{session}')
 
@@ -197,7 +209,7 @@ class _Glass:
                 if time.monotonic() - self.touched > IDLE_END:
                     end(self.session, why='idle')
                     break
-                self._safe(self._show)
+                self._safe(self._show, None, False, False)     # the same frame again: a press in flight is still for it
                 continue
             if press is None:
                 break
@@ -209,6 +221,11 @@ class _Glass:
             fn(*args)
         except Exception as e:
             logger.warning(f'game-room: glass {fn.__name__} failed: {e}', exc_info=True)
+            if fn.__name__ != '_show' and self.alive:      # never leave "thinking..." on the glass
+                try:
+                    self._show()
+                except Exception as e2:
+                    logger.debug(f'game-room: glass redraw after a failure: {e2}')
 
     def _view(self):
         with gc.session_lock(self.game, self.session):
@@ -228,14 +245,22 @@ class _Glass:
             self.note = ''
         return slots
 
-    def _move(self, zone, how):
-        if zone == EXIT:
+    def _move(self, zone, how, at=0.0):
+        if zone == EXIT:                                   # always, even while her seat thinks
             end(self.session, why='exit')
+            return
+        if zone == POKE:                                   # a move made in the browser: redraw, and she speaks here
+            view = self._view()
+            self._show(view)
+            self._speak(view)
+            return
+        if at < self.shown_at:                             # tapped on a frame that is gone (her seat thought, a double tap): dropped, never replayed
+            logger.debug(f'game-room: glass press {zone} on an old frame dropped')
             return
         view = self._view()
         slot = self._slots(view).get(zone)
         if not slot or slot.get('off'):
-            self._show(view)
+            self._show(view, stamp=False)              # the same frame again: nothing changed for the next press
             return
         if isinstance(slot.get('set'), dict):
             self.mem.update(slot['set'])
@@ -246,18 +271,27 @@ class _Glass:
             return
         door = _doors().get(str(slot.get('door') or ''))
         if not door:
-            self._show(view)
+            self._show(view, stamp=False)
             return
         self._show(view, thinking=True)
         body = {'session': self.session}
+        said = ''
         if slot.get('door') == 'act':
             body['action'] = str(slot.get('action') or '')
             body['args'] = dict(slot.get('args') or {})
             if self.say:                               # the words ride the move, as the composer's do in the browser
-                body['say'], self.say = self.say, ''
-        out = door(self.game, body=body)
-        if isinstance(out, tuple):                     # ({'error': ...}, code): nothing happened
+                body['say'] = said = self.say
+                self.say = ''
+        try:
+            out = door(self.game, body=body)
+        except Exception:
+            self.say, self.note = said, 'the move failed'  # the words wait for the next try; _safe redraws
+            raise
+        if not self.alive:                             # the table left while her seat thought: nothing more on that board
+            return
+        if isinstance(out, tuple):                     # ({'error': ...}, code): nothing happened, and the glass says why
             logger.info(f"game-room: glass move {zone} refused: {out[0].get('error')}")
+            self.say, self.note = said, str(out[0].get('error') or 'refused')[:60]
             self._show()
             return
         view = self._view()
@@ -277,6 +311,8 @@ class _Glass:
             said, ok = devices.run(self.device, 'mic', 'listen', str(LISTEN_S), owner=True)
         except Exception as e:
             said, ok = str(e), False
+        if not self.alive:                             # the table left while the board listened
+            return
         heard = HEARD.match(str(said or '').strip()) if ok else None
         if heard and heard.group(1).strip():
             self.say = heard.group(1).strip()[:400]
@@ -288,6 +324,8 @@ class _Glass:
     # --- her lines, on the board -------------------------------------------------------
 
     def _speak(self, view):
+        if not self.alive:
+            return
         fresh = [t for t in view.get('talk') or [] if t.get('who') == 'ai' and not t.get('via')
                  and t.get('seq', 0) > (self.spoken or 0)]
         self.spoken = max(self.spoken or 0, _max_seq(view.get('talk')))
@@ -305,11 +343,15 @@ class _Glass:
 
     # --- the frame ---------------------------------------------------------------------
 
-    def _show(self, view=None, thinking=False):
+    def _show(self, view=None, thinking=False, stamp=True):
+        if not self.alive:                             # the table left: nothing more on that board
+            return
         view = self._view() if view is None else view
         jpeg = frame(self.engine, self.takes, view, self._slots(view), self.mem, thinking)
         from core.devices import glass
         glass.stream_frame(self.device, jpeg)
+        if stamp:
+            self.shown_at = time.monotonic()           # a press from before this frame was for a frame that is gone
 
 
 def _max_seq(talk):

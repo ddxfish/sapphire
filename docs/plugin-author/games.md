@@ -270,7 +270,11 @@ export two functions and your game is on:
   lands in its place and the picture keeps the room between. A `middle` you leave
   empty is the host's TALK: the board listens and the words ride the player's
   next `act` as `say` (poker: mid-hand), so leave it empty whenever a move
-  may carry words.
+  may carry words. The host keeps the taps honest: a press made while her seat
+  thinks (every label dim) was for a frame that is gone and is dropped, never
+  replayed on the next one; a refused move (`({'error'}, 400)`) is said on the
+  middle row; EXIT works at any moment; a move made in the browser meanwhile
+  redraws the glass and is spoken there.
 - `render_glass(draw, box, view, mem, line)`: draw the game's picture (80% of
   the width, from the top row of labels down to the bottom row: 256x196 on the
   speaker board) with a PIL `ImageDraw` inside `box = (x0, y0, x1, y1)`.

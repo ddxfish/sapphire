@@ -9,7 +9,7 @@
     "app/settings-modal.js": "sha256:f6a1b13aab708c64b59f30b4582130567599ab0fe89e5e98b2b57ed398f48027",
     "app/story-room.js": "sha256:f12953a7b1c32b8ea3fbdd4ac8cfba3474deaada4f6813205982534b60d83709",
     "gameroom_core.py": "sha256:8e0ec91f251c86b726562351597a385617b1af9f846282f46cb22c229e2a1d1d",
-    "gameroom_glass.py": "sha256:0bda47da28406e1fc2ffb838519fe747e2468a11f03c3f49471cd4f991bffcaf",
+    "gameroom_glass.py": "sha256:57fec9a113bacdf02d9f2a6a7718a4dde32c0cdc84efc1abae7e666135fa8573",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
     "gameroom_story/referee.py": "sha256:f28074452bcdcf5dbe2ef03cc7663ce06c8989831c1c3e07621c84ef19a965d4",
@@ -27,7 +27,7 @@
     "plugin.json": "sha256:df15d875676154ae849ba8e987c6c8cf7350c8942967074b861c5c76a73da8c9",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
-    "routes/play.py": "sha256:1302c5f472cb7f0c438c999555898d5756d18145426e97f17bc056f10f3fc637",
+    "routes/play.py": "sha256:d5bb8c48e2ccd6202f4277b915097fc99ef65316472059bac137dcd048257855",
     "routes/story_routes.py": "sha256:d4fe6d324d335cb20eabd5dabebb1095f1dcb6d3610e9142c3e9d1ddb5fb51f0",
     "tests/conftest.py": "sha256:32f9c70044d21c2529e3613c9992dc635b2605d0383925110a425e498c7af8f2",
     "tests/fixtures/stories/goblin-den/rooms/1-cave-mouth.json": "sha256:befb3fe7b4ccc87d62aad4c98ca703176a3279d626c5518ca74e7b5c86b489c9",
@@ -45,7 +45,7 @@
     "tests/test_cast.py": "sha256:6f05e2e4bd77a32392b17b2b3f7f73e26391a37c9364161452e62147c82e7df2",
     "tests/test_chat_lifecycle_hooks.py": "sha256:bebf7787432754f920bed8220fdbce7da01c451571ef2fe832491a3faec187f2",
     "tests/test_fixwave_hunt.py": "sha256:a2264152e44a9e869d2ca2fcd7b63bb039170209575b9e16c87e7f077c928686",
-    "tests/test_glass.py": "sha256:90479463cc43c44f715deeda799d12d76cb1e7aad3da64edb4422f2a70095519",
+    "tests/test_glass.py": "sha256:db5d2564735d7c9c39090ce7b0f5857358d4e4b05750575eabcd1498c27dccaa",
     "tests/test_one_move_per_turn.py": "sha256:7f7e938a36b893a89137e03303ebb47a1ed6a67792012cb1ca24cb5146a68a80",
     "tests/test_open_mansion.py": "sha256:44df3762547979380bade943bb604af71153a74eb12136af6ccf8ec403c64dcd",
     "tests/test_rail_port.py": "sha256:d144b442da2ebbea8160f10799788c080f850b67709a6dccc3faad248af6b268",
@@ -65,5 +65,5 @@
     "tools/story_info.py": "sha256:a8a036ae2c3b309c1d646e545b49b4f2bd55451d342f261aec2de41db1cf3850",
     "tools/story_tools.py": "sha256:364e3e3cdb5f190485f7512424111031cceb4a2cf356477af150871609cbd0ed"
   },
-  "signature": "AMSkca2haRNUuhDh1DOmbZKL7AJNHajeZHFDELSctyd5PaRmgQuRidkmwOlrEms4T4zDNq1fts6xCVDeAkrOBA=="
+  "signature": "z49xHsQDX3QlKOEojX2/wCkdQvVrucsKGbfNNYedjYXfdGQmh+LFNDHdow1uvD/iwQg9z4dNQbI5HfuO82vEDw=="
 }

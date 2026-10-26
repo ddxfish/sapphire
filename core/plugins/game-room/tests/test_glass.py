@@ -254,3 +254,94 @@ def test_a_label_too_wide_for_its_line_is_cut_short_not_spilled():
     d = ImageDraw.Draw(im)
     gg._centred(d, (32, 190, 287, 212), 'TALK  "' + 'a very long sentence ' * 6 + '"', gg._font(14), (255, 255, 255))
     assert im.crop((0, 190, 31, 212)).getbbox() is None and im.crop((289, 190, 320, 212)).getbbox() is None
+
+
+def _slow(rig, name, delay=0.3, talk=None):
+    """A door that takes its time, as her seat's turn does."""
+    door = rig.door(name)
+
+    def go(game, body=None, **_):
+        time.sleep(delay)
+        if talk is not None:
+            rig.state['talk'] = talk
+        return door(game, body=body)
+    return go
+
+
+def test_a_press_on_a_frame_that_is_gone_is_dropped_and_exit_always_works():
+    with Rig() as rig, patch.object(gg, '_DOORS', {'act': _slow(rig, 'act'), 'start': rig.door('start'), 'new-session': rig.door('new-session')}):
+        gg.begin('fake', 'table', 'esp')
+        assert rig.wait_frames(1)
+        on_press, _ = rig.claimed['esp']
+        on_press('top-left', 'short')
+        time.sleep(0.1)                                        # her seat thinks, the labels are dim
+        on_press('top-left', 'short')                          # a double tap: never replayed on the next frame
+        assert rig.wait_frames(3)                              # thinking, then the result
+        time.sleep(0.2)
+        assert len(rig.doors) == 1
+        on_press('top-left', 'short')                          # a tap on the new frame goes through
+        assert rig.wait_frames(5)
+        time.sleep(0.1)
+        assert len(rig.doors) == 2
+        on_press('top-left', 'short')
+        time.sleep(0.1)
+        on_press('top', 'short')                               # EXIT while she thinks: the table leaves anyway
+        time.sleep(0.6)
+        assert gg.active('table') is None and len(rig.doors) == 3
+
+
+def test_a_refused_move_is_said_on_the_middle_row_and_the_words_wait():
+    shown = []
+
+    def refused(game, body=None, **_):
+        return ({'error': 'Not your turn.'}, 400)
+    with Rig() as rig, patch.object(gg, '_DOORS', {'act': refused, 'start': rig.door('start'), 'new-session': rig.door('new-session')}), \
+         patch.object(gg, 'frame', lambda engine, takes, view, slots, mem, thinking=False: shown.append(dict(slots)) or b'jpeg'):
+        gg.begin('fake', 'table', 'esp')
+        assert rig.wait_frames(1)
+        g = gg._glasses['table']
+        g.say = 'you are bluffing'
+        on_press, _ = rig.claimed['esp']
+        on_press('top-left', 'short')
+        assert rig.wait_frames(3)
+        time.sleep(0.1)
+        assert shown[-1]['middle'] == {'label': 'Not your turn.', 'off': True}    # the glass says why
+        assert g.say == 'you are bluffing' and rig.said == []                     # the words ride the next try
+
+
+def test_a_move_in_the_browser_pokes_the_glass_and_she_speaks_there():
+    with Rig() as rig:
+        gg.begin('fake', 'table', 'esp')
+        assert rig.wait_frames(1)
+        rig.state['talk'] = [{'who': 'ai', 'text': 'nice flop', 'seq': 1}]       # a browser move left her line in the talk
+        gg.poke('table')
+        assert rig.wait_frames(2)
+        time.sleep(0.1)
+        assert rig.said == [('esp', 'nice flop', 'her')]
+        gg.poke('nope')                                                           # no table on a glass: nothing
+
+
+def test_work_landing_after_the_table_left_stays_off_the_board():
+    with Rig() as rig, patch.object(gg, '_DOORS', {'act': _slow(rig, 'act', talk=[{'who': 'ai', 'text': 'late', 'seq': 9}]),
+                                                   'start': rig.door('start'), 'new-session': rig.door('new-session')}):
+        gg.begin('fake', 'table', 'esp')
+        assert rig.wait_frames(1)
+        on_press, _ = rig.claimed['esp']
+        on_press('top-left', 'short')
+        assert rig.wait_frames(2)                                                 # thinking
+        gg.end('table', why='test')
+        time.sleep(0.5)
+        assert len(rig.frames) == 2 and rig.said == []                            # no ghost frame, no late line
+
+
+def test_forgetting_a_session_takes_its_table_off_the_glass():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('play_for_glass_forget', PLUGIN_DIR / 'routes' / 'play.py')
+    play = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(play)
+    with Rig() as rig, patch.object(gc, 'chat_store', types.SimpleNamespace(delete=lambda *a, **k: None)), \
+         patch.object(gc, 'store', types.SimpleNamespace(delete=lambda *a, **k: None)):
+        gg.begin('fake', 'table', 'esp')
+        assert rig.wait_frames(1)
+        assert play.forget('fake', body={'session': 'table'}) == {'status': 'ok'}
+        assert gg.active('table') is None and 'esp' not in rig.claimed
