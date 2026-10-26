@@ -887,6 +887,7 @@ function speakNew(me) {
     if (me.lastSpokenSeq === null) { baseline(me); return; }
     const mx = maxSeq(me.state.talk);
     if (mx < me.lastSpokenSeq) me.lastSpokenSeq = 0;   // seq went backwards = new stream
+    if (me.state.glass) { me.lastSpokenSeq = Math.max(me.lastSpokenSeq, mx); return; }   // the table is on a glass: she speaks there, never twice
     const fresh = (me.state.talk || []).filter(t =>
         t.who === 'ai' && !t.via && t.seq != null && t.seq > me.lastSpokenSeq);
     me.lastSpokenSeq = Math.max(me.lastSpokenSeq, mx);
@@ -930,7 +931,7 @@ function speakText(me, line) {
 
 // ------------------------------------------------------------------ draw
 
-function drawAll(me) { drawBoard(me); drawActions(me); drawResolved(me); drawGameSidebar(me); }
+function drawAll(me) { drawBoard(me); drawActions(me); drawResolved(me); drawGameSidebar(me); paintGlass(me); }
 
 function sessName(me, who) {
     const s = me.state && me.state.session;
@@ -1182,6 +1183,7 @@ function captureFrame(me, n) {
 async function setupCast(me) {
     const sel = me.root?.querySelector('#gr-cast');
     if (!sel) return;
+    if (me.spec.kind === 'game' && await setupGlass(me, sel)) return;
     let boards = [];
     try {
         const r = await fetch('/api/devices', { headers: { 'X-CSRF-Token': csrf() } });
@@ -1273,6 +1275,50 @@ function castFrame(me) {
           .catch(() => {})
           .finally(() => { c.busy = false; });
     }, 'image/jpeg', 0.8);
+}
+
+// ── the glass: the table on a board's touch screen, the server as the brain ──
+// A game whose engine draws a glass table (gameroom_glass.py) is not cast from
+// this canvas: the server makes a small frame per move and the board's taps are
+// the moves; she speaks on the board. The same select reads `glass:` instead of
+// `cast:`. Leaving the room does NOT end it: the table stays on the board until
+// EXIT (its top place), a long press on it, or half an hour untouched.
+async function setupGlass(me, sel) {
+    let data;
+    try { data = await me.ctx.api(`room/glass?game=${encodeURIComponent(me.spec.id)}`); } catch (e) { return false; }
+    if (R !== me || !data?.can) return false;
+    me.glass = true;
+    if (!data.boards?.length) return true;                  // the game could, no board can: nothing to offer
+    sel.innerHTML = '<option value="">glass: off</option>';
+    for (const b of data.boards) {
+        const o = document.createElement('option');
+        o.value = b.id;
+        const taken = b.busy && b.id !== data.device;
+        o.textContent = `glass: ${b.label || b.id}${taken ? ' (busy)' : ''}`;
+        if (taken) o.disabled = true;
+        sel.appendChild(o);
+    }
+    sel.title = "Put this table on a board's touch screen: its taps are your moves, she speaks there";
+    sel.value = data.device || '';
+    sel.style.display = '';
+    sel.onchange = () => setGlass(me, sel);
+    return true;
+}
+
+async function setGlass(me, sel) {
+    const want = sel.value;
+    try {
+        if (want) await me.ctx.api('room/glass', 'POST', { game: me.spec.id, device: want });
+        else await me.ctx.api('room/glass', 'DELETE', {});
+    } catch (e) { showError(e.message); }
+    if (R === me) me.ctx.refreshState();
+}
+
+// the select follows the server: a table EXITed on the board shows `glass: off` here
+function paintGlass(me) {
+    if (!me.glass) return;
+    const sel = me.root?.querySelector('#gr-cast');
+    if (sel && me.state && 'glass' in me.state) sel.value = me.state.glass || '';
 }
 
 function deposit(me, { frames, text } = {}) {
@@ -1418,6 +1464,12 @@ function bindWatch() {
     eventBus.on('voice_turn_start', (d) => {
         const me = R;
         if (me && me.cad && mine(me, d) && d?.source === 'cadence') { me.cad.running = true; paintCadence(me); }
+    });
+    // a move made on a board's glass (gameroom_glass.py), or the table left it: redraw from the server's state
+    eventBus.on('game_state_changed', (d) => {
+        const me = R;
+        if (!me || !me.mod || d?.session !== me.session) return;
+        me.ctx.refreshState();
     });
 }
 

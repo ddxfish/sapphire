@@ -313,3 +313,21 @@ def test_a_button_that_states_its_ways_is_offered_only_those(home):
         sat._about['pocket'] = (at, said)
     menu = sat.bindings({'id': 'pocket'}, {}, 'buttons')
     assert [s['key'] for s in menu['slots']] == ['key1.short', 'key1.long', 'key1.double', 'top-left.short']
+
+
+# --- a stream that owns the glass's taps (core/devices/glass.py claim, 2026-10-25) ----------
+
+def test_a_press_on_a_board_whose_glass_is_claimed_goes_to_the_claim_not_a_turn(home):
+    import threading
+    from core.devices import glass
+    _with_button()
+    _bind(boot_short={'do': 'tell', 'text': 'hi'})
+    got, seen = [], threading.Event()
+    own = glass._Owner('game-room', lambda z, h: (got.append((z, h)), seen.set()), None, 60)
+    with patch.object(glass, '_owners', {'pocket': own}), patch.object(voice, '_spawn') as run_turn:
+        assert voice.pressed('pocket', 'boot', 'short') == {'ok': True, 'accepted': True, 'taken': 'glass'}
+        assert seen.wait(1) and got == [('boot', 'short')]
+        assert not run_turn.called                      # never a chat turn, whatever the binding says
+    with patch.object(glass, '_owners', {}), patch.object(voice, '_spawn') as run_turn:
+        assert voice.pressed('pocket', 'boot', 'short')['accepted'] is True
+        assert run_turn.called                          # unclaimed: the binding as before

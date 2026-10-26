@@ -427,8 +427,7 @@ FRAMES_PER_MIN = 1200      # frames from a browser: a few boards at a few a seco
 
 def _screen_stream(device_id):
     from core.devices import glass
-    config, secrets, w, h, fps = glass._lookup(device_id)
-    return {"device": device_id, "w": w, "h": h, "fps": fps, "max_bytes": glass.FRAME_MAX,
+    return {"device": device_id, **glass.takes(device_id), "claimed": glass.owner(device_id),
             "stream": glass.stream_status(device_id)}
 
 

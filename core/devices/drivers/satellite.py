@@ -43,7 +43,7 @@ SPEC = {
     'kind': 'Satellite',
     'icon': '\U0001f4e1',
     'capabilities': ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
-                     'buttons', 'sensors', 'firmware', 'ir'],
+                     'buttons', 'sensors', 'firmware', 'ir', 'picker'],
     # it calls Sapphire with its own key (wake, voice, text, events): the
     # address it calls from becomes its url, so a board set up from the
     # browser needs none typed, and a new DHCP lease is followed
@@ -62,12 +62,13 @@ SPEC = {
          'help': "The chat this device is in: what it hears, what is typed on it and what its buttons send "
                  "land there, and its screen shows it. Empty = the last chat used. A name that is not a "
                  "chat yet is made when you save."},
-        # a reader's picker: every open chat, or the one above only (Krem's vote 2026-10-16: off by default,
-        # so a board's key reaches no chat but its own)
+        # a board's chat picker: every open chat, or the one above only (Krem's vote 2026-10-16: off by default,
+        # so a board's key reaches no chat but its own). A board that says `picker` (the speaker board's bottom
+        # place, 0.9.1) or `keyboard` (the reader, whose picker came before the name) has one.
         {'key': 'browse', 'type': 'boolean', 'label': 'Browse chats', 'tab': 'Status', 'default': False,
-         'capability': 'keyboard',
-         'help': "Its picker lists every open chat and it may read any of them back. Off = only the chat "
-                 "above (the active one when that is empty): the board's key reaches nothing else."},
+         'capability': ('keyboard', 'picker'),
+         'help': "Its chat picker lists every open chat (and a reader may read any of them back). Off = only "
+                 "the chat above (the active one when that is empty): the board's key reaches nothing else."},
         {'key': 'camera', 'type': 'boolean', 'label': 'Has a camera', 'tab': 'Status', 'default': True,
          'capability': 'camera',
          'help': "Off = Sapphire is not offered a camera on this satellite."},
@@ -160,7 +161,7 @@ SPEC = {
 
 SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min')
 LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
-INBOUND = ('keyboard', 'buttons')   # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed(), pressed()
+INBOUND = ('keyboard', 'buttons', 'picker')   # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed(), pressed(), chats()/pick_chat()
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 _SECONDS = re.compile(r'^seconds=(\d{1,4})$', re.I)
 _HANDLE = re.compile(r'img:[A-Za-z0-9_.-]{1,72}|doc:\d{1,9}|last')   # what names an image to the picture action (an id may carry a .jpg)
@@ -574,6 +575,8 @@ def describe(device, config):
     }}
     told['keyboard'] = {'label': 'Keyboard', 'help': 'what is typed on it lands in your chat; your reply is shown on its screen',
                         'actions': {}}
+    told['picker'] = {'label': 'Chat picker', 'help': 'a picker on its screen for the chat it talks in: that one, or every open chat with Browse chats on',
+                      'actions': {}}
     if config.get('camera', True):
         told['camera'] = {'label': 'Camera', 'help': 'see that room', 'actions': {
             'look': {'help': 'take one picture and see it. The ring warns the room first',

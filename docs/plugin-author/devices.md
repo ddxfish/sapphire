@@ -357,6 +357,30 @@ rides this to cast a game onto a board.
 `face_boards()` and `face_frame()` remain one release for the first sender
 (FlashHead): the same stream, a square frame.
 
+### Owning the board's taps: a game on the glass
+
+A touch glass whose places tile it (the speaker board from firmware 0.9.0:
+four corners, top, bottom, middle; `screen.zones` and `screen.taps` in its
+`/health`) lets a stream own the taps while it runs, so a plugin can run a
+game on the board with the server as the brain:
+
+- `takes(device_id)` says what the glass takes: `w`, `h`, `fps`, `max_bytes`,
+  `taps` (True when it passes its taps on) and `zones`
+  (`[{'name', 'x', 'y', 'w', 'h'}]`, glass pixels). Draw your frame from the
+  zones, never from a hard-coded 72.
+- `claim(device_id, on_press, on_gone=None, hold=60, who='')` owns the taps:
+  frames then go `taps=1` and stay up `hold` seconds after the last one (send
+  one again every `hold / 2` while nothing changes); every tap on the stream
+  reaches `on_press(zone_name, 'short')` on a thread of its own, and never the
+  Devices page's bindings or a chat turn. When the player leaves (a long press
+  on the board) `on_gone()` is called once and the claim is over. Raises
+  `LookupError` for a glass that does not pass taps on, `RuntimeError` when
+  another owner has it. `release(device_id)` ends the claim and brings the
+  board's page back; `owner(device_id)` names the owner or None.
+- Nothing here knows the game: the Game Room's `gameroom_glass` is the first
+  owner (a poker table). `GET /api/devices/{id}/screen/stream` says `taps`,
+  `zones` and `claimed` for a browser.
+
 ## Voice: a device with a microphone or a speaker
 
 Core's voice pipeline uses devices through a few conventions. Follow them and

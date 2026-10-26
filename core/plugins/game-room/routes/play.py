@@ -42,6 +42,9 @@ def _session(query=None, body=None):
 
 def _out(engine, state, session=None, seat=True):
     view = engine.redact(state) if state else {'session': None}
+    if session:
+        import gameroom_glass
+        view['glass'] = gameroom_glass.active(session)     # the board this table is on (she speaks there, the browser stays quiet)
     if not seat:
         # Silent verbs (real-time checkpoints — Dark Horse every wave end)
         # used to re-resolve the seat provider here, under the session lock:
@@ -474,3 +477,42 @@ def session_end(body=None, query=None, **_):
         gc.logger.warning(f"game-room: session-end summary for {session!r} did not run: {e}")
         return {'status': 'ok', 'summary': False}
     return {'status': 'ok', 'summary': True}
+
+
+# ── the glass: a table on a satellite's touch screen (gameroom_glass.py, 2026-10-25) ──
+# The server is the brain: moves come from the board's taps through the same
+# functions above. The stage bar drives these three doors.
+
+def glass_get(query=None, **_):
+    """For a game and session: whether the game draws a glass table, the boards
+    that take one, and the board this session is on (None = not on a glass)."""
+    import gameroom_glass as gg
+    query = query or {}
+    game = str(query.get('game') or '').strip()
+    session = _session(query)
+    _meta, engine = gc.get_game(game) if game else (None, None)
+    return {'can': gg.can(engine), 'boards': gg.boards() if gg.can(engine) else [],
+            'device': gg.active(session) if session else None}
+
+
+def glass_begin(body=None, query=None, **_):
+    import gameroom_glass as gg
+    body = body or {}
+    session = _session(query, body)
+    try:
+        gg.begin(body.get('game'), session, body.get('device'))
+    except PermissionError as e:
+        return ({'error': str(e)}, 403)
+    except RuntimeError as e:
+        return ({'error': str(e)}, 409)
+    except (ValueError, LookupError) as e:
+        return ({'error': str(e)}, 400)
+    return {'status': 'ok', 'device': gg.active(session)}
+
+
+def glass_end(body=None, query=None, **_):
+    import gameroom_glass as gg
+    session = _session(query, body)
+    if not session:
+        return ({'error': 'session required'}, 400)
+    return {'status': 'ok', 'ended': gg.end(session, why='the room asked')}

@@ -1414,6 +1414,9 @@ def pressed(device_id, button, how, job=None):
         button, how = str(button or '').strip().lower()[:24], str(how or 'short').strip().lower()
         if not button or how not in HOWS:
             return {'ok': False, 'error': f"A press is a button's name and one of {', '.join(HOWS)}."}
+        from core.devices import glass
+        if glass.press(row['id'], button, how):      # a stream owns the board's taps (a game on its glass): the press is its, never a turn
+            return {'ok': True, 'accepted': True, 'taken': 'glass'}
         held = part['config'].get('buttons')
         pick = (held if isinstance(held, dict) else {}).get(f'{button}.{how}')
         # what the page set wins; a press left to the board is the board's word, and only for a job in ASKS

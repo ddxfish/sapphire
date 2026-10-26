@@ -186,9 +186,13 @@ def test_a_board_is_shown_only_what_it_says_it_takes():
 
 # --- a stream on the glass (2026-10-20) ---------------------------------------
 
-def _known_board(fps):
-    """A board the stream knows without asking it: config, secrets, w, h, fps."""
-    return ({'url': 'http://board'}, {'token': 'k'}, 320, 240, fps)
+ZONES = [{'name': 'top-left', 'x': 0, 'y': 0, 'w': 72, 'h': 120}, {'name': 'top', 'x': 72, 'y': 0, 'w': 176, 'h': 72}]
+
+
+def _known_board(fps, taps=False):
+    """A board the stream knows without asking it."""
+    return {'config': {'url': 'http://board'}, 'secrets': {'token': 'k'}, 'w': 320, 'h': 240, 'fps': fps,
+            'taps': taps, 'zones': list(ZONES) if taps else []}
 
 
 def test_stream_paces_to_the_board_and_the_newest_frame_wins():
@@ -235,3 +239,96 @@ def test_stream_counts_a_board_that_does_not_answer_and_keeps_going():
 def test_face_boards_is_the_stream_as_a_square():
     with patch.object(glass, 'stream_boards', return_value=[('b', 320, 240, 3), ('c', 240, 240, 3)]):
         assert glass.face_boards() == [('b', 240), ('c', 240)]
+
+
+# --- a stream that owns the board's taps (firmware 0.9.0) -------------------------
+
+class _Answer:
+    def __init__(self, body):
+        self.body = body
+
+    def json(self):
+        return self.body
+
+
+def test_learn_reads_the_places_and_whether_the_glass_passes_taps_on():
+    said = {'w': 320, 'h': 240, 'jpeg': True, 'fps': 3, 'taps': True,
+            'zones': [{'name': 'Top Left!', 'x': 0, 'y': 0, 'w': 72, 'h': 120}, {'name': '', 'x': 1, 'y': 1, 'w': 1, 'h': 1},
+                      {'name': 'bottom', 'x': 72, 'y': 168, 'w': 176, 'h': 72}, 'junk']}
+    with patch.object(glass, '_known', {}):
+        glass._learn(ROW, {}, {}, said)
+        t = glass.takes('esp')
+    assert t['taps'] is True and t['w'] == 320 and t['max_bytes'] == glass.FRAME_MAX
+    assert [z['name'] for z in t['zones']] == ['topleft', 'bottom']
+    with patch.object(glass, '_known', {}):
+        glass._learn(ROW, {}, {}, {'w': 320, 'h': 240, 'jpeg': True, 'fps': 3})      # 0.8.0: no taps, no zones
+        assert glass.takes('esp')['taps'] is False and glass.takes('esp')['zones'] == []
+
+
+def test_a_claim_needs_a_glass_that_passes_taps_on_and_is_one_at_a_time():
+    import pytest
+    with patch.object(glass, '_known', {'b': _known_board(3)}), patch.object(glass, '_owners', {}):
+        with pytest.raises(LookupError):
+            glass.claim('b', lambda z, h: None)
+    with patch.object(glass, '_known', {'b': _known_board(3, taps=True)}), patch.object(glass, '_owners', {}), \
+         patch.object(glass, '_streams', {}), patch('core.devices.drivers.satellite._call', return_value=None):
+        what = glass.claim('b', lambda z, h: None, who='game-room')
+        assert what['taps'] and [z['name'] for z in what['zones']] == ['top-left', 'top']
+        assert glass.owner('b') == 'game-room'
+        with pytest.raises(RuntimeError):
+            glass.claim('b', lambda z, h: None, who='other')
+        glass.release('b')
+        assert glass.owner('b') is None
+        glass.release('b')                               # twice is fine
+
+
+def test_an_owned_stream_asks_for_the_taps_and_holds_the_frame():
+    import time
+    sent = []
+    with patch.object(glass, '_known', {'b': _known_board(10, taps=True)}), patch.object(glass, '_owners', {}), \
+         patch.object(glass, '_streams', {}), \
+         patch('core.devices.drivers.satellite._call', side_effect=lambda m, path, c, s, **kw: sent.append(path)):
+        glass.claim('b', lambda z, h: None, hold=60)
+        glass.stream_frame('b', b'f1')
+        time.sleep(0.1)
+        glass.release('b')
+        glass.stream_frame('b', b'f2')                   # unowned again: as before
+        time.sleep(0.15)
+    assert sent[0] == '/screen/picture?format=jpeg&seconds=60&taps=1'
+    assert sent[1] == '/screen/picture'                  # the release brought the page back
+    assert sent[2] == '/screen/picture?format=jpeg&seconds=3'
+
+
+def test_a_press_on_an_owned_board_goes_to_the_owner_and_nowhere_else():
+    import threading
+    got, seen = [], threading.Event()
+    def on_press(zone, how):
+        got.append((zone, how))
+        seen.set()
+    with patch.object(glass, '_known', {'b': _known_board(3, taps=True)}), patch.object(glass, '_owners', {}), \
+         patch.object(glass, '_streams', {}), patch('core.devices.drivers.satellite._call', return_value=None):
+        assert glass.press('b', 'top-left', 'short') is False       # nobody owns it: the bindings' turn
+        glass.claim('b', on_press)
+        assert glass.press('b', 'top-left', 'short') is True
+        assert seen.wait(1) and got == [('top-left', 'short')]
+        glass.release('b')
+
+
+def test_the_board_saying_hidden_tells_the_owner_once_and_ends_the_claim():
+    import time, threading
+    gone, told = threading.Event(), []
+    def on_gone():
+        told.append(1)
+        gone.set()
+    answers = iter([_Answer({'ok': True, 'hidden': True}), _Answer({'ok': True, 'hidden': True})])
+    with patch.object(glass, '_known', {'b': _known_board(20, taps=True)}), patch.object(glass, '_owners', {}), \
+         patch.object(glass, '_streams', {}), \
+         patch('core.devices.drivers.satellite._call', side_effect=lambda *a, **kw: next(answers, None)):
+        glass.claim('b', lambda z, h: None, on_gone=on_gone)
+        glass.stream_frame('b', b'f1')
+        assert gone.wait(1)
+        assert glass.owner('b') is None
+        glass.stream_frame('b', b'f2')                   # another hidden, nobody owns it: nothing more is said
+        time.sleep(0.15)
+        assert told == [1]
+        glass.stream_end('b')

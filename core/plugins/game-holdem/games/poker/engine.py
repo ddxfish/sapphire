@@ -661,3 +661,164 @@ def view_for_ai(state):
         'opp_name': sess['player_name'],
         'my_name': sess['ai_name'],
     }
+
+
+# ---------------------------------------------------------------- the glass
+# The table on a satellite's touch screen (game-room gameroom_glass.py, 2026-10-25):
+# seven places tiling the glass, the server the brain. The host owns the frame and
+# EXIT (the top place); this engine names the other six and draws the middle band.
+# `mem` is the session's own scratch: the raise size the bottom place cycles through.
+
+SIZES = ('min', 'half', 'pot')
+SIZE_WORDS = {'min': 'min', 'half': 'half pot', 'pot': 'pot'}     # plain ASCII: the glass's font has no fractions
+GLASS_INK, GLASS_DIM, GLASS_RED, GLASS_BACK = (235, 240, 235), (150, 160, 155), (200, 50, 50), (36, 60, 120)
+
+
+def _size_to(hand, legal, size):
+    """The street bet a sizing names (poker.js's presets): min, half pot, pot; clamped, in 5s."""
+    lo, hi = legal['min_raise_to'], legal['max_raise_to']
+    to_call = legal.get('to_call') or 0
+    my_bet = hand['street_bets']['player']
+    base = hand['pot'] + to_call
+    want = {'min': lo, 'half': my_bet + to_call + base / 2, 'pot': my_bet + to_call + base}.get(size, lo)
+    return int(max(lo, min(hi, round(want / 5) * 5)))
+
+
+def glass_actions(view, mem):
+    """zone -> slot for the player's view: a move {'label', 'door', 'action', 'args'}, a local
+    change {'label', 'set'} or a dim place {'label', 'off': True}. Nothing for the top (EXIT)."""
+    sess = (view or {}).get('session')
+    hand = (view or {}).get('hand')
+    if not sess:
+        return {'middle': {'label': 'SIT DOWN', 'door': 'new-session'}}
+    if sess['player_chips'] <= 0 or sess['ai_chips'] <= 0:
+        return {'middle': {'label': 'NEW SESSION', 'door': 'new-session'}}
+    if not hand or hand.get('street') == 'over':
+        return {'middle': {'label': 'DEAL', 'door': 'start'}}
+    size = mem.get('size') if mem.get('size') in SIZES else 'pot'
+    out = {'bottom': {'label': f'size: {SIZE_WORDS[size]}', 'set': {'size': SIZES[(SIZES.index(size) + 1) % len(SIZES)]}}}
+    legal = hand.get('legal') or {}
+    acts = legal.get('actions') or []
+    if hand.get('to_act') != 'player' or not acts:
+        for zone, label in (('top-left', 'FOLD'), ('top-right', 'CALL'), ('bottom-left', 'RAISE'), ('bottom-right', 'ALL-IN')):
+            out[zone] = {'label': label, 'off': True}
+        return out
+    if 'fold' in acts:                                   # never offered at to_call 0 (check is)
+        out['top-left'] = {'label': 'FOLD', 'door': 'act', 'action': 'fold'}
+    if 'check' in acts:
+        out['top-right'] = {'label': 'CHECK', 'door': 'act', 'action': 'check'}
+    elif 'call' in acts:
+        out['top-right'] = {'label': f"CALL {legal.get('to_call', 0)}", 'door': 'act', 'action': 'call'}
+    verb = 'bet' if 'bet' in acts else 'raise' if 'raise' in acts else None
+    if verb:
+        amount = _size_to(hand, legal, size)
+        out['bottom-left'] = {'label': f'{verb.upper()} {amount}', 'door': 'act', 'action': verb, 'args': {'amount': amount}}
+        out['bottom-right'] = {'label': 'ALL-IN', 'door': 'act', 'action': verb, 'args': {'amount': legal['max_raise_to']}}
+    else:
+        out['bottom-left'] = {'label': 'RAISE', 'off': True}
+        out['bottom-right'] = {'label': 'ALL-IN', 'off': True}
+    return out
+
+
+def _suit(draw, cx, cy, s, suit):
+    """A suit mark about s px tall, as polygons: Pillow's default font has no suit glyphs."""
+    fill = GLASS_RED if suit in 'hd' else (20, 20, 24)
+    q, hf = s / 4, s / 2
+    if suit == 'd':
+        draw.polygon([(cx, cy - hf), (cx + hf, cy), (cx, cy + hf), (cx - hf, cy)], fill=fill)
+    elif suit == 'h':
+        draw.ellipse((cx - hf, cy - hf, cx, cy), fill=fill)
+        draw.ellipse((cx, cy - hf, cx + hf, cy), fill=fill)
+        draw.polygon([(cx - hf, cy - q / 2), (cx + hf, cy - q / 2), (cx, cy + hf)], fill=fill)
+    elif suit == 's':
+        draw.polygon([(cx - hf, cy + q / 2), (cx + hf, cy + q / 2), (cx, cy - hf)], fill=fill)
+        draw.ellipse((cx - hf, cy, cx, cy + hf), fill=fill)
+        draw.ellipse((cx, cy, cx + hf, cy + hf), fill=fill)
+        draw.rectangle((cx - 1, cy + q, cx + 1, cy + hf + 1), fill=fill)
+    else:
+        draw.ellipse((cx - q, cy - hf, cx + q, cy), fill=fill)
+        draw.ellipse((cx - hf, cy - q / 2, cx, cy + q), fill=fill)
+        draw.ellipse((cx, cy - q / 2, cx + hf, cy + q), fill=fill)
+        draw.rectangle((cx - 1, cy, cx + 1, cy + hf + 1), fill=fill)
+
+
+def _card(draw, x, y, code, font, w=24, h=32):
+    """One card at (x, y): a code like 'Kh', 'back' (face down) or None (an empty slot)."""
+    if code is None:
+        draw.rounded_rectangle((x, y, x + w, y + h), radius=3, outline=(60, 110, 80))
+        return
+    if code == 'back':
+        draw.rounded_rectangle((x, y, x + w, y + h), radius=3, fill=GLASS_BACK, outline=(90, 120, 190))
+        return
+    draw.rounded_rectangle((x, y, x + w, y + h), radius=3, fill=(246, 246, 240))
+    rank = '10' if code[0] == 'T' else code[0]
+    red = code[1] in 'hd'
+    draw.text((x + 3, y + 1), rank, font=font, fill=GLASS_RED if red else (20, 20, 24))
+    s = max(10, round(w * 0.42))
+    _suit(draw, x + w - s * 0.8, y + h - s * 0.9, s, code[1])
+
+
+def _wrap(draw, text, font, width):
+    words, lines, line = text.split(), [], ''
+    for word in words:
+        trial = (line + ' ' + word).strip()
+        if draw.textlength(trial, font=font) <= width or not line:
+            line = trial
+        else:
+            lines.append(line)
+            line = word
+    if line:
+        lines.append(line)
+    return lines
+
+
+def render_glass(draw, box, view, mem):
+    """The game's picture on the glass (the host gives it 80% of the width, from the top
+    row of labels down to the strip under it: 256x124 on the speaker board): her name
+    and stack, the pot, the board, my hole cards, hers face down (shown at a showdown);
+    the result between hands. Everything scales from the box's height. PIL ImageDraw,
+    box = (x0, y0, x1, y1)."""
+    from PIL import ImageFont
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    k = max(1.0, min(1.5, bh / 128))                  # 1 on the speaker board's 124 px picture; a taller glass grows it, capped so nothing collides
+    f = ImageFont.load_default(size=round(13 * k))
+    cw, ch, gap = round(24 * k), round(32 * k), round(3 * k)
+    sess, hand = (view or {}).get('session'), (view or {}).get('hand')
+    if not sess:
+        draw.text(((x0 + x1) / 2, (y0 + y1) / 2), "Heads-Up Hold'em", font=f, fill=GLASS_INK, anchor='mm')
+        return
+    over = not hand or hand.get('street') == 'over'
+    dealer = lambda who: ' D' if hand and hand.get('dealer') == who else ''      # the default font has no dot glyph
+    me = f"{str(sess['player_name'])[:10]}{dealer('player')}  {sess['player_chips']}"
+    pad = round(4 * k)
+    draw.text((x0 + pad, y0 + 2), f"{str(sess['ai_name'])[:10]}{dealer('ai')}  {sess['ai_chips']}", font=f, fill=GLASS_INK)
+    if hand and not over:
+        draw.text((x1 - pad, y0 + 2), f"pot {hand['pot']}", font=f, fill=GLASS_INK, anchor='ra')
+    busted = sess['player_chips'] <= 0 or sess['ai_chips'] <= 0
+    if over:
+        said = ''
+        if busted:
+            said = f"{sess['ai_name']} has the table." if sess['player_chips'] <= 0 else f"You felted {sess['ai_name']}."
+        elif hand and hand.get('result'):
+            said = str(hand['result'].get('desc') or '').replace('\u2014', '-')   # no em dash in the glass's font
+        y = y0 + round(20 * k)
+        for line in _wrap(draw, said, f, bw - 2 * pad)[:3]:
+            draw.text((x0 + pad, y), line, font=f, fill=GLASS_INK)
+            y += round(15 * k)
+        draw.text((x0 + pad, y + 2), me, font=f, fill=GLASS_INK)            # above the host's DEAL label
+        return
+    board = list(hand.get('board') or [])
+    bx = (x0 + x1) / 2 - (5 * cw + 4 * gap) / 2
+    for i in range(5):
+        _card(draw, bx + i * (cw + gap), y0 + round(20 * k), board[i] if i < len(board) else None, f, cw, ch)
+    cy = y1 - ch - pad
+    for i, code in enumerate(hand.get('player_hole') or []):
+        _card(draw, x0 + pad + i * (cw + gap), cy, code, f, cw, ch)
+    hers = hand.get('ai_hole') or ['back', 'back']
+    for i, code in enumerate(hers[:2]):
+        _card(draw, x1 - pad - (2 - i) * cw - (1 - i) * gap, cy, code, f, cw, ch)
+    # between my cards and hers, level with them: my name and stack when they fit, else the stack alone
+    room = bw - 2 * (pad + 2 * cw + gap) - 2 * pad
+    short = f"{dealer('player').strip()} {sess['player_chips']}".strip()
+    draw.text(((x0 + x1) / 2, cy + ch / 2), me if draw.textlength(me, font=f) <= room else short, font=f, fill=GLASS_INK, anchor='mm')

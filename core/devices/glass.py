@@ -207,21 +207,36 @@ def start():
 # nothing queues, and whoever made the frame never waits on the board. Each
 # board is reached with its own secrets, as every call is. Nothing here knows
 # what the frames show.
+#
+# A sender may also OWN the board's taps while its stream runs (claim, 0.9.0
+# firmware): the board then names the place under every tap (screen.zones) and
+# sends it as a raw press, which voice.pressed hands to the owner instead of
+# the bindings; no tap dismisses the stream, and a long press on it is the
+# player's way out (the next frame is answered `hidden`: the owner is told).
 
 STREAM_SECONDS = 3            # the board's own page comes back this long after the last frame
 STREAM_IDLE_S = 15            # a sender with nothing to send for this long ends; the next frame starts one again
 STREAM_FPS = 3                # the beat when a board states none
 FRAME_MAX = 256 * 1024        # a frame larger than this is refused (the board's own limit)
+HOLD_DEFAULT = 60             # seconds an owned stream stays up after its last frame (a table changes on moves, not on a clock)
+ZONE_NAME = re.compile(r'[^a-z0-9-]')
 
-_known = {}                   # device id -> (config, secrets, w, h, fps)
+_known = {}                   # device id -> {'config', 'secrets', 'w', 'h', 'fps', 'taps', 'zones'}
 _streams = {}                 # device id -> _Stream
+_owners = {}                  # device id -> _Owner: who has the board's taps while a stream runs
+
+
+class _Owner:
+    def __init__(self, who, on_press, on_gone, hold):
+        self.who, self.on_press, self.on_gone, self.hold = who, on_press, on_gone, hold
+        self.gone = False
 
 
 class _Stream:
     def __init__(self, device_id, known):
         self.device_id = device_id
-        self.known = known[:2]
-        self.fps = max(1, min(30, int(known[4] or STREAM_FPS)))
+        self.known = known
+        self.fps = max(1, min(30, int(known['fps'] or STREAM_FPS)))
         self.next = None
         self.sent = self.replaced = self.failed = 0
         self.last_error = ''
@@ -264,23 +279,65 @@ class _Stream:
             with self.cv:
                 jpeg, self.next = self.next, None
             due = time.monotonic() + period
+            with _lock:
+                own = _owners.get(self.device_id)
+            path = f'/screen/picture?format=jpeg&seconds={own.hold if own else STREAM_SECONDS}' + ('&taps=1' if own else '')
             try:
-                satellite._call('POST', f'/screen/picture?format=jpeg&seconds={STREAM_SECONDS}', *self.known,
-                                timeout=5, data=jpeg, headers={'Content-Type': 'image/jpeg'})
+                r = satellite._call('POST', path, self.known['config'], self.known['secrets'],
+                                    timeout=5, data=jpeg, headers={'Content-Type': 'image/jpeg'})
                 self.sent += 1
             except Exception as e:
                 self.failed += 1
                 self.last_error = str(e)[:160]
+                continue
+            if own and _said_hidden(r):
+                _gone(self.device_id, own)
         with _lock:
             if _streams.get(self.device_id) is self:
                 del _streams[self.device_id]
+
+
+def _said_hidden(r):
+    """The board answered a frame `hidden`: tapped away, or a tapping stream left by a long press."""
+    try:
+        from core.devices.drivers import satellite
+        return bool(satellite._json(r).get('hidden'))
+    except Exception:
+        return False
+
+
+def _gone(device_id, own):
+    """The player left an owned stream (the board said `hidden`): the owner is told once and forgotten."""
+    with _lock:
+        if _owners.get(device_id) is not own or own.gone:
+            return
+        own.gone = True
+        del _owners[device_id]
+    if own.on_gone:
+        threading.Thread(target=own.on_gone, daemon=True, name=f'glass-gone-{device_id}').start()
+
+
+def _zones(said):
+    """The places a board names its taps by, as /health screen.zones states them: [{'name', 'x', 'y', 'w', 'h'}]."""
+    out = []
+    for z in said if isinstance(said, list) else []:
+        try:
+            name = ZONE_NAME.sub('', str(z.get('name') or '').strip().lower())[:24]
+            box = {k: int(z[k]) for k in ('x', 'y', 'w', 'h')}
+            if name and box['w'] > 0 and box['h'] > 0:
+                out.append({'name': name, **box})
+        except Exception:
+            continue
+    return out
 
 
 def _learn(row, config, secrets, screen):
     w, h = int(screen.get('w') or 0), int(screen.get('h') or 0)
     if not (screen.get('jpeg') and screen.get('on', True) and min(w, h) >= 64):
         return None
-    known = (config, secrets, w, h, int(screen.get('fps') or STREAM_FPS))
+    zones = _zones(screen.get('zones'))
+    known = {'config': config, 'secrets': secrets, 'w': w, 'h': h, 'fps': int(screen.get('fps') or STREAM_FPS),
+             'taps': bool(screen.get('taps')) and bool(zones), 'zones': zones}
     with _lock:
         _known[row['id']] = known
     return known
@@ -305,12 +362,13 @@ def _lookup(device_id):
     return known
 
 
-def stream_boards():
+def stream_boards(online_only=False):
     """Every enabled satellite whose glass is on and takes a JPEG frame
     (firmware 0.7.7+, `screen.jpeg` in its /health): [(device id, w, h, fps)],
     the whole glass and the beat it paints on. Each board's /health is asked at
-    most once a minute."""
-    from core.devices import engine
+    most once a minute. `online_only`: a board the health keeper believes offline
+    is not asked at all (an offline board costs a full timeout to ask)."""
+    from core.devices import engine, health
     from core.devices.drivers import satellite
     out = []
     with _lock:
@@ -319,6 +377,8 @@ def stream_boards():
         part = engine._part(row, 'satellite')
         if not part or not row.get('enabled', True):
             continue
+        if online_only and not (health.view(row['id']) or {}).get('online', True):
+            continue
         try:
             config, secrets = part.get('config') or {}, engine._part_secrets(row['id'], 'satellite')
             screen = satellite._health(row, config, secrets).get('screen') or {}
@@ -326,8 +386,16 @@ def stream_boards():
             continue
         known = _learn(row, config, secrets, screen)
         if known:
-            out.append((row['id'], known[2], known[3], known[4]))
+            out.append((row['id'], known['w'], known['h'], known['fps']))
     return out
+
+
+def takes(device_id):
+    """What that board's glass takes: {'w', 'h', 'fps', 'max_bytes', 'taps', 'zones'}.
+    `taps` = a stream may own its taps (claim), `zones` the places a tap is
+    named by. Raises LookupError for a board with no glass that takes frames."""
+    k = _lookup(device_id)
+    return {'w': k['w'], 'h': k['h'], 'fps': k['fps'], 'max_bytes': FRAME_MAX, 'taps': k['taps'], 'zones': list(k['zones'])}
 
 
 def stream_frame(device_id, jpeg):
@@ -357,7 +425,7 @@ def stream_end(device_id):
         stream.stop()
     if known:
         try:
-            satellite._call('POST', '/screen/picture', *known[:2], timeout=5, json={'clear': True})
+            satellite._call('POST', '/screen/picture', known['config'], known['secrets'], timeout=5, json={'clear': True})
         except Exception:
             pass
 
@@ -369,6 +437,56 @@ def stream_status(device_id=None):
             s = _streams.get(device_id)
             return s.status() if s else None
         return {d: s.status() for d, s in _streams.items()}
+
+
+# --- a stream that owns the board's taps ------------------------------------
+
+def claim(device_id, on_press, on_gone=None, hold=HOLD_DEFAULT, who=''):
+    """Own that board's taps while a stream runs: its frames go with `taps=1`
+    and stay up `hold` seconds after the last one; every tap on the stream
+    reaches `on_press(zone, how)` (the zone's name from `zones`, 'short'), on
+    a thread of its own, and never the bindings or a chat turn. When the
+    player leaves (a long press on the board), `on_gone()` is called once and
+    the claim is over. Returns what the glass takes (`takes`). Raises
+    LookupError for a glass that does not pass its taps on (firmware before
+    0.9.0, or none), RuntimeError when another owner has it."""
+    what = takes(device_id)
+    if not what['taps']:
+        raise LookupError(f"{device_id}'s glass does not pass its taps on (firmware 0.9.0 or later)")
+    with _lock:
+        held = _owners.get(device_id)
+        if held is not None:
+            raise RuntimeError(f"{device_id}'s glass is already taken{' by ' + held.who if held.who else ''}")
+        _owners[device_id] = _Owner(who, on_press, on_gone, max(5, min(3600, int(hold))))
+    return what
+
+
+def release(device_id):
+    """The claim is over and the board's own page comes back now. Safe to call twice."""
+    with _lock:
+        own = _owners.pop(device_id, None)
+    if own:
+        own.gone = True
+    stream_end(device_id)
+
+
+def owner(device_id):
+    """Who owns that board's taps now ('' for a nameless claim), or None."""
+    with _lock:
+        own = _owners.get(device_id)
+    return own.who if own else None
+
+
+def press(device_id, button, how):
+    """A press on that board, from voice.pressed: True when a claim took it
+    (the owner's on_press runs on a thread of its own: the board waits on the
+    answer), False when nobody owns the board's taps."""
+    with _lock:
+        own = _owners.get(device_id)
+    if own is None:
+        return False
+    threading.Thread(target=own.on_press, args=(button, how), daemon=True, name=f'glass-press-{device_id}').start()
+    return True
 
 
 # The first senders (FlashHead) asked for a square and painted a face. Kept as

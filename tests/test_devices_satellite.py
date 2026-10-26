@@ -88,7 +88,7 @@ def test_spec_registers_as_a_core_driver():
     assert reg.register_driver('satellite', sat.SPEC, 'core', builtin=True)
     spec = reg.get_driver('satellite')
     assert spec['capabilities'] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard',
-                                    'buttons', 'sensors', 'firmware']
+                                    'buttons', 'sensors', 'firmware', 'ir', 'picker']
     sat._about[DEV['id']] = (0, {'has': ['firmware']})      # describe() offers firmware only to a board that says it
     try:
         assert sorted(spec['capabilities']) == sorted(sat.describe(DEV, CFG))

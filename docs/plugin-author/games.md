@@ -241,3 +241,41 @@ lists such boards, and the host grabs the canvas on the board's own beat
 newest (see devices.md, "A stream on a board's glass"). Leaving the room ends
 the cast. Your game does nothing for it: whatever it draws on `#gr-stage
 canvas` is what the board shows.
+
+## The glass: a table on a board's touch screen
+
+A turn game can be PLAYED from a satellite's touch glass with the server as
+the brain (the speaker board, firmware 0.9.0: seven places tiling the glass,
+`screen.zones` and `screen.taps` in its `/health`): the Game Room renders a
+small frame per move (`gameroom_glass.py`), every tap on the board is a move
+through the same `act` / `start` / `new-session` doors the browser uses, her
+seat plays, her lines are spoken on the board, and any open room redraws on the
+`game_state_changed` bus event. The stage bar's select reads `glass:` instead
+of `cast:` for such a game; leaving the room does not end the table (EXIT on
+the board's top place does, or a finger held on it for over a second, or half an hour untouched).
+A private session never goes on a glass. The host owns the frame and EXIT;
+export two functions and your game is on:
+
+- `glass_actions(view, mem) -> {zone: slot}` for the player's view
+  (`redact`) and `mem`, the session's own scratch the host keeps for you.
+  Zones: `top-left`, `top-right`, `bottom-left`, `bottom-right`, `bottom`,
+  `middle` (`top` is EXIT, never yours). A slot is a move
+  `{'label', 'door': 'act' | 'start' | 'new-session', 'action', 'args'}`, a
+  local change `{'label', 'set': {...}}` merged into `mem` with a redraw and
+  nothing else (poker's raise size cycles this way), or a dim place
+  `{'label', 'off': True}`. Leave a zone out and it is empty. Each label is
+  drawn small inside the hit box of its place: the top row above the game's
+  picture, the bottom row under it, the middle's on a strip at the middle
+  place's lower edge, so a finger on a word lands in its place. A `middle` you leave
+  empty is the host's TALK: the board listens and the words ride the player's
+  next `act` as `say` (poker: mid-hand), so leave it empty whenever a move
+  may carry words.
+- `render_glass(draw, box, view, mem)`: draw the game's picture (80% of the
+  width, from the top row of labels down to the strip: 256x124 on the speaker
+  board) with a PIL `ImageDraw` inside `box = (x0, y0, x1, y1)`. The
+  default font has no suit or fraction glyphs: poker draws its suits as small
+  polygons (`_suit` in its engine) and keeps labels ASCII.
+
+Hold'em is the worked example: FOLD / CHECK or CALL n / RAISE n / ALL-IN in
+the corners, DEAL or SIT DOWN in the middle between hands, the raise size on
+the bottom; everything `off` while her seat acts.
