@@ -36,7 +36,6 @@ _toggle_locks_guard = threading.Lock()
 _user_plugins_file_mutex = threading.Lock()
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
 
 _install_lock = threading.Lock()
 
@@ -193,46 +192,23 @@ def _enforce_locked(result):
 
 
 def _get_merged_plugins():
-    """Merge static and user plugins.json into the shape the UI consumes.
+    """The plugin enable state the UI consumes: {"enabled": [...], "plugins": {}}.
 
-    The `enabled` list reflects what's ACTUALLY RUNNING, not just what's in
-    the user file. Backends with `default_enabled: true` + no explicit user
-    toggle are live via scan() semantics but won't appear in the user file
-    until the user clicks the toggle — previously this meant /api/init's
-    `plugins_config.enabled` missed them, and the frontend's
-    `enabledPlugins` Set (which drives scope-dropdown visibility in
-    scope-dropdowns.js:64) hid their scopes. Tools worked via SCOPE_REGISTRY
-    but the Mind dropdowns ghosted. Toggle-off-then-on wrote the plugin to
-    disk and the mismatch resolved. TODO L132 — 2026-04-21.
+    `enabled` is what is ACTUALLY RUNNING, not just the user file: a backend
+    with `default_enabled: true` and no explicit toggle is live via scan()
+    semantics but absent from the file until the user clicks — /api/init's
+    `plugins_config.enabled` drives scope-dropdown visibility (scope-dropdowns.js),
+    so missing them ghosted the Mind dropdowns. TODO L132 — 2026-04-21.
+    `plugins` is empty since the core-UI class retired (2026-10-25): every
+    plugin is the loader's; the key stays for the shape's consumers.
     """
-    static_plugins_json = STATIC_DIR / 'core-ui' / 'plugins.json'
-    try:
-        with open(static_plugins_json, encoding='utf-8') as f:
-            static = json.load(f)
-    except Exception:
-        static = {"enabled": [], "plugins": {}}
-
+    merged = {"enabled": [], "plugins": {}}
     if USER_PLUGINS_JSON.exists():
         try:
             with open(USER_PLUGINS_JSON, encoding='utf-8') as f:
-                user = json.load(f)
+                merged["enabled"] = list(json.load(f).get("enabled", []))
         except Exception:
-            user = None
-    else:
-        user = None
-
-    if user is None:
-        merged = {
-            "enabled": list(static.get("enabled", [])),
-            "plugins": dict(static.get("plugins", {}))
-        }
-    else:
-        merged = {
-            "enabled": list(user.get("enabled", static.get("enabled", []))),
-            "plugins": dict(static.get("plugins", {})),
-        }
-        if "plugins" in user:
-            merged["plugins"].update(user["plugins"])
+            pass
 
     # Augment with runtime-enabled plugins the user file doesn't yet list
     # (default_enabled semantics). The plugin_loader is the source of truth
@@ -269,14 +245,7 @@ def _is_core_essential(name: str) -> bool:
     try:
         from core.plugin_loader import plugin_loader
         info = plugin_loader.get_plugin_info(name)
-        if info and info.get("manifest", {}).get("essential") is True:
-            return True
-    except Exception:
-        pass
-    # Static core-ui plugins carry the flag in their plugins.json meta
-    try:
-        merged = _get_merged_plugins()
-        return merged.get("plugins", {}).get(name, {}).get("essential") is True
+        return bool(info and info.get("manifest", {}).get("essential") is True)
     except Exception:
         return False
 
@@ -306,82 +275,65 @@ def _plugin_display_title(fields: dict, name: str) -> str:
 
 @router.get("/api/webui/plugins")
 async def list_plugins(request: Request, _=Depends(require_login)):
-    """List all plugins (core-ui + backend plugins)."""
-    merged = _get_merged_plugins()
-    enabled_set = set(merged.get("enabled", []))
-
+    """List the plugins the loader knows: every plugin is the loader's since the
+    core-UI class retired (2026-10-25). A LOCKED_PLUGINS name reads on and locked."""
+    enabled_set = set(_get_merged_plugins().get("enabled", []))
     result = []
-    seen = set()
-    for name, meta in merged.get("plugins", {}).items():
-        result.append({
-            "name": name,
-            "enabled": name in enabled_set,
-            "locked": name in LOCKED_PLUGINS,
-            "title": _plugin_display_title(meta, name),
-            "showInSidebar": meta.get("showInSidebar", True),
-            "collapsible": meta.get("collapsible", True),
-            "settingsUI": "core",
-            "essential": meta.get("essential", False)
-        })
-        seen.add(name)
-
-    # Include backend plugins discovered by plugin_loader
     try:
         from core.plugin_loader import plugin_loader, PLUGIN_PREV_DIR
         for info in plugin_loader.get_all_plugin_info():
-            if info["name"] not in seen:
-                manifest = info.get("manifest", {})
-                plugin_dir = info.get("path", "")
-                has_web = (Path(plugin_dir) / "web" / "index.js").exists() if plugin_dir else False
-                has_script = (Path(plugin_dir) / "web" / "main.js").exists() if plugin_dir else False
-                settings_schema = manifest.get("capabilities", {}).get("settings")
-                # Respect manifest settingsUI — null means no separate settings page
-                manifest_ui = manifest.get("settingsUI", "auto")
-                if manifest_ui is None or manifest_ui == "none":
-                    settings_ui = None
-                elif manifest_ui in ("plugin", "manifest", "core"):
-                    settings_ui = manifest_ui
-                elif has_web:
-                    settings_ui = "plugin"
-                elif settings_schema:
-                    settings_ui = "manifest"
-                else:
-                    settings_ui = None
-                result.append({
-                    "name": info["name"],
-                    "enabled": info.get("enabled", info["name"] in enabled_set),
-                    "locked": False,
-                    "title": _plugin_display_title(manifest, info["name"]),
-                    "showInSidebar": False,
-                    "collapsible": True,
-                    "settingsUI": settings_ui,
-                    "settings_schema": settings_schema,
-                    "verified": info.get("verified"),
-                    "verify_msg": info.get("verify_msg"),
-                    "verify_tier": info.get("verify_tier", "unsigned"),
-                    "verified_author": info.get("verified_author"),
-                    "url": _safe_http_url(manifest.get("url")),
-                    "version": manifest.get("version"),
-                    "author": manifest.get("author"),
-                    "description": (manifest.get("description") or ""),
-                    "icon": _safe_emoji_icon(manifest.get("icon")),
-                    "band": info.get("band"),
-                    "has_script": has_script,
-                    "sidebar_accordion": manifest.get("capabilities", {}).get("sidebar_accordion"),
-                    # plugin surfaces (2026-08-23): manifest default + the
-                    # effective list (user override wins); None = everywhere
-                    "surfaces": manifest.get("surfaces") if isinstance(manifest.get("surfaces"), list) else None,
-                    "surfaces_active": plugin_loader.effective_surfaces(info["name"], manifest),
-                    "missing_deps": info.get("missing_deps", []),
-                    "extra": _plugin_extra(info["name"]),
-                    "essential": manifest.get("essential", False),
-                    "env": info.get("env"),
-                    "has_prev": (info.get("band") == "user"
-                                 and (PLUGIN_PREV_DIR / info["name"] / "plugin.json").exists()),
-                })
+            manifest = info.get("manifest", {})
+            plugin_dir = info.get("path", "")
+            has_web = (Path(plugin_dir) / "web" / "index.js").exists() if plugin_dir else False
+            has_script = (Path(plugin_dir) / "web" / "main.js").exists() if plugin_dir else False
+            settings_schema = manifest.get("capabilities", {}).get("settings")
+            # Respect manifest settingsUI — null means no separate settings page
+            manifest_ui = manifest.get("settingsUI", "auto")
+            if manifest_ui is None or manifest_ui == "none":
+                settings_ui = None
+            elif manifest_ui in ("plugin", "manifest", "core"):
+                settings_ui = manifest_ui
+            elif has_web:
+                settings_ui = "plugin"
+            elif settings_schema:
+                settings_ui = "manifest"
+            else:
+                settings_ui = None
+            result.append({
+                "name": info["name"],
+                "enabled": bool(info.get("enabled", info["name"] in enabled_set)) or info["name"] in LOCKED_PLUGINS,
+                "locked": info["name"] in LOCKED_PLUGINS,
+                "title": _plugin_display_title(manifest, info["name"]),
+                "showInSidebar": False,
+                "collapsible": True,
+                "settingsUI": settings_ui,
+                "settings_schema": settings_schema,
+                "verified": info.get("verified"),
+                "verify_msg": info.get("verify_msg"),
+                "verify_tier": info.get("verify_tier", "unsigned"),
+                "verified_author": info.get("verified_author"),
+                "url": _safe_http_url(manifest.get("url")),
+                "version": manifest.get("version"),
+                "author": manifest.get("author"),
+                "description": (manifest.get("description") or ""),
+                "icon": _safe_emoji_icon(manifest.get("icon")),
+                "band": info.get("band"),
+                "has_script": has_script,
+                "sidebar_accordion": manifest.get("capabilities", {}).get("sidebar_accordion"),
+                # plugin surfaces (2026-08-23): manifest default + the
+                # effective list (user override wins); None = everywhere
+                "surfaces": manifest.get("surfaces") if isinstance(manifest.get("surfaces"), list) else None,
+                "surfaces_active": plugin_loader.effective_surfaces(info["name"], manifest),
+                "missing_deps": info.get("missing_deps", []),
+                "extra": _plugin_extra(info["name"]),
+                "essential": manifest.get("essential", False),
+                "env": info.get("env"),
+                "has_prev": (info.get("band") == "user"
+                             and (PLUGIN_PREV_DIR / info["name"] / "plugin.json").exists()),
+            })
     except Exception as e:
-        # A throw mid-loop truncates the listing to core-UI entries only —
-        # if that ever happens the user must at least see why in the log.
+        # A throw mid-loop truncates the listing — if that ever happens the
+        # user must at least see why in the log.
         logger.warning(f"[PLUGINS] Backend plugin listing failed mid-loop: {e}", exc_info=True)
 
     from core.hooks import SURFACES
@@ -450,9 +402,7 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
         return {"status": "success", "plugin": plugin_name, "enabled": None, "reload_required": False, "note": "toggle already in progress"}
 
     try:
-        merged = _get_merged_plugins()
-        # Accept both static (plugins.json) and backend (plugin_loader) plugins
-        known = set(merged.get("plugins", {}).keys())
+        known = set()
         try:
             from core.plugin_loader import plugin_loader
             known.update(info["name"] for info in plugin_loader.get_all_plugin_info())
@@ -1637,10 +1587,7 @@ async def remove_plugin_env(plugin_name: str, _=Depends(require_login)):
 
 
 def _require_known_plugin(plugin_name: str):
-    """404 if plugin doesn't exist in merged config or backend loader."""
-    merged = _get_merged_plugins()
-    if plugin_name in merged.get("plugins", {}):
-        return
+    """404 if the loader doesn't know the plugin."""
     try:
         from core.plugin_loader import plugin_loader
         if plugin_loader.get_plugin_info(plugin_name):

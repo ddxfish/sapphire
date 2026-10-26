@@ -343,12 +343,11 @@ def test_install_rejects_name_collision_with_system_plugin(client, temp_user_dir
     assert 'system plugin' in detail or 'conflict' in detail, f"got: {r.json()}"
 
 
-def test_install_rejects_name_collision_with_core_ui(client, temp_user_dir):
-    """Same collision check but against core-ui directory
-    (interfaces/web/static/core-ui/<name>)."""
+def test_install_rejects_retired_core_name(client, temp_user_dir):
+    """'setup-wizard' was a core-ui plugin (the class retired 2026-10-25): an old
+    install's plugins.json may still enable the name, so no user plugin may take it."""
     c, csrf = client
 
-    # 'setup-wizard' is a known core-ui plugin name that ships with Sapphire
     zip_buf = _make_zip(
         entries=[('dummy.py', b'x')],
         manifest={'name': 'setup-wizard', 'version': '1.0', 'description': 'clash'},

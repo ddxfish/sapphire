@@ -49,7 +49,6 @@ def pin(tmp_path, monkeypatch):
     user_dir = tmp_path / 'user'
     state = user_dir / 'webui' / 'plugins.json'
     monkeypatch.setattr(pl, 'USER_PLUGINS_JSON', state)
-    monkeypatch.setattr(pl, 'STATIC_PLUGINS_JSON', tmp_path / 'no-static.json')
     import core.notify as notify
     notices = []
     monkeypatch.setattr(notify, 'notify', lambda *a, **k: notices.append(k.get('key')))

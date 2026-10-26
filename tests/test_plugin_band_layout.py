@@ -74,6 +74,7 @@ def test_one_collision_rule_guards_every_install_door():
     this rule, the store tool — Sapphire's own door — did not (2026-10-17)."""
     from core.plugin_loader import core_name_collision
     assert "core/plugins/memory" in core_name_collision("memory")
+    assert "retired" in core_name_collision("setup-wizard")          # the core-ui class is gone; its names stay reserved
     a_function = next(p.stem for p in sorted((PROJECT_ROOT / "functions").glob("*.py"))
                       if not p.stem.startswith("_") and not (SYSTEM_PLUGINS_DIR / p.stem).is_dir())
     assert "core function" in core_name_collision(a_function)

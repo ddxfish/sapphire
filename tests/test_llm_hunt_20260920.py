@@ -183,7 +183,6 @@ def test_preset_switch_clears_the_typed_key():
 # ═════════════════════════════════════════════════════════════════════════════
 
 LLM_PROVIDERS_JS = (ROOT / 'interfaces/web/static/shared/llm-providers.js').read_text(encoding='utf-8')
-WIZARD_JS = (ROOT / 'interfaces/web/static/core-ui/setup-wizard/tabs/llm.js').read_text(encoding='utf-8')
 CHAT_MANAGE_JS = (ROOT / 'interfaces/web/static/views/chat-manage.js').read_text(encoding='utf-8')
 
 
@@ -247,12 +246,6 @@ def test_penalties_have_no_silent_default_in_the_card():              # S12
 
 def test_core_openai_card_has_no_dead_disable_thinking_toggle():      # U15
     assert "const isOpenAITemplate = config.template === 'openai';" in LLM_PROVIDERS_JS
-
-
-def test_wizard_puts_fail_loudly():                                    # U9
-    assert "import { showToast } from '../../../shared/toast.js';" in WIZARD_JS
-    assert WIZARD_JS.count('await updateProvider(') == 2 and WIZARD_JS.count('} catch (err) {') >= 2
-    assert 'if (!settings.LLM_PROVIDERS) settings.LLM_PROVIDERS = {};' in WIZARD_JS.split('// Config field changes')[1]
 
 
 def test_compress_modal_forgets_providers_on_change():                # U6

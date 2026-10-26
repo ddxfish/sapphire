@@ -464,7 +464,7 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 
 **Tasks fire at the wrong hour / her clock is off (often Windows)**
 - Timezone is auto-detected at first start. Linux/macOS read `/etc/localtime`; Windows needs the `tzlocal` package (it's in `requirements.txt` and the minimal set). Without it the log warns and `USER_TIMEZONE` stays UTC — schedules and the clock in her prompt run in UTC.
-- Fix: pick your timezone in the setup wizard's Identity step, or set `USER_TIMEZONE` in `user/settings.json`, then restart. `pip install tzlocal` makes detection work next boot.
+- Fix: pick your timezone in the setup wizard's You step, or set `USER_TIMEZONE` in `user/settings.json`, then restart. `pip install tzlocal` makes detection work next boot.
 - Docker: set `TZ` in `docker-compose.yml`.
 
 **"Invalid cron schedule" error**

@@ -84,7 +84,6 @@ def isolated_memory_loader(tmp_path, monkeypatch):
     iso_state = tmp_path / "iso_plugins.json"
     iso_state.write_text('{"enabled": ["memory"], "disabled": []}', encoding="utf-8")
     monkeypatch.setattr(pl, "USER_PLUGINS_JSON", iso_state)
-    monkeypatch.setattr(pl, "STATIC_PLUGINS_JSON", iso_state)
 
     # Allow unsigned plugins for the test environment, in case the symlinked
     # memory plugin's signature doesn't validate against its symlinked path.

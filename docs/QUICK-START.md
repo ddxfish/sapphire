@@ -4,12 +4,15 @@ You've installed Sapphire and opened it in your browser. The setup wizard walks 
 
 ## Phase 1: Setup Wizard
 
-On first launch, the wizard walks four steps:
+On first launch the wizard opens full-screen (later: Settings → System → Run Setup Wizard). The required lane first, then a gate, then the optional parts:
 
-1. **Voice** — This is where you turn voice on. Pick a speech-to-text provider (local Faster Whisper or cloud), a text-to-speech provider (local Kokoro or ElevenLabs), and enable the wake word if you want hands-free "hey sapphire". Leave everything Disabled for a text-only install. Full details: [VOICE.md](VOICE.md).
-2. **Audio** — Choose and test your microphone and speakers.
-3. **AI Brain** — Choose an LLM (local or cloud), enter its key or URL, and hit **Test Connection** to verify it responds.
-4. **Identity** — Your name and timezone, so the AI knows who it's talking to and when.
+1. **Consent** — what runs locally and what a cloud provider would see.
+2. **You** — your name and timezone, so the AI knows who it's talking to and when.
+3. **Brain** — choose an LLM (local or cloud), enter its key or URL, and hit **Test Connection** to verify it responds.
+4. **Voice** — her voice (text-to-speech), her ears (speech-to-text) and the wake word, each a row of provider cards with everything else under Advanced. Leave them off for a text-only install. Full details: [VOICE.md](VOICE.md).
+5. **Audio** — choose and test your microphone and speakers.
+
+Finish there, or carry on: **Plugins** (the featured ones, on unless you untick them), **Look** (theme, font, background) and **What next** (where everything lives). Provider switches and model downloads run as jobs with rows in the notification center; the wizard shows them too.
 
 If you skip the wizard, everything is reachable later: LLM in Settings → LLM, voice in Settings → TTS / STT / Wakeword (see [VOICE.md](VOICE.md)).
 
@@ -311,7 +314,7 @@ Or follow the whole ladder in order: [MASTERY-GUIDE.md](MASTERY-GUIDE.md).
 Guide users through initial Sapphire setup and first persona creation.
 
 SETUP ORDER:
-1. Setup wizard — four steps: Voice (STT/TTS/wake word — voice on/off lives here, docs/VOICE.md), Audio (mic + speaker devices), AI Brain (LLM + Test Connection), Identity (user name + timezone)
+1. Setup wizard — Consent, You (name + timezone), Brain (LLM + Test Connection), Voice (TTS / STT / wake word cards, docs/VOICE.md), Audio (mic + speakers); optional after the gate: Plugins, Look, What next
 2. Create assembled prompt (Prompts view → + → Assembled)
 3. Create toolset (Toolsets view → + → check functions)
 4. Pick a spice set + its categories (Spices view)

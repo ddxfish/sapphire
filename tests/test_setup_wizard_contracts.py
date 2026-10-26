@@ -114,6 +114,17 @@ def test_look_step_is_theme_font_background_and_one_fold():
     assert "w.host.mount(appearanceTab, body.querySelector('[data-tab=\"appearance\"] .setup-sub-body'));" in look
 
 
+def test_core_ui_class_is_gone():
+    """Wave 4 (2026-10-25): the old core-ui setup wizard and the static plugin
+    list it rode on are retired; every plugin is the loader's."""
+    assert not (ROOT / 'interfaces/web/static/core-ui').exists()
+    for rel, static in (('core/plugin_loader.py', False), ('core/routes/plugins.py', False),
+                        ('views/settings.js', True), ('core/events.js', True)):
+        src = _src(rel) if static else (ROOT / rel).read_text(encoding='utf-8')
+        assert 'core-ui' not in src and 'STATIC_PLUGINS_JSON' not in src and 'sapphireSetupWizard' not in src, rel
+    assert 'RETIRED_PLUGIN_NAMES = frozenset({"setup-wizard"})' in (ROOT / 'core/plugin_loader.py').read_text(encoding='utf-8')
+
+
 def test_next_step_every_door_finishes_first():
     n = _src('views/setup-steps/next.js')
     assert "import { burst } from '../../shared/confetti.js';" in n and 'burst();' in n

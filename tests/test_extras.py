@@ -25,7 +25,9 @@ def present(*names):
 
 
 def test_only_the_named_sets_exist_and_flash_is_one():
-    assert set(extras.EXTRAS) == {'flash'}
+    assert set(extras.EXTRAS) == {'flash', 'tts', 'stt', 'wakeword'}      # the voice sets came with the setup wizard (2026-10-22)
+    for name, spec in extras.EXTRAS.items():
+        assert (extras.ROOT / spec['file']).is_file(), name
     assert (extras.ROOT / extras.EXTRAS['flash']['file']).is_file()
     assert extras.EXTRAS['flash']['restart'] is False
 

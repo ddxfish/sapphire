@@ -79,7 +79,7 @@ See [Chat-Scoped State](tools.md#chat-scoped-state).
       "url": "https://sapphireblue.dev"
     }
   ],
-  "locked": ["setup-wizard", "backup", "continuity"]
+  "locked": []
 }
 ```
 

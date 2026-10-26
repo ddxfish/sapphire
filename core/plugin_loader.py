@@ -36,7 +36,9 @@ PLUGIN_PREV_DIR = PROJECT_ROOT / "user" / "plugin_prev"
 
 # Where enabled/disabled state is stored
 USER_PLUGINS_JSON = PROJECT_ROOT / "user" / "webui" / "plugins.json"
-STATIC_PLUGINS_JSON = PROJECT_ROOT / "interfaces" / "web" / "static" / "core-ui" / "plugins.json"
+# Core-ui plugin names from before the class retired (2026-10-25): an old
+# install's plugins.json may still enable them, so no user plugin may take one.
+RETIRED_PLUGIN_NAMES = frozenset({"setup-wizard"})
 
 
 def _time_to_cron(value, fallback: str) -> str:
@@ -110,8 +112,8 @@ def core_name_collision(name: str):
         return f"'{name}' conflicts with the shipped system plugin at core/plugins/{name} — a user plugin may not take its name"
     if (PROJECT_ROOT / "functions" / f"{name}.py").exists():
         return f"'{name}' conflicts with a core function"
-    if (PROJECT_ROOT / "interfaces" / "web" / "static" / "core-ui" / name).exists():
-        return f"'{name}' conflicts with a core UI plugin"
+    if name in RETIRED_PLUGIN_NAMES:
+        return f"'{name}' is a retired core name — an old install's plugin list may still enable it"
     return None
 
 
@@ -590,39 +592,36 @@ class PluginLoader:
             )
 
     def _read_plugins_json(self, key: str) -> list:
-        """Read a list from user/webui/plugins.json, falling back to the
-        shipped static file. A corrupt USER file is quarantined at ERROR —
-        silently falling through to the static list (enabled: setup-wizard
-        only) would turn every explicitly-enabled plugin dark on next boot
-        with two WARNING lines as the only trace."""
-        for path in (USER_PLUGINS_JSON, STATIC_PLUGINS_JSON):
-            if path.exists():
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    return data.get(key, [])
-                except Exception as e:
-                    if path == USER_PLUGINS_JSON:
-                        from datetime import datetime
-                        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                        quarantine = path.with_name(path.name + f".bad-{stamp}")
-                        try:
-                            path.rename(quarantine)
-                            logger.error(f"[PLUGINS] CORRUPT {path.name} quarantined to "
-                                         f"{quarantine.name} — plugin enable state LOST, "
-                                         f"reverting to defaults: {e}")
-                        except OSError:
-                            logger.error(f"[PLUGINS] CORRUPT {path.name} (quarantine "
-                                         f"failed) — plugin enable state ignored: {e}")
-                        try:
-                            from core.event_bus import publish, Events
-                            publish(Events.PLUGIN_LOAD_ERROR, {
-                                "plugin": "plugins.json",
-                                "error": "Corrupt plugin enable-state file — reverted to defaults",
-                            })
-                        except Exception:
-                            pass
-                    else:
-                        logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
+        """Read a list from user/webui/plugins.json; no file = the defaults. A
+        corrupt file is quarantined at ERROR — silently reverting to defaults
+        would turn every explicitly-enabled plugin dark on next boot with two
+        WARNING lines as the only trace."""
+        path = USER_PLUGINS_JSON
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data.get(key, [])
+        except Exception as e:
+            from datetime import datetime
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            quarantine = path.with_name(path.name + f".bad-{stamp}")
+            try:
+                path.rename(quarantine)
+                logger.error(f"[PLUGINS] CORRUPT {path.name} quarantined to "
+                             f"{quarantine.name} — plugin enable state LOST, "
+                             f"reverting to defaults: {e}")
+            except OSError:
+                logger.error(f"[PLUGINS] CORRUPT {path.name} (quarantine "
+                             f"failed) — plugin enable state ignored: {e}")
+            try:
+                from core.event_bus import publish, Events
+                publish(Events.PLUGIN_LOAD_ERROR, {
+                    "plugin": "plugins.json",
+                    "error": "Corrupt plugin enable-state file — reverted to defaults",
+                })
+            except Exception:
+                pass
         return []
 
     def _get_enabled_list(self) -> list:

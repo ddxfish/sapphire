@@ -106,11 +106,9 @@ async function loadPluginTab(name, source) {
             syncDynamicTabs();
             return;
         }
+        if (source !== 'plugin') return;
         const _v = window.__v ? `?v=${window.__v}` : '';
-        const url = source === 'plugin'
-            ? `/plugin-web/${name}/index.js${_v}`
-            : `/static/core-ui/${name}/index.js${_v}`;
-        const mod = await import(url);
+        const mod = await import(`/plugin-web/${name}/index.js${_v}`);
         const plugin = mod.default;
         if (plugin?.init) {
             const dummy = document.createElement('div');

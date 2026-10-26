@@ -38,7 +38,6 @@ def discover_plugins():
     Skips:
       - hidden dirs (start with .)
       - dirs without a plugin.json
-      - core-ui dirs (frontend-only, no python manifest contract)
     """
     found = []
     from core.paths import SYSTEM_PLUGINS_DIR

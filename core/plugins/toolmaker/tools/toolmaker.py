@@ -29,7 +29,7 @@ _RESERVED_NAMES = {
     'ai', 'docs', 'goals', 'knowledge', 'memory', 'meta', 'network', 'notepad', 'web',
     # System plugins
     'bitcoin', 'email', 'homeassistant', 'image_gen', 'ssh', 'toolmaker', 'voice_commands', 'stop', 'reset',
-    # Core-UI
+    # Retired core-UI plugins: the names stay reserved (an old install's plugin list may still carry them)
     'backup', 'continuity', 'setup_wizard',
 }
 

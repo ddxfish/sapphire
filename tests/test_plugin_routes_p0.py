@@ -206,24 +206,19 @@ def test_list_locked_plugin_is_always_enabled(
     import core.plugin_loader
     c, csrf = client
 
-    # Inject a fake locked plugin name for this test
-    monkeypatch.setattr(rp, 'LOCKED_PLUGINS', ['test_locked_core_ui'])
-    monkeypatch.setattr(rp, '_get_merged_plugins', lambda: rp._enforce_locked({
-        "plugins": {"test_locked_core_ui": {"name": "test_locked_core_ui",
-                                             "title": "Locked Thing"}},
-        "enabled": [],
-    }))
+    # Inject a fake locked plugin name for this test; the plugin is the loader's
+    # (every plugin is, since the core-ui class retired 2026-10-25), off on disk.
+    monkeypatch.setattr(rp, 'LOCKED_PLUGINS', ['test_locked'])
+    monkeypatch.setattr(rp, '_get_merged_plugins', lambda: rp._enforce_locked({"plugins": {}, "enabled": []}))
     mock_pl = MagicMock()
-    mock_pl.get_all_plugin_info.return_value = []
+    mock_pl.get_all_plugin_info.return_value = [_mock_info('test_locked', enabled=False, loaded=False)]
+    mock_pl.effective_surfaces = MagicMock(return_value=None)
     monkeypatch.setattr(core.plugin_loader, 'plugin_loader', mock_pl)
 
     r = c.get('/api/webui/plugins')
     assert r.status_code == 200
     body = r.json()
-    locked_entry = next(
-        (p for p in body['plugins'] if p['name'] == 'test_locked_core_ui'),
-        None,
-    )
+    locked_entry = next((p for p in body['plugins'] if p['name'] == 'test_locked'), None)
     assert locked_entry is not None, f"locked plugin missing: {body}"
     assert locked_entry['locked'] is True
     assert locked_entry['enabled'] is True, \
