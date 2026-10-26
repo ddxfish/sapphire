@@ -47,15 +47,18 @@ IDLE_END = 30 * 60            # a table nobody touched this long is left
 EXIT = 'top'                  # the host's place, every game
 TALK = 'middle'               # the host's place while the game leaves it empty (mid-hand): say something, it rides the next move
 LISTEN_S = 8                  # the board's mic listens up to this long; it ends when the talking stops
-STRIP = 22                    # the strip at the middle place's lower edge: its label, the queued words, "thinking..."
-LABEL_H = 22                  # a row of labels above and below the picture: the small font with room around it
+STRIP = 22                    # the host's own row across the middle place: its label, the queued words, "thinking..."
+LABEL_H = 22                  # a row of labels along the top edge of the glass and one along the bottom: the small font with room around it
 HEARD = re.compile(r'^Heard: "(.*)"$', re.S)   # the device door's word for a recording with speech in it
 JPEG_Q = 80
-PICTURE = 0.8                 # the game's picture takes this much of the glass's width; its height runs from the top row of labels to the strip
+PICTURE = 0.8                 # the game's picture takes this much of the glass's width, from the top row of labels to the bottom row
 FELT = (18, 52, 36)
 GRID = (26, 66, 46)           # the places' outlines, barely there
 INK = (235, 240, 235)
 DIM = (120, 132, 125)
+BAR = (30, 74, 52)            # the bar behind a label: a place that takes a finger
+BAR_OFF = (22, 58, 40)
+EDGE = (46, 98, 70)
 
 _lock = threading.Lock()
 _glasses = {}                 # session -> _Glass
@@ -332,57 +335,72 @@ def _centred(draw, box, text, font, fill):
     draw.text(((x0 + x1 - (r - l)) / 2 - l, (y0 + y1 - (b - t)) / 2 - t), text, font=f, fill=fill)
 
 
-def _label_box(z, h, top, bottom):
-    """Where a place's label goes, inside the place's own hit box: a place touching the
-    top edge of the glass has its label in the row above the picture, one touching the
-    bottom edge in the row under it; a place touching neither keeps its own box."""
+def _label_box(z, h):
+    """Where a place's label goes: inside the place's own hit box, at the glass's edge.
+    A place touching the top edge has its label in the row along it, one touching the
+    bottom edge in the row along that; a place touching neither keeps its own box."""
     x0, x1 = z['x'], z['x'] + z['w'] - 1
     if z['y'] <= 0:
-        return (x0, 0, x1, top - 1)
+        return (x0, 0, x1, LABEL_H - 1)
     if z['y'] + z['h'] >= h:
-        return (x0, bottom, x1, min(h, bottom + LABEL_H) - 1)
+        return (x0, h - LABEL_H, x1, h - 1)
     return (x0, z['y'], x1, z['y'] + z['h'] - 1)
+
+
+def _bar(d, box, on):
+    """A rounded bar behind a label: this place takes a finger."""
+    x0, y0, x1, y1 = box
+    d.rounded_rectangle((x0 + 3, y0 + 2, x1 - 3, y1 - 2), radius=6, fill=BAR if on else BAR_OFF, outline=EDGE if on else GRID)
 
 
 def frame(engine, takes, view, slots, mem, thinking=False):
     """One JPEG of the table. Every label sits inside the hit box of its place (the
-    board's, unchanged), so a finger on a word lands in that place: the top row of
-    labels above the game's picture, the bottom row under it, and the middle place's
-    label (DEAL, TALK, the queued words, "thinking...") on a strip at the middle place's
-    lower edge. The picture (render_glass) takes PICTURE of the width, centred, from
-    the top row down to the strip; the places' outlines are drawn barely there over the
-    whole glass. Labels dim when off or while her seat thinks. Sides multiples of 16."""
+    board's, unchanged) and at the glass's edge, on a bar that says it takes a finger:
+    the top row of labels along the top edge, the bottom row along the bottom, and the
+    middle place's label (DEAL, TALK, the queued words, "thinking...") on a row across
+    the middle place's centre. The picture (render_glass) takes PICTURE of the width,
+    centred, from the top row down to the bottom row, and is told where that middle row
+    is so it keeps it clear; the places' outlines are drawn barely there over the whole
+    glass. Labels dim when off or while her seat thinks. Sides multiples of 16."""
     from PIL import Image, ImageDraw
     w, h = int(takes['w']) // 16 * 16, int(takes['h']) // 16 * 16
     ox, oy = (int(takes['w']) - w) // 2, (int(takes['h']) - h) // 2     # the board centres a smaller frame
     zones = [{'name': z['name'], 'x': z['x'] - ox, 'y': z['y'] - oy, 'w': z['w'], 'h': z['h']} for z in takes['zones']]
     mid = next((z for z in zones if z['name'] == TALK), None)
     top = LABEL_H if any(z['y'] <= 0 for z in zones) else 0
-    bottom = mid['y'] + mid['h'] if mid else h - top                    # the picture's lower edge: the middle place's
+    bottom = h - LABEL_H if any(z['y'] + z['h'] >= h for z in zones) else h
     pw = int(w * PICTURE)
     px = (w - pw) // 2
-    talk = slots.get(TALK) or {}
-    strip = STRIP if talk.get('label') or thinking else 0
-    game = (px, top, px + pw - 1, bottom - strip - 1)
-    line = (mid['x'], bottom - strip, mid['x'] + mid['w'] - 1, bottom - 1) if mid else (px, bottom - strip, px + pw - 1, bottom - 1)
+    game = (px, top, px + pw - 1, bottom - 1)
+    if mid:
+        cy = mid['y'] + mid['h'] // 2
+        line = (mid['x'], cy - STRIP // 2, mid['x'] + mid['w'] - 1, cy + STRIP // 2 - 1)
+    else:
+        cy = (top + bottom) // 2
+        line = (px, cy - STRIP // 2, px + pw - 1, cy + STRIP // 2 - 1)
+    centre = slots.get(TALK) or {}
     im = Image.new('RGB', (w, h), FELT)
     d = ImageDraw.Draw(im)
     small = _font(14)
     for z in zones:
         d.rectangle((z['x'], z['y'], z['x'] + z['w'] - 1, z['y'] + z['h'] - 1), outline=GRID)
     try:
-        engine.render_glass(d, game, view, mem)
+        engine.render_glass(d, game, view, mem, line)
     except Exception as e:
         logger.warning(f'game-room: render_glass failed: {e}')
     for z in zones:
         slot = slots.get(z['name'])
         if not slot or not slot.get('label') or z['name'] == TALK:
             continue
-        _centred(d, _label_box(z, h, top, bottom), str(slot['label']), small, DIM if (slot.get('off') or thinking) else INK)
+        on = not (slot.get('off') or thinking)
+        _bar(d, _label_box(z, h), on)
+        _centred(d, _label_box(z, h), str(slot['label']), small, INK if on else DIM)
     if thinking:
+        _bar(d, line, False)
         _centred(d, line, 'thinking...', small, DIM)
-    elif strip:
-        _centred(d, line, str(talk['label']), small, DIM if talk.get('off') else INK)
+    elif centre.get('label'):
+        _bar(d, line, not centre.get('off'))
+        _centred(d, line, str(centre['label']), small, DIM if centre.get('off') else INK)
     buf = io.BytesIO()
     im.save(buf, 'JPEG', quality=JPEG_Q)
     return buf.getvalue()

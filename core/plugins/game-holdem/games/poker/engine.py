@@ -758,67 +758,76 @@ def _card(draw, x, y, code, font, w=24, h=32):
     _suit(draw, x + w - s * 0.8, y + h - s * 0.9, s, code[1])
 
 
-def _wrap(draw, text, font, width):
-    words, lines, line = text.split(), [], ''
-    for word in words:
-        trial = (line + ' ' + word).strip()
-        if draw.textlength(trial, font=font) <= width or not line:
-            line = trial
-        else:
-            lines.append(line)
-            line = word
-    if line:
-        lines.append(line)
-    return lines
+def _fit(draw, text, size, width):
+    """The text at that size, or one size down, then cut short to the width."""
+    from PIL import ImageFont
+    for f in (ImageFont.load_default(size=size), ImageFont.load_default(size=max(10, round(size * 0.85)))):
+        if draw.textlength(text, font=f) <= width:
+            return f, text
+    while len(text) > 4 and draw.textlength(text, font=f) > width:
+        text = text[:-4].rstrip() + '...'
+    return f, text
 
 
-def render_glass(draw, box, view, mem):
-    """The game's picture on the glass (the host gives it 80% of the width, from the top
-    row of labels down to the strip under it: 256x124 on the speaker board): her name
-    and stack, the pot, the board, my hole cards, hers face down (shown at a showdown);
-    the result between hands. Everything scales from the box's height. PIL ImageDraw,
-    box = (x0, y0, x1, y1)."""
+def render_glass(draw, box, view, mem, line=None):
+    """The game's picture on the glass. The host gives it 80% of the width from the top
+    row of labels to the bottom row (256x196 on the speaker board) and writes its own
+    row (DEAL, TALK, "thinking...") across `line`, a box inside it about the middle:
+    the board's five cards above that row, my stack, the pot and hers on a line between,
+    my hole cards and hers (face down until a showdown) below. Between hands the result
+    takes the stacks' line. Five cards fill the width, so everything scales from it.
+    PIL ImageDraw, box = (x0, y0, x1, y1)."""
     from PIL import ImageFont
     x0, y0, x1, y1 = box
-    bw, bh = x1 - x0, y1 - y0
-    k = max(1.0, min(1.5, bh / 128))                  # 1 on the speaker board's 124 px picture; a taller glass grows it, capped so nothing collides
-    f = ImageFont.load_default(size=round(13 * k))
-    cw, ch, gap = round(24 * k), round(32 * k), round(3 * k)
+    bw = x1 - x0 + 1
+    if line is None:
+        c = (y0 + y1) // 2
+        line = (x0, c - 11, x1, c + 10)
+    pad = max(3, bw // 64)                                    # 4 on the speaker board
+    size = max(12, bw // 18)                                  # 14 there
+    f = ImageFont.load_default(size=size)
+    th = size + 5                                             # the stacks' line, right above the host's row
+    band = (line[1] - th, line[3] + 1)                        # that line and the host's row: no cards here
+    cw = (bw - 2 * pad) * 2 // 11                             # five across, gaps of an eighth
+    ch = max(8, min(cw * 4 // 3, band[0] - y0 - 2 * pad, y1 + 1 - band[1] - 2 * pad))
+    cw = max(6, min(cw, ch * 3 // 4))
+    gap = max(2, cw // 8)
+    cf = ImageFont.load_default(size=max(11, cw // 2))       # a card's rank
     sess, hand = (view or {}).get('session'), (view or {}).get('hand')
     if not sess:
-        draw.text(((x0 + x1) / 2, (y0 + y1) / 2), "Heads-Up Hold'em", font=f, fill=GLASS_INK, anchor='mm')
+        draw.text(((x0 + x1) / 2, (y0 + band[0]) / 2), "Heads-Up Hold'em", font=ImageFont.load_default(size=size + 4), fill=GLASS_INK, anchor='mm')
         return
     over = not hand or hand.get('street') == 'over'
     dealer = lambda who: ' D' if hand and hand.get('dealer') == who else ''      # the default font has no dot glyph
-    me = f"{str(sess['player_name'])[:10]}{dealer('player')}  {sess['player_chips']}"
-    pad = round(4 * k)
-    draw.text((x0 + pad, y0 + 2), f"{str(sess['ai_name'])[:10]}{dealer('ai')}  {sess['ai_chips']}", font=f, fill=GLASS_INK)
-    if hand and not over:
-        draw.text((x1 - pad, y0 + 2), f"pot {hand['pot']}", font=f, fill=GLASS_INK, anchor='ra')
+    # the board's five above the band, my two and her two below it, each row centred in its half
+    board = list(hand.get('board') or []) if hand else []
+    bx = (x0 + x1) / 2 - (5 * cw + 4 * gap) / 2
+    by = y0 + (band[0] - y0 - ch) // 2
+    for i in range(5):
+        _card(draw, bx + i * (cw + gap), by, board[i] if i < len(board) else None, cf, cw, ch)
+    hy = band[1] + (y1 + 1 - band[1] - ch) // 2
+    mine = list(hand.get('player_hole') or []) if hand else []
+    hers = list(hand.get('ai_hole') or ['back', 'back']) if hand else []
+    for i in range(2):
+        _card(draw, x0 + pad + i * (cw + gap), hy, mine[i] if i < len(mine) else None, cf, cw, ch)
+        _card(draw, x1 + 1 - pad - (2 - i) * cw - (1 - i) * gap, hy, hers[i] if i < len(hers) else None, cf, cw, ch)
+    # the line between: the result once the hand is over, else my stack, the pot, hers
+    ly = band[0] + th / 2
     busted = sess['player_chips'] <= 0 or sess['ai_chips'] <= 0
-    if over:
-        said = ''
+    if over and (busted or (hand and hand.get('result'))):
         if busted:
             said = f"{sess['ai_name']} has the table." if sess['player_chips'] <= 0 else f"You felted {sess['ai_name']}."
-        elif hand and hand.get('result'):
+        else:
             said = str(hand['result'].get('desc') or '').replace('\u2014', '-')   # no em dash in the glass's font
-        y = y0 + round(20 * k)
-        for line in _wrap(draw, said, f, bw - 2 * pad)[:3]:
-            draw.text((x0 + pad, y), line, font=f, fill=GLASS_INK)
-            y += round(15 * k)
-        draw.text((x0 + pad, y + 2), me, font=f, fill=GLASS_INK)            # above the host's DEAL label
+        rf, said = _fit(draw, said, size, bw - 2 * pad)
+        draw.text(((x0 + x1) / 2, ly), said, font=rf, fill=GLASS_INK, anchor='mm')
         return
-    board = list(hand.get('board') or [])
-    bx = (x0 + x1) / 2 - (5 * cw + 4 * gap) / 2
-    for i in range(5):
-        _card(draw, bx + i * (cw + gap), y0 + round(20 * k), board[i] if i < len(board) else None, f, cw, ch)
-    cy = y1 - ch - pad
-    for i, code in enumerate(hand.get('player_hole') or []):
-        _card(draw, x0 + pad + i * (cw + gap), cy, code, f, cw, ch)
-    hers = hand.get('ai_hole') or ['back', 'back']
-    for i, code in enumerate(hers[:2]):
-        _card(draw, x1 - pad - (2 - i) * cw - (1 - i) * gap, cy, code, f, cw, ch)
-    # between my cards and hers, level with them: my name and stack when they fit, else the stack alone
-    room = bw - 2 * (pad + 2 * cw + gap) - 2 * pad
-    short = f"{dealer('player').strip()} {sess['player_chips']}".strip()
-    draw.text(((x0 + x1) / 2, cy + ch / 2), me if draw.textlength(me, font=f) <= room else short, font=f, fill=GLASS_INK, anchor='mm')
+    me = f"{str(sess['player_name'])[:10]}{dealer('player')}  {sess['player_chips']}"
+    her = f"{str(sess['ai_name'])[:10]}{dealer('ai')}  {sess['ai_chips']}"
+    pot = f"pot {hand['pot']}" if hand and not over else ''
+    if draw.textlength(me + her + pot, font=f) > bw - 6 * pad:     # long names: the stacks alone
+        me, her = f"{dealer('player').strip()} {sess['player_chips']}".strip(), f"{sess['ai_chips']}{dealer('ai')}"
+    draw.text((x0 + pad, ly), me, font=f, fill=GLASS_INK, anchor='lm')
+    draw.text((x1 - pad, ly), her, font=f, fill=GLASS_INK, anchor='rm')
+    if pot:
+        draw.text(((x0 + x1) / 2, ly), pot, font=f, fill=GLASS_INK, anchor='mm')

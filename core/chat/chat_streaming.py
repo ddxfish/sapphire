@@ -4,10 +4,11 @@ import re
 import time
 from typing import Generator, Union, Dict, Any
 import config
-from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text
+from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text, bad_args_result
 from core.ui_markers import stage_cards
 from core import think as _think
 from .llm_providers import LLMResponse, get_generation_params
+from .llm_errors import explain_finish
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
 from core.metrics import metrics as token_metrics
@@ -916,6 +917,10 @@ class StreamingChat:
                 
                 if metadata is not None and finish:
                     metadata["finish"] = finish        # the row remembers how its generation ended
+                    # cut off at max_tokens: the words for it ride the row (ui.js)
+                    cutoff = explain_finish(finish, bool((_think.split(current_content)[0] or '').strip()), provider_key)
+                    if cutoff:
+                        metadata["cutoff"] = cutoff
 
                 # Accumulate tokens across iterations
                 if metadata and metadata.get("tokens"):
@@ -1036,9 +1041,9 @@ class StreamingChat:
                                 # with permissive defaults). 2026-05-14.
                                 logger.error(
                                     f"[STREAMING] Failed to parse tool arguments for "
-                                    f"{function_name}: {raw_args!r}"
+                                    f"{function_name} (finish={finish}): {raw_args!r}"
                                 )
-                                error_result = "Error: Invalid JSON arguments."
+                                error_result = bad_args_result(finish)
                                 # Loop-warn to the LLM only; history keeps raw error.
                                 llm_result = error_result + self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
                                 # CRITICAL: also append to messages — without this, the next

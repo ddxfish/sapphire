@@ -297,7 +297,7 @@ class AnthropicCompatProvider(BaseProvider):
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": api_messages,
-            "max_tokens": params.get("max_tokens") or 4096,  # null-safe: blanked Max Tok persists JSON null (2026-09-20)
+            "max_tokens": params.get("max_tokens") or 8192,  # null-safe: blanked Max Tok persists JSON null (2026-09-20)
         }
 
         if system_prompt:
@@ -341,7 +341,7 @@ class AnthropicCompatProvider(BaseProvider):
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": api_messages,
-            "max_tokens": params.get("max_tokens") or 4096,  # null-safe: blanked Max Tok persists JSON null (2026-09-20)
+            "max_tokens": params.get("max_tokens") or 8192,  # null-safe: blanked Max Tok persists JSON null (2026-09-20)
         }
 
         if system_prompt:

@@ -5,7 +5,7 @@ import {
     saveGenerationParams, renderProviderCard, loadModelGenParamsIntoCard,
     collectGenParamsFromCard, collectProviderFormData, initProviderDragDrop,
     refreshProviderKeyStatus, updateCardEnabledState, toggleProviderCollapse,
-    handleModelSelectChange, runTestConnection
+    handleModelSelectChange, runTestConnection, getGenerationParams
 } from '../../shared/llm-providers.js';
 import { showToast } from '../../shared/toast.js';
 import { responseError } from '../../shared/fetch.js';
@@ -297,7 +297,7 @@ function _renderCustomRow(k, c, i) {
     const template = c.template || c.provider || 'openai';
     const model = c.model || '';
     return `
-        <div class="provider-card custom-card ${enabled ? 'enabled' : 'disabled'}" data-provider="${k}">
+        <div class="provider-card custom-card ${enabled ? 'enabled' : 'disabled'}" data-provider="${k}" data-key="provider:${k}">
             <div class="provider-header" data-provider="${k}">
                 <div class="provider-title">
                     <span class="provider-drag-handle" title="Drag to reorder">⋮⋮</span>
@@ -337,7 +337,7 @@ const _OPTIONAL_KNOBS = [
 
 function _advancedFieldsHtml(prefix, v = {}) {
     const temp = v.temperature ?? 0.7;
-    const maxTok = v.max_tokens ?? 4096;
+    const maxTok = v.max_tokens ?? '';   // blank = the model's own default (placeholder), never baked
     const topP = v.top_p ?? 0.9;
     const knobs = _OPTIONAL_KNOBS.map(([id, key, label, step, min, max]) => `
                 <div class="field-row" style="margin-bottom:6px">
@@ -357,14 +357,14 @@ function _advancedFieldsHtml(prefix, v = {}) {
                 </div>
                 <div class="field-row" style="margin-bottom:6px">
                     <label>Max Tokens</label>
-                    <input type="number" id="${prefix}-maxtok" value="${maxTok}" step="1" min="1" style="width:80px">
+                    <input type="number" id="${prefix}-maxtok" value="${maxTok}" placeholder="${v.inherit_max_tokens ?? 8192}" step="1" min="1" style="width:80px">
                 </div>
                 <div class="field-row" style="margin-bottom:6px">
                     <label>Top P</label>
                     <input type="number" id="${prefix}-topp" value="${topP}" step="0.05" min="0" max="1" style="width:80px">
                 </div>${knobs}
                 <div class="text-muted" style="font-size:0.8em;margin-left:24px;margin-top:2px">
-                    Blank = not sent. Repeat penalty and Top K are local-model knobs (LM Studio, llama.cpp — repeat 1.05–1.1 or presence 1–1.5 tames a looping Qwen). A provider that rejects one is retried without it and a warning names it.
+                    Max Tokens blank = the model's default (the number shown). Penalties and Top K blank = not sent. Repeat penalty and Top K are local-model knobs (LM Studio, llama.cpp — repeat 1.05–1.1 or presence 1–1.5 tames a looping Qwen). A provider that rejects one is retried without it and a warning names it.
                 </div>
                 <div class="field-row" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
                     <label class="checkbox-inline">
@@ -488,6 +488,7 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
         ${_advancedFieldsHtml(prefix, {
             temperature: gen.temperature,
             max_tokens: gen.max_tokens,
+            inherit_max_tokens: getGenerationParams(config.model, generationProfiles).max_tokens,
             top_p: gen.top_p,
             presence_penalty: gen.presence_penalty,
             frequency_penalty: gen.frequency_penalty,
@@ -560,7 +561,7 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         if (g('extra-body')) g('extra-body').value = '';
         if (g('extra-headers')) g('extra-headers').value = '';
         if (g('temp')) g('temp').value = 0.7;
-        if (g('maxtok')) g('maxtok').value = 4096;
+        if (g('maxtok')) g('maxtok').value = '';
         if (g('topp')) g('topp').value = 0.9;
         _OPTIONAL_KNOBS.forEach(([id]) => { const el = g(id); if (el) el.value = ''; });
 
@@ -621,7 +622,6 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
             }
             const genDefaults = preset.generation_defaults || {};
             if (genDefaults.temperature !== undefined) g('temp').value = genDefaults.temperature;
-            if (genDefaults.max_tokens !== undefined) g('maxtok').value = genDefaults.max_tokens;
             if (genDefaults.top_p !== undefined) g('topp').value = genDefaults.top_p;
         }
     });

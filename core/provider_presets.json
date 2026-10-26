@@ -8,7 +8,7 @@
       "is_local": true,
       "auto_discover_models": true,
       "default_timeout": 0.3,
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "ollama": {
       "template": "openai",
@@ -17,7 +17,7 @@
       "is_local": true,
       "auto_discover_models": true,
       "default_timeout": 0.3,
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "fireworks": {
       "template": "openai",
@@ -38,7 +38,7 @@
         {"id": "accounts/fireworks/models/gpt-oss-120b", "name": "GPT-OSS 120B"}
       ],
       "config_hints": {"extra_body": {"user": "{session}"}},
-      "generation_defaults": {"temperature": 0.75, "top_p": 0.9, "max_tokens": 8192}
+      "generation_defaults": {"temperature": 0.75, "top_p": 0.9}
     },
     "opencode_go": {
       "template": "openai",
@@ -58,7 +58,7 @@
         {"id": "space-bunny-free", "name": "Space Bunny (free)"}
       ],
       "config_hints": {"extra_headers": {"x-opencode-session": "{session}", "User-Agent": "sapphire/{version}"}},
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "opencode_zen": {
       "template": "openai",
@@ -78,7 +78,7 @@
         {"id": "space-bunny-free", "name": "Space Bunny (free)"}
       ],
       "config_hints": {"extra_headers": {"x-opencode-session": "{session}", "User-Agent": "sapphire/{version}"}},
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "featherless": {
       "template": "openai",
@@ -93,7 +93,7 @@
         {"id": "Qwen/Qwen3.6-27B", "name": "Qwen 3.6 27B"},
         {"id": "meta-llama/Llama-3.3-70B-Instruct", "name": "Llama 3.3 70B"}
       ],
-      "generation_defaults": {"temperature": 0.75, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.75, "top_p": 0.9}
     },
     "deepseek_official": {
       "template": "openai",
@@ -104,7 +104,7 @@
         {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro (thinking)"},
         {"id": "deepseek-flash", "name": "DeepSeek Flash (V4.1, thinking)"}
       ],
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.95, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.95}
     },
     "openrouter": {
       "template": "openai",
@@ -124,7 +124,7 @@
         {"id": "z-ai/glm-5.3", "name": "GLM 5.3"},
         {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B"}
       ],
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "grok": {
       "template": "openai",
@@ -138,7 +138,7 @@
         {"id": "grok-build-0.1", "name": "Grok Build 0.1 (code)"}
       ],
       "config_hints": {"strip_penalties": true},
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "minimax": {
       "template": "anthropic",
@@ -151,7 +151,7 @@
         {"id": "MiniMax-M2.7-highspeed", "name": "MiniMax M2.7 Highspeed"},
         {"id": "MiniMax-M2.5", "name": "MiniMax M2.5"}
       ],
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "together": {
       "template": "openai",
@@ -167,7 +167,7 @@
         {"id": "MiniMaxAI/MiniMax-M3", "name": "MiniMax M3"},
         {"id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "name": "Llama 3.3 70B Turbo"}
       ],
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     },
     "groq": {
       "template": "openai",
@@ -179,7 +179,7 @@
         {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B"},
         {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B"}
       ],
-      "generation_defaults": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 4096}
+      "generation_defaults": {"temperature": 0.7, "top_p": 0.9}
     }
   }
 }

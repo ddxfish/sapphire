@@ -108,7 +108,7 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
   const useAsFallback = config.use_as_fallback !== false;
 
   return `
-    <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}">
+    <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}" data-key="provider:${key}">
       <div class="provider-header" data-provider="${key}">
         <div class="provider-title">
           <span class="provider-drag-handle" title="Drag to reorder">⋮⋮</span>
@@ -276,7 +276,7 @@ export function renderGenerationParams(providerKey, modelName, genProfiles = {})
   // The old 0.1 seed here was harvested by collectGenParamsFromCard on any
   // touch and rode every request from then on (scout S12, 2026-09-20).
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, ...fallback };
+  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 8192, ...fallback };
   const params = genProfiles[modelName] || defaults;
 
   const temp = params.temperature ?? defaults.temperature;
@@ -403,7 +403,7 @@ export function renderProviderToggles(key, config) {
  */
 export function getGenerationParams(modelName, genProfiles) {
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, ...fallback };
+  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 8192, ...fallback };
   return genProfiles[modelName] || defaults;
 }
 

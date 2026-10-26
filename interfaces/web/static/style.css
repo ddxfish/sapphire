@@ -9706,3 +9706,22 @@ body.setup-mode #app-content { margin-left: 0; margin-bottom: 0; width: 100%; he
     .next-cols { grid-template-columns: 1fr; }
     .next-prime { flex-wrap: wrap; }
 }
+
+/* A reply cut off at max_tokens (ui.js, metadata.cutoff): amber note + metrics chip */
+.message-cutoff {
+    margin-top: 8px;
+    padding: 6px 10px;
+    border-left: 3px solid var(--warning-border);
+    background: var(--warning-light);
+    color: var(--text);
+    font-size: 0.9em;
+    line-height: 1.4;
+    border-radius: 0 6px 6px 0;
+}
+.message-cutoff .cutoff-fix {
+    margin-left: 8px;
+    background: transparent;
+    border-color: var(--warning-border);
+}
+.message-cutoff .cutoff-fix:hover { border-color: var(--warning-text); }
+.mm-cutoff { color: var(--warning-text); font-weight: 600; }

@@ -307,7 +307,7 @@ class ClaudeProvider(BaseProvider):
             "messages": claude_messages,
             # `or` not a default: a blanked Max Tok box persists JSON null
             # (scout, 2026-09-20) and the thinking floor compares it.
-            "max_tokens": params.get("max_tokens") or 4096,
+            "max_tokens": params.get("max_tokens") or 8192,
         }
 
         # Prompt caching configuration (read dynamically for hot-reload)
@@ -402,7 +402,7 @@ class ClaudeProvider(BaseProvider):
             "messages": claude_messages,
             # `or` not a default: a blanked Max Tok box persists JSON null
             # (scout, 2026-09-20) and the thinking floor compares it.
-            "max_tokens": params.get("max_tokens") or 4096,
+            "max_tokens": params.get("max_tokens") or 8192,
         }
 
         # Prompt caching configuration (read dynamically for hot-reload)

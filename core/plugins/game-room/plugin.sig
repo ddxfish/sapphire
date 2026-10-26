@@ -9,7 +9,7 @@
     "app/settings-modal.js": "sha256:f6a1b13aab708c64b59f30b4582130567599ab0fe89e5e98b2b57ed398f48027",
     "app/story-room.js": "sha256:f12953a7b1c32b8ea3fbdd4ac8cfba3474deaada4f6813205982534b60d83709",
     "gameroom_core.py": "sha256:e1361ebf49b36506e07b9eb3fc8b85715e7f929fc109734c5a0a22c578c12f05",
-    "gameroom_glass.py": "sha256:dae8824f60ca41eb6e964f2a7cba355aa74fb14a1459faf251e040e0c9bed2fe",
+    "gameroom_glass.py": "sha256:0bda47da28406e1fc2ffb838519fe747e2468a11f03c3f49471cd4f991bffcaf",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
     "gameroom_story/referee.py": "sha256:f28074452bcdcf5dbe2ef03cc7663ce06c8989831c1c3e07621c84ef19a965d4",
@@ -45,7 +45,7 @@
     "tests/test_cast.py": "sha256:6f05e2e4bd77a32392b17b2b3f7f73e26391a37c9364161452e62147c82e7df2",
     "tests/test_chat_lifecycle_hooks.py": "sha256:bebf7787432754f920bed8220fdbce7da01c451571ef2fe832491a3faec187f2",
     "tests/test_fixwave_hunt.py": "sha256:a2264152e44a9e869d2ca2fcd7b63bb039170209575b9e16c87e7f077c928686",
-    "tests/test_glass.py": "sha256:5113a1cc31f41fd6bca882be101da70565b7774727f4a42b4f47bc532402a135",
+    "tests/test_glass.py": "sha256:90479463cc43c44f715deeda799d12d76cb1e7aad3da64edb4422f2a70095519",
     "tests/test_one_move_per_turn.py": "sha256:7f7e938a36b893a89137e03303ebb47a1ed6a67792012cb1ca24cb5146a68a80",
     "tests/test_open_mansion.py": "sha256:44df3762547979380bade943bb604af71153a74eb12136af6ccf8ec403c64dcd",
     "tests/test_rail_port.py": "sha256:d144b442da2ebbea8160f10799788c080f850b67709a6dccc3faad248af6b268",
@@ -65,5 +65,5 @@
     "tools/story_info.py": "sha256:a8a036ae2c3b309c1d646e545b49b4f2bd55451d342f261aec2de41db1cf3850",
     "tools/story_tools.py": "sha256:364e3e3cdb5f190485f7512424111031cceb4a2cf356477af150871609cbd0ed"
   },
-  "signature": "epAiZ/hNr1KTlDk//dchFBwAhaeW9+ovlFNplIN/0H9oNLtR7W1ZVA9TaejZ5PAO6AOGWsVjz1Pn7iMUTEJwAA=="
+  "signature": "cdNbosr0hT7hpLGFH2bDwkV5jaevjxNpLkG8zB6zz5A6DpgDGa8Hnb++wTpkaxbEEu/gBWexR/8bHIlYnBj8Dw=="
 }

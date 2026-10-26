@@ -369,6 +369,19 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
         contentDiv.appendChild(note);
     }
 
+    // Cut off at the reply token ceiling (llm_errors.explain_finish): the words
+    // stay, the why and a Fix it ride under them. Amber, not the error red.
+    const cutoff = role === 'assistant' && msg.metadata?.cutoff;
+    if (cutoff?.text) {
+        const note = createElem('div', { class: 'message-cutoff' }, `\u26A0\uFE0F ${cutoff.text}`);
+        if (cutoff.go) {
+            const fix = createElem('button', { type: 'button', class: 'llm-error-fix cutoff-fix' }, 'Fix it');
+            fix.addEventListener('click', () => goTo(cutoff.go));
+            note.appendChild(fix);
+        }
+        contentDiv.appendChild(note);
+    }
+
     // A failed turn's row (core/chat/llm_errors.py): its words above, a Fix it
     // button when there's a place to go, the raw error folded under Details.
     const failed = role === 'assistant' && msg.metadata?.error;
@@ -412,10 +425,9 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
             parts.push(`${meta.duration_seconds}s`);
         }
         // the generation hit the model's reply token ceiling (a reasoning model
-        // thinking to max_tokens, a cut-off answer) - the row carries finish
-        if (['length', 'max_tokens', 'incomplete'].includes(meta.finish)) {
-            parts.push('hit the token limit');
-        }
+        // thinking to max_tokens, a cut-off answer) - the row carries finish;
+        // an amber chip at the head of the line (old rows have no cutoff note)
+        const cut = ['length', 'max_tokens', 'incomplete'].includes(meta.finish);
         if (meta.tokens_per_second) {
             const label = tok.estimated ? 'tok/s est' : 'tok/s';
             parts.push(`${meta.tokens_per_second} ${label}`);
@@ -453,6 +465,7 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
             const metaDiv = createElem('div', { class: 'message-metadata' });
             const line = createElem('div', { class: 'message-metadata-line' });
             line.appendChild(createElem('span', { class: 'mm-chev' }, '▸'));
+            if (cut) line.appendChild(createElem('span', { class: 'mm-cutoff', title: 'Cut off at the reply length limit (Max Tokens)' }, '\u26A0 token limit · '));
             line.appendChild(document.createTextNode(parts.join(' · ')));
             metaDiv.appendChild(line);
 

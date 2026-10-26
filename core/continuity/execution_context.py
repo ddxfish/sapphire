@@ -708,7 +708,7 @@ class ExecutionContext:
                     self.tool_engine.execute_tool_calls,
                     tool_calls, messages, None, self.provider, scopes=self.scopes,
                     allowed_tools=self._allowed_tool_names, loop_counts=loop_counts,
-                    image_sink=_image_sink
+                    image_sink=_image_sink, finish=getattr(response_msg, 'finish_reason', None)
                 )
                 if tool_images:
                     _inject_tool_images(messages, tool_images, self.provider)

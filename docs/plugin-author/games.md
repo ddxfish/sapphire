@@ -264,17 +264,21 @@ export two functions and your game is on:
   local change `{'label', 'set': {...}}` merged into `mem` with a redraw and
   nothing else (poker's raise size cycles this way), or a dim place
   `{'label', 'off': True}`. Leave a zone out and it is empty. Each label is
-  drawn small inside the hit box of its place: the top row above the game's
-  picture, the bottom row under it, the middle's on a strip at the middle
-  place's lower edge, so a finger on a word lands in its place. A `middle` you leave
+  drawn small on a bar inside the hit box of its place, at the glass's edge:
+  the top row along the top edge, the bottom row along the bottom, the
+  middle's on a row across the middle place's centre, so a finger on a word
+  lands in its place and the picture keeps the room between. A `middle` you leave
   empty is the host's TALK: the board listens and the words ride the player's
   next `act` as `say` (poker: mid-hand), so leave it empty whenever a move
   may carry words.
-- `render_glass(draw, box, view, mem)`: draw the game's picture (80% of the
-  width, from the top row of labels down to the strip: 256x124 on the speaker
-  board) with a PIL `ImageDraw` inside `box = (x0, y0, x1, y1)`. The
-  default font has no suit or fraction glyphs: poker draws its suits as small
-  polygons (`_suit` in its engine) and keeps labels ASCII.
+- `render_glass(draw, box, view, mem, line)`: draw the game's picture (80% of
+  the width, from the top row of labels down to the bottom row: 256x196 on the
+  speaker board) with a PIL `ImageDraw` inside `box = (x0, y0, x1, y1)`.
+  `line` is the host's own row inside that box (the middle place's label:
+  DEAL, TALK, "thinking..."), a box the same way; keep it clear. Poker puts
+  the board above it, the stacks and the pot on the line just above it, the
+  hole cards below. The default font has no suit or fraction glyphs: poker
+  draws its suits as small polygons (`_suit` in its engine) and keeps labels ASCII.
 
 Hold'em is the worked example: FOLD / CHECK or CALL n / RAISE n / ALL-IN in
 the corners, DEAL or SIT DOWN in the middle between hands, the raise size on

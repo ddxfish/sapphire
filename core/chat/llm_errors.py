@@ -200,6 +200,9 @@ def _explain(e, provider_key):
         return out(f"That image is too big for {who}. Try a smaller one.")
     if any(k in err for k in ('image', 'vision', 'multimodal', 'content_type')):
         return out("This model can't see images. Send without the image, or pick a vision model in Settings › LLM.")
+    if 'prefill' in err or 'final assistant content' in err:
+        return out(f"{Who} can't continue a reply in place with this model. Ask it to go on in a new "
+                   f"message instead.")
     if 'invalid tool call' in err or 'tool call arguments' in err:
         return out(f"{Who} rejected a tool step earlier in this chat. Start a new chat, or pick another "
                    f"provider in the chat sidebar.")
@@ -208,6 +211,22 @@ def _explain(e, provider_key):
                    "Toolset to none in the chat sidebar.")
     return out(f"{Who} turned the request down ({status}). Try again, or pick another provider "
                f"in the chat sidebar.", known=False)
+
+
+def explain_finish(finish, said, provider_key=None):
+    """{'text', 'go'} when a generation ended on the reply token ceiling, else
+    None. Not an exception: the words stay and the row is a real reply, so this
+    rides beside it (metadata.cutoff) instead of replacing it. `said` = the
+    reply has visible words (False = a reasoning model thought to the limit)."""
+    from core.chat.llm_providers.base import LENGTH_FINISH
+    if finish not in LENGTH_FINISH:
+        return None
+    go = {**LLM_TAB, 'key': f'provider:{provider_key}'} if provider_key else dict(LLM_TAB)
+    if said:
+        return {'text': "This reply hit its length limit and was cut off. Press Continue to pick up "
+                        "where it stopped, or raise Max Tokens for this provider in Settings › LLM.", 'go': go}
+    return {'text': "The model used its whole reply budget thinking and never got to answer. Raise "
+                    "Max Tokens for this provider in Settings › LLM, or lower its reasoning effort.", 'go': go}
 
 
 def _unknown(who):

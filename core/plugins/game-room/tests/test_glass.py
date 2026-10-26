@@ -34,11 +34,12 @@ def _engine(state):
                 'bottom-right': {'label': 'ALL-IN', 'off': True},
                 'middle': {'label': 'DEAL', 'door': 'start'}}
 
-    def render_glass(draw, box, view, mem):
+    def render_glass(draw, box, view, mem, line):
         drawn.append(box)
+        e.lines.append(line)
         draw.text((box[0] + 4, box[1] + 4), 'table', fill=(255, 255, 255))
 
-    e = types.SimpleNamespace(redact=lambda st: dict(st), glass_actions=glass_actions, render_glass=render_glass, drawn=drawn)
+    e = types.SimpleNamespace(redact=lambda st: dict(st), glass_actions=glass_actions, render_glass=render_glass, drawn=drawn, lines=[])
     return e
 
 
@@ -122,13 +123,13 @@ def test_a_private_session_a_gameless_engine_and_a_taken_session_are_refused():
         assert rig.events[0][0] == 'game_state_changed' and rig.events[0][1]['glass'] == 'esp' and rig.events[0][2] is True
 
 
-def test_a_label_sits_inside_the_hit_box_of_its_place():
-    h, top, bottom = 240, 22, 168
-    assert gg._label_box({'x': 0, 'y': 0, 'w': 72, 'h': 120}, h, top, bottom) == (0, 0, 71, 21)          # top-left: the row above the picture, its own width
-    assert gg._label_box({'x': 248, 'y': 120, 'w': 72, 'h': 120}, h, top, bottom) == (248, 168, 319, 189)  # bottom-right: the row under it
-    assert gg._label_box({'x': 72, 'y': 0, 'w': 176, 'h': 72}, h, top, bottom) == (72, 0, 247, 21)        # top
-    assert gg._label_box({'x': 72, 'y': 168, 'w': 176, 'h': 72}, h, top, bottom) == (72, 168, 247, 189)   # bottom
-    assert gg._label_box({'x': 10, 'y': 50, 'w': 20, 'h': 20}, h, top, bottom) == (10, 50, 29, 69)        # a place touching neither edge keeps its own box
+def test_a_label_sits_inside_the_hit_box_of_its_place_at_the_glass_edge():
+    h = 240
+    assert gg._label_box({'x': 0, 'y': 0, 'w': 72, 'h': 120}, h) == (0, 0, 71, 21)            # top-left: the row along the top edge, its own width
+    assert gg._label_box({'x': 248, 'y': 120, 'w': 72, 'h': 120}, h) == (248, 218, 319, 239)  # bottom-right: the row along the bottom edge
+    assert gg._label_box({'x': 72, 'y': 0, 'w': 176, 'h': 72}, h) == (72, 0, 247, 21)          # top
+    assert gg._label_box({'x': 72, 'y': 168, 'w': 176, 'h': 72}, h) == (72, 218, 247, 239)     # bottom
+    assert gg._label_box({'x': 10, 'y': 50, 'w': 20, 'h': 20}, h) == (10, 50, 29, 69)          # a place touching neither edge keeps its own box
 
 
 def test_the_first_frame_is_a_jpeg_of_the_glass_with_the_places_drawn():
@@ -137,7 +138,8 @@ def test_the_first_frame_is_a_jpeg_of_the_glass_with_the_places_drawn():
         assert rig.wait_frames(1)
         im = Image.open(io.BytesIO(rig.frames[0]))
         assert im.size == (320, 240) and im.format == 'JPEG' and len(rig.frames[0]) < TAKES['max_bytes']
-        assert rig.engine.drawn == [(32, 22, 287, 145)]      # the picture: 80% of the width, from the top row of labels to the strip at the middle place's lower edge (y 168)
+        assert rig.engine.drawn == [(32, 22, 287, 217)]      # the picture: 80% of the width, from the top row of labels to the bottom row
+        assert rig.engine.lines == [(72, 109, 247, 130)]     # the host's own row across the middle place's centre (y 72..168), told to the game
 
 
 def test_a_press_on_a_move_goes_through_the_door_and_she_speaks_on_the_board():

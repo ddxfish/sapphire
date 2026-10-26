@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_GENERATION_PARAMS = {
     'temperature': 0.7,
     'top_p': 0.9,
-    'max_tokens': 4096,
+    'max_tokens': 8192,
 }
 
 
@@ -482,33 +482,31 @@ class ProviderRegistry(_BaseRegistry):
         """
         Get generation parameters for a provider instance.
 
-        Resolution:
-        1. Instance generation_params (if set)
-        2. MODEL_GENERATION_PROFILES lookup by model name
-        3. MODEL_GENERATION_PROFILES __fallback__
-        4. Default params
+        Layers, each over the last, key by key:
+        1. Default params
+        2. MODEL_GENERATION_PROFILES by model name, else its __fallback__
+        3. Instance generation_params — only the keys it sets (a blanked
+           field persists null and inherits). It used to REPLACE the
+           profile whole, so a card's stock 4096 hid a model's tuned values.
+           A card with params of its own still owns the penalties: the
+           profile's never ride in under it (blank = never sent).
         """
         if providers_config is None:
             providers_config = self._get_all_configs()
 
         config = providers_config.get(provider_key, {})
-
-        # 1. Instance-level override (highest priority)
-        if config.get('generation_params'):
-            return {**DEFAULT_GENERATION_PARAMS, **config['generation_params']}
-
-        # 2. Model-name lookup in profiles (preserves tuned params per model)
+        inst = {k: v for k, v in (config.get('generation_params') or {}).items() if v is not None}
+        profile = {}
         try:
             import config as app_config
-            profiles = getattr(app_config, 'MODEL_GENERATION_PROFILES', {})
-            if model and model in profiles:
-                return {**DEFAULT_GENERATION_PARAMS, **profiles[model]}
-            if '__fallback__' in profiles:
-                return {**DEFAULT_GENERATION_PARAMS, **profiles['__fallback__']}
+            profiles = getattr(app_config, 'MODEL_GENERATION_PROFILES', {}) or {}
+            profile = (profiles.get(model) if model and model in profiles
+                       else profiles.get('__fallback__')) or {}
         except ImportError:
             pass
-
-        return dict(DEFAULT_GENERATION_PARAMS)
+        if inst:
+            profile = {k: v for k, v in profile.items() if k in DEFAULT_GENERATION_PARAMS}
+        return {**DEFAULT_GENERATION_PARAMS, **profile, **inst}
 
     # =========================================================================
     # API KEYS

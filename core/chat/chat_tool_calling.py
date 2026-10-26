@@ -6,7 +6,7 @@ import uuid
 from typing import Dict, Any, Optional, List
 
 from .llm_providers import LLMResponse
-from .llm_providers.base import BaseProvider
+from .llm_providers.base import BaseProvider, LENGTH_FINISH
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,17 @@ def strip_ui_markers(content: str, keep_img: bool = False) -> str:
             logger.debug(f"   - {marker.strip()[:120]}")
     
     return clean.strip()
+
+
+def bad_args_result(finish=None) -> str:
+    """The tool result for arguments that don't parse. A reply cut off at
+    max_tokens mid-arguments is its own cause: name it, or the model resends
+    the same too-long call and dies the same way."""
+    if finish in LENGTH_FINISH:
+        return ("Error: this tool call was cut off. The reply hit its max_tokens limit while "
+                "writing the arguments, so the tool did not run. Send less per call "
+                "(split large content across several calls).")
+    return "Error: Invalid JSON arguments."
 
 
 def wrap_tool_result(tool_call_id: str, function_name: str, result: str) -> Dict[str, Any]:
@@ -460,7 +471,7 @@ class ToolCallingEngine:
 
         return None
 
-    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None, image_sink=None):
+    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None, image_sink=None, finish=None):
         """
         Execute tool calls and add results to messages array AND history.
 
@@ -497,8 +508,8 @@ class ToolCallingEngine:
             try:
                 function_args = json.loads(raw_args) if raw_args not in ("", None) else {}
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse tool arguments: {raw_args!r}")
-                error_result = "Error: Invalid JSON arguments."
+                logger.error(f"Failed to parse tool arguments (finish={finish}): {raw_args!r}")
+                error_result = bad_args_result(finish)
                 # Loop-warn goes to the LLM message only — history keeps the raw error
                 # (else the warning persists and replays every future turn).
                 llm_result = error_result + self.function_manager.loop_warn_suffix(function_name, loop_counts)
