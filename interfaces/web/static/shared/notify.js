@@ -282,6 +282,11 @@ function _highlight(view, key, tries = 0) {
         if (tries < 20) setTimeout(() => _highlight(view, key, tries + 1), 150);   // the tab is still painting
         return;
     }
+    // a target that folds (a provider card) opens what it marks for arrival
+    el.querySelectorAll('[data-open-on-arrive]').forEach(f => {
+        f.classList.remove('collapsed');
+        if (f.tagName === 'DETAILS') f.open = true;
+    });
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     el.classList.add('notify-target');
     setTimeout(() => el.classList.remove('notify-target'), 2400);

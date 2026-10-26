@@ -577,6 +577,7 @@ class ExecutionContext:
                      f"history={len(history_messages) if history_messages else 0} msgs")
         final_content = None
         llm_retries = 0  # one rescue decode per run — shared by both garbage shapes below
+        cut_streak = 0   # tool-call rounds cut at max_tokens, in a row
 
         overflow_reason = None
         loop_counts = {}  # per-turn per-tool call counts (loop guard); turn-local by design
@@ -726,6 +727,16 @@ class ExecutionContext:
                     )
                     logger.warning(f"[ExecCtx] {self.degraded_reason}")
                     break
+                # Two rounds in a row cut at max_tokens mid-call: each retry costs a
+                # full max_tokens and lands the same way. Stop, and say why.
+                cut_streak = cut_streak + 1 if response_msg.finish_reason in _LENGTH_FINISH else 0
+                if cut_streak >= 2:
+                    self.degraded_reason = (
+                        "Two tool calls in a row were cut off at the reply length limit (max_tokens) "
+                        "before their arguments finished. Stopped. Raise Max Tokens for this provider "
+                        "in Settings › LLM, or ask for less per step.")
+                    logger.warning(f"[ExecCtx] {self.degraded_reason}")
+                    break
                 continue
 
             elif response_msg.content and _visible:
@@ -756,7 +767,7 @@ class ExecutionContext:
                 # flags degraded so workers don't count the message as ok.
                 # Provider dialects for "hit the token ceiling": openai-compat
                 # says 'length', Claude/anthropic-compat pass raw 'max_tokens',
-                # openai_responses says 'incomplete' (fixer-scout, 2026-07-19 —
+                # openai_responses maps its max_output_tokens 'incomplete' to 'length' (fixer-scout, 2026-07-19 —
                 # matching only 'length' left the b12 class live elsewhere).
                 _finish = getattr(response_msg, 'finish_reason', None)
                 # A wall of '...', a line on repeat, a two-token stub after

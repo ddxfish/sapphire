@@ -250,7 +250,7 @@ export const replayTts = async (idx) => {
     if (!msg) return;
     const content = msg.querySelector('.message-content');
     if (!content) return;
-    const prose = extractProseForTts(content);
+    const prose = ui.extractProseText(content);   // the one extractor (ui-parsing)
     if (!prose) return;
 
     // Try the streaming TTS endpoint first. Falls back to /api/tts whole-blob
@@ -358,12 +358,6 @@ export const playTextStreaming = async (text, voice = null, chat = null, opts = 
     return sawChunk || sawEnd;
 };
 
-// Extract prose text for TTS (mirrors ui.extractProseText logic)
-const extractProseForTts = (el) => {
-    const clone = el.cloneNode(true);
-    clone.querySelectorAll('details, .tool-block, .message-metadata, pre, code').forEach(e => e.remove());
-    return clone.textContent.trim();
-};
 
 // Clear TTS cache (call on chat switch/history reload)
 export const clearTtsCache = () => {

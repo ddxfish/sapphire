@@ -79,6 +79,7 @@ export const extractProseText = (el) => {
     clone.querySelectorAll('.accordion-tool').forEach(t => t.remove());    // Tool accordions alt
     clone.querySelectorAll('[class*="code"]').forEach(c => c.remove());    // Any code-related class
     clone.querySelectorAll('.message-metadata').forEach(m => m.remove()); // Metadata footer
+    clone.querySelectorAll('.row-note, .tool-block').forEach(n => n.remove()); // the app's notes about a row (never content)
     
     // Add periods after list items for TTS pauses (before textContent extraction)
     clone.querySelectorAll('li').forEach(li => {

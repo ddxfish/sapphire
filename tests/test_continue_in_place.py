@@ -32,7 +32,8 @@ PREFILL = "Half a sent"
 # ─── engine harness (shape of tests/test_llm_done_split._run) ───────────────
 
 def _run(provider_events=(), *, continue_from="T1", prefill=PREFILL, raise_exc=None,
-         cancel_on=None, cancel_at_start=False, hook_stub=None, provider_side_effect=None):
+         cancel_on=None, cancel_at_start=False, hook_stub=None, provider_side_effect=None,
+         continues=True):
     mock_main = MagicMock()
     mock_main.system = None
     fm = mock_main.function_manager
@@ -70,6 +71,9 @@ def _run(provider_events=(), *, continue_from="T1", prefill=PREFILL, raise_exc=N
         patch.object(config, 'TTS_STREAMING_ENABLED', False, create=True),
         patch('core.voice_privacy.tts_gate_reason', return_value=""),
         patch('core.chat.chat_streaming.publish', lambda *a, **k: None),
+        # the fake 'test' provider resumes replies unless a test says otherwise
+        patch('core.chat.llm_providers.resolve.continues_in_place', return_value=continues),
+        patch('core.chat.llm_providers.resolve.display_name', return_value="Test"),
     ]
     if hook_stub is not None:
         patches.append(patch('core.chat.chat_streaming.hook_runner', hook_stub))
@@ -185,6 +189,16 @@ class TestEngine:
         assert notices and "unchanged" in notices[0]["message"]
         assert _final(out)["text"] == PREFILL
 
+    def test_refused_up_front_when_the_provider_cant_continue(self):
+        """A provider that answers fresh (hosted OpenAI-style) is never sent the
+        continuation: words, history untouched (resolve.continues_in_place)."""
+        _, out, main, provider = _run([{"type": "done", "response": None}], continues=False)
+        provider.chat_completion_stream.assert_not_called()
+        main.session_manager.continue_assistant.assert_not_called()
+        notices = [e for e in out if isinstance(e, dict) and e.get("type") == "notice"]
+        assert notices and "can't continue a reply in place" in notices[0]["message"]
+        assert _final(out)["error"] is True
+
     def test_refused_when_the_turn_is_not_the_last_prose_row(self):
         _, out, main, provider = _run([{"type": "done", "response": None}], prefill=None)
         provider.chat_completion_stream.assert_not_called()
@@ -234,7 +248,8 @@ class TestEngine:
             with patch.object(config, 'TTS_ENABLED', False, create=True), \
                  patch.object(config, 'TTS_STREAMING_ENABLED', False, create=True), \
                  patch('core.voice_privacy.tts_gate_reason', return_value=""), \
-                 patch('core.chat.chat_streaming.publish', lambda *a, **k: None):
+                 patch('core.chat.chat_streaming.publish', lambda *a, **k: None), \
+                 patch('core.chat.llm_providers.resolve.continues_in_place', return_value=True):
                 out = list(sc.chat_stream("", continue_from="T1"))
         sm.continue_assistant.assert_not_called()
         # tool row content = this stream's prose only (the prefill row stands)

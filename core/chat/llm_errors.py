@@ -18,6 +18,12 @@ _LOCAL_HOSTS = ('127.0.0.1', 'localhost', '0.0.0.0', '::1')
 _CONTEXT = ('context size', 'context length', 'context_length', 'maximum context', 'context window',
             'token limit', 'n_ctx', 'exceeds the available context', 'prompt is too long',
             'exceeds the maximum number of tokens', 'input token count')
+# Max Tokens itself refused: above the model's own reply cap (Anthropic,
+# OpenAI, Groq wordings) or prompt + Max Tokens past the server's context
+# (vLLM "N in the completion", TGI-style hosts "max_new_tokens").
+_OUT_CAP = ('maximum allowed number of output tokens', 'is too large', 'supports at most',
+            'must be less than or equal', 'maximum value for')
+_OUT_ROOM = ('in the completion', 'max_new_tokens')
 _KEY_WORDS = ('api key not valid', 'api_key_invalid', 'invalid api key', 'incorrect api key',
               'invalid x-api-key', 'authentication', 'unauthorized')
 
@@ -126,6 +132,17 @@ def _explain(e, provider_key):
     tname = type(e).__name__
     status = _status(e)
 
+    # Max Tokens before context: these name the reply budget, and "start a new
+    # chat" alone won't fix a Max Tokens the model can't take.
+    card = {**LLM_TAB, 'key': f'provider:{provider_key}'} if provider_key else dict(LLM_TAB)
+    if any(k in err for k in ('max_tokens', 'max_completion_tokens', 'output tokens')) \
+            and any(k in err for k in _OUT_CAP):
+        return out(f"Max Tokens is set higher than the model at {who} can write in one reply. "
+                   f"Lower Max Tokens for this provider in Settings › LLM.", card)
+    if any(k in err for k in _OUT_ROOM):
+        return out(f"This chat plus the reply's Max Tokens is more than the model at {who} can hold. "
+                   f"Lower Max Tokens for this provider in Settings › LLM, or start a new chat.", card)
+
     # Context before status: llama.cpp / LM Studio raise it mid-stream with none.
     if any(k in err for k in _CONTEXT):
         if local:
@@ -213,20 +230,29 @@ def _explain(e, provider_key):
                f"in the chat sidebar.", known=False)
 
 
-def explain_finish(finish, said, provider_key=None):
+def explain_finish(finish, said, provider_key=None, model=None):
     """{'text', 'go'} when a generation ended on the reply token ceiling, else
     None. Not an exception: the words stay and the row is a real reply, so this
     rides beside it (metadata.cutoff) instead of replacing it. `said` = the
-    reply has visible words (False = a reasoning model thought to the limit)."""
+    reply has visible words (False = a reasoning model thought to the limit).
+    Continue is offered only where it works (resolve.continues_in_place); the
+    model is named because a core card's Max Tokens is set per model."""
     from core.chat.llm_providers.base import LENGTH_FINISH
     if finish not in LENGTH_FINISH:
         return None
     go = {**LLM_TAB, 'key': f'provider:{provider_key}'} if provider_key else dict(LLM_TAB)
-    if said:
-        return {'text': "This reply hit its length limit and was cut off. Press Continue to pick up "
-                        "where it stopped, or raise Max Tokens for this provider in Settings › LLM.", 'go': go}
-    return {'text': "The model used its whole reply budget thinking and never got to answer. Raise "
-                    "Max Tokens for this provider in Settings › LLM, or lower its reasoning effort.", 'go': go}
+    where = f"for {str(model).split('/')[-1]} in Settings › LLM" if model else "for this provider in Settings › LLM"
+    if not said:
+        return {'text': f"The model used its whole reply budget thinking and never got to answer. Raise "
+                        f"Max Tokens {where}, or lower its reasoning effort.", 'go': go}
+    try:
+        from core.chat.llm_providers.resolve import continues_in_place
+        can = bool(provider_key) and continues_in_place(provider_key)
+    except Exception:
+        can = False
+    then = "Press Continue to pick up where it stopped" if can else "Ask it to go on in a new message"
+    return {'text': f"This reply hit its length limit and was cut off. {then}, or raise Max Tokens {where}.",
+            'go': go}
 
 
 def _unknown(who):

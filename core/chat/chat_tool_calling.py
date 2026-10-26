@@ -72,6 +72,14 @@ def bad_args_result(finish=None) -> str:
     return "Error: Invalid JSON arguments."
 
 
+def cut_call(tool_call, tool_calls, finish) -> bool:
+    """The response's last tool call, empty-argued, on a max_tokens finish: the
+    cut landed right after its name, so '' is not a no-arg call. Running it
+    with defaults is the permissive-defaults hazard; it is a cut-off call."""
+    return (finish in LENGTH_FINISH and bool(tool_calls) and tool_call is tool_calls[-1]
+            and tool_call.get("function", {}).get("arguments") in ("", None))
+
+
 def wrap_tool_result(tool_call_id: str, function_name: str, result: str) -> Dict[str, Any]:
     """
     Wrap tool results in standard OpenAI tool format.
@@ -505,9 +513,13 @@ class ToolCallingEngine:
             # arguments='' (not '{}') when a tool has no params. Streaming got
             # this guard 2026-05-15; the engine copy never did, so agent-lane
             # no-arg calls failed with "Invalid JSON arguments". 2026-08-17.
-            try:
-                function_args = json.loads(raw_args) if raw_args not in ("", None) else {}
-            except json.JSONDecodeError:
+            function_args = None
+            if not cut_call(tool_call, tool_calls, finish):
+                try:
+                    function_args = json.loads(raw_args) if raw_args not in ("", None) else {}
+                except json.JSONDecodeError:
+                    pass
+            if not isinstance(function_args, dict):
                 logger.error(f"Failed to parse tool arguments (finish={finish}): {raw_args!r}")
                 error_result = bad_args_result(finish)
                 # Loop-warn goes to the LLM message only — history keeps the raw error
@@ -522,6 +534,7 @@ class ToolCallingEngine:
 
                 if history:
                     history.add_tool_result(tool_call["id"], function_name, error_result)
+                tools_executed += 1     # a round the model gets back, not a hallucinated name
                 continue
 
             try:

@@ -308,12 +308,56 @@ class SettingsManager:
             logger.info(f"[SETTINGS] Fireworks affinity -> extra_body {{session}} on {changed} provider(s)")
             self.save()
 
+    # Models whose stock max_tokens was 4096 until 2026-10-26 (now 8192). A
+    # frozen copy of that stock is not a choice, so the one-time thinning of
+    # an old full-dict save drops it like any other stock value.
+    _OLD_STOCK_4096 = frozenset({
+        '__fallback__', 'gpt-4o', 'gpt-4o-mini', 'accounts/fireworks/models/gpt-oss-120b',
+        'MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.5', 'MiniMax-M2.1', 'zai-org/GLM-4.7',
+        'Qwen/Qwen3-32B', 'openai/gpt-oss-120b', 'meta-llama/Llama-3.3-70B-Instruct'})
+
+    def _thin_profiles(self, user, legacy=False):
+        """MODEL_GENERATION_PROFILES as only what the user changed: per model,
+        the knobs that differ from stock. The core card used to PUT the whole
+        merged map, freezing every model's stock into settings.json so no new
+        default ever reached that install (scout 2026-10-26). A model stock
+        doesn't know is the user's own and stays whole. `legacy` also drops
+        the old 4096 stock (see _OLD_STOCK_4096)."""
+        stock = self._defaults.get('MODEL_GENERATION_PROFILES') or {}
+        out = {}
+        for model, p in (user or {}).items():
+            base = stock.get(model)
+            if model not in stock:
+                out[model] = p
+            elif isinstance(p, dict) and isinstance(base, dict):
+                mine = {k: v for k, v in p.items() if base.get(k, object()) != v
+                        and not (legacy and k == 'max_tokens' and v == 4096 and model in self._OLD_STOCK_4096)}
+                if mine:
+                    out[model] = mine
+            elif p != base:
+                out[model] = p
+        return out
+
+    def _migrate_generation_profiles(self):
+        """One-time thinning of a frozen full-map save. Self-detecting: every
+        old full-map save carried the defaults' `_comment`, which a thinned map
+        (stock values dropped) never has, so this runs once and goes quiet."""
+        user = self._user.get('MODEL_GENERATION_PROFILES')
+        if not isinstance(user, dict) or '_comment' not in user:
+            return
+        thin = self._thin_profiles(user, legacy=True)
+        self._user['MODEL_GENERATION_PROFILES'] = thin
+        logger.info(f"[SETTINGS] Generation profiles thinned to the user's own values: "
+                    f"{len(user)} entries -> {len(thin)} ({', '.join(sorted(thin)) or 'none'})")
+        self.save()
+
     def _merge_settings(self):
         """Merge defaults with user overrides, deep-merging LLM_PROVIDERS"""
         # Run migration before merge
         self._migrate_providers()
         self._migrate_fireworks_affinity()
         self._migrate_setup_state()
+        self._migrate_generation_profiles()
 
         self._config = {**self._defaults, **self._user}
 
@@ -345,9 +389,14 @@ class SettingsManager:
                 merged_custom[key] = user_config
         self._config['LLM_CUSTOM_PROVIDERS'] = merged_custom
 
-        # Deep-merge MODEL_GENERATION_PROFILES so new model profiles from defaults aren't lost
-        if 'MODEL_GENERATION_PROFILES' in self._defaults and 'MODEL_GENERATION_PROFILES' in self._user:
-            self._config['MODEL_GENERATION_PROFILES'] = {**self._defaults['MODEL_GENERATION_PROFILES'], **self._user['MODEL_GENERATION_PROFILES']}
+        # Deep-merge MODEL_GENERATION_PROFILES per model, knob by knob: the user
+        # file holds only changed knobs (_thin_profiles), stock fills the rest
+        if 'MODEL_GENERATION_PROFILES' in self._defaults and isinstance(self._user.get('MODEL_GENERATION_PROFILES'), dict):
+            merged = dict(self._defaults['MODEL_GENERATION_PROFILES'])
+            for model, p in self._user['MODEL_GENERATION_PROFILES'].items():
+                base = merged.get(model)
+                merged[model] = {**base, **p} if isinstance(base, dict) and isinstance(p, dict) else p
+            self._config['MODEL_GENERATION_PROFILES'] = merged
 
         # Managed mode: lock down for Docker resale
         if os.environ.get('SAPPHIRE_MANAGED'):
@@ -493,7 +542,9 @@ class SettingsManager:
                 self._config['TTS_ENABLED'] = bool(value and value != 'none')
 
             if persist:
-                self._user[key] = value
+                # profiles persist as the user's own knobs only (stock fills in at merge)
+                self._user[key] = (self._thin_profiles(value) if key == 'MODEL_GENERATION_PROFILES'
+                                   and isinstance(value, dict) else value)
                 self._runtime.pop(key, None)  # Now persisted, no need to preserve
                 self.save()
 
@@ -520,6 +571,8 @@ class SettingsManager:
         if persist:
             with self._lock:
                 self._user.update(settings_dict)
+                if isinstance(settings_dict.get('MODEL_GENERATION_PROFILES'), dict):
+                    self._user['MODEL_GENERATION_PROFILES'] = self._thin_profiles(settings_dict['MODEL_GENERATION_PROFILES'])
                 for key in settings_dict:
                     self._runtime.pop(key, None)  # Now persisted
                 self.save()

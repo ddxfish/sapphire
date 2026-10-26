@@ -255,7 +255,8 @@ const createToolbar = (idx, total, role = 'user', failed = false) => {
 
     buttons.forEach(([cls, act, icon, title]) => {
         // Continue resumes the chat's LAST reply in place — offered only there,
-        // and never on a failed turn's row (its words aren't hers to go on from).
+        // never on a failed turn's row (its words aren't hers to go on from),
+        // never on a room seat's line (`failed` carries both).
         if (act === 'continue' && (failed || !(role === 'assistant' && idx === total - 1))) return;
         const btn = createElem('button', { class: cls, 'data-action': act, 'data-message-index': idx }, icon);
         btn.title = title;
@@ -271,7 +272,7 @@ const updateToolbars = () => {
         if (!toolbar) return;
         
         const role = msg.classList.contains('assistant') ? 'assistant' : 'user';
-        const failed = msg.classList.contains('llm-error');
+        const failed = msg.classList.contains('llm-error') || msg.classList.contains('seat-line');
         const btns = toolbar.querySelectorAll('button');
         
         if (btns.length === 0) {
@@ -337,6 +338,7 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     // sits on the left wearing that persona's face if there is one; the
     // room's own notices are one muted line. The person's rows stay as is.
     if (msg.speaker && msg.name && msg.speaker !== 'user') {
+        msgEl.classList.add('seat-line');   // a room's line: its brain is a seat's, not this chat's - no Continue
         if (msg.speaker === 'room') {
             msgEl.classList.add('notice');
         } else {
@@ -349,7 +351,8 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     }
 
     if (idx !== null) {
-        const toolbar = createToolbar(idx, total, role, !!(role === 'assistant' && msg.metadata?.error));
+        const toolbar = createToolbar(idx, total, role,
+            !!(role === 'assistant' && msg.metadata?.error) || msgEl.classList.contains('seat-line'));
         tb.replaceWith(toolbar);
     }
     
@@ -363,7 +366,7 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     if (role === 'assistant' && !msg.content && msg.metadata?.degraded_reason) {
         const note = createElem(
             'div',
-            { class: 'message-degraded' },
+            { class: 'message-degraded row-note' },
             `⚠️ ${msg.metadata.degraded_reason}`
         );
         contentDiv.appendChild(note);
@@ -373,7 +376,7 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     // stay, the why and a Fix it ride under them. Amber, not the error red.
     const cutoff = role === 'assistant' && msg.metadata?.cutoff;
     if (cutoff?.text) {
-        const note = createElem('div', { class: 'message-cutoff' }, `\u26A0\uFE0F ${cutoff.text}`);
+        const note = createElem('div', { class: 'message-cutoff row-note' }, `\u26A0\uFE0F ${cutoff.text}`);
         if (cutoff.go) {
             const fix = createElem('button', { type: 'button', class: 'llm-error-fix cutoff-fix' }, 'Fix it');
             fix.addEventListener('click', () => goTo(cutoff.go));
@@ -387,7 +390,7 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     const failed = role === 'assistant' && msg.metadata?.error;
     if (failed) {
         msgEl.classList.add('llm-error');
-        const box = createElem('div', { class: 'llm-error-extra' });
+        const box = createElem('div', { class: 'llm-error-extra row-note' });
         if (failed.go) {
             const fix = createElem('button', { type: 'button', class: 'llm-error-fix' }, 'Fix it');
             fix.addEventListener('click', () => goTo(failed.go));
@@ -424,10 +427,10 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
         if (meta.duration_seconds) {
             parts.push(`${meta.duration_seconds}s`);
         }
-        // the generation hit the model's reply token ceiling (a reasoning model
-        // thinking to max_tokens, a cut-off answer) - the row carries finish;
-        // an amber chip at the head of the line (old rows have no cutoff note)
-        const cut = ['length', 'max_tokens', 'incomplete'].includes(meta.finish);
+        // the generation hit the model's reply token ceiling: the backend's
+        // verdict (metadata.cutoff, llm_errors.explain_finish) - never a JS copy
+        // of the finish list. An amber chip at the head of the line.
+        const cut = !!meta.cutoff;
         if (meta.tokens_per_second) {
             const label = tok.estimated ? 'tok/s est' : 'tok/s';
             parts.push(`${meta.tokens_per_second} ${label}`);

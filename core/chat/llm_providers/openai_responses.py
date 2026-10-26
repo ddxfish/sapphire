@@ -24,6 +24,17 @@ from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, serv
 logger = logging.getLogger(__name__)
 
 
+
+def _finish(resp):
+    """The response status in the app's finish dialect: an 'incomplete' cut at
+    max_output_tokens is 'length' (LENGTH_FINISH); a content filter names
+    itself, so it is never told to raise Max Tokens."""
+    status = getattr(resp, 'status', None)
+    if status != 'incomplete':
+        return status
+    reason = getattr(getattr(resp, 'incomplete_details', None), 'reason', None)
+    return 'length' if reason == 'max_output_tokens' else (reason or 'incomplete')
+
 class OpenAIResponsesProvider(BaseProvider):
     """
     Provider for OpenAI Responses API.
@@ -401,10 +412,18 @@ class OpenAIResponsesProvider(BaseProvider):
                     }
             
             # Response lifecycle events
-            elif event_type == "response.completed" or event_type == "response.done":
+            # A failed response raises (the turn gets llm_errors words), never a silent empty reply
+            elif event_type in ("response.failed", "error"):
+                err = getattr(getattr(event, 'response', None), 'error', None) or event
+                raise RuntimeError(f"OpenAI Responses {event_type}: "
+                                   f"{getattr(err, 'message', None) or getattr(err, 'code', None) or 'no detail'}")
+
+            # response.incomplete is how a cut at max_output_tokens ends the
+            # stream (it used to fall through as unhandled: no finish, no usage)
+            elif event_type in ("response.completed", "response.done", "response.incomplete"):
                 response_obj = getattr(event, 'response', None)
                 if response_obj:
-                    finish_reason = getattr(response_obj, 'status', 'completed')
+                    finish_reason = _finish(response_obj) or 'completed'
                     # Parse usage from completed response
                     resp_usage = getattr(response_obj, 'usage', None)
                     if resp_usage:
@@ -530,7 +549,7 @@ class OpenAIResponsesProvider(BaseProvider):
         return LLMResponse(
             content=final_content if final_content else None,
             tool_calls=tool_calls,
-            finish_reason=getattr(response, 'status', None),
+            finish_reason=_finish(response),
             usage=usage
         )
     

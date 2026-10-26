@@ -488,8 +488,8 @@ class ProviderRegistry(_BaseRegistry):
         3. Instance generation_params — only the keys it sets (a blanked
            field persists null and inherits). It used to REPLACE the
            profile whole, so a card's stock 4096 hid a model's tuned values.
-           A card with params of its own still owns the penalties: the
-           profile's never ride in under it (blank = never sent).
+           A custom card owns its penalties: the profile's never ride in
+           under it (blank = never sent, Krem 2026-08-23 + 2026-10-26).
         """
         if providers_config is None:
             providers_config = self._get_all_configs()
@@ -504,7 +504,7 @@ class ProviderRegistry(_BaseRegistry):
                        else profiles.get('__fallback__')) or {}
         except ImportError:
             pass
-        if inst:
+        if not self.is_core_provider(provider_key):
             profile = {k: v for k, v in profile.items() if k in DEFAULT_GENERATION_PARAMS}
         return {**DEFAULT_GENERATION_PARAMS, **profile, **inst}
 

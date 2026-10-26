@@ -1006,8 +1006,13 @@ def _is_local_provider(key):
 
 
 def _get_provider(provider_key=None, model='', privacy_required=False, health='cached'):
-    """Explicit provider by key (with optional model override), else Auto.
-    Thin door onto core.chat.llm_providers.resolve — the ONE resolver
+    sel = _select(provider_key, model, privacy_required, health)
+    return sel.provider if sel else None
+
+
+def _select(provider_key=None, model='', privacy_required=False, health='cached'):
+    """The resolver's Selection (key, provider, model) or None. Explicit
+    provider by key (with optional model override), else Auto. Thin door onto core.chat.llm_providers.resolve — the ONE resolver
     (2026-09-21). privacy_required=True (private session chat, P3-T3) allows
     LOCAL providers only; a refusal or a dead pin is terminal (never a
     cloud pick, never auto). This NEVER reads the operator's active web
@@ -1016,7 +1021,7 @@ def _get_provider(provider_key=None, model='', privacy_required=False, health='c
     from core.chat.llm_providers.resolve import resolve, ProviderRefused
     try:
         return resolve(provider_key or 'auto', model, private=bool(privacy_required),
-                       health=health).provider
+                       health=health)
     except ProviderRefused as e:
         logger.warning(f'game-room: {e}')
         return None
@@ -1103,14 +1108,29 @@ def _system_prompt(contract, view, cfg, gcfg=None):
     return base + '\n\n' + text
 
 
+MOVE_TOKENS_FLOOR = 8192
+
+
+def _move_budget(sel):
+    """max_tokens for a seat's move: the resolver's value for this provider and
+    model (core.chat.llm_providers), never below MOVE_TOKENS_FLOOR."""
+    try:
+        from core.chat.llm_providers import provider_registry
+        got = provider_registry.get_generation_params(sel.key, sel.effective_model).get('max_tokens')
+        return max(int(got or 0), MOVE_TOKENS_FLOOR)
+    except Exception:
+        return MOVE_TOKENS_FLOOR
+
+
 def _call_llm(system, user, cfg):
     """One-shot completion → think-stripped content string, or None."""
     cfg = cfg or {}
     if cfg.get('hidden'):
         logger.warning('game-room: session chat is sealed in a locked vault — seat refused')
         return None
-    provider = _get_provider(cfg.get('provider'), cfg.get('model', ''),
-                             privacy_required=bool(cfg.get('privacy_required')))
+    sel = _select(cfg.get('provider'), cfg.get('model', ''),
+                  privacy_required=bool(cfg.get('privacy_required')))
+    provider = sel.provider if sel else None
     if provider is None:
         logger.warning('game-room: no LLM provider available')
         return None
@@ -1123,8 +1143,9 @@ def _call_llm(system, user, cfg):
             [{'role': 'system', 'content': system},
              {'role': 'user', 'content': user}],
             tools=None,
-            # generous budget: thinking models spend tokens reasoning in-content
-            generation_params={'temperature': temp, 'max_tokens': 3000},
+            # the provider's own Max Tokens, floored: thinking models spend it
+            # reasoning before the move's JSON (a flat 3000 could all go there)
+            generation_params={'temperature': temp, 'max_tokens': _move_budget(sel)},
         )
     except Exception as e:
         logger.error(f'game-room: chat_completion failed: {e}')

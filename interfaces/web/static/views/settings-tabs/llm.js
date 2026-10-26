@@ -5,7 +5,7 @@ import {
     saveGenerationParams, renderProviderCard, loadModelGenParamsIntoCard,
     collectGenParamsFromCard, collectProviderFormData, initProviderDragDrop,
     refreshProviderKeyStatus, updateCardEnabledState, toggleProviderCollapse,
-    handleModelSelectChange, runTestConnection, getGenerationParams
+    handleModelSelectChange, runTestConnection
 } from '../../shared/llm-providers.js';
 import { showToast } from '../../shared/toast.js';
 import { responseError } from '../../shared/fetch.js';
@@ -316,7 +316,7 @@ function _renderCustomRow(k, c, i) {
                     </label>
                 </div>
             </div>
-            <div class="provider-fields collapsed">
+            <div class="provider-fields collapsed" data-open-on-arrive>
                 ${_providerFormHtml('pf-' + k, c, { mode: 'edit' })}
             </div>
         </div>
@@ -336,9 +336,10 @@ const _OPTIONAL_KNOBS = [
 ];
 
 function _advancedFieldsHtml(prefix, v = {}) {
-    const temp = v.temperature ?? 0.7;
-    const maxTok = v.max_tokens ?? '';   // blank = the model's own default (placeholder), never baked
-    const topP = v.top_p ?? 0.9;
+    // blank = the model's own value (the placeholder, from the backend resolver), never baked
+    const temp = v.temperature ?? '';
+    const maxTok = v.max_tokens ?? '';
+    const topP = v.top_p ?? '';
     const knobs = _OPTIONAL_KNOBS.map(([id, key, label, step, min, max]) => `
                 <div class="field-row" style="margin-bottom:6px">
                     <label>${label}</label>
@@ -348,23 +349,23 @@ function _advancedFieldsHtml(prefix, v = {}) {
     const extraBody = v.extra_body ? (typeof v.extra_body === 'string' ? v.extra_body : JSON.stringify(v.extra_body)) : '';
     const extraHeaders = v.extra_headers ? (typeof v.extra_headers === 'string' ? v.extra_headers : JSON.stringify(v.extra_headers)) : '';
     return `
-        <details style="margin-bottom:8px">
+        <details style="margin-bottom:8px" data-open-on-arrive>
             <summary style="cursor:pointer;font-size:var(--font-sm);color:var(--text-muted)">Advanced</summary>
             <div style="padding:8px 0">
                 <div class="field-row" style="margin-bottom:6px">
                     <label>Temperature</label>
-                    <input type="number" id="${prefix}-temp" value="${temp}" step="0.05" min="0" max="2" style="width:80px">
+                    <input type="number" id="${prefix}-temp" value="${temp}" placeholder="0.7" step="0.05" min="0" max="2" style="width:80px">
                 </div>
                 <div class="field-row" style="margin-bottom:6px">
                     <label>Max Tokens</label>
-                    <input type="number" id="${prefix}-maxtok" value="${maxTok}" placeholder="${v.inherit_max_tokens ?? 8192}" step="1" min="1" style="width:80px">
+                    <input type="number" id="${prefix}-maxtok" value="${maxTok}" placeholder="8192" step="1" min="1" style="width:80px">
                 </div>
                 <div class="field-row" style="margin-bottom:6px">
                     <label>Top P</label>
-                    <input type="number" id="${prefix}-topp" value="${topP}" step="0.05" min="0" max="1" style="width:80px">
+                    <input type="number" id="${prefix}-topp" value="${topP}" placeholder="0.9" step="0.05" min="0" max="1" style="width:80px">
                 </div>${knobs}
                 <div class="text-muted" style="font-size:0.8em;margin-left:24px;margin-top:2px">
-                    Max Tokens blank = the model's default (the number shown). Penalties and Top K blank = not sent. Repeat penalty and Top K are local-model knobs (LM Studio, llama.cpp — repeat 1.05–1.1 or presence 1–1.5 tames a looping Qwen). A provider that rejects one is retried without it and a warning names it.
+                    Temperature, Max Tokens and Top P blank = the model's default (the number shown). Penalties and Top K blank = not sent. Repeat penalty and Top K are local-model knobs (LM Studio, llama.cpp — repeat 1.05–1.1 or presence 1–1.5 tames a looping Qwen). A provider that rejects one is retried without it and a warning names it.
                 </div>
                 <div class="field-row" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
                     <label class="checkbox-inline">
@@ -488,7 +489,6 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
         ${_advancedFieldsHtml(prefix, {
             temperature: gen.temperature,
             max_tokens: gen.max_tokens,
-            inherit_max_tokens: getGenerationParams(config.model, generationProfiles).max_tokens,
             top_p: gen.top_p,
             presence_penalty: gen.presence_penalty,
             frequency_penalty: gen.frequency_penalty,
@@ -541,6 +541,24 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         if (status) { status.textContent = msg; status.style.color = color; }
     };
 
+    // Blank gen fields show what they inherit for the model in the form, as
+    // the backend resolves it (GET /api/llm/generation-params) - never baked.
+    let inheritSeq = 0;
+    const showInherited = async () => {
+        const mine = ++inheritSeq;
+        try {
+            const q = new URLSearchParams({ provider: key || '', model: g('model')?.value?.trim() || '' });
+            const res = await fetch(`/api/llm/generation-params?${q}`);
+            if (!res.ok || mine !== inheritSeq) return;
+            const gen = await res.json();
+            [['temp', 'temperature'], ['maxtok', 'max_tokens'], ['topp', 'top_p']].forEach(([id, k]) => {
+                if (g(id) && gen[k] != null) g(id).placeholder = gen[k];
+            });
+        } catch {}
+    };
+    showInherited();
+    g('model')?.addEventListener('change', showInherited);
+
     // ── Add mode: preset picker drives template + prefills ──
     let selectedTemplate = 'openai';
     let selectedPreset = null;
@@ -553,16 +571,14 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         body.style.display = 'block';
         // Fresh form on every pick: an API key typed for Fireworks must not ride
         // into an OpenRouter add (scout U5, 2026-09-20). Gen fields go back to
-        // the form defaults; the preset's own generation_defaults apply below.
+        // blank gen fields (they inherit the model's values, shown as placeholders).
         if (g('key')) g('key').value = '';
         if (g('vision')) g('vision').checked = false;
         if (g('fallback')) g('fallback').checked = true;
         if (g('no-think')) g('no-think').checked = false;
         if (g('extra-body')) g('extra-body').value = '';
         if (g('extra-headers')) g('extra-headers').value = '';
-        if (g('temp')) g('temp').value = 0.7;
-        if (g('maxtok')) g('maxtok').value = '';
-        if (g('topp')) g('topp').value = 0.9;
+        ['temp', 'maxtok', 'topp'].forEach(id => { if (g(id)) g(id).value = ''; });
         _OPTIONAL_KNOBS.forEach(([id]) => { const el = g(id); if (el) el.value = ''; });
 
         if (val.startsWith('__manual_')) {
@@ -615,14 +631,12 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
                 g('suggested').innerHTML = '<small class="text-muted">Suggested: ' +
                     suggested.map(m => `<a href="#" class="wizard-model-pick" data-model="${_esc(m.id)}" style="margin-right:6px">${_esc(m.name)}</a>`).join('') + '</small>';
                 g('suggested').querySelectorAll('.wizard-model-pick').forEach(a => {
-                    a.addEventListener('click', ev => { ev.preventDefault(); g('model').value = a.dataset.model; });
+                    a.addEventListener('click', ev => { ev.preventDefault(); g('model').value = a.dataset.model; showInherited(); });
                 });
             } else {
                 g('suggested').innerHTML = '';
             }
-            const genDefaults = preset.generation_defaults || {};
-            if (genDefaults.temperature !== undefined) g('temp').value = genDefaults.temperature;
-            if (genDefaults.top_p !== undefined) g('topp').value = genDefaults.top_p;
+            showInherited();
         }
     });
 

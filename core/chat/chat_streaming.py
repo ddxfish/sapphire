@@ -4,10 +4,11 @@ import re
 import time
 from typing import Generator, Union, Dict, Any
 import config
-from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text, bad_args_result
+from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text, bad_args_result, cut_call
 from core.ui_markers import stage_cards
 from core import think as _think
 from .llm_providers import LLMResponse, get_generation_params
+from .llm_providers.base import LENGTH_FINISH
 from .llm_errors import explain_finish
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
@@ -82,6 +83,19 @@ def _stash_pasted(images):
             out.append(None)
     return out
 
+
+
+def _stamp_finish(metadata, finish, content, provider_key, note=True):
+    """A row's metadata learns how its generation ended: `finish`, plus the
+    cutoff words (llm_errors.explain_finish, ui.js renders them) when that was
+    the reply token ceiling. The one stamp every row builder here calls."""
+    if metadata is None or not finish:
+        return
+    metadata["finish"] = finish
+    cutoff = (explain_finish(finish, bool((_think.split(content)[0] or '').strip()), provider_key,
+                             metadata.get("model")) if note else None)
+    if cutoff:
+        metadata["cutoff"] = cutoff
 
 class StreamingChat:
     def __init__(self, main_chat):
@@ -674,6 +688,19 @@ class StreamingChat:
 
             provider_key, provider, model_override = self.main_chat._select_provider()
 
+            # Continue only where the provider really resumes a reply: elsewhere
+            # refuse with words, history untouched (resolve.continues_in_place).
+            if continue_from:
+                from .llm_providers.resolve import continues_in_place, display_name
+                if not continues_in_place(provider_key):
+                    logger.info(f"[CONTINUE] refused - {provider_key} doesn't continue a reply in place")
+                    yield {"type": "notice", "severity": "warning",
+                           "message": f"{display_name(provider_key)} can't continue a reply in place. "
+                                      f"Ask it to go on in a new message instead."}
+                    yield self._emit_llm_done(tts_pump)
+                    yield {"type": "final", "text": "", "cancelled": False, "error": True}
+                    return
+
             # A model with no vision reads a description in place of each stored
             # image on the wire — pasted this turn or replayed by the vision
             # window (Settings › Images › Image describer). The caption lives on
@@ -723,6 +750,7 @@ class StreamingChat:
             current_thinking = ""
             metadata = None
             finish = None          # how the last LLM call ended (finish_reason); rides on the row and on `final`
+            cut_streak, cut_stop = 0, False   # tool-call rounds cut at max_tokens, in a row
 
             for iteration in range(config.MAX_TOOL_ITERATIONS):
                 if self.cancel_flag:
@@ -915,12 +943,9 @@ class StreamingChat:
                             if resp_usage.get(k):
                                 metadata["tokens"][k] = resp_usage[k]
                 
-                if metadata is not None and finish:
-                    metadata["finish"] = finish        # the row remembers how its generation ended
-                    # cut off at max_tokens: the words for it ride the row (ui.js)
-                    cutoff = explain_finish(finish, bool((_think.split(current_content)[0] or '').strip()), provider_key)
-                    if cutoff:
-                        metadata["cutoff"] = cutoff
+                # a tool-call row gets no "Press Continue" note: its bad-args result is the signal
+                _stamp_finish(metadata, finish, (prefill or '') + current_content if has_prefill else current_content,
+                              provider_key, note=not tool_calls)
 
                 # Accumulate tokens across iterations
                 if metadata and metadata.get("tokens"):
@@ -1026,45 +1051,48 @@ class StreamingChat:
                         # sends arguments='' (not '{}') when a tool has no params.
                         # json.loads('') would fail. Treat empty as {} explicitly.
                         # 2026-05-15.
-                        if raw_args == "" or raw_args is None:
-                            function_args = {}
-                        else:
+                        # A response cut at max_tokens right after its last call's name
+                        # leaves '' args: a cut-off call, never a no-arg run (cut_call).
+                        function_args = None
+                        if not cut_call(tool_call, tool_calls, finish):
                             try:
-                                function_args = json.loads(raw_args)
+                                function_args = json.loads(raw_args) if raw_args not in ("", None) else {}
                             except json.JSONDecodeError:
-                                # Mirror the non-streaming path (chat_tool_calling.py:372-385):
-                                # surface the parse error back to the LLM as a tool result
-                                # instead of silently calling the tool with empty args.
-                                # Smaller/quantized models occasionally emit malformed JSON;
-                                # without feedback the LLM can't self-correct and the tool
-                                # runs with default args (potentially destructive for tools
-                                # with permissive defaults). 2026-05-14.
-                                logger.error(
-                                    f"[STREAMING] Failed to parse tool arguments for "
-                                    f"{function_name} (finish={finish}): {raw_args!r}"
-                                )
-                                error_result = bad_args_result(finish)
-                                # Loop-warn to the LLM only; history keeps raw error.
-                                llm_result = error_result + self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
-                                # CRITICAL: also append to messages — without this, the next
-                                # LLM call sees a tool_use with no matching tool_result and
-                                # Anthropic returns a 400 that kills the whole turn.
-                                # 2026-05-15.
-                                wrapped_err = provider.format_tool_result(
-                                    tool_call_id, function_name, llm_result
-                                )
-                                messages.append(wrapped_err)
-                                self.main_chat.session_manager.add_tool_result(
-                                    tool_call_id, function_name, error_result
-                                )
-                                yield {
-                                    "type": "tool_end",
-                                    "id": tool_call_id,
-                                    "name": function_name,
-                                    "result": error_result,
-                                    "error": True,   # was `is_error` — a key with zero consumers, so the failed tool rendered green (broadsword M-C6)
-                                }
-                                continue
+                                pass
+                        if not isinstance(function_args, dict):
+                            # Mirror the non-streaming path (chat_tool_calling.py:372-385):
+                            # surface the parse error back to the LLM as a tool result
+                            # instead of silently calling the tool with empty args.
+                            # Smaller/quantized models occasionally emit malformed JSON;
+                            # without feedback the LLM can't self-correct and the tool
+                            # runs with default args (potentially destructive for tools
+                            # with permissive defaults). 2026-05-14.
+                            logger.error(
+                                f"[STREAMING] Failed to parse tool arguments for "
+                                f"{function_name} (finish={finish}): {raw_args!r}"
+                            )
+                            error_result = bad_args_result(finish)
+                            # Loop-warn to the LLM only; history keeps raw error.
+                            llm_result = error_result + self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
+                            # CRITICAL: also append to messages — without this, the next
+                            # LLM call sees a tool_use with no matching tool_result and
+                            # Anthropic returns a 400 that kills the whole turn.
+                            # 2026-05-15.
+                            wrapped_err = provider.format_tool_result(
+                                tool_call_id, function_name, llm_result
+                            )
+                            messages.append(wrapped_err)
+                            self.main_chat.session_manager.add_tool_result(
+                                tool_call_id, function_name, error_result
+                            )
+                            yield {
+                                "type": "tool_end",
+                                "id": tool_call_id,
+                                "name": function_name,
+                                "result": error_result,
+                                "error": True,   # was `is_error` — a key with zero consumers, so the failed tool rendered green (broadsword M-C6)
+                            }
+                            continue
 
                         # Emit typed tool_start event
                         yield {
@@ -1169,6 +1197,15 @@ class StreamingChat:
                         # save stores it a second time as a standalone
                         # assistant message (S1 #2b).
                         current_content = ""
+                        break
+
+                    # Two tool-call rounds in a row cut at max_tokens: the model keeps
+                    # writing more than one reply holds, and each retry costs a full
+                    # max_tokens. Stop the tools; the forced final says why.
+                    cut_streak = cut_streak + 1 if finish in LENGTH_FINISH else 0
+                    if cut_streak >= 2:
+                        logger.warning(f"[STREAMING] {cut_streak} tool-call rounds in a row cut at max_tokens - stopping tools")
+                        cut_stop = True
                         break
 
                     continue
@@ -1340,14 +1377,20 @@ class StreamingChat:
                        "cancelled": True, "error": False, "finish": finish}
                 return
 
-            # Loop exhausted - force final response
-            logger.warning(f"[STREAMING] Exceeded max iterations ({config.MAX_TOOL_ITERATIONS}). Forcing final answer.")
-            
+            # Loop exhausted (or stopped on repeated cut-offs) - force final response
+            if not cut_stop:
+                logger.warning(f"[STREAMING] Exceeded max iterations ({config.MAX_TOOL_ITERATIONS}). Forcing final answer.")
+
             messages.append({
                 "role": "user",
-                "content": "You've used tools multiple times. Stop using tools now and provide your final answer based on the information you gathered."
+                "content": ("Your last two tool calls were cut off: each reply hit its max_tokens limit while "
+                            "writing the arguments, so those tools did not run. Stop using tools now. Briefly "
+                            "tell the user what you were trying to do and that it was too long for one reply."
+                            if cut_stop else
+                            "You've used tools multiple times. Stop using tools now and provide your final answer based on the information you gathered.")
             })
             
+            forced_finish = None     # how the forced final ended; rides the `final` event
             try:
                 yield {"type": "content", "text": "\n\n"}
                 
@@ -1436,18 +1479,23 @@ class StreamingChat:
                             if resp_usage.get(k):
                                 final_metadata["tokens"][k] = resp_usage[k]
                 
+                forced_finish = getattr(forced_final_response, 'finish_reason', None)
+                _stamp_finish(final_metadata, forced_finish, final_content, provider_key)
+
                 if final_content:
                     full_final = final_content
                 else:
                     # Empty content after tool calls — short placeholder + toast.
                     # Old text ("I used N tools and gathered information") was
                     # a confident lie when tools had silently errored. Mirrors
-                    # non-streaming chat.py fix. 2026-05-16.
+                    # non-streaming chat.py fix. 2026-05-16. A token-ceiling death
+                    # says so instead of blaming a tool.
                     full_final = "(no response)"
                     yield {"type": "content", "text": full_final}
+                    _cut = (final_metadata or {}).get("cutoff")
                     yield {
                         "type": "notice",
-                        "message": (
+                        "message": _cut["text"] if _cut else (
                             f"The reply came back empty after {tool_call_count} tool call(s). "
                             f"A tool may have failed. Try again, or ask a different way."
                         ),
@@ -1492,7 +1540,7 @@ class StreamingChat:
             if not self.llm_done:   # the except path above saved its row too
                 yield self._emit_llm_done(tts_pump)
             yield {"type": "final", "text": _forced_text,
-                   "cancelled": False, "error": _forced_error}
+                   "cancelled": False, "error": _forced_error, "finish": forced_finish}
 
         except ConnectionError as e:
             logger.warning(f"[STREAMING] {e}")

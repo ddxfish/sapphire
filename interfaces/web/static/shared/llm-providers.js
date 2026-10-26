@@ -122,7 +122,7 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
         </label>
       </div>
       
-      <div class="provider-fields collapsed" data-provider="${key}">
+      <div class="provider-fields collapsed" data-provider="${key}" data-open-on-arrive>
         <div class="provider-fields-grid">
           ${renderProviderFields(key, config, meta)}
         </div>

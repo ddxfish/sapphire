@@ -95,6 +95,27 @@ def is_local(key: str, conf: Optional[dict] = None) -> bool:
     return bool(conf.get('is_local', meta.get('is_local', False)))
 
 
+def continues_in_place(key: str, conf: Optional[dict] = None) -> bool:
+    """Can this provider resume a reply from a trailing assistant message
+    (Continue)? The provider's own `continues_in_place` wins. Else Anthropic-
+    style APIs (native prefill; a model that refuses it 400s into llm_errors
+    words) and local OpenAI-compat servers (llama.cpp, Ollama continue the
+    final assistant turn) do. Hosted OpenAI-style APIs answer fresh or empty,
+    and a fresh answer spliced on as a continuation corrupts the row, so
+    they don't (Krem 2026-10-26: Continue fails with words, no fallback)."""
+    if conf is None:
+        conf = providers_config().get(key) or {}
+    if 'continues_in_place' in conf:
+        return bool(conf['continues_in_place'])
+    tpl = conf.get('template') or conf.get('provider') or key
+    if tpl in ('claude', 'anthropic'):
+        return True
+    try:
+        return tpl == 'openai' and is_local(key, conf)
+    except Exception:
+        return False
+
+
 def display_name(key: str, conf: Optional[dict] = None) -> str:
     """Friendly name for a provider key ('auto'/'none' pass through)."""
     if key in ('auto', 'none', ''):

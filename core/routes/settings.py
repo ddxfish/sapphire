@@ -699,6 +699,16 @@ async def update_llm_provider(provider_key: str, request: Request, _=Depends(req
     return {"status": "success", "provider": provider_key}
 
 
+@router.get("/api/llm/generation-params")
+async def llm_generation_params(provider: str = '', model: str = '', _=Depends(require_login)):
+    """What a provider card's blank Temperature / Max Tokens / Top P inherit
+    for this model: the backend resolver itself (instance params left out),
+    so the card's placeholders never re-derive the layering in JS."""
+    from core.chat.llm_providers import provider_registry
+    gen = provider_registry.get_generation_params(provider, model, {provider: {}})
+    return {k: gen.get(k) for k in ('temperature', 'top_p', 'max_tokens')}
+
+
 @router.put("/api/llm/fallback-order")
 async def update_fallback_order(request: Request, _=Depends(require_login)):
     """Update LLM fallback order."""
