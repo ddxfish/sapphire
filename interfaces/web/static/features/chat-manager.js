@@ -6,6 +6,7 @@ import { getElements, getIsProc, setHistLen, refresh } from '../core/state.js';
 import { updateScene, updateSendButtonLLM } from './scene.js';
 import { applyTrimColor } from './chat-settings.js';
 import { cancelPendingSave, flushPendingSave } from '../views/chat.js';
+import { saveJson } from '../shared/download.js';
 
 let _listPaintSeq = 0;
 let _listRetryTimer = null;
@@ -179,15 +180,7 @@ export async function handleExportChat() {
     try {
         const data = await api.fetchRawHistory();
         const chatName = chatSelect.value || 'chat';
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${chatName}_export.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        saveJson(`${chatName}_export.json`, data);
         ui.showToast('Chat exported', 'success');
     } catch (e) {
         console.error('Failed to export chat:', e);

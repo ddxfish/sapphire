@@ -3,6 +3,7 @@
 
 import { registerPluginSettings } from '/static/shared/plugin-registry.js';
 import { createAccountManager } from '/static/shared/account-manager.js';
+import { saveJson } from '/static/shared/download.js';
 
 const SECURITY_BANNER = `
     <div style="padding:14px 16px;border:2px solid #ff6b35;border-radius:10px;background:rgba(255,107,53,0.08);font-size:12px;line-height:1.6;color:var(--text)">
@@ -79,11 +80,7 @@ async function showBackupGate(body, scope, address, helpers) {
 
     body.querySelector('#btc-gate-download').addEventListener('click', () => {
         const bundle = { scope, label, address, wif };
-        const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `btc-${scope}.json`; a.click();
-        URL.revokeObjectURL(url);
+        saveJson(`btc-${scope}.json`, bundle);   // a late revoke: same-tick lost the file on Brave
         body.querySelector('#btc-gate-status').textContent = '\u2713 Backup downloaded';
         body.querySelector('#btc-gate-status').style.color = 'var(--success, #28a745)';
         // Replace skip link with a big obvious Done button
@@ -311,11 +308,7 @@ function renderWalletEditor(body, scope, wallet, helpers) {
 
             area.querySelector('#btc-download').addEventListener('click', () => {
                 const bundle = { scope: data.scope, label: data.label, address: data.address, wif: data.wif };
-                const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url; a.download = `btc-${scope}.json`; a.click();
-                URL.revokeObjectURL(url);
+                saveJson(`btc-${scope}.json`, bundle);
                 helpers.showResult(true, 'Downloaded wallet backup');
             });
 

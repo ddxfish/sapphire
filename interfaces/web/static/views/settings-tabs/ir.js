@@ -9,6 +9,7 @@
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import { showToast } from '../../shared/toast.js';
 import { showModal, escapeHtml as esc } from '../../shared/modal.js';
+import { saveJson } from '../../shared/download.js';
 
 const API = '/api/ir';
 const post = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -150,13 +151,7 @@ function openMenu(anchor, items) {
 }
 
 function exportAppliance(a) {
-    const blob = new Blob([JSON.stringify(a, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `ir-${cssId(a.name)}.json`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    saveJson(`ir-${cssId(a.name)}.json`, a);
 }
 
 // --- modals ----------------------------------------------------------------

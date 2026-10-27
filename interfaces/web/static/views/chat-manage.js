@@ -16,6 +16,7 @@ import { switchView } from '../core/router.js';
 import { vaultStatus } from '../shared/vault-api.js';
 import { snapScroll } from '../shared/dom-guard.js';
 import { responseError, errWords } from '../shared/fetch.js';
+import { saveBlob, saveJson } from '../shared/download.js';
 
 let container = null;
 let chats = [];
@@ -95,15 +96,7 @@ function daysOld(iso) {
 }
 
 function downloadJSON(data, filename) {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    saveJson(filename, data);
 }
 
 function confirmList(verb, names) {
@@ -308,15 +301,7 @@ async function doBulkExport() {
             body: JSON.stringify({ names: pubNames })
         });
         if (!resp.ok) throw await responseError(resp);
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `sapphire_chats_${new Date().toISOString().slice(0, 10)}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        saveBlob(await resp.blob(), `sapphire_chats_${new Date().toISOString().slice(0, 10)}.zip`);
         const skipped = privCount
             ? ` — ${privCount} private skipped (export those per-row)` : '';
         ui.showToast(`Exported ${pubNames.length} chat(s) as zip${skipped}`,

@@ -2,6 +2,7 @@
 // Used by personas, prompts, toolsets, spices, etc.
 import * as ui from '../ui.js';
 import { setupModalClose } from './modal.js';
+import { saveJson } from './download.js';
 
 /**
  * Show export dialog with copy-to-clipboard and download options.
@@ -162,11 +163,7 @@ export function showImportDialog(opts) {
 
 /** Download JSON data as a file. */
 export function downloadJson(filename, data) {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename; a.click();
-    URL.revokeObjectURL(url);
+    saveJson(filename, data);
 }
 
 // ── Internal ──

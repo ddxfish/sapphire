@@ -34,6 +34,7 @@ import { updateScene } from '../features/scene.js';
 import { applyTrimColor } from '../features/chat-settings.js';
 import { switchView } from '../core/router.js';
 import * as eventBus from '../core/event-bus.js';
+import { saveUrl } from '../shared/download.js';
 
 let container = null;
 let personas = [];
@@ -632,12 +633,7 @@ function bindEvents() {
     // Export — downloads a PNG character card (avatar pixels + embedded bundle)
     container.querySelector('#pa-export')?.addEventListener('click', () => {
         if (!selectedName) return;
-        const a = document.createElement('a');
-        a.href = `/api/personas/${encodeURIComponent(selectedName)}/export.png`;
-        a.download = `${selectedName}.png`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        saveUrl(`/api/personas/${encodeURIComponent(selectedName)}/export.png`, `${selectedName}.png`);
     });
 
     // Import (accepts both persona bundles and plain prompt exports)

@@ -11,6 +11,7 @@
 // Three renderers parse + build through here: tool results in history (ui-parsing
 // renderToolResult), tool results live (ui-streaming doEndTool), and message text
 // (ui-parsing parseContent — a take the user played lands in their own bubble).
+import { saveUrl } from './download.js';
 
 export const FILES_RE = /<!--FILES:(\{[^\n]*\})-->[ \t]*\n?/;
 const FILES_RE_ALL = new RegExp(FILES_RE.source, 'g');
@@ -81,7 +82,11 @@ function chip(file) {
     a.download = file.name;
     a.title = 'Download ' + file.name;
     a.textContent = '↓ ' + file.name;
-    a.addEventListener('click', ev => ev.stopPropagation());
+    a.addEventListener('click', ev => {
+        ev.stopPropagation();
+        ev.preventDefault();          // the page's connection, not a browser download (shared/download.js)
+        saveUrl(file.url, file.name);
+    });
     return a;
 }
 
