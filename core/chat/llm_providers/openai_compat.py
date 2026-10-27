@@ -314,42 +314,55 @@ class OpenAICompatProvider(BaseProvider):
         with auto_discover_models) names the model its server serves, so a
         blank model never goes out on the wire (Teri, 2026-10-23: Auto sent
         model "" to LM Studio while her pinned chat sent a real one). LM
-        Studio's own list says which model is LOADED — its /v1/models lists
-        every download under JIT, and loading the wrong one is a stall or an
-        OOM — else the first chat model /v1/models offers. fetch=False only
+        Studio is asked what is LOADED on every fetch, never guessed: it
+        JIT-loads whatever name it is sent, so a stale or alphabetical pick
+        loads the wrong model (2026-10-26: nothing loaded -> "altworld_..."
+        won on the letter a, failed to load, the game room checked forever).
+        Nothing loaded = False with `no_model` set to the words. Other
+        servers: the first chat model /v1/models offers. fetch=False only
         uses what was found in the last minute."""
         if self.model:
             return True
         key, now = self.base_url.rstrip('/'), time.time()
         hit = _FOUND_MODEL.get(key)
         model = hit[0] if hit and now < hit[1] else ''
-        if not model and fetch:
-            model = self._loaded_model() or next(
-                (m['id'] for m in (self.list_models() or []) if not _NOT_CHAT.search(m['id'])), '')
+        if fetch:
+            loaded = self._loaded_model()
+            if loaded is not None:       # LM Studio: what's loaded now, or nothing
+                model = loaded
+                self.no_model = '' if loaded else 'has no model loaded. Load one in LM Studio, or set a model on its card in Settings › LLM.'
+            elif not model:
+                model = next((m['id'] for m in (self.list_models() or []) if not _NOT_CHAT.search(m['id'])), '')
             if model:
+                if not hit or hit[0] != model:
+                    logger.info(f"{self.base_url} has no model set: using '{model}', the one its server serves")
                 _FOUND_MODEL[key] = (model, now + _FOUND_TTL)
-                logger.info(f"{self.base_url} has no model set: using '{model}', the one its server serves")
+            else:
+                _FOUND_MODEL.pop(key, None)
         if not model:
             return False
         self.model = model
         self._rejected_params = _REJECTED_PARAMS.setdefault(f"{self.base_url}|{model}", set())
         return True
 
-    def _loaded_model(self) -> str:
+    def _loaded_model(self):
         """LM Studio's native list (/api/v0/models: type + state per model):
-        the first chat model that is loaded. '' from any other server."""
+        the first chat model that is loaded, '' when none is. None from any
+        other server (no such list)."""
         root = re.sub(r'/v1/?$', '', self.base_url.rstrip('/'))
         try:
             hdrs = {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
             r = _shared_http_client(self.base_url).get(
                 f"{root}/api/v0/models", headers=hdrs, timeout=max(self.health_check_timeout, 1.0))
             data = r.json().get('data') if r.status_code == 200 else None
-            for m in data or []:
+            if not isinstance(data, list):
+                return None
+            for m in data:
                 if m.get('state') == 'loaded' and m.get('type') in ('llm', 'vlm'):
                     return str(m.get('id') or '')
+            return ''
         except Exception:
-            pass
-        return ''
+            return None
 
     def list_models(self) -> Optional[list]:
         """Discover available models via /v1/models endpoint (one try: a

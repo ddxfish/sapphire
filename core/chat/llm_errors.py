@@ -188,6 +188,11 @@ def _explain(e, provider_key):
     if lms and ('no models loaded' in err or 'lms load' in err or 'model unloaded' in err
                 or 'model is not loaded' in err):
         return out("LM Studio has no model loaded. Open LM Studio, load a model, then send again.")
+    if lms and 'failed to load model' in err:
+        m = re.search(r'failed to load model "([^"]+)"', raw, re.I)
+        return out(f"LM Studio couldn't load {m.group(1) if m else 'that model'}: it may not fit in memory, "
+                   f"or the file is broken. Load a model in LM Studio yourself, or set one on its card in "
+                   f"Settings › LLM.")
     if ollama and 'try pulling' in err:
         return out("Ollama doesn't have that model downloaded. Download it in Ollama, or pick a model "
                    "you have in Settings › LLM.")

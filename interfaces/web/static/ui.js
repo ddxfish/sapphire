@@ -467,34 +467,37 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
         if (parts.length > 0) {
             const metaDiv = createElem('div', { class: 'message-metadata' });
             const line = createElem('div', { class: 'message-metadata-line' });
-            line.appendChild(createElem('span', { class: 'mm-chev' }, '▸'));
+            // no provider = not a generation (an import, a plugin row): the time alone, no made-up detail
+            const gen = !!meta.provider;
+            if (gen) line.appendChild(createElem('span', { class: 'mm-chev' }, '▸'));
             if (cut) line.appendChild(createElem('span', { class: 'mm-cutoff', title: 'Cut off at the reply length limit (Max Tokens)' }, '\u26A0 token limit · '));
             line.appendChild(document.createTextNode(parts.join(' · ')));
             metaDiv.appendChild(line);
+            if (gen) {
+                // Detail accordion — raw numbers, full identifiers. Thinking is
+                // always a chars/4 approximation (providers fold it into
+                // completion), hence the tilde.
+                const rows = [];
+                rows.push(`${meta.provider || '?'} · ${meta.model || '?'}`);
+                if (meta.start_time && meta.end_time) {
+                    rows.push(`${String(meta.start_time).slice(0, 10)} ${String(meta.start_time).slice(11, 19)} → ${String(meta.end_time).slice(11, 19)}`);
+                }
+                rows.push(`in: ${totalIn} total (${prompt} prompt + ${cacheRead} cached)`
+                    + (cacheWrite ? ` · ${cacheWrite} cache-written` : ''));
+                rows.push(`out: ${tok.content || 0} content`
+                    + (tok.thinking ? ` · ~${tok.thinking} thinking` : ''));
+                if (cumTok && cumTok.iterations > 1) {
+                    rows.push(`${cumTok.iterations} calls · Σ ${fmt(cumTok.prompt + (cumTok.cache_read || 0))} in / ${fmt(cumTok.completion || 0)} out / ${fmt(cumTok.total || 0)} total`);
+                }
+                if (tok.estimated) {
+                    rows.push('counts estimated — provider sent no usage');
+                }
+                const detail = createElem('div', { class: 'message-metadata-detail' });
+                rows.forEach(r => detail.appendChild(createElem('div', {}, r)));
+                metaDiv.appendChild(detail);
 
-            // Detail accordion — raw numbers, full identifiers. Thinking is
-            // always a chars/4 approximation (providers fold it into
-            // completion), hence the tilde.
-            const rows = [];
-            rows.push(`${meta.provider || '?'} · ${meta.model || '?'}`);
-            if (meta.start_time && meta.end_time) {
-                rows.push(`${String(meta.start_time).slice(0, 10)} ${String(meta.start_time).slice(11, 19)} → ${String(meta.end_time).slice(11, 19)}`);
+                line.addEventListener('click', () => metaDiv.classList.toggle('open'));
             }
-            rows.push(`in: ${totalIn} total (${prompt} prompt + ${cacheRead} cached)`
-                + (cacheWrite ? ` · ${cacheWrite} cache-written` : ''));
-            rows.push(`out: ${tok.content || 0} content`
-                + (tok.thinking ? ` · ~${tok.thinking} thinking` : ''));
-            if (cumTok && cumTok.iterations > 1) {
-                rows.push(`${cumTok.iterations} calls · Σ ${fmt(cumTok.prompt + (cumTok.cache_read || 0))} in / ${fmt(cumTok.completion || 0)} out / ${fmt(cumTok.total || 0)} total`);
-            }
-            if (tok.estimated) {
-                rows.push('counts estimated — provider sent no usage');
-            }
-            const detail = createElem('div', { class: 'message-metadata-detail' });
-            rows.forEach(r => detail.appendChild(createElem('div', {}, r)));
-            metaDiv.appendChild(detail);
-
-            line.addEventListener('click', () => metaDiv.classList.toggle('open'));
             contentDiv.appendChild(metaDiv);
         }
     }

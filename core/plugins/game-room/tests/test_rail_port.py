@@ -85,7 +85,7 @@ def test_banter_reply_survives_nameless_view(monkeypatch):
 
     def fake_llm(system, user, cfg):
         seen["system"] = system
-        return '{"say": "hold the bend"}'
+        return '{"say": "hold the bend"}', {}
     monkeypatch.setattr(gc, "_call_llm", fake_llm)
     monkeypatch.setattr(gc, "_resolve_persona_prompt", lambda n: None)
     monkeypatch.setattr(gc, "_resolve_prompt_text", lambda n: None)
@@ -95,7 +95,7 @@ def test_banter_reply_survives_nameless_view(monkeypatch):
 
 
 def test_decide_survives_nameless_view(monkeypatch):
-    monkeypatch.setattr(gc, "_call_llm", lambda s, u, c: None)   # provider down -> fallback
+    monkeypatch.setattr(gc, "_call_llm", lambda s, u, c: (None, {}))   # provider down -> fallback
     eng = types.SimpleNamespace(
         view_for_ai=lambda st: {"wave": 1}, safe_action=lambda st: ("noop", {}),
         CONTRACT="{ai_name} {opp_name}", build_user_msg=lambda v: "go",

@@ -4,6 +4,7 @@ The explicit-provider path used to bypass core's private-chat local-only
 gate entirely, and a hidden session silently lost its own llm_primary
 (fail-open to the room-wide provider). Plan: tmp/vaulted-chats-plan.md §9.
 """
+import pytest
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -90,7 +91,8 @@ class TestProviderGate:
 
 class TestSeatGates:
     def test_call_llm_refuses_hidden_session(self):
-        assert gameroom_core._call_llm("sys", "user", {"hidden": True}) is None
+        with pytest.raises(gameroom_core.SeatDown):
+            gameroom_core._call_llm("sys", "user", {"hidden": True})
 
     def _fake_system(self, settings=None, hidden=False):
         sm = SimpleNamespace(

@@ -467,7 +467,9 @@ class ProviderRegistry(_BaseRegistry):
             # its server what it serves (unprobed lanes use only what is known).
             ensure = getattr(provider, 'ensure_model', None)      # a plugin's provider may not subclass BaseProvider
             if ensure and not ensure(fetch=probe):
-                trail.append((provider_key, 'has no model set, and its server named none'))
+                why = getattr(provider, 'no_model', '')
+                trail.append((provider_key, why.split('.')[0] if isinstance(why, str) and why
+                              else 'has no model set, and its server named none'))
                 continue
             return (provider_key, provider)
 

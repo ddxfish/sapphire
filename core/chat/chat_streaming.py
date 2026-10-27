@@ -85,6 +85,42 @@ def _stash_pasted(images):
 
 
 
+def usage_metadata(provider_key, model, response, content, thinking, start, end):
+    """The metrics block an assistant row carries (the ui.js footer): the
+    provider's usage when it sent one, else chars/4 estimates. ONE builder:
+    the chat turn, the forced final and the game room's seat all stamp it."""
+    usage = getattr(response, 'usage', None) if response else None
+    thinking_tokens = len(thinking) // 4 if thinking else 0
+    if usage:
+        content_tokens = usage.get("completion_tokens", 0)
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        total_tokens = usage.get("total_tokens", 0)
+    else:
+        content_tokens = len(content) // 4 if content else 0
+        prompt_tokens = 0
+        total_tokens = content_tokens + thinking_tokens
+    duration = round(end - start, 2)
+    meta = {
+        "provider": provider_key,
+        "model": model,
+        "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(start)),
+        "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end)),
+        "duration_seconds": duration,
+        "tokens": {
+            "content": content_tokens,
+            "thinking": thinking_tokens,
+            "prompt": prompt_tokens,
+            "total": total_tokens,
+            "estimated": not usage
+        },
+        "tokens_per_second": round(content_tokens / duration, 1) if duration > 0 else 0
+    }
+    for k in ("cache_read_tokens", "cache_write_tokens"):
+        if usage and usage.get(k):
+            meta["tokens"][k] = usage[k]
+    return meta
+
+
 def _stamp_finish(metadata, finish, content, provider_key, note=True):
     """A row's metadata learns how its generation ended: `finish`, plus the
     cutoff words (llm_errors.explain_finish, ui.js renders them) when that was
@@ -903,45 +939,8 @@ class StreamingChat:
                 
                 # Build metadata if not provided by provider
                 if not metadata:
-                    iteration_end_time = time.time()
-                    gen_start = first_chunk_time or iteration_end_time
-                    duration = round(iteration_end_time - gen_start, 2)
-
-                    # Try real usage from provider response first, fall back to estimate
-                    resp_usage = final_response.usage if final_response and hasattr(final_response, 'usage') else None
-                    if resp_usage:
-                        content_tokens = resp_usage.get("completion_tokens", 0)
-                        prompt_tokens = resp_usage.get("prompt_tokens", 0)
-                        total_tokens = resp_usage.get("total_tokens", 0)
-                        estimated = False
-                    else:
-                        content_tokens = len(current_content) // 4 if current_content else 0
-                        prompt_tokens = 0
-                        total_tokens = content_tokens + (len(current_thinking) // 4 if current_thinking else 0)
-                        estimated = True
-
-                    thinking_tokens = len(current_thinking) // 4 if current_thinking else 0
-
-                    metadata = {
-                        "provider": provider_key,
-                        "model": effective_model,
-                        "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(gen_start)),
-                        "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(iteration_end_time)),
-                        "duration_seconds": duration,
-                        "tokens": {
-                            "content": content_tokens,
-                            "thinking": thinking_tokens,
-                            "prompt": prompt_tokens,
-                            "total": total_tokens,
-                            "estimated": estimated
-                        },
-                        "tokens_per_second": round(content_tokens / duration, 1) if duration > 0 else 0
-                    }
-                    # Forward cache stats from provider
-                    if resp_usage:
-                        for k in ("cache_read_tokens", "cache_write_tokens"):
-                            if resp_usage.get(k):
-                                metadata["tokens"][k] = resp_usage[k]
+                    metadata = usage_metadata(provider_key, effective_model, final_response, current_content,
+                                              current_thinking, first_chunk_time or time.time(), time.time())
                 
                 # a tool-call row gets no "Press Continue" note: its bad-args result is the signal
                 _stamp_finish(metadata, finish, (prefill or '') + current_content if has_prefill else current_content,
@@ -1442,42 +1441,8 @@ class StreamingChat:
                         break
 
                 if not final_metadata:
-                    final_end_time = time.time()
-                    duration = round(final_end_time - final_start_time, 2)
-
-                    resp_usage = forced_final_response.usage if forced_final_response and hasattr(forced_final_response, 'usage') else None
-                    if resp_usage:
-                        content_tokens = resp_usage.get("completion_tokens", 0)
-                        prompt_tokens = resp_usage.get("prompt_tokens", 0)
-                        total_tokens = resp_usage.get("total_tokens", 0)
-                        estimated = False
-                    else:
-                        content_tokens = len(final_content) // 4 if final_content else 0
-                        prompt_tokens = 0
-                        total_tokens = content_tokens + (len(final_thinking) // 4 if final_thinking else 0)
-                        estimated = True
-
-                    thinking_tokens = len(final_thinking) // 4 if final_thinking else 0
-
-                    final_metadata = {
-                        "provider": provider_key,
-                        "model": effective_model,
-                        "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(final_start_time)),
-                        "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(final_end_time)),
-                        "duration_seconds": duration,
-                        "tokens": {
-                            "content": content_tokens,
-                            "thinking": thinking_tokens,
-                            "prompt": prompt_tokens,
-                            "total": total_tokens,
-                            "estimated": estimated
-                        },
-                        "tokens_per_second": round(content_tokens / duration, 1) if duration > 0 else 0
-                    }
-                    if resp_usage:
-                        for k in ("cache_read_tokens", "cache_write_tokens"):
-                            if resp_usage.get(k):
-                                final_metadata["tokens"][k] = resp_usage[k]
+                    final_metadata = usage_metadata(provider_key, effective_model, forced_final_response,
+                                                    final_content, final_thinking, final_start_time, time.time())
                 
                 forced_finish = getattr(forced_final_response, 'finish_reason', None)
                 _stamp_finish(final_metadata, forced_finish, final_content, provider_key)

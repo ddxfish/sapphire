@@ -59,6 +59,7 @@ import json
 import logging
 import re
 import threading
+import time
 from pathlib import Path
 
 from core.plugin_loader import plugin_loader
@@ -915,9 +916,13 @@ def table_pair(engine, state, since_seq, action, args=None, say='', cfg=None, gc
     if say:
         user += ' \u2014 ' + say
     parts = [('\U0001f0a0 ' + t['text']) if t.get('who') == 'dealer' else t['text'] for t in lines]
+    # the seat's last call's metrics (the chat footer), only when her voice is on this row
+    seat = state.pop('seat_meta', None) or {}
+    if not any(t.get('who') == 'ai' for t in lines):
+        seat = {}
     return [{'role': 'user', 'content': user, 'metadata': {'source': 'table'}},
             {'role': 'assistant', 'content': '\n'.join(parts) or '\u2026',
-             'metadata': {'source': 'table'}}]
+             'metadata': {**seat, 'source': 'table'}}]
 
 
 def append_table(session, rows):
@@ -1006,25 +1011,26 @@ def _is_local_provider(key):
 
 
 def _get_provider(provider_key=None, model='', privacy_required=False, health='cached'):
-    sel = _select(provider_key, model, privacy_required, health)
+    from core.chat.llm_providers.resolve import ProviderRefused
+    try:
+        sel = _select(provider_key, model, privacy_required, health)
+    except ProviderRefused as e:
+        logger.warning(f'game-room: {e}')
+        return None
     return sel.provider if sel else None
 
 
 def _select(provider_key=None, model='', privacy_required=False, health='cached'):
-    """The resolver's Selection (key, provider, model) or None. Explicit
+    """The resolver's Selection (key, provider, model); a refusal raises
+    ProviderRefused, its text the user's words. Explicit
     provider by key (with optional model override), else Auto. Thin door onto core.chat.llm_providers.resolve — the ONE resolver
     (2026-09-21). privacy_required=True (private session chat, P3-T3) allows
     LOCAL providers only; a refusal or a dead pin is terminal (never a
     cloud pick, never auto). This NEVER reads the operator's active web
     chat — the old copy fell through to `llm_chat._select_provider()`, so an
     auto-mode game session ran on whatever the browser tab had open."""
-    from core.chat.llm_providers.resolve import resolve, ProviderRefused
-    try:
-        return resolve(provider_key or 'auto', model, private=bool(privacy_required),
-                       health=health)
-    except ProviderRefused as e:
-        logger.warning(f'game-room: {e}')
-        return None
+    from core.chat.llm_providers.resolve import resolve
+    return resolve(provider_key or 'auto', model, private=bool(privacy_required), health=health)
 
 
 def provider_info(provider_key=None, model='', privacy_required=False):
@@ -1122,22 +1128,35 @@ def _move_budget(sel):
         return MOVE_TOKENS_FLOOR
 
 
+class SeatDown(Exception):
+    """The seat couldn't get a reply; str(e) is why, in the user's words."""
+
+
 def _call_llm(system, user, cfg):
-    """One-shot completion → think-stripped content string, or None."""
+    """One-shot completion → (think-stripped content, metrics block — the
+    chat's own usage_metadata). Raises SeatDown with the words (llm_errors,
+    the chat's own explainer) when there is none."""
+    from core.chat.llm_providers.resolve import ProviderRefused
+    from core.chat.llm_errors import explain
     cfg = cfg or {}
     if cfg.get('hidden'):
         logger.warning('game-room: session chat is sealed in a locked vault — seat refused')
-        return None
-    sel = _select(cfg.get('provider'), cfg.get('model', ''),
-                  privacy_required=bool(cfg.get('privacy_required')))
+        raise SeatDown("This session's chat is sealed in a locked vault, so the seat can't play.")
+    try:
+        sel = _select(cfg.get('provider'), cfg.get('model', ''),
+                      privacy_required=bool(cfg.get('privacy_required')))
+    except ProviderRefused as e:
+        logger.warning(f'game-room: {e}')
+        raise SeatDown(str(e))
     provider = sel.provider if sel else None
     if provider is None:
         logger.warning('game-room: no LLM provider available')
-        return None
+        raise SeatDown('No LLM provider is available. Check Settings › LLM.')
     try:
         temp = max(0.0, min(float(cfg.get('temperature', 0.85)), 1.5))
     except (TypeError, ValueError):
         temp = 0.85
+    start = time.time()
     try:
         resp = provider.chat_completion(
             [{'role': 'system', 'content': system},
@@ -1149,15 +1168,29 @@ def _call_llm(system, user, cfg):
         )
     except Exception as e:
         logger.error(f'game-room: chat_completion failed: {e}')
-        return None
+        raise SeatDown(explain(e, sel.key)['text'])
     content = getattr(resp, 'content', None) or ''
     # Thinking models leak <think>...</think> into content (sometimes unclosed
     # when truncated) — strip before JSON extraction.
     from core import think
-    return think.strip(content)
+    from core.chat.chat_streaming import usage_metadata
+    answer, thought = think.split(content)
+    meta = usage_metadata(sel.key, sel.effective_model, resp, answer,
+                          getattr(resp, 'thinking', None) or thought, start, time.time())
+    return answer or '', meta
 
 
 # ---------------------------------------------------------------- orchestration
+
+def _line_down(state, why):
+    """The dealer says why her seat missed: once per cause, so a dead line
+    doesn't repeat the paragraph every turn (her own line stays "static").
+    The dealer, never her: her lines are spoken and cast to the glass."""
+    if why != state.get('line_down'):
+        add_talk(state, 'dealer', f'Static on the line: {why}')
+    state['line_down'] = why
+
+
 
 def _merge_gcfg(cfg, gcfg):
     """Game settings overlay the session cfg where they own the knob."""
@@ -1175,7 +1208,12 @@ def decide(engine, state, cfg, gcfg=None):
     fallback = {'action': s_action, 'args': s_args,
                 'say': f'(static on the line... I {s_action})', 'fallback': True}
     system = _system_prompt(engine.CONTRACT, view, cfg, gcfg)
-    content = _call_llm(system, engine.build_user_msg(view), _merge_gcfg(cfg, gcfg))
+    state.pop('seat_meta', None)
+    try:
+        content, state['seat_meta'] = _call_llm(system, engine.build_user_msg(view), _merge_gcfg(cfg, gcfg))
+    except SeatDown as e:
+        _line_down(state, str(e))
+        return fallback
     if content is None:
         return fallback
     data = _extract_json(content)
@@ -1184,11 +1222,14 @@ def decide(engine, state, cfg, gcfg=None):
         # logs are plaintext for 30 days, and get_self_info feeds recent
         # warnings back into (possibly cloud) chats (hunt 2026-08-17).
         logger.warning(f'game-room: unparseable AI response ({len(content)} chars)')
+        _line_down(state, f"{view['my_name']} answered, but not with a move I could read.")
         return fallback
     decision = engine.validate_decision(data, view)
     if not decision:
         logger.warning(f'game-room: AI decision failed validation: {data}')
+        _line_down(state, f"{view['my_name']} tried a move the rules don't allow.")
         return fallback
+    state.pop('line_down', None)
     decision.setdefault('args', {})
     decision['say'] = str(decision.get('say') or '').strip()[:400] or '...'
     decision['fallback'] = False
@@ -1200,7 +1241,12 @@ def banter_reply(engine, state, cfg, gcfg=None):
     live = round_live(state)
     view = _names(engine.view_for_ai(state) if live else engine.view_between(state), state)
     system = _system_prompt(engine.BANTER_CONTRACT, view, cfg, gcfg)
-    content = _call_llm(system, engine.build_banter_msg(view), _merge_gcfg(cfg, gcfg))
+    state.pop('seat_meta', None)
+    try:
+        content, state['seat_meta'] = _call_llm(system, engine.build_banter_msg(view), _merge_gcfg(cfg, gcfg))
+    except SeatDown as e:
+        _line_down(state, str(e))
+        return '(static on the line...)'
     data = _extract_json(content or '')
     say = str((data or {}).get('say') or '').strip()
     return say[:400] if say else '(static on the line...)'

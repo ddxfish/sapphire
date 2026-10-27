@@ -352,7 +352,11 @@ def _pinned(key, model, cfg, private, timeout, health, require_images, conversat
                 f"chat sidebar to fall back to your other providers.")
     ensure = getattr(provider, 'ensure_model', None)
     if ensure and not ensure(fetch=health != 'skip'):
-        logger.warning(f"Pinned '{key}' has no model set and its server named none: sending without one")
+        why = getattr(provider, 'no_model', '')
+        if isinstance(why, str) and why:
+            raise ProviderUnavailable(f"{name} {why}")
+        if health != 'skip':
+            logger.warning(f"Pinned '{key}' has no model set and its server named none: sending without one")
     logger.info(f"Using chat-specific provider '{key}' ({getattr(provider, 'model', '') or 'no model'}) for '{conversation or '?'}'")
     return Selection(key, provider, model)
 
