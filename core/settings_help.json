@@ -374,7 +374,11 @@
   },
   "CONTEXT_LIMIT": {
     "short": "Context window budget in tokens (0 = unlimited)",
-    "long": "Maximum tokens for the entire conversation context sent to the LLM. Sapphire trims older messages to stay under this limit, providing pseudo context-shifting for models that don't support it (like GLM). Set to 0 to disable token-based trimming. A safety buffer is applied automatically when enabled."
+    "long": "The most tokens Sapphire sends the model in one request: system prompt, tools, history, pictures and room for the reply all count. A local server that has less loaded (LM Studio, llama.cpp, Ollama) is asked, and its smaller window wins. When a chat outgrows it, the oldest turns leave her view a few at a time (she is told), so the reply always has room. 0 = no limit of ours (the model's own window still applies)."
+  },
+  "TOOL_EXPIRES_AFTER": {
+    "short": "Old tool results leave her view after N turns (0 = never)",
+    "long": "For tools that don't say for themselves: after this many of your messages, an old tool result is shortened to one line in what the model is sent (the chat still shows all of it). Tools can declare their own: page views are replaced by the next one, web reads go after 3 turns, and memory tools never expire, whatever this says. 0 = tools that don't say are kept whole."
   },
   "LLM_REQUEST_TIMEOUT": {
     "short": "Maximum wait time for LLM response (seconds)",

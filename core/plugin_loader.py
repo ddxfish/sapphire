@@ -933,7 +933,8 @@ class PluginLoader:
         # displaced.
         tool_paths = capabilities.get("tools", [])
         if tool_paths and self._function_manager:
-            refusal = self._function_manager.register_plugin_tools(name, plugin_dir, tool_paths)
+            refusal = self._function_manager.register_plugin_tools(name, plugin_dir, tool_paths,
+                                                                   expires=manifest.get("tool_expires"))
             if refusal:
                 self._function_manager.unregister_plugin_tools(name)
                 hook_runner.unregister_plugin(name)

@@ -122,6 +122,9 @@ def _explain(e, provider_key):
     # health_words), privacy refusals too.
     if isinstance(e, ProviderRefused) or (isinstance(e, ConnectionError) and 'privat' in err):
         return out(raw)
+    from core.chat.budget import ContextFull          # the budgeter's own refusal is already the words
+    if isinstance(e, ContextFull):
+        return out(raw, {**LLM_TAB, 'key': 'CONTEXT_LIMIT'})
 
     name, local, u = _who(e, provider_key)
     who = name or ('your local LLM server' if local else 'the LLM provider')
@@ -258,6 +261,13 @@ def explain_finish(finish, said, provider_key=None, model=None):
     then = "Press Continue to pick up where it stopped" if can else "Ask it to go on in a new message"
     return {'text': f"This reply hit its length limit and was cut off. {then}, or raise Max Tokens {where}.",
             'go': go}
+
+
+def is_context_error(e) -> bool:
+    """The server refused the request as longer than it holds."""
+    from core.chat.budget import ContextFull
+    err = str(e).lower()
+    return not isinstance(e, ContextFull) and any(k in err for k in _CONTEXT + _OUT_ROOM)
 
 
 def _unknown(who):

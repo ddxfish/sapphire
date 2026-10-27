@@ -90,7 +90,7 @@ def test_live_turn_wire_copy_drops_the_marker():
     # the ONE marker list (core/ui_markers.py) strips here too - FILES, GALLERY,
     # ASK and <<IMG>> alike (seam scout, 2026-10-07: this seam stripped FILES only)
     assert "user_input = UI_MARKER_RE.sub('', user_input).strip()" in build
-    assert build.index("UI_MARKER_RE.sub('', user_input)") < build.index('count_tokens(user_input)')
+    assert build.index("UI_MARKER_RE.sub('', user_input)") < build.index('user_content = user_input')
 
 
 def test_one_files_renderer():
@@ -108,7 +108,7 @@ def test_live_turn_wire_copy_is_built_without_the_marker(monkeypatch):
     from core.chat import chat as chat_mod
 
     class _Session:
-        def get_messages_for_llm(self, reserved_tokens=0):
+        def get_messages_for_llm(self, reserved_tokens=0, context_limit=None):
             return [{'role': 'assistant', 'content': 'earlier turn'}]
 
         def get_chat_settings(self):

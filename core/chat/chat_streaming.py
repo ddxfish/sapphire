@@ -9,7 +9,8 @@ from core.ui_markers import stage_cards
 from core import think as _think
 from .llm_providers import LLMResponse, get_generation_params
 from .llm_providers.base import LENGTH_FINISH
-from .llm_errors import explain_finish
+from .llm_errors import explain_finish, is_context_error
+from . import budget
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
 from core.metrics import metrics as token_metrics
@@ -605,6 +606,9 @@ class StreamingChat:
                 messages[-1]["content"] = prefill.rstrip()
                 messages[-1].pop("thinking", None)
                 messages[-1].pop("thinking_raw", None)
+            # This turn's own row (the person's message, or the reply a Continue
+            # resumes): it and all after it stay whole in every fit (budget.py).
+            _live = messages[-1] if messages else None
 
             if not skip_user_message:
                 # Build content list if files or images present, otherwise just text
@@ -774,6 +778,23 @@ class StreamingChat:
                 gen_params['disable_thinking'] = True
                 logger.info("[CONTINUE] Disabled thinking for continue (can't replay signatures)")
 
+            # The one budgeter (core/chat/budget.py): every call below sends what
+            # fit() makes of `messages` - the real window, room for the reply,
+            # expired tool results as one line, the oldest turns out of view.
+            # `messages` itself keeps everything, so each round fits afresh.
+            _fm = self.main_chat.function_manager
+
+            def _expiry(name):
+                meta = _fm.tool_meta(name) if hasattr(_fm, 'tool_meta') else None
+                return meta.get('expires') if isinstance(meta, dict) else None
+
+            def _fitted(tools):
+                f = budget.fit(messages, tools, provider, provider_key, effective_model,
+                               gen_params.get('max_tokens'), chat=chat_name, live=_live, expiry=_expiry)
+                gp = gen_params if f.max_tokens == gen_params.get('max_tokens') else {**gen_params, 'max_tokens': f.max_tokens}
+                return f, gp
+            _fit, _ctx_retried = None, False
+
             tool_call_count = 0
             loop_counts = {}  # per-turn per-tool call counts (loop guard); turn-local by design
             # Accumulate token usage across all iterations for final summary
@@ -812,11 +833,12 @@ class StreamingChat:
                 chunk_count = 0  # init BEFORE the try — the except reads it, and creation can raise
 
                 try:
+                    _fit, _gp = _fitted(enabled_tools)
                     logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (effective_model={effective_model})")
                     self.current_stream = provider.chat_completion_stream(
-                        messages,
+                        _fit.messages,
                         tools=enabled_tools if enabled_tools else None,
-                        generation_params=gen_params
+                        generation_params=_gp
                     )
                     for event in self.current_stream:
                         chunk_count += 1
@@ -933,6 +955,13 @@ class StreamingChat:
                             except Exception:
                                 pass
                         continue    # burns one tool-iteration slot; messages unchanged
+                    # The server says it's too long though we counted it in: count
+                    # this model heavier and fit again, once (budget.tighten).
+                    if is_context_error(e) and chunk_count == 0 and not _ctx_retried and not self.cancel_flag:
+                        _ctx_retried = True
+                        self._cleanup_stream()
+                        budget.tighten(provider_key, effective_model)
+                        continue
                     logger.error(f"[ERR] [STREAMING] Iteration {iteration + 1} failed: {e}", exc_info=True)
                     self._cleanup_stream()
                     raise
@@ -941,6 +970,7 @@ class StreamingChat:
                 if not metadata:
                     metadata = usage_metadata(provider_key, effective_model, final_response, current_content,
                                               current_thinking, first_chunk_time or time.time(), time.time())
+                budget.learn(_fit, (metadata or {}).get("tokens"))
                 
                 # a tool-call row gets no "Press Continue" note: its bad-args result is the signal
                 _stamp_finish(metadata, finish, (prefill or '') + current_content if has_prefill else current_content,
@@ -963,8 +993,8 @@ class StreamingChat:
                     try:
                         # effective chat: a phone call's tokens attribute to ITS
                         # chat ('__private__' for private chats — plaintext deposit).
-                        chat_name = self.main_chat.session_manager.metrics_chat_label()
-                        token_metrics.record(chat_name, provider_key, effective_model,
+                        _label = self.main_chat.session_manager.metrics_chat_label()   # never chat_name: the turn reads that after
+                        token_metrics.record(_label, provider_key, effective_model,
                                              call_type, metadata, estimated=estimated)
                     except Exception:
                         pass  # Metrics are best-effort
@@ -1382,7 +1412,7 @@ class StreamingChat:
                 logger.warning(f"[STREAMING] Exceeded max iterations ({config.MAX_TOOL_ITERATIONS}). Forcing final answer.")
 
             messages.append({
-                "role": "user",
+                "role": "user", "_inject": True,
                 "content": ("Your last two tool calls were cut off: each reply hit its max_tokens limit while "
                             "writing the arguments, so those tools did not run. Stop using tools now. Briefly "
                             "tell the user what you were trying to do and that it was too long for one reply."
@@ -1394,10 +1424,11 @@ class StreamingChat:
             try:
                 yield {"type": "content", "text": "\n\n"}
                 
+                _fit, _gp = _fitted(None)
                 final_stream = provider.chat_completion_stream(
-                    messages,
+                    _fit.messages,
                     tools=None,
-                    generation_params=gen_params
+                    generation_params=_gp
                 )
                 
                 final_content = ""

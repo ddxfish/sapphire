@@ -17,6 +17,8 @@ Remote Sapphire guests
 SQLite message rows
 Edit regen delete
 Trim compress
+Fit model window
+Old results shortened
 Import export
 Content search
 ### LLM

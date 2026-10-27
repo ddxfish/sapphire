@@ -314,7 +314,7 @@ def _replay_images(msgs, refs, window, loader):
         return out
 
     def flush(pending):
-        return {"role": "user", "content": [{"type": "text", "text": _REPLAY_NOTE}] + pending}
+        return {"role": "user", "content": [{"type": "text", "text": _REPLAY_NOTE}] + pending, "_inject": True}
 
     out, pending = list(msgs[:start]), []
     for m, r in zip(msgs[start:], refs[start:]):
@@ -4317,8 +4317,11 @@ class ChatSessionManager:
         return {"chat": None, "ephemeral": True, "settings": settings,
                 "system_prompt": "", "tools": None, "history": hist}
 
-    def get_messages_for_llm(self, reserved_tokens: int = 0, provider: str = None) -> List[Dict[str, str]]:
-        """Get messages for LLM with trimming applied."""
+    def get_messages_for_llm(self, reserved_tokens: int = 0, provider: str = None,
+                             context_limit: int = None) -> List[Dict[str, str]]:
+        """Get messages for LLM with trimming applied. context_limit=0: no token
+        trim here - the chat lane's budgeter (core/chat/budget.py) fits what is
+        really sent, at send time, against the real window."""
         try:
             window = max(0, int(getattr(config, 'IMAGE_MEMORY_TURNS', 0) or 0))
         except (TypeError, ValueError):
@@ -4327,6 +4330,7 @@ class ChatSessionManager:
             reserved_tokens,
             provider=provider,
             in_tool_cycle=self._in_tool_cycle,
+            context_limit=context_limit,
             image_window=window,
             image_loader=self.visible_tool_image,
             caption_loader=self.image_caption,

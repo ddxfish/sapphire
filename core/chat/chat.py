@@ -72,7 +72,7 @@ def _inject_tool_images(messages, tool_images, provider=None):
     supports = bool(provider and getattr(provider, 'supports_images', False))
     if not supports:
         messages.append({
-            "role": "user",
+            "role": "user", "_inject": True,
             "content": f"[Tool returned {len(tool_images)} image(s), saved and shown to the user. "
                        f"The current model does not support image inputs, so the image "
                        f"contents are not available for analysis this turn.]"
@@ -101,7 +101,7 @@ def _inject_tool_images(messages, tool_images, provider=None):
             "data": data,
             "media_type": media_type,
         })
-    messages.append({"role": "user", "content": content})
+    messages.append({"role": "user", "content": content, "_inject": True})   # the app's row, not a turn (core/chat/budget.py)
     logger.info(f"[TOOL] Injected {len(tool_images)} tool image(s) into conversation")
 
 
@@ -562,7 +562,7 @@ class LLMChat:
             # it instead of continuing (the old flow re-sent the user text).
             messages = [
                 {"role": "system", "content": system_prompt},
-                *self.session_manager.get_messages_for_llm(count_tokens(system_prompt)),
+                *self.session_manager.get_messages_for_llm(context_limit=0),     # fit at send time (budget.py)
             ]
             if dynamic_context:
                 messages.insert(1, {"role": "system", "content": dynamic_context, "_dynamic": True})
@@ -591,9 +591,9 @@ class LLMChat:
                 parts.append(f"```{lang}\n# {f['filename']}\n{f['text']}\n```")
             user_input = "\n\n".join(parts)
 
-        # Reserve space for system prompt + current user message in context budget
-        reserved_tokens = count_tokens(system_prompt) + count_tokens(user_input)
-        history_messages = self.session_manager.get_messages_for_llm(reserved_tokens)
+        # Whole history: chat_streaming fits what is really sent, at send time,
+        # against the real window and room for the reply (core/chat/budget.py)
+        history_messages = self.session_manager.get_messages_for_llm(context_limit=0)
 
         # Build user message content - list if images, string otherwise
         if images:
@@ -637,7 +637,7 @@ class LLMChat:
             *history_messages,
         ]
         if ghost_text:
-            messages.append({"role": "user", "content": ghost_text})
+            messages.append({"role": "user", "content": ghost_text, "_inject": True})
         messages.append({"role": "user", "content": user_content})
 
         # Dynamic story context — injected as separate system content for cache efficiency
@@ -648,7 +648,7 @@ class LLMChat:
         # RAG injection — if chat has uploaded documents, search and inject
         rag_context = self._get_rag_context(user_input)
         if rag_context:
-            messages.insert(-1, {"role": "user", "content": rag_context})
+            messages.insert(-1, {"role": "user", "content": rag_context, "_inject": True})
 
         return messages
 

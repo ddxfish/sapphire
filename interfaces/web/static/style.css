@@ -5132,6 +5132,18 @@ span[data-image-gone] {
     z-index: 1;
 }
 
+/* Where the model's own window ends, when it holds less than Context Limit
+   (a local server's loaded context): the bar fills past it = she's trimmed. */
+#context-notch {
+    position: absolute;
+    top: 0;
+    width: 2px;
+    height: 7px;
+    background: var(--warning, #e0a030);
+    display: none;
+    z-index: 2;
+}
+
 /* Agent pill bar */
 #agent-bar {
     display: none;

@@ -1,5 +1,6 @@
 {
   "name": "remembrance",
+  "tool_expires": "never",
   "short_display_name": "Remembrance",
   "version": "1.2.0",
   "description": "Offsite encrypted backups to the zero-knowledge Remembrance vault. The app encrypts before upload; the server never sees your data or password.",

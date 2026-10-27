@@ -178,6 +178,7 @@
   "llm": {
     "LLM_MAX_HISTORY": 0,
     "CONTEXT_LIMIT": 65535,
+    "TOOL_EXPIRES_AFTER": 0,
     "LLM_REQUEST_TIMEOUT": 240.0,
     "LLM_PROVIDERS": {
       "claude": {

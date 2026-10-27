@@ -376,6 +376,7 @@ class FunctionManager:
                     emoji = getattr(module, 'EMOJI', '')
                     group = getattr(module, 'GROUP', None)
                     category = getattr(module, 'TOOL_CATEGORY', None)
+                    expires = getattr(module, 'TOOL_EXPIRES', None)
 
                     if not tools or not executor:
                         logger.warning(f"Module '{module_name}' missing TOOLS or execute()")
@@ -383,7 +384,7 @@ class FunctionManager:
 
                     if available_functions is not None:
                         tools = [t for t in tools if t['function']['name'] in available_functions]
-                    self._record_tool_meta(tools, module_name, category)
+                    self._record_tool_meta(tools, module_name, category, expires=expires)
 
                     self.function_modules[module_name] = {
                         'module': module,
@@ -443,13 +444,15 @@ class FunctionManager:
                 except Exception as e:
                     logger.error(f"Failed to load function module '{module_name}': {e}")
 
-    def register_plugin_tools(self, plugin_name: str, plugin_dir, tool_paths: list):
+    def register_plugin_tools(self, plugin_name: str, plugin_dir, tool_paths: list, expires=None):
         """Register tools from a plugin directory.
 
         Args:
             plugin_name: Plugin name for tracking
             plugin_dir: Path to plugin root directory
             tool_paths: List of relative paths to tool files (e.g., ["tools/ha.py"])
+            expires: the manifest's `tool_expires`, the default for every tool
+                here that declares none (a file's TOOL_EXPIRES comes first)
 
         Returns:
             None on success (including per-module non-fatal errors, which are
@@ -562,6 +565,7 @@ class FunctionManager:
                     mode_filter = namespace.get('MODE_FILTER')
                     settings_gate = namespace.get('SETTINGS_GATED')
                     category = namespace.get('TOOL_CATEGORY')
+                    module_expires = namespace.get('TOOL_EXPIRES', expires)
 
                     # Check for function name conflicts BEFORE mutating state.
                     # A collision means mutual exclusivity by design (e.g. the
@@ -599,7 +603,7 @@ class FunctionManager:
                         'canonical': canonical_name,  # its sys.modules name, for shutdown()
                         'get_tools': get_tools_fn,  # settings-aware rebuilder, or None
                     }
-                    self._record_tool_meta(tools, module_name, category, plugin_name)
+                    self._record_tool_meta(tools, module_name, category, plugin_name, expires=module_expires)
 
                     # Track per-tool flags (safe — conflict check passed)
                     for tool in tools:
@@ -1120,7 +1124,7 @@ class FunctionManager:
                     if t['function']['name'] in fn_set)
 
     # ── tool metadata: category, writes, scope ──────────────────────────────
-    def _record_tool_meta(self, tools, module_name, category=None, plugin_name=''):
+    def _record_tool_meta(self, tools, module_name, category=None, plugin_name='', expires=None):
         meta = self.__dict__.setdefault('_tool_meta', {})    # fixtures build the manager bare
         for tool in tools:
             if not isinstance(tool, dict) or not isinstance(tool.get('function'), dict):
@@ -1130,7 +1134,34 @@ class FunctionManager:
                 continue
             cat = str(tool.get('category') or category or plugin_name or module_name)
             meta[name] = {'category': cat, 'writes': bool(tool.get('writes')),
-                          'module': module_name, 'plugin': plugin_name or ''}
+                          'module': module_name, 'plugin': plugin_name or '',
+                          'expires': self.parse_expires(tool['expires'] if 'expires' in tool else expires, name)}
+
+    @staticmethod
+    def parse_expires(raw, name=''):
+        """A tool's `expires` (or its file's TOOL_EXPIRES, its plugin's
+        `tool_expires`), as the budgeter reads it: {'after': 'never' |
+        'superseded' | N user turns, 'group', 'hint'}, or None = undeclared
+        (the global TOOL_EXPIRES_AFTER applies). Expiry only shortens what the
+        MODEL is sent of an old result (core/chat/budget.py); the stored row
+        and the transcript stay whole. Never raises: a malformed value is
+        undeclared, logged."""
+        if raw is None:
+            return None
+        try:
+            spec = dict(raw) if isinstance(raw, dict) else {'after': raw}
+            after = spec.get('after')
+            if isinstance(after, str):
+                after = after.strip().lower()
+                if after.isdigit():
+                    after = int(after)
+            if after not in ('never', 'superseded') and not (isinstance(after, int) and not isinstance(after, bool) and after > 0):
+                raise ValueError(f"after={spec.get('after')!r}")
+            return {'after': after, 'group': str(spec.get('group') or name),
+                    'hint': str(spec.get('hint') or '').strip()[:200]}
+        except Exception as e:
+            logger.warning(f"[TOOLS] '{name}': expires {raw!r} not understood ({e}) - treated as undeclared")
+            return None
 
     def _meta(self):
         return getattr(self, '_tool_meta', None) or {}        # fixtures build the manager bare

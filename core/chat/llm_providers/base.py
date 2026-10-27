@@ -255,6 +255,12 @@ class BaseProvider(ABC):
         """Return provider identifier string."""
         return self.config.get('provider', 'unknown')
     
+    def context_window(self) -> Optional[int]:
+        """Tokens the server holds for one request, as it reports it; None =
+        unknown (the app's Context Limit stands alone). Local servers answer
+        (openai_compat); a cloud API's window is wider than anything we send."""
+        return None
+
     @property
     def supports_images(self) -> bool:
         """Whether this provider supports image inputs.

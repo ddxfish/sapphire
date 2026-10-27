@@ -1,5 +1,6 @@
 {
   "name": "mindpalace",
+  "tool_expires": "never",
   "short_display_name": "Mind",
   "short_name": "Mind Palace",
   "version": "0.17.1",

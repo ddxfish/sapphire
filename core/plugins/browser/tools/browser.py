@@ -29,6 +29,7 @@ _REF = {'type': 'string', 'description': 'An element\'s ref from the latest page
 TOOLS = [
     {
         "type": "function", "is_local": False,
+        "expires": {"after": "superseded", "group": "browser-view", "hint": "browser_look to read the page again"},
         "function": {
             "name": "browser_open",
             "description": "Open a web page in your own browser and read it. Returns the page's text, with a "
@@ -49,6 +50,7 @@ TOOLS = [
     },
     {
         "type": "function", "is_local": False,
+        "expires": {"after": "superseded", "group": "browser-view", "hint": "browser_look to read the page again"},
         "function": {
             "name": "browser_look",
             "description": "Read the page in your browser's current tab again, with fresh refs. A long page "
@@ -68,6 +70,7 @@ TOOLS = [
     },
     {
         "type": "function", "is_local": False,
+        "expires": {"after": "superseded", "group": "browser-view", "hint": "browser_look to read the page again"},
         "function": {
             "name": "browser_act",
             "description": "Do one thing on the page in your browser, then read it again. Actions: click, type "
@@ -90,6 +93,7 @@ TOOLS = [
     },
     {
         "type": "function", "is_local": False,
+        "expires": {"after": "superseded", "hint": "browser_tabs to list them again"},
         "function": {
             "name": "browser_tabs",
             "description": "Your browser's tabs: list them, open a new one, switch to one, or close one.",
@@ -106,6 +110,7 @@ TOOLS = [
     },
     {
         "type": "function", "is_local": False,
+        "expires": {"after": 3, "hint": "browser_console all=true to read it again"},
         "function": {
             "name": "browser_console",
             "description": "What the pages in your browser logged: console messages, page errors and failed "
@@ -118,6 +123,7 @@ TOOLS = [
     },
     {
         "type": "function", "is_local": False,
+        "expires": {"after": 3},
         "function": {
             "name": "browser_js",
             "description": "Run a JavaScript expression in the current tab and return its value as JSON. For "

@@ -1,5 +1,6 @@
 {
   "name": "memory",
+  "tool_expires": "never",
   "short_display_name": "Memory (legacy)",
   "short_name": "Memory System (legacy)",
   "version": "1.0.2",

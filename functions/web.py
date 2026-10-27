@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 ENABLED = True
 EMOJI = '🌐'
 TOOL_CATEGORY = 'web'
+TOOL_EXPIRES = 3          # user turns: an old page or search leaves her view (core/chat/budget.py); she can fetch it again
 
 WORK_SEARCH_MAX_RESULTS = 8
 WORK_WEBSITE_MAX_CONTENT = 12000

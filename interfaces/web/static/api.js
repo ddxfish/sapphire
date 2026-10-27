@@ -14,20 +14,35 @@ const _boundQS = (sep = '?') => {
     return b ? `${sep}chat=${encodeURIComponent(b)}` : '';
 };
 
-// Context bar update function
+// The context bar (core/chat/budget.py meter): Context Limit is the full width,
+// the fill is what her last turn really sent, and a notch marks where the
+// model's own window ends when it holds less (a local server's loaded context).
 const updateContextBar = (context) => {
     const bar = document.getElementById('context-bar');
+    const notch = document.getElementById('context-notch');
     if (!bar || !context) return;
-    
-    // Hide bar if context limit is disabled (0)
-    if (context.limit === 0) {
+
+    if (!context.limit) {                 // no limit of ours and no window known
         bar.style.display = 'none';
+        if (notch) notch.style.display = 'none';
         return;
     }
-    
+
+    const n = v => Number(v || 0).toLocaleString();
+    const parts = [`${context.measured ? 'Sent last turn' : 'This chat'}: ${n(context.used)} of ${n(context.limit)} tokens (${context.percent}%)`];
+    if (context.server) parts.push(`the model holds ${n(context.server)}`);
+    if (context.out_of_view) parts.push(`${context.out_of_view} oldest turn${context.out_of_view === 1 ? '' : 's'} out of her view`);
+    if (context.stubbed) parts.push(`${context.stubbed} old tool result${context.stubbed === 1 ? '' : 's'} shortened`);
     bar.style.display = 'block';
     bar.style.width = `${context.percent}%`;
-    bar.title = `Context: ${context.used.toLocaleString()} / ${context.limit.toLocaleString()} tokens (${context.percent}%)`;
+    bar.title = parts.join(' · ');
+    if (notch) {
+        notch.style.display = context.notch ? 'block' : 'none';
+        if (context.notch) {
+            notch.style.left = `calc(${context.notch}% - 1px)`;
+            notch.title = `The model holds ${n(context.server)} tokens: what's past here can't be sent`;
+        }
+    }
 };
 
 // Unified status endpoint - single call for all UI state

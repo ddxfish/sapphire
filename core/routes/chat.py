@@ -71,7 +71,6 @@ async def get_history(request: Request, chat: str = None, _=Depends(require_logi
         prompt_content = system.llm_chat.current_system_prompt or ""
     display_messages = format_messages_for_display(raw_messages)
 
-    context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
     # Display rows already fold `thinking` INTO content (history.py
     # _reconstruct_thinking_content); adding it again double-counted every
     # reasoning turn and pinned the context bar (broadsword M-L8 / H17).
@@ -86,16 +85,11 @@ async def get_history(request: Request, chat: str = None, _=Depends(require_logi
         prompt_tokens = 0
 
     total_used = history_tokens + prompt_tokens
-    percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
-
+    from core.chat import budget        # what was really sent last, once a turn has run (the one meter)
     out = {
         "messages": display_messages,
         "chat_name": chat_name,
-        "context": {
-            "used": total_used,
-            "limit": context_limit,
-            "percent": percent
-        }
+        "context": budget.meter(chat_name, total_used),
     }
     # F2 latch: unreadable rows were skipped at load — chat is read-only.
     # Absent key = healthy (additive; old frontends unaffected).
@@ -708,12 +702,12 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         # now aggregates across per-request streams.
         is_streaming = system.llm_chat.any_streaming() if hasattr(system.llm_chat, 'any_streaming') else False
 
-        context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
         raw_messages = system.llm_chat.session_manager.get_messages()
         message_count = len(raw_messages)
+        # Thinking is not sent to the model (history.get_messages_for_llm), so
+        # it doesn't count - /api/history agreed already; this route added it.
         history_tokens = sum(
             count_message_tokens(m.get("content", ""), include_images=False)
-            + count_tokens(m.get("thinking", "") or "")
             for m in raw_messages
         )
 
@@ -724,7 +718,8 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             prompt_tokens = 0
 
         total_used = history_tokens + prompt_tokens
-        context_percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
+        from core.chat import budget
+        context = budget.meter(active_chat, total_used)
 
         user_tools = list(function_names)
 
@@ -756,11 +751,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
                 "enabled": spice_enabled,
                 "available": is_assembled
             },
-            "context": {
-                "used": total_used,
-                "limit": context_limit,
-                "percent": context_percent
-            },
+            "context": context,
             "chat_settings": chat_settings
         }
     except Exception as e:

@@ -23,6 +23,7 @@ export const chatMode = {
 
     formArea: `
                         <div id="context-bar"></div>
+                        <div id="context-notch"></div>
                         <div id="image-preview-area" style="display: none;"></div>
                         <form id="chat-form">
                             <!-- Mic split: #mic-btn keeps every gesture handler; the caret is a

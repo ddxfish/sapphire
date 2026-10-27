@@ -93,6 +93,9 @@ _REJECTED_PARAMS: Dict[str, set] = {}
 # set asks once a minute, never per turn. Misses are never kept.
 _FOUND_MODEL: Dict[str, tuple] = {}
 _FOUND_TTL = 60.0
+# (server root, model) → (tokens it holds for one request | None, trusted_until).
+# A reload in LM Studio can change it, so it is asked again each minute.
+_WINDOW: Dict[tuple, tuple] = {}
 _NOT_CHAT = re.compile(r'embed|rerank|whisper|tts|moderation', re.I)
 
 
@@ -344,6 +347,66 @@ class OpenAICompatProvider(BaseProvider):
         self.model = model
         self._rejected_params = _REJECTED_PARAMS.setdefault(f"{self.base_url}|{model}", set())
         return True
+
+    def context_window(self) -> Optional[int]:
+        """The tokens this server holds for one request (prompt + reply), as
+        it says itself: LM Studio's loaded_context_length (/api/v0/models),
+        llama.cpp's per-slot n_ctx (/props), Ollama's context_length
+        (/api/ps). Asked of a local or LAN server only, once a minute; None =
+        unknown (a cloud API, a server that doesn't say), and the app's own
+        Context Limit stands alone. core/chat/budget.py reads it."""
+        from urllib.parse import urlparse
+        import ipaddress
+        host = (urlparse(self.base_url or '').hostname or '').lower()
+        try:
+            near = host == 'localhost' or ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            near = host.endswith('.local') or '.' not in host
+        if not (near or self.config.get('is_local')):
+            return None
+        root = re.sub(r'/v1/?$', '', self.base_url.rstrip('/'))
+        key, now = (root, self.model or ''), time.time()
+        hit = _WINDOW.get(key)
+        if hit and now < hit[1]:
+            return hit[0]
+        found = None
+        client = _shared_http_client(self.base_url)
+        hdrs = {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
+
+        def ask(path):
+            try:
+                r = client.get(f"{root}{path}", headers=hdrs, timeout=1.5)
+                return r.json() if r.status_code == 200 else None
+            except Exception:
+                return None
+
+        def tokens(v):
+            try:
+                n = int(v)
+                return n if n > 0 else None
+            except (TypeError, ValueError):
+                return None
+
+        lms = ask('/api/v0/models')
+        if isinstance(lms, dict) and isinstance(lms.get('data'), list):
+            loaded = [m for m in lms['data'] if isinstance(m, dict) and m.get('state') == 'loaded'
+                      and m.get('type') in ('llm', 'vlm')]
+            pick = next((m for m in loaded if m.get('id') == self.model), loaded[0] if loaded and not self.model else None)
+            found = tokens(pick.get('loaded_context_length')) if pick else None
+        else:
+            props = ask('/props')
+            if isinstance(props, dict):
+                found = tokens((props.get('default_generation_settings') or {}).get('n_ctx') or props.get('n_ctx'))
+            else:
+                ps = ask('/api/ps')
+                if isinstance(ps, dict) and isinstance(ps.get('models'), list):
+                    pick = next((m for m in ps['models'] if isinstance(m, dict)
+                                 and self.model in (m.get('name'), m.get('model'))), None)
+                    found = tokens(pick.get('context_length')) if pick else None
+        if found != (hit[0] if hit else None):
+            logger.info(f"[CONTEXT] {root} ({self.model or 'its loaded model'}) holds {found or 'an unknown number of'} tokens per request")
+        _WINDOW[key] = (found, now + _FOUND_TTL)
+        return found
 
     def _loaded_model(self):
         """LM Studio's native list (/api/v0/models: type + state per model):

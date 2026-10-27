@@ -575,6 +575,16 @@ class ExecutionContext:
                      f"tools={len(self.tools) if self.tools else 0} "
                      f"(~{tool_schema_tokens} schema tokens), "
                      f"history={len(history_messages) if history_messages else 0} msgs")
+        from core.chat import budget
+        _model = self.model_override or getattr(self.provider, 'model', '')
+        _fm = getattr(self.tool_engine, 'function_manager', None)
+
+        def _expiry(name):
+            meta = _fm.tool_meta(name) if _fm is not None and hasattr(_fm, 'tool_meta') else None
+            return meta.get('expires') if isinstance(meta, dict) else None
+        # whose watermark: a run inside a chat keeps its cut point steady (the cache)
+        _mark = (f"task:{self.task_settings.get('chat_target')}"
+                 if history_messages is not None and self.task_settings.get('chat_target') else None)
         final_content = None
         llm_retries = 0  # one rescue decode per run — shared by both garbage shapes below
         cut_streak = 0   # tool-call rounds cut at max_tokens, in a row
@@ -585,92 +595,27 @@ class ExecutionContext:
             if self._is_cancelled():
                 logger.info(f"[ExecCtx] cancelled before round {i+1}")
                 break
-            # Context limit check — auto-trim oldest messages rather than bail.
-            # Previously this break fired before we ever called the LLM whenever
-            # loaded history was already >90% of the task's context_limit,
-            # producing a silent "(No response — tool loop exhausted)" placeholder.
-            # Now we aggressively trim the oldest non-system messages, clean up
-            # orphaned tool-result heads, retry under 80% of limit, and only
-            # give up with a specific reason if trim can't help.
-            if context_limit > 0:
-                # count_message_tokens, not count_tokens(str(content)): a vision
-                # turn's content is a list carrying base64 image blocks, and the
-                # text tokenizer chews base64 at ~1.4 chars/token — one 374KB PNG
-                # off Discord was charged 356k "tokens" (the model bills ~1.4k for
-                # its pixels), tripped overflow on a 198k history, and she never
-                # replied. Images are a flat per-block estimate here. 2026-10-02.
-                def _budget(ms):
-                    return sum(count_message_tokens(m.get("content", ""), include_images=True) for m in ms)
-                msg_tokens = _budget(messages)
-                total_tokens = msg_tokens + tool_schema_tokens
-                if total_tokens > context_limit * 0.9:
-                    sys_idx = 1 if messages and messages[0].get("role") == "system" else 0
-                    before, dropped, passes = total_tokens, 0, 0
-                    # Keep biting until under 80% (the headroom this block always
-                    # promised) or nothing droppable is left. Before 2026-10-02 it
-                    # was ONE 25% bite, so any turn more than 25% over bailed as
-                    # overflow with history still on the table.
-                    while total_tokens > context_limit * 0.8:
-                        non_system = len(messages) - sys_idx
-                        if non_system <= 4:
-                            break
-                        drop = max(1, non_system // 4)
-                        # Trim is for OLD history ONLY — never delete the current
-                        # turn's user message or anything after it. On a short/empty
-                        # chat user_msg sits near the front and the raw drop range
-                        # would delete it, which loses the LLM's actual prompt AND
-                        # reopens the stale-anchor bug via the identity fallback
-                        # (next(...) misses → falls back to a stale msg_start_idx).
-                        # Clamp so the delete never reaches user_msg. 2026-06-13.
-                        protect_idx = next((i for i, m in enumerate(messages) if m is user_msg), len(messages))
-                        drop = min(drop, max(0, protect_idx - sys_idx))
-                        if drop <= 0:
-                            break
-                        del messages[sys_idx:sys_idx + drop]
-                        # Strip any orphaned tool-result messages now at the front
-                        while len(messages) > sys_idx and messages[sys_idx].get("role") == "tool":
-                            messages.pop(sys_idx)
-                        # Also strip an assistant that had tool_calls whose results
-                        # just got dropped (would become orphan at LLM call time)
-                        if len(messages) > sys_idx and messages[sys_idx].get("role") == "assistant" and messages[sys_idx].get("tool_calls"):
-                            messages.pop(sys_idx)
-                        dropped += drop
-                        passes += 1
-                        msg_tokens = _budget(messages)
-                        total_tokens = msg_tokens + tool_schema_tokens
-                    if dropped:
-                        logger.warning(
-                            f"[ExecCtx] Context trim: dropped ~{dropped} oldest msgs in {passes} pass(es) "
-                            f"({before} → {total_tokens} tokens, "
-                            f"limit {context_limit}; tool schemas {tool_schema_tokens})"
-                        )
-                    if total_tokens > context_limit * 0.9:
-                        # Trim couldn't rescue this turn — give a specific reason
-                        # that points at the actual lever to pull. With heavy
-                        # toolsets, schemas often exceed the limit on their own
-                        # and clearing chat history won't help.
-                        n_tools = len(self.tools) if self.tools else 0
-                        if tool_schema_tokens > context_limit * 0.7:
-                            advice = (
-                                f"Toolset is too large for this context_limit "
-                                f"({n_tools} tools = {tool_schema_tokens} schema tokens). "
-                                f"Reduce toolset size or raise context_limit."
-                            )
-                        else:
-                            advice = (
-                                f"Clear older chat history or raise context_limit."
-                            )
-                        overflow_reason = (
-                            f"(Context overflow — {total_tokens}/{context_limit} tokens "
-                            f"({msg_tokens} messages + {tool_schema_tokens} tool schemas "
-                            f"from {n_tools} tools). {advice})"
-                        )
-                        logger.error(f"[ExecCtx] {overflow_reason}")
-                        break
-
+            # The one budgeter (core/chat/budget.py), as the chat lane uses it:
+            # the real window (a local server's loaded context wins over a
+            # bigger limit), room for the reply, expired tool results as one
+            # line, the oldest turns out of view - on a copy; `messages` keeps
+            # everything and this turn (user_msg on) is never cut. It replaces
+            # this lane's own 90%/80% trim, which counted no reply room, no
+            # tool_call arguments and every picture as 1500 tokens.
+            try:
+                fitted = budget.fit(messages, self.tools, self.provider, self.provider_key, _model,
+                                    self.gen_params.get('max_tokens'), chat=_mark, live=user_msg,
+                                    expiry=_expiry, limit=context_limit)
+            except budget.ContextFull as e:
+                overflow_reason = f"(Context overflow - {e})"
+                logger.error(f"[ExecCtx] {overflow_reason}")
+                break
+            gen_params = (self.gen_params if fitted.max_tokens == self.gen_params.get('max_tokens')
+                          else {**self.gen_params, 'max_tokens': fitted.max_tokens})
             response_msg = self.tool_engine.call_llm_with_metrics(
-                self.provider, messages, self.gen_params, tools=self.tools
+                self.provider, fitted.messages, gen_params, tools=self.tools
             )
+            budget.learn_usage(fitted, getattr(response_msg, 'usage', None))
 
             # A cancel that landed during the LLM call: nothing from this
             # reply is appended or executed — no tool side effects after the
