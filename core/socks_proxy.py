@@ -36,7 +36,7 @@ def clear_session_cache():
         apply_proxy_env()
     except Exception as e:
         logger.error(f"apply_proxy_env failed during cache clear: {e}")
-    for fn in list(_invalidators):
+    for fn in list(_invalidators.values()):
         try:
             fn()
         except Exception as e:
@@ -143,7 +143,8 @@ def get_session():
 # at spawn and pick up changes on their next restart.
 # ============================================================================
 _PROXY_VARS = ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")
-_invalidators = []        # run on every proxy-config change (clear_session_cache)
+_invalidators = {}        # owner -> fn, run on every proxy-config change (clear_session_cache)
+_blackholed = False       # SOCKS on but unusable: the env points at a refusing proxy
 _env_warnings = []        # surfaced via proxy_status() + the load_errors toast lane
 _llm_hint_sent = set()    # learn-once proxy hint, per provider per boot
 
@@ -156,11 +157,39 @@ _CORE_LLM_HOSTS = {
 }
 
 
-def register_invalidator(fn):
+def register_invalidator(fn, owner=None):
     """Register a zero-arg callable run whenever proxy config changes.
-    openai_compat registers its httpx-pool drop here."""
-    if fn not in _invalidators:
-        _invalidators.append(fn)
+    openai_compat registers its httpx-pool drop here. OWNER-KEYED like the
+    direct-host registry below: a reloaded plugin's fn has the same
+    module.qualname, so it replaces its old closure instead of adding one
+    per reload (longevity scout 2026-10-27)."""
+    _invalidators[owner or f"{getattr(fn, '__module__', '')}.{getattr(fn, '__qualname__', repr(fn))}"] = fn
+
+
+def unregister_invalidator(owner):
+    _invalidators.pop(owner, None)
+
+
+def socks_target():
+    """(host, port, why) of the configured SOCKS proxy - the ONE parser of
+    the host/port fields (core's env here, the browser plugin's egress).
+    `why` is non-empty when SOCKS can't be used as configured."""
+    host = str(getattr(config, 'SOCKS_HOST', '') or '').strip()
+    # A pasted 'socks5://host' or 'http://host' in the HOST field would nest
+    # into the proxy URL; strip any scheme and trailing slashes.
+    if '://' in host:
+        host = host.split('://', 1)[1]
+    host = host.strip('/')
+    try:
+        port = int(str(getattr(config, 'SOCKS_PORT', '') or '').strip())
+        if not (0 < port < 65536):
+            raise ValueError(f"out of range: {port}")
+    except (ValueError, TypeError) as e:
+        return host, 0, (f"SOCKS_PORT invalid ({getattr(config, 'SOCKS_PORT', None)!r}: {e}); "
+                         f"set a port 1-65535 in Settings › Network")
+    if not host:
+        return '', port, "SOCKS_HOST is empty; set a host in Settings › Network"
+    return host, port, ''
 
 
 # Direct-host registry (net facade, 2026-09-01): components register a
@@ -357,6 +386,8 @@ def apply_proxy_env() -> None:
 
 
 def _apply_proxy_env_inner() -> None:
+    global _blackholed
+    _blackholed = False
     _env_warnings.clear()
     _drop_network_load_errors()
     if not getattr(config, 'SOCKS_ENABLED', False):
@@ -394,31 +425,15 @@ def _apply_proxy_env_inner() -> None:
         _env_warnings.append(
             "SOCKS enabled but credentials are missing — proxied requests will "
             "fail until set (traffic never falls back to direct)")
-    host = str(getattr(config, 'SOCKS_HOST', '') or '').strip()
-    # A pasted 'socks5://host' or 'http://host' in the HOST field would nest
-    # into the proxy URL; strip any scheme and trailing slashes.
-    if '://' in host:
-        host = host.split('://', 1)[1]
-    host = host.strip('/')
-    try:
-        port = int(str(getattr(config, 'SOCKS_PORT', '') or '').strip())
-        if not (0 < port < 65536):
-            raise ValueError(f"out of range: {port}")
-    except (ValueError, TypeError) as e:
-        _env_warnings.append(
-            f"SOCKS_PORT invalid ({getattr(config, 'SOCKS_PORT', None)!r}: {e}) — "
-            f"proxy env NOT applied; set a port 1-65535 in Settings › Network")
-        for w in _env_warnings:
-            logger.warning(f"[PROXY] {w}")
-            _push_network_load_error(w, "Settings › Network")
-        return
-    if not host:
-        _env_warnings.append(
-            "SOCKS_HOST is empty — proxy env NOT applied; set a host in Settings › Network")
-        for w in _env_warnings:
-            logger.warning(f"[PROXY] {w}")
-            _push_network_load_error(w, "Settings › Network")
-        return
+    host, port, why = socks_target()
+    if why:
+        # Fail closed (2026-10-27): SOCKS is ON, so nothing may quietly go
+        # direct. Stamp a proxy that refuses every connection (port 1 on
+        # loopback; not 9, Windows' optional "discard" service would accept
+        # and swallow it): requests fail loudly until the setting is fixed.
+        _env_warnings.append(f"{why} — proxied requests fail until then (traffic never falls back to direct)")
+        _blackholed = True
+        auth, host, port = '', '127.0.0.1', 1
     proxy = f"{_scheme()}://{auth}{host}:{port}"
     no_proxy = build_no_proxy()
     # NO_PROXY FIRST: in the stamp window a belt-lane caller hitting LAN
@@ -435,8 +450,7 @@ def _apply_proxy_env_inner() -> None:
         _env_warnings.append(
             "httpx[socks] not installed — LLM/cloud requests will fail while "
             "the proxy is on. Fix: pip install 'httpx[socks]'")
-    logger.info(f"Proxy env applied: {_scheme()}://{config.SOCKS_HOST}:"
-                f"{config.SOCKS_PORT} · NO_PROXY={no_proxy}")
+    logger.info(f"Proxy env applied: {_scheme()}://{host}:{port} · NO_PROXY={no_proxy}")
     for w in _env_warnings:
         logger.warning(f"[PROXY] {w}")
         _push_network_load_error(w, "Settings › Network")
@@ -461,9 +475,12 @@ def start_boot_probe() -> None:
         _drop_network_load_errors()
         for w in list(_env_warnings):
             _push_network_load_error(w, "Settings › Network")
+        host, port, why = socks_target()               # the same reading the env got (a pasted scheme works)
+        if why:
+            return                                     # already warned by apply_proxy_env: no second toast
         try:
             username, password = get_socks_credentials()
-            _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT,
+            _test_socks_auth(host, port,
                              username, password,
                              getattr(config, 'SOCKS_TIMEOUT', 10.0))
             # The auth test dials an IP — it PASSES on a proxy with no
@@ -474,8 +491,8 @@ def start_boot_probe() -> None:
                 import socks as _pysocks
                 ts = _pysocks.socksocket()
                 try:
-                    ts.set_proxy(_pysocks.SOCKS5, config.SOCKS_HOST,
-                                 config.SOCKS_PORT, rdns=True,
+                    ts.set_proxy(_pysocks.SOCKS5, host,
+                                 port, rdns=True,
                                  username=username or None,
                                  password=password or None)
                     ts.settimeout(getattr(config, 'SOCKS_TIMEOUT', 10.0))
@@ -561,7 +578,7 @@ def proxy_status() -> dict:
         'route_llm': bool(getattr(config, 'SOCKS_ROUTE_LLM', False)),
         'remote_dns': remote_dns,
         'dns_via_proxy': enabled and remote_dns,
-        'env_applied': bool(os.environ.get('ALL_PROXY')),
+        'env_applied': bool(os.environ.get('ALL_PROXY')) and not _blackholed,
         'httpx_socks': httpx_socks,
         'no_proxy': [e for e in (os.environ.get('NO_PROXY') or '').split(',') if e],
         'system_proxy': system_proxy,

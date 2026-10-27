@@ -31,17 +31,27 @@ let visible = false;        // the Chat view is on screen
 let chat = { name: '', private: true };
 let epoch = 0;              // supersede token for mounts and privacy reads
 let checkSeq = 0;
+let openSeq = 0;            // supersede token for openStage (a close or another open wins)
+let known = null;           // Promise of the stage-app list, cleared when plugins change
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// The apps that can open here, or null when the server couldn't be asked
+// (a slow or failed fetch is not "nothing is enabled").
 export async function stageApps() {
     try {
         const r = await fetch('/api/apps', { signal: AbortSignal.timeout(10000) });
-        const d = r.ok ? await r.json() : { apps: [] };
+        if (!r.ok) return null;
+        const d = await r.json();
         return (d.apps || []).filter(a => (a.places || []).includes('stage'));
     } catch {
-        return [];
+        return null;
     }
+}
+
+function appList() {
+    if (!known) known = stageApps().then(list => { if (list === null) known = null; return list; });
+    return known;
 }
 
 export function initStage(container) {
@@ -57,7 +67,7 @@ export function initStage(container) {
         menu: container.querySelector('#sb-stage-menu'),
     };
     const w = parseInt(localStorage.getItem(WIDTH_KEY) || '', 10);
-    if (w) stage.style.flexBasis = `${w}px`;
+    if (w) stage.style.setProperty('--stage-w', `${w}px`);   // a variable: the phone stack never reads it
     stage.querySelector('.chat-stage-close').addEventListener('click', closeStage);
     els.btn?.addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
     document.addEventListener('click', (e) => {
@@ -69,10 +79,20 @@ export function initStage(container) {
     // Every way the chat beside the stage can change, or change privacy
     const sel = document.getElementById('chat-select');
     sel?.addEventListener('chat-activated', (e) => recheck(e.detail || null));
+    sel?.addEventListener('chat-switching', (e) => recheck(e.detail || null));   // before the transcript paints
     sel?.addEventListener('chat-list-ready', () => recheck());
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => recheck());
     eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, (d) => { if (!d?.chat || d.chat === chat.name) recheck(); });
     eventBus.on(eventBus.Events.PROMPT_CHANGED, (d) => { if (d?.action === 'vault_changed') recheck(); });
+    // A plugin switched off, reloaded or removed: the open app is checked again before it shows
+    const replugged = async () => {
+        known = null;
+        const apps = await appList();
+        if (live && apps && !apps.some(a => a.name === live.name)) closeStage();
+    };
+    document.addEventListener('sapphire:plugin_toggled', replugged);
+    eventBus.on(eventBus.Events.PLUGIN_RELOADED, replugged);
+    new ResizeObserver(fitSidebar).observe(els.body);
 }
 
 // The Chat view came on screen or left it (views/chat.js show/hide).
@@ -82,19 +102,33 @@ export function setStageVisible(on) {
 }
 
 export async function openStage(name) {
-    const app = (await stageApps()).find(a => a.name === name);
+    const my = ++openSeq;
+    known = null;
+    const apps = await appList();
+    if (my !== openSeq) return false;                           // closed, or another app asked for, meanwhile
+    if (apps === null) {
+        showToast("Couldn't reach Sapphire to open the stage; try again.", 'warning');
+        return false;
+    }
+    const app = apps.find(a => a.name === name);
     if (!app) {
         showToast(`No stage app named "${name}" is enabled.`, 'warning');
         return false;
     }
+    await recheck();
+    if (my !== openSeq) return false;
+    if (chat.private) {                                         // nothing saved: no surprise open in the next chat
+        showToast('The stage stays closed in private chats.', 'info');
+        return false;
+    }
     wanted = { name: app.name, label: app.label, icon: app.icon };
     try { sessionStorage.setItem(OPEN_KEY, JSON.stringify(wanted)); } catch {}
-    await recheck();
-    if (chat.private) showToast('The stage stays closed in private chats.', 'info');
-    return !chat.private;
+    apply();
+    return true;
 }
 
 export function closeStage() {
+    openSeq++;
     wanted = null;
     try { sessionStorage.removeItem(OPEN_KEY); } catch {}
     apply();
@@ -143,13 +177,20 @@ async function mount(app) {
     els.stage.hidden = false;
     els.gutter.hidden = false;
     els.body.classList.add('has-stage');
+    fitSidebar();
     const ctx = {
-        chat: { ...chat },
+        get chat() { return { ...chat }; },                    // current even if the chat changed mid-import
         onChange: (fn) => { me.listeners.add(fn); return () => me.listeners.delete(fn); },
     };
     const v = document.querySelector('meta[name="boot-version"]')?.content || '';
     let mod = null;
     try {
+        const apps = await appList();                          // still enabled? (restored from this tab's last visit)
+        if (mine !== epoch) return;
+        if (apps && !apps.some(a => a.name === app.name)) {
+            closeStage();
+            return;
+        }
         mod = await import(`/plugin-web/${app.name}/app/index.js?v=${v}`);
         if (mine !== epoch) return;
         const ret = mod.render ? await mod.render(els.mount, ctx) : null;
@@ -178,6 +219,7 @@ function hideFrame() {
     els.stage.hidden = true;
     els.gutter.hidden = true;
     els.body.classList.remove('has-stage');
+    fitSidebar();
 }
 
 async function toggleMenu() {
@@ -187,7 +229,9 @@ async function toggleMenu() {
     if (chat.private) return;
     menu.innerHTML = '<div class="sb-stage-empty">Loading…</div>';
     menu.hidden = false;
-    const apps = await stageApps();
+    known = null;
+    const apps = await appList();
+    if (apps === null) { menu.innerHTML = '<div class="sb-stage-empty">Couldn\'t reach Sapphire.</div>'; return; }
     const rows = apps.map(a => `<button type="button" data-app="${esc(a.name)}" class="${wanted?.name === a.name ? 'on' : ''}">`
         + `<span>${esc(a.icon || '📦')}</span> ${esc(a.label)}</button>`);
     if (wanted) rows.push('<button type="button" data-close="1">Close the stage</button>');
@@ -202,16 +246,39 @@ function initGutter() {
         e.preventDefault();
         g.setPointerCapture(e.pointerId);
         const body = els.body.getBoundingClientRect();
+        // the chat column keeps its 360 px; the sidebar and gutters keep theirs
+        const others = [...els.body.children].filter(c => c !== els.stage && !c.classList.contains('chat-main'))
+            .reduce((sum, c) => sum + c.getBoundingClientRect().width, 0);
+        const max = body.width - others - 360;
         g.onpointermove = (ev) => {
-            const w = Math.max(280, Math.min(ev.clientX - body.left, body.width - 320));
-            els.stage.style.flexBasis = `${Math.round(w)}px`;
+            const w = Math.max(280, Math.min(ev.clientX - body.left, max));
+            els.stage.style.setProperty('--stage-w', `${Math.round(w)}px`);
         };
         g.onpointerup = g.onpointercancel = (ev) => {
             g.onpointermove = g.onpointerup = g.onpointercancel = null;
             try { g.releasePointerCapture(ev.pointerId); } catch {}
-            const w = parseInt(els.stage.style.flexBasis, 10);
+            const w = parseInt(els.stage.style.getPropertyValue('--stage-w'), 10);
             if (w) localStorage.setItem(WIDTH_KEY, String(w));
         };
     };
-    g.ondblclick = () => { els.stage.style.flexBasis = ''; localStorage.removeItem(WIDTH_KEY); };
+    g.ondblclick = () => { els.stage.style.removeProperty('--stage-w'); localStorage.removeItem(WIDTH_KEY); };
+}
+
+// Stage + chat column + sidebar don't all fit (a mid-width window): the
+// sidebar folds away while the stage is open and comes back when there's
+// room or the stage closes. Only a fold this module made is undone; the
+// user's own collapse (views/chat.js, saved) is never touched.
+function fitSidebar() {
+    const side = els?.body.querySelector('.chat-sidebar');
+    if (!side) return;
+    const stacked = matchMedia('(max-width: 768px)').matches;
+    const sbw = parseInt(getComputedStyle(side).getPropertyValue('--sb-w'), 10) || 260;
+    const fits = stacked || !live || els.body.getBoundingClientRect().width >= 280 + 360 + sbw + 12;
+    if (!fits && !side.classList.contains('collapsed')) {
+        side.classList.add('collapsed');
+        side.dataset.stageFolded = '1';
+    } else if (fits && side.dataset.stageFolded) {
+        delete side.dataset.stageFolded;
+        if (localStorage.getItem('sapphire-chat-sidebar') !== 'collapsed') side.classList.remove('collapsed');
+    }
 }

@@ -26,7 +26,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
 ```json
 {"ok": true, "name": "den", "board": "waveshare-s3-audio", "firmware": "0.1.0",
  "has": ["speaker", "mic", "wake"],
- "plays": {"type": "audio/wav", "rate": 16000, "channels": 1},
+ "plays": {"type": "audio/wav", "rate": 16000, "channels": 1, "codec": "pcm"},
  "volume": 85, "uptime_s": 61,
  "wakeword": {"enabled": true, "running": true, "model": "hey_sapphire", "format": "tflite"},
  "link": {"connected": true}}
@@ -35,7 +35,7 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | Field | Meaning |
 |---|---|
 | `has` | What this board has. The device shows these tabs and no others, also while the board is offline |
-| `plays` | The one sound format it plays. Sapphire converts her voice to it |
+| `plays` | The one sound format it plays. Sapphire converts her voice to it. `codec` is what the WAV body holds: `pcm` (16-bit, the default when left out) or `ima_adpcm` (~4:1, for a board on a crowded link). An unknown codec gets `pcm` |
 | `link.connected` | Its events stream to Sapphire is open |
 | `volume`, `temp_c` | Optional readings |
 | `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` with a card in; a board with a slot but no card may say `{"mounted": false}` (the page then reads "card: none") and leaves `storage` out of `has` |

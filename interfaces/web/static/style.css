@@ -574,7 +574,7 @@ body {
 /* The stage (surface/stage.js): one app left of the chat rail. It is a
    SIBLING of .chat-main — inside it, two flex:1 columns would split 50/50. */
 .chat-stage {
-    flex: 0 0 58%;
+    flex: 0 1 var(--stage-w, 58%); /* gives way before the chat does; --stage-w = the dragged width */
     min-width: 280px;
     display: flex;
     flex-direction: column;
@@ -589,7 +589,7 @@ body {
 .chat-stage-mount > * { flex: 1 1 auto; min-height: 0; }
 .stage-resizer { flex: 0 0 6px; cursor: ew-resize; background: transparent; transition: background 0.15s; }
 .stage-resizer:hover { background: var(--trim-light, var(--bg-hover)); }
-.chat-body.has-stage .chat-main { min-width: 300px; }
+.chat-body.has-stage .chat-main { min-width: 360px; }   /* room for the composer */
 .sb-stage-pick { position: relative; display: inline-block; }
 #sb-stage-btn.active { color: var(--trim, var(--accent)); }
 #sb-stage-btn:disabled { opacity: 0.35; cursor: not-allowed; }

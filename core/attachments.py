@@ -36,7 +36,8 @@ def marker(title, items) -> str:
     if not out:
         return ''
     title = re.sub(r'[\r\n]+', ' ', str(title or '')).strip()[:120]
-    return '<!--FILES:' + json.dumps({'title': title, 'items': out}) + '-->'
+    from core.ui_markers import mint
+    return mint('<!--FILES:' + json.dumps({'title': title, 'items': out}) + '-->')
 
 
 def strip(text):

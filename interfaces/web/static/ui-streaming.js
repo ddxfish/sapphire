@@ -531,7 +531,7 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     // A question card (ask_user) rides its own (shared/ask-marker.js).
     const { cards: askCards, text: askStripped } = parseAskMarker(filesStripped);
     // An app opened beside the chat (open_stage) rides its own (shared/stage-marker.js).
-    const { cards: stageCards, text: shownResult } = parseStageMarker(askStripped);
+    const { cards: stageCards, text: shownResult } = parseStageMarker(askStripped, toolName);
 
     if (!toolData) {
         // Fallback: create accordion now

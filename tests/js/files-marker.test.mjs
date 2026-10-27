@@ -12,6 +12,9 @@ function mk(tag) {
 }
 globalThis.document = { createElement: mk };
 globalThis.console = { ...console, warn: () => {} };
+// files-marker -> download -> fetch/notify -> event-bus: their module tops touch these
+globalThis.window = { addEventListener() {}, location: {} };
+globalThis.sessionStorage = { _m: {}, getItem(k) { return this._m[k] ?? null; }, setItem(k, v) { this._m[k] = v; } };
 
 const { FILES_RE, safeUrl, normalizeFiles, parseFilesMarker, buildFilesRows } =
     await import('../../interfaces/web/static/shared/files-marker.js');

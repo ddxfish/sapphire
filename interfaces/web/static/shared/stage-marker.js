@@ -5,13 +5,16 @@
 // chat". The tab that streamed her turn also opens it at once (openLive);
 // every other tab painting the chat (a reload, the phone) only shows the card,
 // so nothing starts playing twice. The marker is UI-only (core strips the
-// model's copy). Sibling of ask-marker.js / files-marker.js.
+// model's copy). Sibling of ask-marker.js / files-marker.js. Only open_stage's
+// own result makes a card: the same text in a web page, a search hit or an
+// email is stripped and ignored (privacy scout 2026-10-27).
 
 const STAGE_RE = /<!--STAGE:(\{.*?\})-->[ \t]*\n?/g;
 
-export function parseStageMarker(text) {
+export function parseStageMarker(text, tool) {
     const cards = [];
     const out = String(text || '').replace(STAGE_RE, (_, json) => {
+        if (tool !== 'open_stage') return '';
         try {
             const c = JSON.parse(json);
             const app = String(c.app || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 64);
@@ -24,7 +27,11 @@ export function parseStageMarker(text) {
 
 async function open(app) {
     const [{ openStage }, { getCurrentView }] = await Promise.all([import('../surface/stage.js'), import('../core/router.js')]);
-    if (getCurrentView() !== 'chat') return false;          // the stage lives on the Chat page
+    if (getCurrentView() !== 'chat') {                       // the stage lives on the Chat page
+        const { showToast } = await import('../ui.js');
+        showToast('Open it from the Chat page: the stage sits beside the chat there.', 'info');
+        return false;
+    }
     return openStage(app);
 }
 

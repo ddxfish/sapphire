@@ -70,6 +70,9 @@ export async function handleChatChange() {
         // activateChat already returns settings - no need for separate getChatSettings call
         const result = await api.activateChat(selectedChat);
         const settings = result?.settings || {};
+        // Before the transcript paints: the stage (surface/stage.js) must close
+        // before a private chat's history appears beside it, not after.
+        chatSelect?.dispatchEvent(new CustomEvent('chat-switching', { detail: { chat: selectedChat, settings } }));
 
         const len = await refresh(false);
         setHistLen(len);

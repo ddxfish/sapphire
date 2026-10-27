@@ -247,7 +247,7 @@ async function init() {
                 const appsRes = await fetch('/api/apps', { signal: AbortSignal.timeout(15000) });
                 if (appsRes.ok) {
                     const appsData = await appsRes.json();
-                    const allApps = appsData.apps || [];
+                    const allApps = (appsData.apps || []).filter(a => (a.places || ['apps']).includes('apps'));   // stage-only: no rail slot, no tile
                     const navApps = allApps.filter(a => a.nav);
                     const gridApps = allApps.filter(a => !a.nav);
 

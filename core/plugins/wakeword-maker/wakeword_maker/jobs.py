@@ -349,13 +349,20 @@ def cancel(job_dir):
         _write_status(job_dir, 'cancelled')     # before the signal: the child reads it and keeps it
         pid = int(j['pid'])
         try:
-            if os.name == 'posix':
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-            else:
-                os.kill(pid, signal.SIGTERM)
+            _kill_tree(pid, hard=False)
         except Exception as e:
             logger.warning(f"[WWM] cancel {Path(job_dir).name}: {e}")
         return True
+
+
+def _kill_tree(pid, hard):
+    """The job and everything it started (dataloader workers hold the GPU).
+    Windows has no SIGKILL and os.kill ends one process: taskkill /T does the tree."""
+    if os.name == 'posix':
+        os.killpg(os.getpgid(pid), signal.SIGKILL if hard else signal.SIGTERM)
+    else:
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, timeout=30,
+                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 
 def attach(job_dir, publish):
@@ -411,7 +418,7 @@ def _tail(job_dir, publish):
                 if time.time() - lingering > 30:
                     logger.warning(f"[WWM] {job_dir.name} wrote its status but did not exit; killing it")
                     try:
-                        os.killpg(os.getpgid(pid), signal.SIGKILL) if os.name == 'posix' else os.kill(pid, signal.SIGKILL)
+                        _kill_tree(pid, hard=True)
                     except Exception:
                         pass
             if not alive:

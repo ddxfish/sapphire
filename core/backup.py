@@ -507,7 +507,7 @@ class Backup:
         the BUSY rate. Day-ruiner scout 2026-05-07 #K.
         """
         failed = set()
-        for db_path in self.user_dir.rglob("*.db"):
+        for db_path in self._user_dbs():
             try:
                 conn = sqlite3.connect(str(db_path), timeout=10.0)
                 # busy_timeout for the checkpoint itself — better to wait
@@ -533,6 +533,19 @@ class Backup:
                 failed.add(db_path.resolve())
         return failed
 
+    def _user_dbs(self):
+        """Every SQLite DB under user/ that backups own: the privacy floor and
+        cache exclusions apply here too, so no walk checkpoints, snapshots or
+        VACUUMs a DB another program holds open (Chromium's own .db files in
+        user/browser, privacy scout 2026-10-27)."""
+        for db_path in self.user_dir.rglob("*.db"):
+            try:
+                rel = db_path.relative_to(self.user_dir).as_posix()
+            except ValueError:
+                continue
+            if not _is_excluded(rel):
+                yield db_path
+
     def _snapshot_databases(self, staging_dir):
         """Consistent point-in-time copy of every SQLite DB under user/ via
         sqlite3's backup API (safe against live writers — the API re-copies
@@ -542,7 +555,7 @@ class Backup:
         day-ruiner #K philosophy). negspace N10, 2026-08-31."""
         snapshots, failed = {}, set()
         user_root = self.user_dir.resolve()
-        for db_path in sorted(self.user_dir.rglob("*.db")):
+        for db_path in sorted(self._user_dbs()):
             resolved = db_path.resolve()
             try:
                 resolved.relative_to(user_root)
@@ -593,7 +606,7 @@ class Backup:
         Witch-hunt 2026-04-21 finding R1.
         """
         corrupt = []
-        for db_path in self.user_dir.rglob("*.db"):
+        for db_path in self._user_dbs():
             try:
                 conn = sqlite3.connect(str(db_path), timeout=15)
             except Exception as e:

@@ -12,6 +12,7 @@ const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').re
 globalThis.document = {
     createElement: () => ({ _t: '', set textContent(v) { this._t = v; }, get innerHTML() { return esc(this._t); } }),
     querySelector: () => null,
+    body: { contains: () => false },      // the found-list clock: off the page, so it stops on its first tick
 };
 globalThis.CSS = { escape: s => String(s) };
 

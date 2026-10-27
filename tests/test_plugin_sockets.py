@@ -94,3 +94,18 @@ def test_manifest_sockets_load_async_handlers_only(tmp_path):
         assert set(plugin_loader._sockets['sk2']) == {'good'}
     finally:
         plugin_loader._sockets.pop('sk2', None)
+
+
+def test_malformed_socket_and_route_entries_are_skipped_not_raised(tmp_path):
+    # one plugin's typo used to raise out of scan(): every plugin after it never loaded
+    from core.plugin_loader import plugin_loader
+    for bad in (["view"], {"path": "view"}, [{"path": "v", "handler": ["a"]}], "view"):
+        plugin_loader._register_sockets('typo', tmp_path, bad)
+        plugin_loader._register_routes('typo', tmp_path, bad)
+    assert 'typo' not in plugin_loader._sockets and 'typo' not in plugin_loader._routes
+
+
+def test_scan_survives_a_plugin_that_raises():
+    src = open('core/plugin_loader.py', encoding='utf-8').read()
+    loop = src.split('for name, info in ordered:')[1][:900]
+    assert 'ok = self._load_plugin(name)' in loop and 'except Exception as e:' in loop

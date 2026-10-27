@@ -157,8 +157,8 @@ def render(text):
 
 
 def wanted(plays):
-    """The format a device stated, checked: {'type', 'rate', 'channels'}, or
-    None when it stated none that can be made."""
+    """The format a device stated, checked: {'type', 'rate', 'channels',
+    'codec'}, or None when it stated none that can be made."""
     if not isinstance(plays, dict) or str(plays.get('type') or '').lower() != 'audio/wav':
         return None
     try:

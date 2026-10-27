@@ -61,9 +61,9 @@
     "tests/test_story_overrides.py": "sha256:8856a8770c90e1e102a91f8515d81e754b928db55837996470837988c7c36caf",
     "tests/test_story_vault_gate.py": "sha256:d52ffb3dc15fdd4581242847f0a354566ac071e2cf5a0896ac26c36cd6e1719f",
     "tests/test_tool_fence.py": "sha256:546729f75067b1cc302e4cfdac702d9a602d17bc8dda7b25ac40f26b1568f1cc",
-    "tests/test_vault_gates_p3.py": "sha256:cedecd75777f4c74a414943ea83245b131e127b7aab69ab59debbdcdccffaa33",
+    "tests/test_vault_gates_p3.py": "sha256:d15fd0d300cf23800e2cf24785be267d2636b3a01d7297d686004860412deabd",
     "tools/story_info.py": "sha256:a8a036ae2c3b309c1d646e545b49b4f2bd55451d342f261aec2de41db1cf3850",
     "tools/story_tools.py": "sha256:364e3e3cdb5f190485f7512424111031cceb4a2cf356477af150871609cbd0ed"
   },
-  "signature": "duSE062AFgoimHTF9lvFdAp+hRJ6QEOj3wrUMe8+/HACHN0F6XE4Zirpe653o9Mq8BjpGTdCSkQLLWadtz7SBg=="
+  "signature": "jpSDF0PtN1DrscHOvQ899Kcf9lgKwAsJareUDMr/vh6kz2nLOmaaDbwhy6CQPRCwR+PIJdqF5xsbjx/ob2tfAA=="
 }

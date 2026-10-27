@@ -106,7 +106,8 @@ def normalize(questions, card_id=None):
 
 
 def marker(questions, card_id=None) -> str:
-    return '<!--ASK:' + json.dumps(normalize(questions, card_id), ensure_ascii=False) + '-->'
+    from core.ui_markers import mint
+    return mint('<!--ASK:' + json.dumps(normalize(questions, card_id), ensure_ascii=False) + '-->')
 
 
 def answer_who(card_id) -> str:

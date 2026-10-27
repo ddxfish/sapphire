@@ -36,7 +36,7 @@
     "wakeword_maker/features.py": "sha256:645c3738460cf696399c9e2be9215c4ac3957f3d31dd71baaf81382cc610a9b4",
     "wakeword_maker/features_mww.py": "sha256:6b7ec673b7b05e22355ff4ceb1665048d8c455db321b2f3b15971f98ea4def23",
     "wakeword_maker/holdout.py": "sha256:606e563a487c602959e6dcd0b47122aced4951f9da125a6225eca4c9a1b461a5",
-    "wakeword_maker/jobs.py": "sha256:b351c4256c29579f0a89cecc0dd8f749d4123388bdfe4c88143ff88aa23765db",
+    "wakeword_maker/jobs.py": "sha256:d18bec8bff64e34ed92e4b14a18e64bec4fcc52f5e404010badb5bd324235aea",
     "wakeword_maker/judge.py": "sha256:f938e3c283a73951ab4e198eda499bcb59610abce8f7628e8f89ba6419bf9a4b",
     "wakeword_maker/negatives.py": "sha256:731d6a69956054095caf20ea472d3c00f153379b1707339adc6606ee3067e854",
     "wakeword_maker/paths.py": "sha256:b1bcf322a8238df23dbe37931a3af673c3cab3585d56a2c2fd459c44e0343fba",
@@ -53,5 +53,5 @@
     "wakeword_maker/voices.py": "sha256:8f204033e069a6c93c89741f44d70fa7cfa16c95a5a8cf3e88bc6ddcd8750ac9",
     "wakeword_maker/watch.py": "sha256:3a5c2ec9ae292ff95cc939995376b8a81322b415c1255d563a989d2ec4d40b58"
   },
-  "signature": "zbrJm/BEJTP0x5LQIKdZJ8q3mCKOyocibNASDdv2K33FXO9j/Ok7ex2cg7VMDRGum63ARJle7TC8ogyZsBfXBA=="
+  "signature": "v0Vr3flJm45gH09DQFM3eDv7TbWJvdoHCDd+bj3kZXES1Uas1tYnIEVIkxbTuHV5c5pNZD3jqdP9D0AxwoVhDg=="
 }

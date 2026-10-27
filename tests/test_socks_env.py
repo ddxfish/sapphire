@@ -136,12 +136,12 @@ def test_clear_session_cache_rederives_and_invalidates(monkeypatch):
     os.environ["ALL_PROXY"] = "socks5h://stale:1080"
     calls = []
     fn = lambda: calls.append(1)
-    sp.register_invalidator(fn)
-    sp.register_invalidator(fn)  # dedup — registered once
+    sp.register_invalidator(fn, owner='t')
+    sp.register_invalidator(fn, owner='t')  # dedup — registered once
     try:
         sp.clear_session_cache()
     finally:
-        sp._invalidators.remove(fn)
+        sp.unregister_invalidator('t')
     assert calls == [1]
     assert "ALL_PROXY" not in os.environ      # env re-derived (off = scrubbed)
 
@@ -310,13 +310,33 @@ def test_no_proxy_stamped_before_proxy_vars(socks_on, monkeypatch):
     assert keys.index('NO_PROXY') < keys.index('ALL_PROXY')
 
 
-def test_invalid_port_does_not_stamp_env(socks_on):
-    """Wave 2: a bad SOCKS_PORT stamped a dead ALL_PROXY while the strip
-    said env_applied=True. Now it refuses to stamp and warns."""
-    socks_on.setattr(config, "SOCKS_PORT", "not-a-port", raising=False)
+@pytest.mark.parametrize('key,value,words', [('SOCKS_PORT', 'not-a-port', 'SOCKS_PORT invalid'),
+                                              ('SOCKS_HOST', '', 'SOCKS_HOST is empty')])
+def test_unusable_socks_fails_closed(socks_on, key, value, words):
+    """A bad port or empty host with SOCKS ON used to leave the env unstamped,
+    so every request went DIRECT (privacy scout 2026-10-27). Now the env
+    points at a refusing proxy, the warning says why, and the strip doesn't
+    claim the proxy is applied."""
+    socks_on.setattr(config, key, value, raising=False)
     sp.apply_proxy_env()
-    assert "ALL_PROXY" not in os.environ
-    assert any("SOCKS_PORT invalid" in w for w in sp._env_warnings)
+    assert os.environ["ALL_PROXY"].endswith("://127.0.0.1:1")
+    assert any(words in w for w in sp._env_warnings)
+    assert sp.proxy_status()['env_applied'] is False
+
+
+def test_reloaded_invalidator_replaces_its_old_closure():
+    def make():
+        def _forget():
+            pass
+        return _forget
+    before = len(sp._invalidators)
+    sp.register_invalidator(make())
+    sp.register_invalidator(make())                  # a plugin reload: same module.qualname
+    try:
+        assert len(sp._invalidators) == before + 1
+    finally:
+        sp.unregister_invalidator(f"{__name__}.test_reloaded_invalidator_replaces_its_old_closure.<locals>.make.<locals>._forget")
+    assert len(sp._invalidators) == before
 
 
 def test_scheme_pasted_in_host_is_stripped(socks_on):

@@ -119,7 +119,7 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
                                           'look_nolink': 'red pulse',
                                           'lights_from': '08:00', 'lights_until': '00:00', 'look_night': 'off',
                                           'keep_daily': 7, 'keep_weekly': 4, 'keep_monthly': 3}}
-    assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard', 'buttons', 'sensors']   # firmware: only a board that says it has two slots
+    assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard', 'buttons', 'sensors', 'ir', 'picker']   # firmware: only a board that says it has two slots
     view = engine.public(row)
     assert view['parts'][0]['values']['token'] == 'set' and view['parts'][0]['values']['voice_key'] == 'set'
 
@@ -690,7 +690,7 @@ def _level(sound, rate, hz):
     return 2 * abs(np.mean(wave * np.exp(-2j * np.pi * hz * t)))
 
 
-PLAYS = {'type': 'audio/wav', 'rate': 16000, 'channels': 1}
+PLAYS = {'type': 'audio/wav', 'rate': 16000, 'channels': 1, 'codec': 'pcm'}     # no codec stated = plain PCM
 
 
 @pytest.mark.parametrize('kind, subtype, content_type', [
@@ -766,7 +766,7 @@ def test_a_format_that_cannot_be_made_is_no_format(plays):
 def test_a_stated_format_is_read_with_care():
     assert voice.wanted({'type': 'Audio/WAV', 'rate': '16000', 'junk': 1}) == PLAYS
     assert voice.wanted({'type': 'audio/wav', 'rate': 22050, 'channels': 2}) == \
-        {'type': 'audio/wav', 'rate': 22050, 'channels': 2}
+        {'type': 'audio/wav', 'rate': 22050, 'channels': 2, 'codec': 'pcm'}
 
 
 def test_the_zone_is_posix_for_a_small_board():

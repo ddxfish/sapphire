@@ -1123,7 +1123,8 @@ class StreamingChat:
                                 "result": clean_result[:500] if len(clean_result) > 500 else clean_result,
                                 "error": False
                             }
-                            stage = stage_cards(result_str)       # open_stage: the asking tab opens it now
+                            # open_stage's own card only: a STAGE marker in a web page or an email is not one
+                            stage = stage_cards(result_str) if function_name == 'open_stage' else None
                             if stage:
                                 end["stage"] = stage
                             yield end

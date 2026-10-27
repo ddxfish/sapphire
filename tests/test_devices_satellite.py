@@ -494,12 +494,22 @@ def test_play_is_the_door_core_speaks_through_as_her_voice_is_made(board):
         sat.play(b'OggS-three', 'audio/ogg', DEV, CFG, KEY)
 
 
+def _wav_second():
+    """One second of 16 kHz mono silence with a real header: duration() reads it."""
+    import io, wave
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000)
+        w.writeframes(b'\0' * 32000)
+    return buf.getvalue()
+
+
 def test_a_board_stating_its_format_loosely_still_gets_its_seconds(board):
     """A Pi says rate "16000" and no channels: wanted() forgives that, so
     the arithmetic after fit() must too (it once did string maths)."""
     loose = dict(BOARD, plays={"type": "audio/wav", "rate": "16000"})
     with patch.dict(REAL, {('GET', '/health'): loose}), \
-         patch.object(voice, 'fit', return_value=(b'\0' * (44 + 32000), 'audio/wav')):
+         patch.object(voice, 'fit', return_value=(_wav_second(), 'audio/wav')):
         sat._about.clear()
         assert sat.play(b'OggS', 'audio/ogg', DEV, CFG, KEY) == {'ok': True, 'seconds': 1.0}
 

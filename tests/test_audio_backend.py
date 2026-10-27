@@ -137,5 +137,7 @@ def test_no_core_module_imports_sounddevice_directly():
                 continue
             if rel == "core/audio/device_manager.py" and m.group(1):
                 continue   # embedded subprocess script
+            if rel == "core/plugins/wakeword-maker/wakeword_maker/road.py" and m.group(1):
+                continue   # the CLI road's PC-mic grab: the operator's terminal, never Sapphire's process
             offenders.append(f"{rel}:{lineno}: {line.strip()}")
     assert offenders == [], "direct sounddevice import(s) -- route through core.audio.backend:\n" + "\n".join(offenders)

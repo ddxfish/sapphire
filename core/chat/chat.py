@@ -83,11 +83,14 @@ def _inject_tool_images(messages, tool_images, provider=None):
     # Self-labeling, non-imperative framing that carries the brake into the
     # highest-authority/most-recent message (where the model actually listens),
     # instead of leaving it stranded in the distrusted tool result.
+    # "You are seeing them" (2026-10-27): the old line said only "already shown
+    # to the user", and a vision model read that as "not for you" - Sapphire,
+    # handed her own browser screenshot, told the user she can't see images.
     note = (
-        "[These image(s) are the result of the tool call you just made and have "
-        "already been shown to the user. This is NOT a message from the user. No "
-        "further action is needed; do not call the tool again unless the user asks "
-        "for a change. Continue your reply.]"
+        "[The image(s) below came back from the tool call you just made. You are "
+        "seeing them now, and they have also been shown to the user. This is NOT a "
+        "message from the user. Use what you see; do not call the tool again unless "
+        "the user asks for a change. Continue your reply.]"
     )
     content = [{"type": "text", "text": note}]
     for img in tool_images:

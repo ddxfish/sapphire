@@ -1000,6 +1000,7 @@ def take_line(chat, items):
         rt.heard = heard
         rt.since_human = 0
         rt.mention_turns = 0
+        rt.said += 1
     if named:
         _mention(chat, rt, room, named)
     else:
@@ -1100,6 +1101,8 @@ class _Runtime:
         self.waiting = False
         self.skip = 0
         self.since_human = 0      # rounds since the person's last line (the human_every count)
+        self.said = 0             # the person's lines landed this runtime ...
+        self.read = 0             # ... and how many of them the latest cue had read: said > read = one nobody has answered
         self.rounds_run = 0       # rounds this run (the max_rounds count)
         self.mentions = []        # seat ids named `@Name` and not yet answered, in order (the mention lane)
         self.mention_turns = 0    # mentioned turns since the person's last line (the mention_max count)
@@ -1224,6 +1227,24 @@ def _reader(rt):
             logger.warning(f"[ROOM] '{rt.chat}': reading a line on {dev} failed: {e}")
 
 
+def _person_turn(rt):
+    """The floor is the person's: wait for their line, unless one already
+    landed that no cue has read (typed during a blind round, or as the round
+    ended): that line IS their turn, so the next round answers it now. Checked
+    on both sides of `waiting` going up, so a line landing at any moment
+    either wakes the wait (_kick) or is seen here, never lost between."""
+    if rt.said > rt.read:
+        return
+    rt.waiting = True
+    if rt.said > rt.read:
+        rt.waiting = False
+        rt.user_turn.clear()                          # _kick may have woken a wait that never began
+        return
+    _publish_state(rt)
+    rt.user_turn.wait()
+    rt.user_turn.clear()
+
+
 def _loop(rt):
     import random
     fresh = True                  # no seat has spoken since the run began or the person last spoke: no pause
@@ -1243,10 +1264,7 @@ def _loop(rt):
                 _mention_run(chat, rt, room)
                 if rt.stop_flag.is_set():
                     break
-                rt.waiting = True
-                _publish_state(rt)
-                rt.user_turn.wait()
-                rt.user_turn.clear()
+                _person_turn(rt)
                 fresh = True
                 continue
             if room['shuffle']:
@@ -1290,10 +1308,7 @@ def _loop(rt):
                 rt.skip -= 1
                 continue
             if room['human_every'] and rt.since_human >= room['human_every']:
-                rt.waiting = True
-                _publish_state(rt)
-                rt.user_turn.wait()
-                rt.user_turn.clear()
+                _person_turn(rt)
                 fresh = True
     finally:
         rt.running, rt.turn, rt.waiting = False, None, False
@@ -1325,6 +1340,8 @@ def _item(rt, fn, who):
 def _turn(chat, seat, rt, prep=None):
     """One seat's turn (_seat_turn) and, after it, the seats her line names:
     on the mention lane (the chain), never herself. Returns her line."""
+    if prep is None:
+        rt.read = rt.said                 # her cue is read now (a line lands only between inbox items)
     text = _seat_turn(chat, seat, rt) if prep is None else _seat_turn(chat, seat, rt, prep)
     if text:
         _, room = _room(chat)
@@ -1387,6 +1404,7 @@ def _blind_round(chat, seats, rt, pause_s=0.0):
     first, then the turns run one after another as ever; the next round is
     where they read each other (`seen` on her row). One seat's trouble is her
     notice, not the round's. True if anyone spoke."""
+    rt.read = rt.said                     # every cue of the round is read now
     preps = []
     for seat in seats:
         try:

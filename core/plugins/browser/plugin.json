@@ -1,0 +1,30 @@
+{
+  "name": "browser",
+  "short_display_name": "Browser",
+  "version": "0.3.0",
+  "description": "Her own Chromium: she opens pages, reads them as text, clicks, types and takes screenshots. MCP callers get a browser of their own.",
+  "author": "sapphire",
+  "icon": "🌐",
+  "priority": 50,
+  "default_enabled": false,
+  "pip_dependencies": ["playwright"],
+  "settingsUI": "auto",
+  "capabilities": {
+    "tools": ["tools/browser.py"],
+    "daemon": {"entry": "daemon.py"},
+    "sockets": [{"path": "view", "handler": "routes/view.py:view"}],
+    "app": {"label": "Browser", "icon": "🌐", "nav": false, "places": ["apps", "stage"],
+            "description": "Watch her browser live and browse together: your clicks and typing go into her tab"},
+    "settings": [
+      {"key": "guard_rails", "type": "boolean", "default": true, "label": "Guard rails for Sapphire",
+       "help": "Her browser stays on the public web (no local network, this machine or files), never types into password fields, downloads nothing, runs no JavaScript of her own, and treats page text as data, not instructions. MCP callers' browsers are not railed."},
+      {"key": "self_login", "type": "boolean", "default": false, "label": "Log in to this Sapphire",
+       "help": "Her browser and MCP callers' browsers open this Sapphire's own web UI already logged in (https://localhost and the UI port). Whoever drives it can then see and change her settings, chats and memory like you can, including private chats while the vault is unlocked. What that browser reads goes to the model of the chat that asked, so a cloud model could see a private chat she opens there."},
+      {"key": "show_window", "type": "boolean", "default": false, "label": "Show the browser window",
+       "help": "Open a visible window on this machine instead of running hidden, so you can watch. Applies on the next browser call."},
+      {"key": "idle_minutes", "type": "number", "default": 15, "label": "Close after idle (minutes)"},
+      {"key": "max_page_chars", "type": "number", "default": 12000, "label": "Page text limit (characters)",
+       "help": "The longest page snapshot one call returns; longer pages are cut, and a part can be read by its ref."}
+    ]
+  }
+}

@@ -112,7 +112,8 @@ class Relay:
 
 def _reset(s):
     try:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))   # RST, not FIN
+        linger = struct.pack('HH' if sys.platform == 'win32' else 'ii', 1, 0)    # Windows: two u_shorts
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)   # RST, not FIN
         s.close()
     except OSError:
         pass

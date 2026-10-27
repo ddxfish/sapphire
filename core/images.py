@@ -329,7 +329,8 @@ def gallery(title, entries, *, view=True):
             continue
         item.update({k: e[k] or '' for k in ('full', 'title', 'page') if k in e})
         items.append(item)
-    marker = "<!--GALLERY:" + json.dumps({'title': title, 'items': items}) + "-->"
+    from core.ui_markers import mint
+    marker = mint("<!--GALLERY:" + json.dumps({'title': title, 'items': items}) + "-->")
     if not view:
         return [], marker
     if len(entries) == 1:

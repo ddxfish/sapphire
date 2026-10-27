@@ -14,13 +14,19 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-# On-demand sets (core/extras.py EXTRAS - the board flasher's esptool) are
-# installed from the page that needs them, on the person's say-so, and are
-# NOT part of the main install: they stand outside the parity rule (2026-10-08).
+# The main install: root requirements.txt is exactly these sets. The voice
+# sets are ALSO in core/extras.py EXTRAS (the setup wizard installs one when
+# it is missing) but stay part of the main install. Any other EXTRAS set (the
+# board flasher's esptool) is on-demand only and stands outside the parity
+# rule (2026-10-08).
+MAIN = {"minimal", "tts", "stt", "wakeword"}
+
+
 def _on_demand():
     try:
         from core import extras
-        return {(ROOT / spec['file']).resolve() for spec in extras.EXTRAS.values() if spec.get('file')}
+        return {(ROOT / spec['file']).resolve() for spec in extras.EXTRAS.values()
+                if spec.get('file') and Path(spec['file']).stem.removeprefix('requirements-') not in MAIN}
     except Exception:
         return set()
 
@@ -41,8 +47,7 @@ def _specs(path: Path) -> dict:
 
 def test_split_files_exist():
     names = {p.name for p in SPLIT}
-    assert {"requirements-minimal.txt", "requirements-tts.txt",
-            "requirements-stt.txt", "requirements-wakeword.txt"} <= names
+    assert {f"requirements-{n}.txt" for n in MAIN} <= names
 
 
 def test_install_split_matches_root():

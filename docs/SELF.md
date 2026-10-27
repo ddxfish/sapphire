@@ -110,6 +110,7 @@ Dashboard widgets
 Mind view
 Chat manager
 Notification center
+Stage beside chat
 ### System
 Settings hot reload
 Auto-updater
@@ -157,6 +158,8 @@ SD server images
 Blender bpy control
 Webcam
 Screenshot
+Own Chromium browser
+Browse together viewer
 MIDI synth music
 3D avatar
 ### Life
@@ -182,6 +185,8 @@ routes HTTP
 settings UI
 web scripts
 app full page
+app stage place
+sockets WebSocket
 sidebar_accordion
 widgets dashboard
 themes

@@ -16,7 +16,7 @@ function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').r
 async function loadApps() {
     try {
         const data = await fetchWithTimeout('/api/apps');
-        appsData = data.apps || [];
+        appsData = (data.apps || []).filter(a => (a.places || ['apps']).includes('apps'));   // a stage-only app has no tile
     } catch (e) {
         console.warn('[Apps] Failed to load apps:', e);
         appsData = [];

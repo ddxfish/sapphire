@@ -166,7 +166,7 @@ def test_invalidator_drops_sessions():
     assert net.session_for('https://example.com/') is not a
 
 def test_invalidator_registered_on_chokepoint():
-    assert net._invalidate in sp._invalidators
+    assert net._invalidate in sp._invalidators.values()
 
 
 # ── cookie policy: plain lane stateless, browser lane bounded ───────────
@@ -234,13 +234,15 @@ def test_lan_redirect_opt_in(monkeypatch):
 # ── guard rail: no new raw requests callers in first-party code ─────────
 
 # Allowlist — phase-2 WAN migration + C fold + alias sweep landed
-# 2026-09-01, so this is down to the irreducible three. user/plugins is
+# 2026-09-01; the irreducible few remain (worker_door joined 2026-10). user/plugins is
 # NOT scanned (third-party band rides the env belt by design).
 _ALLOWED = {
     'core/net.py',                            # the facade itself
     'core/plugins/remembrance/tests/test_ops.py',  # test double
     'core/plugins/email/daemon.py',                # out-of-process daemon — can't
                                               # import core; env belt lane
+    'core/worker_door.py',                         # no Sapphire imports (plugins' standalone
+                                              # servers carry copies); pinned TLS to a paired worker
 }
 _CALL = re.compile(r'\brequests\.(get|post|put|patch|delete|head|request|Session)\s*\(')
 _ALIAS = re.compile(r'\bimport requests as (\w+)')

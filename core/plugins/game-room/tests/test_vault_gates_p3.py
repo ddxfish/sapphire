@@ -75,7 +75,7 @@ class TestProviderGate:
                             ["cloudy", "lanbox"], raising=False)
         from core.chat.llm_providers import provider_registry
         seen = {}
-        sentinel = object()
+        sentinel = SimpleNamespace(model='m')      # the resolver stamps .conversation on what it picks
 
         def fake_first(cfg, order, timeout=240.0, exclude=None, force_privacy=False, **kw):
             seen["force_privacy"] = force_privacy

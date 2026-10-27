@@ -1618,6 +1618,10 @@ class FunctionManager:
         execution_time = time.time() - start_time
         if result is None:
             result = "(no output)"
+        # widget markers survive only if core's builders made them: a marker
+        # written in a web page or an email is the outside drawing in her chat
+        from core.ui_markers import only_minted
+        result = only_minted(result)
 
         self._log_tool_call(function_name, arguments, result, execution_time, success)
 

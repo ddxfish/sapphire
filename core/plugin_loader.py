@@ -399,7 +399,20 @@ class PluginLoader:
                          key=lambda kv: bool((kv[1].get("manifest") or {}).get("requires_plugins")))
         for name, info in ordered:
             if info["enabled"]:
-                if self._load_plugin(name):
+                try:
+                    ok = self._load_plugin(name)
+                except Exception as e:
+                    # one plugin's bad manifest must not stop every plugin after
+                    # it (and plugins_ready) - integrity scout 2026-10-27
+                    logger.error(f"[PLUGINS] {name} failed to load: {e!r}", exc_info=True)
+                    try:
+                        self.unload_plugin(name)           # whatever it registered before the raise
+                    except Exception as ue:
+                        logger.warning(f"[PLUGINS] {name}: cleanup after the failed load: {ue!r}")
+                    self._load_errors.append({"plugin": name, "error": f"Failed to load: {e}",
+                                              "hint": "Check the plugin's plugin.json"})
+                    ok = False
+                if ok:
                     loaded += 1
                 else:
                     # Plugin failed verification/load. Mark in-memory enabled=False
@@ -2109,8 +2122,13 @@ class PluginLoader:
                 # Never kill/claim Sapphire's own ports — a typo'd plugin port
                 # setting must not SIGTERM the web UI, TTS server, or proxy.
                 import config
-                core_ports = {int(getattr(config, k, 0) or 0)
-                              for k in ("WEB_UI_PORT", "TTS_SERVER_PORT", "SOCKS_PORT")} - {0}
+                core_ports = set()
+                for k in ("WEB_UI_PORT", "TTS_SERVER_PORT", "SOCKS_PORT"):
+                    try:
+                        core_ports.add(int(getattr(config, k, 0) or 0))
+                    except (TypeError, ValueError):
+                        pass                       # a junk value (SOCKS fails closed on it) guards no port
+                core_ports -= {0}
                 if port in core_ports:
                     logger.error(f"[PLUGINS] Service port {port} for '{name}' is a Sapphire core port — service NOT started (fix the plugin's port setting)")
                     continue
@@ -2384,7 +2402,14 @@ class PluginLoader:
         registered = []
         # Cache namespaces per file so multiple handlers from the same file share state
         ns_cache = {}
+        if not isinstance(routes, list):
+            logger.warning(f"[PLUGINS] {name}: capabilities.routes must be a list")
+            return
         for route_def in routes:
+            if not isinstance(route_def, dict) or not all(isinstance(route_def.get(k, ""), str)
+                                                          for k in ("method", "path", "handler")):
+                logger.warning(f"[PLUGINS] {name}: a route entry must be {{\"method\", \"path\", \"handler\"}} strings")
+                continue
             method = route_def.get("method", "GET").upper()
             path = route_def.get("path", "")
             handler_ref = route_def.get("handler", "")
@@ -2449,7 +2474,13 @@ class PluginLoader:
         checked the login and the Origin and accepted the socket."""
         found = {}
         ns_cache = {}
+        if not isinstance(sockets, list):
+            logger.warning(f"[PLUGINS] {name}: capabilities.sockets must be a list")
+            return
         for sock in sockets:
+            if not isinstance(sock, dict) or not isinstance(sock.get("handler", ""), str):
+                logger.warning(f"[PLUGINS] {name}: a socket entry must be {{\"path\": ..., \"handler\": \"file.py:fn\"}}")
+                continue
             path = str(sock.get("path", "")).strip("/")
             ref = sock.get("handler", "")
             if not path or not ref:

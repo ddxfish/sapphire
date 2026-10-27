@@ -901,20 +901,21 @@ class TestSSHNoShellTrue:
         spec.loader.exec_module(mod)
         return mod
 
-    def test_run_remote_no_shell_true(self):
-        """_run_remote must not use shell=True (command injection risk)."""
-        import inspect
+    def test_run_remote_runs_an_argv_list_without_a_shell(self, monkeypatch):
+        """What reaches subprocess.run: a list with the command as ONE argv
+        item, never shell=True (command injection risk)."""
         mod = self._load_ssh_tool()
-        source = inspect.getsource(mod._run_remote)
-        assert "shell=True" not in source, "shell=True found in _run_remote — command injection risk"
+        seen = {}
 
-    def test_run_remote_uses_list_command(self):
-        """_run_remote should pass a list to subprocess.run, not a string."""
-        import inspect
-        mod = self._load_ssh_tool()
-        source = inspect.getsource(mod._run_remote)
-        assert "ssh_cmd" in source, "Expected ssh_cmd list variable in _run_remote"
-        assert "subprocess.run" in source, "Expected subprocess.run in _run_remote"
+        def run(cmd, **kw):
+            seen['cmd'], seen['kw'] = cmd, kw
+            return mod.subprocess.CompletedProcess(cmd, 0, 'out', '')
+        monkeypatch.setattr(mod.subprocess, 'run', run)
+        cmd = 'ls; rm -rf /'
+        mod._run_remote({'name': 'box', 'host': 'h', 'user': 'u'}, cmd, 5, raw=True)
+        assert isinstance(seen['cmd'], list) and seen['cmd'][0] == 'ssh'
+        assert seen['cmd'][-1] == cmd
+        assert not seen['kw'].get('shell')
 
 
 # =============================================================================

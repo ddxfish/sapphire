@@ -550,6 +550,9 @@ export function setupImageHandlers() {
     
     // Paste handler
     document.addEventListener('paste', async (e) => {
+        // An app (the stage, Apps page) owns what's pasted into it: a screenshot
+        // pasted into the browser viewer must not ride along with the next chat send.
+        if (e.target?.closest?.('[data-keeps-focus], .app-host-content')) return;
         const items = e.clipboardData?.items;
         if (!items) return;
         

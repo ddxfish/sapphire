@@ -129,3 +129,37 @@ def test_the_live_tool_end_carries_stage_payloads_only():
     assert stage_cards('<!--STAGE:{torn-->') == [] and stage_cards(None) == []
     src = (ROOT / 'core' / 'chat' / 'chat_streaming.py').read_text(encoding='utf-8')
     assert 'stage = stage_cards(result_str)' in src and '"result": clean_result[:500]' in src
+
+
+# --- the 2026-10-27 hunt ---------------------------------------------------------
+
+def test_only_open_stage_makes_a_card():
+    s = _src('shared/stage-marker.js')
+    assert "if (tool !== 'open_stage') return '';" in s
+    assert 'parseStageMarker(askStripped, toolName)' in _src('ui-parsing.js')
+    assert 'parseStageMarker(askStripped, toolName)' in _src('ui-streaming.js')
+    src = (ROOT / 'core' / 'chat' / 'chat_streaming.py').read_text(encoding='utf-8')
+    assert "stage_cards(result_str) if function_name == 'open_stage' else None" in src
+
+
+def test_a_paste_into_an_app_stays_in_the_app():
+    assert "closest?.('[data-keeps-focus], .app-host-content')" in _src('handlers/send-handlers.js')
+
+
+def test_the_dragged_width_is_a_variable_the_phone_stack_ignores():
+    assert 'flex: 0 1 var(--stage-w, 58%)' in _src('style.css')
+    s = _src('surface/stage.js')
+    assert 'flexBasis' not in s and "setProperty('--stage-w'" in s
+
+
+def test_the_stage_closes_before_a_private_transcript_paints():
+    cm = _src('features/chat-manager.js')
+    assert cm.index("'chat-switching'") < cm.index('const len = await refresh(false);')
+    assert "addEventListener('chat-switching'" in _src('surface/stage.js')
+
+
+def test_open_stage_saves_nothing_for_a_private_chat_and_ctx_chat_stays_current():
+    s = _src('surface/stage.js')
+    body = s.split('export async function openStage')[1].split('export function closeStage')[0]
+    assert body.index('if (chat.private)') < body.index('sessionStorage.setItem')
+    assert 'get chat() {' in s

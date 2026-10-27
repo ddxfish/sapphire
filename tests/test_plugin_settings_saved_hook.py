@@ -137,3 +137,23 @@ def test_settings_delete_without_stored_file_is_ok(client, mock_system, monkeypa
                  headers={"X-CSRF-Token": csrf})
     assert r.status_code == 200
     assert r.json().get("status") == "success"
+
+
+def test_settings_put_reaches_daemon_on_settings_saved(client, mock_system, monkeypatch, tmp_path):
+    """The daemon hook reads the loader's live entry: get_plugin_info() is a
+    clean copy without daemon_module, so it never fired (2026-10-26)."""
+    from unittest.mock import MagicMock
+    c, csrf = client
+    from core.routes import plugins as plug
+    from core.plugin_loader import plugin_loader
+    monkeypatch.setattr(plug, "_require_known_plugin", lambda n: None)
+    monkeypatch.setattr(plug, "USER_PLUGIN_SETTINGS_DIR", tmp_path)
+    daemon = MagicMock()
+    monkeypatch.setitem(plugin_loader._plugins, "fakedaemon", {"daemon_module": daemon})
+
+    r = c.put("/api/webui/plugins/fakedaemon/settings",
+              json={"settings": {"camera": True}},
+              headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 200
+    daemon.on_settings_saved.assert_called_once()
+    assert daemon.on_settings_saved.call_args[0][0].get("camera") is True

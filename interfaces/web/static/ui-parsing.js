@@ -728,7 +728,7 @@ const renderToolResult = (el, part) => {
     const { groups: fileGroups, text: filesStripped } = parseFilesMarker(galleryStripped);
     // A question card (ask_user) rides its own marker (shared/ask-marker.js).
     const { cards: askCards, text: askStripped } = parseAskMarker(filesStripped);
-    const { cards: stageCards, text: fullResult } = parseStageMarker(askStripped);
+    const { cards: stageCards, text: fullResult } = parseStageMarker(askStripped, toolName);
 
     // Get truncation limit based on tool
     const maxLen = toolName === 'web_search' ? 1000 :

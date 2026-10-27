@@ -42,12 +42,26 @@ _install_lock = threading.Lock()
 
 def _move_dir(src, dst):
     """Directory move for the install swap: rename when possible, copy-move
-    when user/ spans filesystems (symlinked setups)."""
-    try:
-        os.rename(src, dst)
-    except OSError:
-        import shutil
-        shutil.move(str(src), str(dst))
+    only when user/ spans filesystems (symlinked setups). On Windows a rename
+    fails while anything inside is open (a log, a .pyd, Defender scanning):
+    retried, and never answered with copy-then-delete, whose delete hits the
+    same lock halfway and leaves the live plugin mutilated (windows scout
+    2026-10-27). A rename that can't happen raises with both trees whole."""
+    import errno
+    import time as _time
+    for attempt in range(6):
+        try:
+            os.rename(src, dst)
+            return
+        except OSError as e:
+            cross = e.errno == errno.EXDEV or getattr(e, 'winerror', 0) == 17   # ERROR_NOT_SAME_DEVICE
+            if cross:
+                break
+            if attempt == 5:
+                raise
+            _time.sleep(0.5)
+    import shutil
+    shutil.move(str(src), str(dst))
 
 
 def _staging_signature_gate(staging_dir):
@@ -1210,6 +1224,9 @@ def install_plugin(
                 # never deleted before its verified replacement is in place.
                 if prev.exists():
                     _rmtree_robust(prev)
+                if prev.exists():                  # a locked file kept it: moving into it would nest
+                    raise RuntimeError(f"couldn't clear the previous copy of {name} (a file in it is in use); "
+                                       f"the installed version is untouched")
                 _move_dir(dest, prev)
                 try:
                     _move_dir(staging, dest)
@@ -1754,8 +1771,9 @@ def _propagate_settings_change(plugin_name: str, effective: dict):
     # Opt-in, same shape as the provider hook: daemon.on_settings_saved(settings).
     try:
         from core.plugin_loader import plugin_loader as _pl
-        _info = _pl.get_plugin_info(plugin_name) or {}
-        _daemon = _info.get("daemon_module")
+        # The live entry: get_plugin_info() is a clean copy without the module,
+        # so this hook never fired for anyone until 2026-10-26.
+        _daemon = (_pl._plugins.get(plugin_name) or {}).get("daemon_module")
         if _daemon is not None and hasattr(_daemon, "on_settings_saved"):
             _daemon.on_settings_saved(dict(effective))
     except Exception as e:

@@ -6,7 +6,8 @@
 # into the interpreter Sapphire runs in, on the person's say-so, from the
 # page that needs it: the Devices page's flasher asks for `flash` the moment
 # someone picks "the computer Sapphire runs on". TTS, STT and the wake word
-# are NOT here: they stay part of the main install.
+# are here too, for the setup wizard to fill a gap, but they stay part of the
+# main install (requirements.txt carries them; tests/test_requirements_parity.py).
 #
 # Only the sets named below can be installed, plus one set PER PLUGIN built
 # from its own manifest (`plugin:<name>`, 2026-10-08): the plugin's hard
@@ -233,7 +234,9 @@ def start(name):
 
 def _install(job, spec):
     from core import notify
-    env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONUNBUFFERED='1')
+    # PYTHONIOENCODING: pip writes in the console's code page (cp1252 on
+    # Windows) unless told otherwise, and the pipe below reads utf-8.
+    env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"extras-{job['name'].replace(':', '-')}.log"
     try:

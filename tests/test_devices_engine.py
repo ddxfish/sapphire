@@ -814,24 +814,29 @@ def test_a_crash_is_a_500_without_its_detail(host):
 def test_the_routes_are_all_behind_login():
     """Every devices route must carry require_login. A route without it would
     hand the device list, and the Try button, to anyone on the network.
-    The SEVEN exceptions are the doors a device opens with its own key: its
-    wake, what it heard, a press of its button, a job it asks of her (stop,
-    backup: voice.ASKS), what it typed and the pull of her reply, and what
-    its light should show (tests/test_devices_voice.py,
-    test_devices_wake.py, test_devices_buttons.py and test_devices_text_lane.py
-    prove that lock on them)."""
+    The ELEVEN exceptions are the doors a device opens with its own key: its
+    wake, what it heard, a piece of its room, a press of its button, a job it
+    asks of her (stop, backup: voice.ASKS), what it typed and the pull of her
+    reply, its chat picker (the list, the pick, the history) and what its
+    light should show (tests/test_devices_voice.py, test_devices_wake.py,
+    test_devices_buttons.py and test_devices_text_lane.py prove that lock on
+    them). Each one's first act is _device_key."""
+    import inspect
     from core.auth import require_login
     found = [r for r in routes.router.routes if r.path.startswith('/api/devices')]
-    assert len(found) == 30            # + the pick list's setup door (found/{driver}/do, 2026-10-12), + a job a board asks for (2026-10-11), + add and remove a connection, + the firmware sources (2026-10-10), + provision, here, firmware index + part, flash ports/chip/start/status/ask/close (2026-10-07), a firmware file of the user's own and a press (2026-10-09)
+    assert len(found) == 37            # + room, chats, chat, history (the glass, 2026-10-25), + the pick list's setup door (found/{driver}/do, 2026-10-12), + a job a board asks for (2026-10-11), + add and remove a connection, + the firmware sources (2026-10-10), + provision, here, firmware index + part, flash ports/chip/start/status/ask/close (2026-10-07), a firmware file of the user's own and a press (2026-10-09)
     assert not [r.path for r in routes.router.routes if r.path.startswith('/api/body')]
     open_doors = []
     for r in found:
         deps = [d.call for d in r.dependant.dependencies]
         if require_login not in deps:
             open_doors.append(r.path)
+            assert '_device_key(' in inspect.getsource(r.endpoint), f"{r.path} is open without the device's key"
     assert open_doors == ['/api/devices/{device_id}/wake', '/api/devices/{device_id}/voice',
+                          '/api/devices/{device_id}/room',
                           '/api/devices/{device_id}/text', '/api/devices/{device_id}/press', '/api/devices/{device_id}/ask',
-                          '/api/devices/{device_id}/text',
+                          '/api/devices/{device_id}/chats', '/api/devices/{device_id}/chat',
+                          '/api/devices/{device_id}/history', '/api/devices/{device_id}/text',
                           '/api/devices/{device_id}/events']
 
 

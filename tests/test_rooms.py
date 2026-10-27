@@ -1032,22 +1032,22 @@ def test_a_blind_round_cues_every_seat_before_anyone_speaks(world, monkeypatch):
     assert _wait(lambda: len(turns) == 1) and rooms.state(chat)['turn'] == a['id']
     rooms.say(chat, 'typed while a speaks')                             # lands after the round, like any mid-round line
     gate.set()
-    assert _wait(lambda: rooms.state(chat)['waiting'])
+    # that line IS the person's turn: no cue of round 1 read it, so round 2 starts at once to
+    # answer it instead of waiting for a second message (Krem's ruling A, 2026-10-27)
+    assert _wait(lambda: len(cues[a['id']]) == 2)
     assert [r['speaker'] for r in rows] == ['user', a['id'], b['id'], 'user']
-    assert turns == [(a['id'], a['id']), (b['id'], b['id'])]             # one after another, each the one speaking
-    # both cues were read before either spoke: the person's line, not the other seat's answer
+    assert turns[:2] == [(a['id'], a['id']), (b['id'], b['id'])]         # one after another, each the one speaking
+    # both cues of round 1 were read before either spoke: the person's line, not the other seat's answer
     assert cues[a['id']][0] == 'Krem: Boats?\n\n(Your turn, Sapphire.)'
     assert cues[b['id']][0] == 'Krem: Boats?\n\n(Your turn, Sapphire 2.)'
     assert rows[1]['seen'] == 1 and rows[2]['seen'] == 1                 # where each cue left off
-    # the next round is where they read each other (and the line typed meanwhile)
-    rooms.say(chat, 'More.')
-    assert _wait(lambda: len(cues[a['id']]) == 2)
     st = rooms.state(chat)
-    assert st['turn'] == a['id'] and st['waiting'] is False              # the wait of round 1 is over (it used to linger)
+    assert st['turn'] == a['id'] and st['waiting'] is False
     gate2.set()
+    # round 2 is where they read each other and the line typed meanwhile; then the floor is the person's
     assert _wait(lambda: len(cues[b['id']]) == 2 and rooms.state(chat)['waiting'])
-    assert cues[a['id']][1] == f"Sapphire 2: {b['id']} says\n\nKrem: typed while a speaks\n\nKrem: More.\n\n(Your turn, Sapphire.)"
-    assert cues[b['id']][1] == f"Sapphire: {a['id']} says\n\nKrem: typed while a speaks\n\nKrem: More.\n\n(Your turn, Sapphire 2.)"
+    assert cues[a['id']][1] == f"Sapphire 2: {b['id']} says\n\nKrem: typed while a speaks\n\n(Your turn, Sapphire.)"
+    assert cues[b['id']][1] == f"Sapphire: {a['id']} says\n\nKrem: typed while a speaks\n\n(Your turn, Sapphire 2.)"
     rooms.stop(chat)
     assert _wait(lambda: not rooms.state(chat)['running'])
     # the sidebar's speaking order offers it (not the gear, which nobody found); the rules carry it

@@ -11,6 +11,8 @@ twice (and the FILES one nearly wasn't).
 """
 import json
 import re
+import threading
+import time
 
 UI_MARKER_PATTERN = (r'<<[A-Z]+::[^>]+>>\s*'
                      r'|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
@@ -24,6 +26,46 @@ UI_MARKER_RE = re.compile(UI_MARKER_PATTERN)
 # markers go. IMG, GALLERY, FILES and ASK ride along as bounded noise within
 # the one run; the history read path cleans them before the next run's wire.
 UI_MARKER_KEEP_IMG_RE = re.compile(r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*')
+
+
+# --- provenance: a widget marker in a tool result must be one core MADE ------
+# A tool's text can carry words from outside - a web page, a search hit, an
+# email body. Written as `<!--ASK:{...}-->`, those words would draw her own
+# question card in the user's chat (or a GALLERY tile hot-linking a stranger's
+# server) while her copy, stripped of markers, never shows it (chaos scout
+# 2026-10-27). So the builders (ask_card, attachments, images.gallery,
+# open_stage) mint() what they make, and execute_function keeps only minted
+# markers. Process-wide, not per-context: a builder may run on a worker thread.
+_WIDGET_RE = re.compile(r'<!--(?:GALLERY|FILES|ASK|STAGE):[^\n]*?-->')
+_MINT_TTL = 1800           # seconds a made marker stays good: longer than any one tool call
+_minted = {}               # marker text -> when it was made
+_mint_lock = threading.Lock()
+
+
+def mint(marker: str) -> str:
+    """Record a marker core built; returns it unchanged."""
+    if marker:
+        now = time.monotonic()
+        with _mint_lock:
+            _minted[marker] = now
+            if len(_minted) > 512:
+                for k in [k for k, t in _minted.items() if now - t > _MINT_TTL]:
+                    del _minted[k]
+    return marker
+
+
+def only_minted(result):
+    """A tool's result with every widget marker core didn't make removed
+    (str, or the {'text', 'images'} dict shape)."""
+    def clean(text):
+        if not isinstance(text, str) or '<!--' not in text:
+            return text
+        now = time.monotonic()
+        with _mint_lock:
+            return _WIDGET_RE.sub(lambda m: m.group(0) if now - _minted.get(m.group(0), -1e9) < _MINT_TTL else '', text)
+    if isinstance(result, dict) and 'text' in result:
+        return {**result, 'text': clean(result['text'])}
+    return clean(result)
 
 
 def has_marker(text) -> bool:

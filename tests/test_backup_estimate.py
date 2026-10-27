@@ -155,3 +155,15 @@ def test_backup_filter_skips_symlinks():
     reg = tarfile.TarInfo("user/history/chat.db")
     reg.type = tarfile.REGTYPE
     assert _backup_filter(reg) is not None
+
+
+def test_db_walks_skip_the_privacy_floor(tmp_path, monkeypatch):
+    # Chromium's own .db files under user/browser are open in Chromium: no
+    # checkpoint, snapshot or VACUUM may touch them (privacy scout 2026-10-27)
+    user = tmp_path / "user"
+    (user / "history").mkdir(parents=True)
+    (user / "browser" / "sapphire" / "Default").mkdir(parents=True)
+    (user / "history" / "chat.db").write_bytes(b"")
+    (user / "browser" / "sapphire" / "Default" / "heavy_ad_intervention_opt_out.db").write_bytes(b"")
+    monkeypatch.setattr(backup_manager, "user_dir", user)
+    assert [p.name for p in backup_manager._user_dbs()] == ["chat.db"]

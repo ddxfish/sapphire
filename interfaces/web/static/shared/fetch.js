@@ -1,13 +1,20 @@
 // /static/shared/fetch.js - Shared fetch utility with timeout and auth handling
 
-// Session ID for SSE origin tracking - generated once per browser tab
+// Session ID for SSE origin tracking - generated once per browser tab.
+// Storage blocked (site data off: the read throws) gets one per page load,
+// rather than a throw here taking down every module that imports this one.
 const getSessionId = () => {
-  let sid = sessionStorage.getItem('sapphire_session_id');
-  if (!sid) {
-    sid = 'ses_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    sessionStorage.setItem('sapphire_session_id', sid);
+  const fresh = () => 'ses_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  try {
+    let sid = sessionStorage.getItem('sapphire_session_id');
+    if (!sid) {
+      sid = fresh();
+      sessionStorage.setItem('sapphire_session_id', sid);
+    }
+    return sid;
+  } catch {
+    return fresh();
   }
-  return sid;
 };
 
 // Export for SSE filtering
