@@ -815,12 +815,13 @@ class ContinuityExecutor:
             # Read history from target chat WITHOUT switching active chat.
             # The task's context_limit (when set) governs the history trim
             # too — before this, the global CONTEXT_LIMIT silently capped
-            # long-session tasks (the librarian's 128K nights) at read time.
-            # 0 / missing -> None -> the global CONTEXT_LIMIT inside the reader
-            # (a literal 0 would mean "never trim" there — 2026-09-26).
+            # long-session tasks (the librarian's 128K nights) - at send time now:
+            # the whole chat is read here (0 = no trim in the reader) and ExecCtx
+            # fits it per call against the real window (core/chat/budget.py).
+            # Trimmed here too, the cut point drifted and her note undercounted.
             history_messages = session_manager.read_chat_messages(
                 target_chat, provider=task_settings.get("provider"),
-                context_limit=task_settings.get("context_limit") or None
+                context_limit=0
             )
 
             try:

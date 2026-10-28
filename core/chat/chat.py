@@ -626,10 +626,15 @@ class LLMChat:
         # build_ghost_message happy (its hook firing tolerates a None system).
         from core.ghost_messages import build_ghost_message
         chat_settings_for_ghost = self.session_manager.get_chat_settings()
+        try:
+            _ghost_chat = self.session_manager._effective_chat_name()
+        except Exception:
+            _ghost_chat = None
         ghost_text = build_ghost_message(
             getattr(self, 'system', None),
             chat_settings_for_ghost,
             user_input or "",
+            chat_name=_ghost_chat if isinstance(_ghost_chat, str) else None,
         )
 
         messages = [

@@ -14,6 +14,7 @@ When creating or modifying plugins:
 - Voice commands = pre_chat hooks with trigger matching, `bypass_llm: true` for instant response
 - Routes = custom HTTP endpoints at `/api/plugin/{name}/{path}`; handler is called with keyword args (each path param + `body`, `settings`, `credentials`, `query`, `request`) — END the signature with `**_` or it raises TypeError. Auth+CSRF+rate-limit enforced by framework
 - Schedule = cron tasks calling `run(event)` handler, event has `system`, `config`, `task`, `plugin_state`
+- Idle clock = `core.idle.minutes(chat=None, person=False)`: minutes since the last message in a chat (or any chat); one clock for plugins, her idle line, and the context budgeter
 - Web settings = `web/index.js` using `registerPluginSettings()`, served at `/plugin-web/{name}/`
 - Plugin scripts = `web/main.js` auto-loaded on app startup, listen for `sapphire:tool_start` DOM events
 - Daemon = background thread with `start(plugin_loader, settings)` / `stop()`, emits events via `plugin_loader.emit_daemon_event(source_name, json_payload)`

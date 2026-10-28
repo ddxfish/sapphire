@@ -99,7 +99,7 @@ def test_the_key_never_reaches_a_provider():
 
 def test_an_old_page_view_is_one_line_once_a_later_one_exists():
     msgs = [user('look'), *page(1), {'role': 'assistant', 'content': 'saw it'}, user('next'), *page(2)]
-    out, n = budget._expire(msgs, len(msgs) - 3, expiry_of({'browser_act': VIEW}))
+    out, n, _ = budget._expire(msgs, len(msgs) - 3, expiry_of({'browser_act': VIEW}))
     assert n == 1
     assert out[2]['content'].startswith('[browser_act result left out of your view to save room: https://site/1 - Page 1')
     assert out[2]['content'].endswith('browser_look to read the page again]')
@@ -110,7 +110,7 @@ def test_an_old_page_view_is_one_line_once_a_later_one_exists():
 def test_the_live_turn_keeps_its_views_unless_pressed():
     msgs = [user('go'), *page(1), *page(2)]
     assert budget._expire(msgs, 0, expiry_of({'browser_act': VIEW}))[1] == 0
-    out, n = budget._expire(msgs, 0, expiry_of({'browser_act': VIEW}), pressure=True)
+    out, n, _ = budget._expire(msgs, 0, expiry_of({'browser_act': VIEW}), pressure=True)
     assert n == 1 and out[2]['content'].startswith('[browser_act result left out')
     assert budget._expire(out, 0, expiry_of({'browser_act': VIEW}), pressure=True)[1] == 0   # a stub is never stubbed again
 
@@ -130,7 +130,7 @@ def test_never_and_undeclared(monkeypatch):
     table = {'read_self': parse('never', 'read_self')}
     assert budget._expire(msgs, len(msgs), expiry_of(table))[1] == 0
     monkeypatch.setattr(config, 'TOOL_EXPIRES_AFTER', 2)
-    out, n = budget._expire(msgs, len(msgs), expiry_of(table))
+    out, n, _ = budget._expire(msgs, len(msgs), expiry_of(table))
     assert n == 1 and out[2]['content'].startswith('https://site/1') and out[4]['content'].startswith('[mystery result')
 
 
@@ -139,7 +139,7 @@ def test_a_stubbed_results_pictures_go_with_it():
         {'type': 'text', 'text': 'note'}, {'type': 'image', 'data': 'x', 'id': 'img1'}]},
         {'role': 'assistant', 'content': 'saw'}, user('again'), *page(2)]
     msgs[2] = dict(msgs[2], content=msgs[2]['content'] + '\n<<IMG::tool:img1>>')
-    out, _ = budget._expire(msgs, len(msgs) - 2, expiry_of({'browser_act': VIEW}))
+    out, _, _ = budget._expire(msgs, len(msgs) - 2, expiry_of({'browser_act': VIEW}))
     assert not any(m.get('_inject') for m in out)
 
 
@@ -329,3 +329,304 @@ def test_both_routes_read_the_one_meter():
     js = (ROOT / 'interfaces' / 'web' / 'static' / 'api.js').read_text()
     assert "getElementById('context-notch')" in js
     assert '<div id="context-notch"></div>' in (ROOT / 'interfaces' / 'web' / 'static' / 'surface' / 'chat-mode.js').read_text()
+
+
+# --- the bug hunt's fixes (2026-10-27) ------------------------------------------------
+
+def pic(img_id):
+    return {'role': 'user', '_inject': True, 'content': [{'type': 'text', 'text': 'note'},
+                                                          {'type': 'image', 'data': 'x', 'id': img_id}]}
+
+
+def shot(i, img):
+    a, t = page(i, 400)
+    return [a, dict(t, content=t['content'] + f'\n<<IMG::tool:{img}>>'), pic(img)]
+
+
+def test_a_dropped_picture_row_never_moves_the_live_turn_into_history():
+    """The hunt's HIGH (two scouts): _expire dropped a picture row and the live
+    turn's index went stale - the person's own message became a cuttable span,
+    the request went out with the system prompt alone."""
+    msgs = [{'role': 'system', 'content': 's'}, user('browse ' + 'w ' * 50)]
+    for i in range(6):
+        msgs += shot(i, f'img{i}')
+    msgs.append({'role': 'assistant', 'content': 'done'})
+    live = user('big paste ' + 'p ' * 3000)
+    msgs.append(live)
+    f = budget.fit(msgs, None, Prov(6000), 'k', 'm', 1024, chat='c', live=live,
+                   expiry=expiry_of({'browser_act': VIEW}))
+    assert f.messages[-1]['content'].endswith(live['content'])        # the person's message is sent
+    assert f.messages[0]['role'] == 'system' and len(f.messages) >= 2
+    ids = [m.get('tool_call_id') for m in f.messages if m.get('role') == 'tool']
+    calls = [c['id'] for m in f.messages for c in (m.get('tool_calls') or [])]
+    assert ids == calls
+
+
+def test_a_full_cut_still_tells_her():
+    msgs, live = chat_of(40)
+    live['content'] = 'now ' + 'x ' * 4200
+    f = budget.fit(msgs, None, Prov(6000), 'k', 'm', 1024, chat='c', live=live)
+    assert f.out_of_view == 40
+    assert f.messages[1]['content'].startswith('[Earlier in this chat: the first 40 turns are out of your view')
+    assert f.messages[1]['content'].endswith(live['content'])
+
+
+def claude_result(call_id, text):
+    return {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': call_id, 'content': text}]}
+
+
+def test_claudes_tool_results_are_counted_and_are_not_turns():
+    """Claude's live result rows (role user, tool_result blocks) counted 0
+    tokens and each one counted as a person's turn."""
+    r = claude_result('c1', 'word ' * 2000)
+    assert budget._content_tokens(r['content'], 'claude') > 1500
+    assert not budget._is_person(r) and budget._is_result(r)
+    assert budget._spans([user('q'), {'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'c1'}]}, r], 0, 3) == [(0, 3)]
+    rule = expiry_of({'get_website': parse(1, 'get_website')})
+    msgs = [user('q'), {'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'c1', 'function': {'name': 'get_website'}}]},
+            claude_result('c1', 'page'), {'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'c2', 'function': {'name': 'get_website'}}]},
+            claude_result('c2', 'page')]
+    assert budget._expire(msgs, 0, rule)[1] == 0                       # the rounds of one turn are not turns
+
+
+def test_claudes_live_superseded_views_go_under_pressure():
+    a1 = {'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'c1', 'function': {'name': 'browser_act'}}]}
+    a2 = {'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'c2', 'function': {'name': 'browser_act'}}]}
+    msgs = [user('go'), a1, claude_result('c1', 'https://x\n' + 'w ' * 50), a2, claude_result('c2', 'https://y')]
+    out, n, _ = budget._expire(msgs, 0, expiry_of({'browser_act': VIEW}), pressure=True)
+    assert n == 1 and out[2]['content'][0]['content'].startswith('[browser_act result left out of your view')
+    assert out[2]['content'][0]['tool_use_id'] == 'c1'
+
+
+def test_a_tool_that_is_not_loaded_never_expires(monkeypatch):
+    """Krem: an unloaded or unknown tool never gets the global setting (a
+    classic memory tool after the move to Mind is still memory)."""
+    monkeypatch.setattr(config, 'TOOL_EXPIRES_AFTER', 1)
+    msgs = [user('a'), *page(1, name='search_knowledge'), user('b'), user('c')]
+    assert budget._expire(msgs, len(msgs), lambda n: False)[1] == 0
+    assert budget._expire(msgs, len(msgs), lambda n: None)[1] == 1
+
+
+def test_notepad_never_expires():
+    assert re.search(r"^TOOL_EXPIRES = 'never'", (ROOT / 'functions' / 'notepad.py').read_text(), re.M)
+
+
+def test_a_new_window_starts_the_cut_point_over():
+    msgs, live = chat_of(200)
+    budget.fit(msgs, None, Prov(8000), 'k', 'm', 1024, chat='c', live=live)
+    small_cut = budget._watermark['c'][0]
+    f = budget.fit(msgs, None, Prov(40000), 'k', 'm', 1024, chat='c', live=live)
+    assert f.out_of_view < small_cut                                # a bigger model sees more again
+
+
+def test_deleted_turns_under_the_cut_point_start_it_over():
+    msgs, live = chat_of(100)
+    budget.fit(msgs, None, Prov(8000), 'k', 'm', 1024, chat='c', live=live)
+    held = budget._watermark['c'][0]
+    fewer = msgs[:1] + msgs[1 + 2 * 50:]                            # 50 turns left: fewer than were cut, more than fit
+    assert held >= 50
+    f = budget.fit(fewer, None, Prov(8000), 'k', 'm', 1024, chat='c', live=live)
+    assert 0 < f.out_of_view < 50                                   # recomputed, not everything
+
+
+def test_a_small_max_tokens_is_honoured_not_refused():
+    msgs, live = chat_of(20)
+    f = budget.fit(msgs, None, Prov(8000), 'k', 'm', 512, live=live)
+    assert f.max_tokens <= 512 and f.estimate + f.max_tokens <= 8000
+
+
+def test_max_tokens_never_overruns_our_own_limit(monkeypatch):
+    monkeypatch.setattr(config, 'CONTEXT_LIMIT', 16000)
+    msgs, live = chat_of(60)
+    f = budget.fit(msgs, None, Prov(None), 'k', 'm', 8192, live=live)
+    assert f.estimate + f.max_tokens <= 16000
+
+
+def test_the_log_never_names_a_private_chat(caplog):
+    msgs, live = chat_of(100)
+    with caplog.at_level('INFO', logger='core.chat.budget'):
+        budget.fit(msgs, None, Prov(8000), 'k', 'm', 1024, chat='my secret chat', live=live, label='__private__')
+    assert 'my secret chat' not in caplog.text and '__private__' in caplog.text
+
+
+def test_tighten_asks_the_server_again():
+    class P(Prov):
+        forgot = False
+
+        def forget_window(self):
+            P.forgot = True
+    budget.tighten('k', 'm', P())
+    assert P.forgot
+
+
+def test_clearing_renaming_deleting_a_chat_forgets_its_fit():
+    src = (ROOT / 'core' / 'chat' / 'history.py').read_text()
+    for fn in ('def clear_chat', 'def rename_chat', 'def delete_chat'):
+        body = src[src.index(fn):src.index(fn) + 1200]
+        assert '_forget_fit(' in body, fn
+
+
+def test_the_engine_anchors_a_continue_on_its_question_and_labels_the_log():
+    src = (ROOT / 'core' / 'chat' / 'chat_streaming.py').read_text()
+    assert '_live = next((m for m in reversed(messages[:-1]) if budget._is_person(m)), _live)' in src
+    assert 'label=_label if isinstance(_label, str) else None' in src
+    assert 'budget.tighten(provider_key, effective_model, provider)' in src and 'and _fit.window' in src
+    assert src.count('budget.learn(_fit') == 2
+    assert "else False   # False: not loaded, never expires" in src
+
+
+def test_claudes_history_cache_skips_the_rag_row():
+    from core.chat.llm_providers.claude import ClaudeProvider
+    from core.ghost_messages import _ENVELOPE_HEADER
+    msgs = [{'role': 'user', 'content': 'old'}, {'role': 'assistant', 'content': 'last history'},
+            {'role': 'user', 'content': _ENVELOPE_HEADER + ' time'},
+            {'role': 'user', 'content': '[Reference Documents]\n\ndoc'}, {'role': 'user', 'content': 'new'}]
+    ClaudeProvider._apply_history_cache_control(None, msgs, '5m')
+    assert msgs[1]['content'][0].get('cache_control') and isinstance(msgs[3]['content'], str)
+
+
+def test_the_window_probe_keeps_the_last_real_answer_and_reads_lan_names(monkeypatch):
+    from core.chat.llm_providers import openai_compat as oc
+    p = oc.OpenAICompatProvider({'provider': 'openai', 'base_url': 'http://gpu.lan:1234/v1', 'model': 'm', 'api_key': 'x'})
+    tag = oc.OpenAICompatProvider({'provider': 'openai', 'base_url': 'http://100.101.1.2:11434/v1', 'model': 'llama3', 'api_key': 'x'})
+    answers = iter([{'data': [{'id': 'm', 'state': 'loaded', 'type': 'llm', 'loaded_context_length': 32768}]},
+                    {'data': [{'id': 'm', 'state': 'not-loaded', 'type': 'llm'}]}])
+
+    class R:
+        status_code = 200
+
+        def __init__(self, j):
+            self.j = j
+
+        def json(self):
+            return self.j
+
+    class C:
+        def get(self, url, **kw):
+            return R(next(answers))
+    monkeypatch.setattr(oc, '_shared_http_client', lambda base: C())
+    oc._WINDOW.clear()
+    oc._LAST_WINDOW.clear()
+    assert p.context_window() == 32768
+    p.forget_window()
+    assert p.context_window() == 32768                    # unloaded while idle: the last real window stands
+    ollama = iter([None, None, {'models': [{'name': 'llama3:latest', 'context_length': 8192}]}])
+
+    class C2:
+        def get(self, url, **kw):
+            j = next(ollama)
+            r = R(j)
+            r.status_code = 200 if j else 404
+            return r
+    monkeypatch.setattr(oc, '_shared_http_client', lambda base: C2())
+    assert tag.context_window() == 8192                   # Tailscale address, untagged Ollama name
+
+
+# --- the idle clock and the warm cache (Sapphire's ask, 2026-10-27) -------------------
+
+import time as _time
+
+
+def test_the_idle_clock_counts_anyone_and_the_person(monkeypatch):
+    from core import idle
+    monkeypatch.setattr(idle, '_any', {}), monkeypatch.setattr(idle, '_person', {})
+    monkeypatch.setattr(idle, '_seeded', set()), monkeypatch.setattr(idle, '_all_seeded', True)
+    now = _time.time()
+    idle.touch('c', 'user', at=now - 3600)
+    idle.touch('c', 'assistant', at=now - 600)
+    assert 9.9 < idle.minutes('c') < 10.1 and 59.9 < idle.minutes('c', person=True) < 60.1
+    idle.touch('d', 'assistant', at=now - 60)
+    assert idle.minutes() < 1.1                                    # app-wide: the latest anywhere
+    idle.forget('c', 'c2')
+    assert idle.minutes('c2', person=True) > 59 and 'c' not in idle._any
+    assert idle.words(45) == '45 min' and idle.words(130) == '2 h 10 min' and idle.words(3000) == '2 days 2 h'
+
+
+def test_the_idle_clock_seeds_from_stored_rows(monkeypatch):
+    from core import idle
+    from datetime import datetime, timedelta
+    monkeypatch.setattr(idle, '_any', {}), monkeypatch.setattr(idle, '_person', {})
+    monkeypatch.setattr(idle, '_seeded', set()), monkeypatch.setattr(idle, '_all_seeded', False)
+    old = (datetime.now() - timedelta(hours=3)).isoformat()
+
+    class SM:
+        def last_activity(self, chat=None):
+            return {'quiet': (old, old)}
+    import types
+    sysmod = types.SimpleNamespace(llm_chat=types.SimpleNamespace(session_manager=SM()))
+    import core.api_fastapi as api
+    monkeypatch.setattr(api, 'get_system', lambda: sysmod)
+    assert 179 < idle.minutes('quiet') < 181
+
+
+def test_her_ghost_line_tells_a_long_quiet(monkeypatch):
+    from core import idle, ghost_messages
+    monkeypatch.setattr(idle, '_any', {'c': _time.time() - 7800}), monkeypatch.setattr(idle, '_seeded', {'c'})
+    monkeypatch.setattr(config, 'IDLE_NOTICE_MINUTES', 60, raising=False)
+    g = ghost_messages.build_ghost_message(None, {'spice_enabled': False}, '', chat_name='c')
+    assert 'Quiet here: 2 h 10 min since the last message in this chat.' in g
+    monkeypatch.setattr(config, 'IDLE_NOTICE_MINUTES', 200, raising=False)
+    assert ghost_messages.build_ghost_message(None, {'spice_enabled': False}, '', chat_name='c') is None
+    monkeypatch.setattr(config, 'IDLE_NOTICE_MINUTES', 0, raising=False)
+    assert ghost_messages.build_ghost_message(None, {'spice_enabled': False}, '', chat_name='c') is None
+
+
+def test_history_stamps_the_clock_where_messages_land():
+    src = (ROOT / 'core' / 'chat' / 'history.py').read_text()
+    assert src.count('_landed(') >= 5                              # the helper + user, assistant, pair, by-name append
+    assert '_idle_moved(old_name, safe_name)' in src and 'def last_activity(self' in src
+
+
+def browsing(n_views, extra=0, size=300):
+    msgs = [{'role': 'system', 'content': 's'}, user('browse')]
+    for i in range(n_views):
+        msgs += page(i, size)
+    msgs.append({'role': 'assistant', 'content': 'done'})
+    live = user('next ' + 'n ' * extra)
+    return msgs + [live], live
+
+
+def test_a_warm_cache_holds_new_stubs_until_cold():
+    """Sapphire: a stub during the cache's life rewrites the cached prompt.
+    New ones wait for cold (or for room)."""
+    rule = expiry_of({'browser_act': VIEW})
+    msgs, live = browsing(2)
+    f1 = budget.fit(msgs, None, Prov(None), 'k', 'm', 1024, chat='c', live=live, expiry=rule)
+    budget.forget('c')
+    budget._record('c', ('k', 'm'), set())                         # a send a moment ago, nothing stubbed
+    more, live2 = browsing(4)
+    f2 = budget.fit(more, None, Prov(None), 'k', 'm', 1024, chat='c', live=live2, expiry=rule)
+    assert f2.stubbed == 0                                         # warm: the earned stubs wait
+    budget._sent['c']['at'] -= 400                                 # five minutes on: cold
+    f3 = budget.fit(more, None, Prov(None), 'k', 'm', 1024, chat='c', live=live2, expiry=rule)
+    assert f3.stubbed == 3
+    f4 = budget.fit(more, None, Prov(None), 'k', 'm', 1024, chat='c', live=live2, expiry=rule)
+    assert f4.stubbed == 3                                         # warm again, and what was stubbed stays stubbed
+
+
+def test_a_warm_but_full_chat_lets_the_waiting_stubs_go_first():
+    rule = expiry_of({'browser_act': VIEW})
+    msgs, live = browsing(12, size=600)
+    budget._record('c', ('k', 'm'), set())
+    f = budget.fit(msgs, None, Prov(6000), 'k', 'm', 1024, chat='c', live=live, expiry=rule)
+    assert f.stubbed == 11 and f.out_of_view == 0                  # stubs, not a cut
+
+
+def test_another_chat_on_a_local_model_cools_this_one():
+    budget._record('a', ('k', 'm'), set())
+    assert budget._warm('a', ('k', 'm'), Prov(None), 'patches')
+    assert budget._warm('a', ('k', 'm'), Prov(8000), 'patches')
+    budget._record('b', ('k', 'm'), set())
+    assert not budget._warm('a', ('k', 'm'), Prov(8000), 'patches')   # the server holds b's prompt now
+    assert not budget._warm('b', ('k', 'other'), Prov(None), 'patches')
+
+
+def test_a_task_writing_into_a_chat_never_counts_as_the_person():
+    """A heartbeat's prompt row lands through append_messages_to_chat as role
+    user; the person's idle clock must not hear it (or an Idle Heartbeat would
+    reset itself). Rooms stamp the person's own lines."""
+    src = (ROOT / 'core' / 'chat' / 'history.py').read_text()
+    body = src[src.index('def append_messages_to_chat'):]
+    body = body[:body.index('\n    def ', 10)]
+    assert '_landed(chat_name, "assistant")' in body and '"user"' not in body.split('_landed(')[1][:40]
+    assert "idle.touch(chat, 'user')" in (ROOT / 'core' / 'rooms.py').read_text()

@@ -89,7 +89,7 @@ uses its own name (`bitcoin`, `wordpress` do).
 }
 ```
 
-`"tool_expires": "never"` at the manifest's top level keeps every tool of the plugin whole in what the model is sent, whatever the user's setting (the memory plugins do this: what she recalls is who she is). A tool's own `expires` still wins.
+`"tool_expires": "never"` at the manifest's top level keeps every tool of the plugin whole in what the model is sent, whatever the user's setting (the memory plugins do this: what she recalls is who she is). A tool's own `expires` still wins. Tools registered at runtime (MCP servers, `register_dynamic_tools`) declare nothing unless their dict carries `"expires"`, so the user's setting applies to them. A result whose tool is no longer loaded is never shortened.
 
 ---
 

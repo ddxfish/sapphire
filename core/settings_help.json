@@ -376,6 +376,10 @@
     "short": "Context window budget in tokens (0 = unlimited)",
     "long": "The most tokens Sapphire sends the model in one request: system prompt, tools, history, pictures and room for the reply all count. A local server that has less loaded (LM Studio, llama.cpp, Ollama) is asked, and its smaller window wins. When a chat outgrows it, the oldest turns leave her view a few at a time (she is told), so the reply always has room. 0 = no limit of ours (the model's own window still applies)."
   },
+  "IDLE_NOTICE_MINUTES": {
+    "short": "Tell her how long a chat was quiet, after N minutes (0 = never)",
+    "long": "When a message arrives after the chat was quiet at least this long, she's told how long it was (\"Quiet here: 2 h 10 min since the last message in this chat\") beside the time, in the per-turn note that never disturbs the prompt cache. 0 = never told."
+  },
   "TOOL_EXPIRES_AFTER": {
     "short": "Old tool results leave her view after N turns (0 = never)",
     "long": "For tools that don't say for themselves: after this many of your messages, an old tool result is shortened to one line in what the model is sent (the chat still shows all of it). Tools can declare their own: page views are replaced by the next one, web reads go after 3 turns, and memory tools never expire, whatever this says. 0 = tools that don't say are kept whole."

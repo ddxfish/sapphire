@@ -6,6 +6,7 @@ SSE streaming
 Tool call loop
 Per-chat loadout
 Ghost messages
+Idle clock
 Thinking blocks
 Image upload vision
 CLIP describe fallback

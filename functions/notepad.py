@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 ENABLED = True
 EMOJI = '📝'
 TOOL_CATEGORY = 'files'
+TOOL_EXPIRES = 'never'    # her notepad is her own memory: never shortened in what the model is sent (core/chat/budget.py)
 # __file__-anchored (functions/ -> project root). Was CWD-relative — the only
 # user-path in the tree that broke when launched outside the project root
 # (notes landed outside the tree + backups, invisibly). negspace 2026-08-31.

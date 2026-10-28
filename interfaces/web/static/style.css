@@ -5133,7 +5133,8 @@ span[data-image-gone] {
 }
 
 /* Where the model's own window ends, when it holds less than Context Limit
-   (a local server's loaded context): the bar fills past it = she's trimmed. */
+   (a local server's loaded context). The fill never passes it: what was sent
+   always fit; the hover says how much was left out to make it fit. */
 #context-notch {
     position: absolute;
     top: 0;

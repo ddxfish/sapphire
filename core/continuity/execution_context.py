@@ -581,7 +581,7 @@ class ExecutionContext:
 
         def _expiry(name):
             meta = _fm.tool_meta(name) if _fm is not None and hasattr(_fm, 'tool_meta') else None
-            return meta.get('expires') if isinstance(meta, dict) else None
+            return meta.get('expires') if isinstance(meta, dict) else False   # False: not loaded, never expires
         # whose watermark: a run inside a chat keeps its cut point steady (the cache)
         _mark = (f"task:{self.task_settings.get('chat_target')}"
                  if history_messages is not None and self.task_settings.get('chat_target') else None)
@@ -605,7 +605,7 @@ class ExecutionContext:
             try:
                 fitted = budget.fit(messages, self.tools, self.provider, self.provider_key, _model,
                                     self.gen_params.get('max_tokens'), chat=_mark, live=user_msg,
-                                    expiry=_expiry, limit=context_limit)
+                                    expiry=_expiry, limit=context_limit, label='a task')
             except budget.ContextFull as e:
                 overflow_reason = f"(Context overflow - {e})"
                 logger.error(f"[ExecCtx] {overflow_reason}")
@@ -904,7 +904,9 @@ class ExecutionContext:
         # turn-only and must not persist (same replay-bloat hazard the swap
         # guards for event images). 2026-06-13. Only include if we got a response —
         # an orphaned user message with no assistant reply corrupts chat history.
-        new = [_scrub_inline_images(m) for m in messages[cur_idx:]]
+        # The app's own rows (`_inject`: the tool-image note) stay turn-only, as
+        # in the chat lane: stored, a note row reads as the person's turn later.
+        new = [_scrub_inline_images(m) for m in messages[cur_idx:] if not m.get("_inject")]
         has_assistant = any(m.get("role") == "assistant" for m in new)
         self.new_messages = new if has_assistant else []
 

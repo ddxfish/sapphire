@@ -606,9 +606,12 @@ class StreamingChat:
                 messages[-1]["content"] = prefill.rstrip()
                 messages[-1].pop("thinking", None)
                 messages[-1].pop("thinking_raw", None)
-            # This turn's own row (the person's message, or the reply a Continue
-            # resumes): it and all after it stay whole in every fit (budget.py).
+            # This turn's own row: the person's message - for a Continue, the
+            # question whose reply it resumes. It and all after it stay whole
+            # in every fit (budget.py).
             _live = messages[-1] if messages else None
+            if continue_from:
+                _live = next((m for m in reversed(messages[:-1]) if budget._is_person(m)), _live)
 
             if not skip_user_message:
                 # Build content list if files or images present, otherwise just text
@@ -786,11 +789,17 @@ class StreamingChat:
 
             def _expiry(name):
                 meta = _fm.tool_meta(name) if hasattr(_fm, 'tool_meta') else None
-                return meta.get('expires') if isinstance(meta, dict) else None
+                return meta.get('expires') if isinstance(meta, dict) else False   # False: not loaded, never expires
+
+            try:
+                _label = self.main_chat.session_manager.metrics_chat_label()      # '__private__' for a private chat
+            except Exception:
+                _label = None
 
             def _fitted(tools):
                 f = budget.fit(messages, tools, provider, provider_key, effective_model,
-                               gen_params.get('max_tokens'), chat=chat_name, live=_live, expiry=_expiry)
+                               gen_params.get('max_tokens'), chat=chat_name, live=_live, expiry=_expiry,
+                               label=_label if isinstance(_label, str) else None)
                 gp = gen_params if f.max_tokens == gen_params.get('max_tokens') else {**gen_params, 'max_tokens': f.max_tokens}
                 return f, gp
             _fit, _ctx_retried = None, False
@@ -957,10 +966,11 @@ class StreamingChat:
                         continue    # burns one tool-iteration slot; messages unchanged
                     # The server says it's too long though we counted it in: count
                     # this model heavier and fit again, once (budget.tighten).
-                    if is_context_error(e) and chunk_count == 0 and not _ctx_retried and not self.cancel_flag:
+                    if (is_context_error(e) and chunk_count == 0 and not _ctx_retried and not self.cancel_flag
+                            and _fit is not None and _fit.window):     # no window = nothing to fit tighter into
                         _ctx_retried = True
                         self._cleanup_stream()
-                        budget.tighten(provider_key, effective_model)
+                        budget.tighten(provider_key, effective_model, provider)
                         continue
                     logger.error(f"[ERR] [STREAMING] Iteration {iteration + 1} failed: {e}", exc_info=True)
                     self._cleanup_stream()
@@ -1476,6 +1486,7 @@ class StreamingChat:
                     final_metadata = usage_metadata(provider_key, effective_model, forced_final_response,
                                                     final_content, final_thinking, final_start_time, time.time())
                 
+                budget.learn(_fit, (final_metadata or {}).get("tokens"))
                 forced_finish = getattr(forced_final_response, 'finish_reason', None)
                 _stamp_finish(final_metadata, forced_finish, final_content, provider_key)
 

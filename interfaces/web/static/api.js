@@ -48,8 +48,9 @@ const updateContextBar = (context) => {
 // Unified status endpoint - single call for all UI state
 export const fetchStatus = async () => {
     const status = await fetchWithTimeout('/api/status', {}, 5000);
-    // Update context bar if present
-    if (status?.context) {
+    // The bar shows the chat on screen: /api/status measures the ACTIVE chat,
+    // so while the view is bound to another (a room) /api/history owns it.
+    if (status?.context && !getBoundChat()) {
         updateContextBar(status.context);
     }
     return status;

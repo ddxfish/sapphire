@@ -1869,7 +1869,7 @@ async def chat_prompt_preview(chat_name: str, request: Request, _=Depends(requir
             token = stream_brain.set_override(sess)
         settings = sm.get_chat_settings()
         prompt, _user, _ = llm._get_system_prompt()
-        ghost = ghost_messages.build_ghost_message(system, settings, "")
+        ghost = ghost_messages.build_ghost_message(system, settings, "", chat_name=sm._effective_chat_name())
         if sess is not None:
             names = sorted(t["function"]["name"] for t in (sess["tools"] or []))
         else:

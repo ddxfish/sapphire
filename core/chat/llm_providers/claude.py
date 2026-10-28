@@ -749,16 +749,19 @@ class ClaudeProvider(BaseProvider):
             from core.ghost_messages import _ENVELOPE_HEADER as _GHOST_PREFIX
         except Exception:
             _GHOST_PREFIX = "[System context from Sapphire's own app"
-        second_to_last = claude_messages[-2]
-        _content = second_to_last.get("content") if isinstance(second_to_last.get("content"), str) else ""
-        is_ghost = (
-            second_to_last.get("role") == "user"
-            and (
-                _content.startswith(_GHOST_PREFIX)
-                or _content.startswith("[Operator metadata for assistant")
-            )
-        )
-        cache_idx = -3 if is_ghost else -2
+        # Walk back from the row before the new message over the per-turn rows
+        # the app adds (the ghost, then RAG's documents: different every turn).
+        # The marker goes on the last row of real history. Before 2026-10-27
+        # only a ghost was skipped: a chat with documents got the marker on its
+        # RAG row, so the history cache was written every turn and never read.
+        def per_turn(m):
+            c = m.get("content") if isinstance(m.get("content"), str) else ""
+            return m.get("role") == "user" and (
+                c.startswith(_GHOST_PREFIX) or c.startswith("[Operator metadata for assistant")
+                or c.startswith("[Reference Documents]") or c.startswith("[RAG documents are configured"))
+        cache_idx = -2
+        while abs(cache_idx) <= len(claude_messages) and per_turn(claude_messages[cache_idx]):
+            cache_idx -= 1
         if abs(cache_idx) > len(claude_messages):
             return  # nothing to cache (e.g., only ghost + new user)
 

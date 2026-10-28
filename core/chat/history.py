@@ -258,6 +258,33 @@ def count_message_tokens(content, include_images: bool = False) -> int:
     return count_tokens(str(content))
 
 
+def _forget_fit(chat_name):
+    """A chat cleared, renamed or deleted: the budgeter's cut point and meter
+    reading for that name go too (core/chat/budget.py)."""
+    try:
+        from core.chat import budget
+        budget.forget(chat_name)
+    except Exception:
+        pass
+
+
+def _landed(chat_name, role):
+    """A new message is in: the idle clock hears it (core/idle.py)."""
+    try:
+        from core import idle
+        idle.touch(chat_name, role)
+    except Exception:
+        pass
+
+
+def _idle_moved(chat_name, new_name=None):
+    try:
+        from core import idle
+        idle.forget(chat_name, new_name)
+    except Exception:
+        pass
+
+
 def turn_spans(messages: List[Dict[str, Any]]) -> List[tuple]:
     """Split a message list into turn spans: (start, end) index pairs.
 
@@ -2293,6 +2320,8 @@ class ChatSessionManager:
         The active chat routes through clear() so the in-memory list resets
         too. Total wipe regardless of storage format: blob nulled, rows
         deleted, tool images swept. Route layer refuses live-call chats."""
+        _forget_fit(chat_name)
+        _idle_moved(chat_name)
         if self._vault_hidden(chat_name):
             # Vault hunt G2: the one by-name op that lacked this gate — a
             # sealed chat must be indestructible by stale name (bulk-clear
@@ -2401,6 +2430,7 @@ class ChatSessionManager:
         agent refusal, and live-call refusal; this owns chats +
         chat_messages + tool_images + plugin_chat_data + active-name/marker,
         one transaction."""
+        _forget_fit(old_name)
         if old_name == "default":
             return False, "Cannot rename the default chat"
         if self._vault_hidden(old_name):
@@ -2441,6 +2471,7 @@ class ChatSessionManager:
                 if old_name == self.landing_chat_name:
                     self.landing_chat_name = safe_name
             logger.info(f"Renamed chat '{old_name}' -> '{safe_name}'")
+            _idle_moved(old_name, safe_name)
             return True, safe_name
         except Exception as e:
             logger.error(f"rename_chat('{old_name}' -> '{new_name}') failed: {e}")
@@ -3460,6 +3491,8 @@ class ChatSessionManager:
 
     def delete_chat(self, chat_name: str) -> bool:
         """Delete chat. Recreates default if deleted, switches active if needed."""
+        _forget_fit(chat_name)
+        _idle_moved(chat_name)
         self._ensure_db()
 
         if self._vault_hidden(chat_name):
@@ -4069,6 +4102,7 @@ class ChatSessionManager:
         with self._lock:
             self._effective_chat().add_user_message(content, persona=persona)
             self._save_current_chat()
+        _landed(self._effective_chat_name(), "user")
         publish(Events.MESSAGE_ADDED, {"role": "user", "chat_name": self._effective_chat_name()})
 
     def add_assistant_with_tool_calls(
@@ -4111,12 +4145,14 @@ class ChatSessionManager:
                 self._in_tool_cycle = False
 
             self._save_current_chat()
+        _landed(self._effective_chat_name(), "assistant")
         publish(Events.MESSAGE_ADDED, {"role": "assistant", "chat_name": self._effective_chat_name()})
 
     def add_message_pair(self, user_content: str, assistant_content: str):
         with self._lock:
             self._effective_chat().add_message_pair(user_content, assistant_content)
             self._save_current_chat()
+        _landed(self._effective_chat_name(), "pair")
         publish(Events.MESSAGE_ADDED, {"role": "pair", "chat_name": self._effective_chat_name()})
 
     def get_messages(self) -> List[Dict[str, str]]:
@@ -4338,6 +4374,33 @@ class ChatSessionManager:
 
     def get_turn_count(self) -> int:
         return self._effective_chat().get_turn_count()
+
+    def last_activity(self, chat_name: Optional[str] = None) -> Dict[str, tuple]:
+        """{chat: (timestamp of its last row, of its last user row)} from the
+        stored rows - one chat, or all (None). The idle clock's seed after a
+        restart (core/idle.py). Sealed chats and rows that don't read as
+        JSON are left out; a missing timestamp is None."""
+        self._ensure_db()
+
+        def stamp(mj):
+            try:
+                return json.loads(mj).get("timestamp")
+            except Exception:
+                return None
+        last_any = ("SELECT m.chat_name, m.message_json FROM chat_messages m JOIN "
+                    "(SELECT chat_name, MAX(seq) s FROM chat_messages {w} GROUP BY chat_name) t "
+                    "ON m.chat_name = t.chat_name AND m.seq = t.s")
+        where, args = ("WHERE chat_name = ?", (chat_name,)) if chat_name else ("", ())
+        where_user = (where + " AND" if where else "WHERE") + " role = 'user'"
+        out = {}
+        with self._get_connection() as conn:
+            anyrows = conn.execute(last_any.format(w=where), args).fetchall()
+            userrows = dict(conn.execute(last_any.format(w=where_user), args).fetchall())
+        for name, mj in anyrows:
+            if self._vault_hidden(name):
+                continue
+            out[name] = (stamp(mj), stamp(userrows[name]) if name in userrows else None)
+        return out
 
     def chat_exists(self, chat_name: str) -> bool:
         """Whether a chat row exists - and NOTHING else: no decrypt, no privacy
@@ -4563,6 +4626,10 @@ class ChatSessionManager:
                                 f"(state={state}, base={base}) — flagging resync")
                             self.current_chat._needs_full_resync = True
 
+                # Activity, never the person: a task's prompt row lands here as
+                # role user (a heartbeat must not reset the person's idle clock).
+                # Rooms stamp the person's own lines themselves (rooms.take_line).
+                _landed(chat_name, "assistant")
                 publish(Events.MESSAGE_ADDED, {"role": "pair", "chat_name": chat_name})
                 return True
         except Exception as e:

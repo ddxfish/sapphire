@@ -1,3 +1,7 @@
+# 2.15.7 - Token Improvements
+- Tools can decay and drop out of chat after X turns
+- Token calculation is better, reads tools and images
+- Plugins can use token decay
 # 2.15.6 - Error Handlers
 - Wrote most errors to human-readable how-to-fix
 - 'Fix it' button to some errors that support it

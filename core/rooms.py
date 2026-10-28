@@ -1001,6 +1001,11 @@ def take_line(chat, items):
         rt.since_human = 0
         rt.mention_turns = 0
         rt.said += 1
+        try:
+            from core import idle
+            idle.touch(chat, 'user')          # the person spoke here (core/idle.py)
+        except Exception:
+            pass
     if named:
         _mention(chat, rt, room, named)
     else:

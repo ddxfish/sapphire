@@ -23,7 +23,7 @@ def preview_client(client, mock_system, monkeypatch):
     mock_system.llm_chat.function_manager.get_enabled_function_names.return_value = ['story_act']
     from core import ghost_messages
     monkeypatch.setattr(ghost_messages, 'build_ghost_message',
-                        lambda system, settings, user_input='': '[envelope] room block')
+                        lambda system, settings, user_input='', chat_name=None: '[envelope] room block')
     return c, mock_system
 
 

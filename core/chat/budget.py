@@ -31,6 +31,7 @@ import json
 import logging
 import math
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -49,10 +50,12 @@ MSG_OVERHEAD = 4            # per message: role and framing
 STUB_LINE = 200             # chars of an expired result's first line kept
 
 _lock = threading.Lock()
-_watermark: Dict[str, int] = {}      # chat → whole turns out of view at its front
+_watermark: Dict[str, tuple] = {}    # chat → (whole turns out of view at its front, the window they were cut for)
 _ratio: Dict[tuple, float] = {}      # (provider_key, model) → real tokens / our count
 _dims: Dict[tuple, tuple] = {}       # an image's (len, head, tail) → (w, h)
 _last: Dict[str, dict] = {}          # chat → what its last fit sent (the meter)
+_sent: Dict[str, dict] = {}          # chat → its last send: at, key, stubs (the warm-cache hold)
+_sender: Dict[tuple, str] = {}       # (provider_key, model) → the chat that last sent to it
 
 
 class ContextFull(Exception):
@@ -134,6 +137,8 @@ def _content_tokens(content, family) -> int:
         elif isinstance(b, dict):
             if b.get('type') == 'image':
                 total += image_tokens(*_size(str(b.get('data') or '')), family)
+            elif b.get('type') == 'tool_result':      # Claude's shape for a result this turn: its text is in content
+                total += _content_tokens(b.get('content'), family)
             else:
                 total += count_tokens(str(b.get('text') or ''))
     return total
@@ -143,7 +148,28 @@ def _msg_tokens(m, family) -> int:
     n = MSG_OVERHEAD + _content_tokens(m.get('content'), family)
     if m.get('tool_calls'):
         n += count_tokens(json.dumps(m['tool_calls'], ensure_ascii=False))
+    if m.get('thinking_raw'):                          # Claude's signed thinking rides back inside a tool cycle
+        n += count_tokens(json.dumps(m['thinking_raw'], ensure_ascii=False, default=str))
     return n
+
+
+def _results(m):
+    """The tool_result blocks of a Claude-shaped result row (role user), or []."""
+    c = m.get('content')
+    if m.get('role') != 'user' or not isinstance(c, list) or not c:
+        return []
+    blocks = [b for b in c if isinstance(b, dict)]
+    return blocks if blocks and all(b.get('type') == 'tool_result' for b in blocks) else []
+
+
+def _is_result(m) -> bool:
+    return m.get('role') == 'tool' or bool(_results(m))
+
+
+def _is_person(m) -> bool:
+    """A row the person (or a task's prompt) wrote: not one the app added
+    (ghost, RAG, pictures: `_inject`), not a tool result in Claude's shape."""
+    return m.get('role') == 'user' and not m.get('_inject') and not _results(m)
 
 
 def tools_tokens(tools) -> int:
@@ -178,39 +204,62 @@ def _global_after() -> int:
         return 0
 
 
-def _stub(m, spec) -> dict:
-    name = m.get('name') or 'tool'
-    text = m.get('content')
-    if isinstance(text, list):
-        text = ' '.join(str(b.get('text') or '') for b in text if isinstance(b, dict))
-    text = str(text or '')
+def _text_of(content) -> str:
+    if isinstance(content, list):
+        return ' '.join(_text_of(b.get('content')) if b.get('type') == 'tool_result' else str(b.get('text') or '')
+                        for b in content if isinstance(b, dict))
+    return str(content or '')
+
+
+def _stub(m, spec, name) -> dict:
+    text = _text_of(m.get('content'))
     from core.ui_markers import UI_MARKER_RE
     first = next((ln.strip() for ln in UI_MARKER_RE.sub('', text).splitlines() if ln.strip()), '')[:STUB_LINE]
     hint = (spec or {}).get('hint') or f"Run {name} again if you need it."
-    return dict(m, content=f"[{name} result left out of your view to save room: {first} ({len(text)} chars). {hint}]",
-                _stub=True)
+    line = f"[{name} result left out of your view to save room: {first} ({len(text)} chars). {hint}]"
+    if m.get('role') == 'tool':
+        return dict(m, content=line, _stub=True)
+    return dict(m, content=[dict(b, content=line) for b in _results(m)], _stub=True)
 
 
-def _expire(msgs, live_from, expiry, pressure=False):
+def _rid(m):
+    """A result row's identity across turns: its call id."""
+    if m.get('role') == 'tool':
+        return m.get('tool_call_id')
+    r = _results(m)
+    return r[0].get('tool_use_id') if r else None
+
+
+def _expire(msgs, live_from, expiry, pressure=False, only=None):
     """Stub expired tool results. A row before live_from expires when a later
     row of its group exists (superseded) or N of the person's turns came after
     it; pressure=True also lets the live turn's superseded rows go. Returns
-    (messages, number stubbed). Images a stubbed result brought go with it."""
+    (messages, number stubbed). Images a stubbed result brought go with it.
+    expiry(name): the tool's parsed `expires`, None = declared nothing (the
+    global TOOL_EXPIRES_AFTER applies), False = no such tool loaded (never
+    expires: a memory tool whose plugin is off is still a memory tool).
+    only: a set of row ids - while the prompt cache is warm, only these (the
+    ones already stubbed) are; the rest wait (None = all that expired). The
+    third value returned is the ids stubbed."""
     if not expiry:
-        return msgs, 0
+        return msgs, 0, set()
     glob = _global_after()
-    specs, turn_at, turns = {}, {}, 0
+    specs, turn_at, names, turns, called = {}, {}, {}, 0, {}
     for i, m in enumerate(msgs):
-        if m.get('role') == 'user' and not m.get('_inject'):
+        for tc in m.get('tool_calls') or []:
+            if isinstance(tc, dict):
+                called[tc.get('id')] = (tc.get('function') or {}).get('name')
+        if _is_person(m):
             turns += 1
-        elif m.get('role') == 'tool' and not m.get('_stub'):
-            spec = expiry(m.get('name') or '')
+        elif _is_result(m) and not m.get('_stub'):
+            name = m.get('name') if m.get('role') == 'tool' else called.get(_results(m)[0].get('tool_use_id'))
+            spec = expiry(name or '')
             if spec is None and glob:
-                spec = {'after': glob, 'group': m.get('name') or '', 'hint': ''}
+                spec = {'after': glob, 'group': name or '', 'hint': ''}
             if spec and spec.get('after') != 'never':
-                specs[i], turn_at[i] = spec, turns
+                specs[i], turn_at[i], names[i] = spec, turns, name or 'tool'
     if not specs:
-        return msgs, 0
+        return msgs, 0, set()
     last = {}
     for i, spec in specs.items():
         if spec['after'] == 'superseded':
@@ -224,17 +273,19 @@ def _expire(msgs, live_from, expiry, pressure=False):
                 gone.add(i)
         elif turns - turn_at[i] >= spec['after']:
             gone.add(i)
+    if only is not None:
+        gone = {i for i in gone if _rid(msgs[i]) in only}
     if not gone:
-        return msgs, 0
+        return msgs, 0, set()
     from core.chat.history import _IMG_MARKER_RE
     out, dead_ids, batch, batch_gone = [], set(), [], []
     for i, m in enumerate(msgs):
-        if m.get('role') == 'tool':
+        if _is_result(m):
             batch.append(i)
             if i in gone:
                 batch_gone.append(i)
-                dead_ids.update(_IMG_MARKER_RE.findall(str(m.get('content') or '')))
-                m = _stub(m, specs[i])
+                dead_ids.update(_IMG_MARKER_RE.findall(_text_of(m.get('content'))))
+                m = _stub(m, specs[i], names[i])
             out.append(m)
             continue
         if m.get('_inject') and m.get('role') == 'user' and isinstance(m.get('content'), list) and batch:
@@ -247,7 +298,7 @@ def _expire(msgs, live_from, expiry, pressure=False):
             m = dict(m, content=kept)
         batch, batch_gone = [], []
         out.append(m)
-    return out, len(gone)
+    return out, len(gone), {_rid(msgs[i]) for i in gone}
 
 
 # --- turns out of view --------------------------------------------------------
@@ -256,7 +307,7 @@ def _spans(msgs, lo, hi):
     """Whole turns in msgs[lo:hi]: each starts at the person's row (rows the app
     adds - ghost, RAG, pictures - are not turns), so a tool call never leaves
     without its result."""
-    starts = [i for i in range(lo, hi) if msgs[i].get('role') == 'user' and not msgs[i].get('_inject')]
+    starts = [i for i in range(lo, hi) if _is_person(msgs[i])]
     if not starts:
         return []
     starts[0] = lo
@@ -274,15 +325,25 @@ def _note(m, turns) -> dict:
 
 # --- the fit --------------------------------------------------------------------
 
+def _live_index(msgs, live, sys_end) -> int:
+    """Where this turn starts in msgs: its own row, found by identity (rows
+    before it can be dropped or replaced), then back over the ghost and RAG
+    rows that ride with it."""
+    i = next((k for k, m in enumerate(msgs) if m is live), len(msgs))
+    while i > sys_end and msgs[i - 1].get('_inject') and msgs[i - 1].get('role') == 'user' and not _results(msgs[i - 1]):
+        i -= 1
+    return i
+
+
 def fit(messages, tools=None, provider=None, provider_key='', model='', max_tokens=None,
         chat=None, live=None, expiry: Optional[Callable[[str], Optional[dict]]] = None,
-        limit: Optional[int] = None) -> Fit:
+        limit: Optional[int] = None, label: Optional[str] = None) -> Fit:
     """What to send. `live`: this turn's first row (the person's message, or the
     task's) - it and everything after it are this turn and stay whole unless
-    nothing else is left. `chat`: whose watermark. `expiry`: tool name → its
-    parsed `expires` (FunctionManager.parse_expires) or None. Raises
-    ContextFull when the live turn alone can't fit. `limit`: a task's own
-    Context Limit in place of the setting (0/None = the setting)."""
+    nothing else is left. `chat`: whose watermark. `expiry`: see _expire.
+    Raises ContextFull when the live turn alone can't fit. `limit`: a task's
+    own Context Limit in place of the setting (0/None = the setting). `label`:
+    how the log names the chat (a private chat's name never reaches the log)."""
     msgs = list(messages)
     if not (isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0):
         max_tokens = None                               # unset, or not a number at all
@@ -291,73 +352,128 @@ def fit(messages, tools=None, provider=None, provider_key='', model='', max_toke
     sys_end = 0
     while sys_end < len(msgs) and msgs[sys_end].get('role') == 'system':
         sys_end += 1
-    live_from = next((i for i, m in enumerate(msgs) if m is live), len(msgs))
-    while live_from > sys_end and msgs[live_from - 1].get('_inject'):
-        live_from -= 1                                  # the ghost and RAG rows ride with this turn
 
-    msgs, stubbed = _expire(msgs, live_from, expiry)
+    base = msgs
+    warm = _warm(chat, key, provider, family)
+    prev = (_sent.get(chat) or {}).get('stubs', set()) if chat else set()
+    msgs, stubbed, ids = _expire(base, _live_index(base, live, sys_end), expiry, only=prev if warm else None)
+    live_from = _live_index(msgs, live, sys_end)
 
     limit, server = (int(limit) if limit else _limit()), server_window(provider)
     window = min([n for n in (limit, server) if n] or [0]) or None
     ratio = _ratio.get(key) or (1.2 if family == 'claude' else 1.05)
     schema = tools_tokens(tools)
-
-    def raw_of(ms):
-        return schema + sum(_msg_tokens(m, family) for m in ms)
-
-    raw = raw_of(msgs)
+    tk = [_msg_tokens(m, family) for m in msgs]          # each row counted once per fit
+    raw = schema + sum(tk)
     if not window:
         _remember(chat, int(raw * ratio), server, 0, stubbed)
+        _record(chat, key, ids)
         return Fit(msgs, max_tokens, None, limit, server, int(raw * ratio), raw, 0, 0, stubbed, key)
 
     asked = int(max_tokens or 8192)
-    reserve = min(asked, max(REPLY_FLOOR, window // 4))
+    floor = min(REPLY_FLOOR, asked)                     # what the reply always keeps
+    reserve = min(asked, max(floor, window // 4))
     margin = int(window * 0.02) + 256
     room = window - reserve - margin                    # what the prompt may use
 
-    out_of_view = 0
-    if raw * ratio > room:
-        spans = _spans(msgs, sys_end, live_from)
-        held = _watermark.get(chat, 0) if chat else 0
-        held = min(held, len(spans))
-        cost = [sum(_msg_tokens(m, family) for m in msgs[s:e]) for s, e in spans]
+    if warm and raw * ratio > room:                     # warm, but full: the stubs that waited go first
+        msgs, stubbed, ids = _expire(base, _live_index(base, live, sys_end), expiry)
+        live_from = _live_index(msgs, live, sys_end)
+        tk = [_msg_tokens(m, family) for m in msgs]
+        raw = schema + sum(tk)
+
+    spans = _spans(msgs, sys_end, live_from)
+    cost = [sum(tk[s:e]) for s, e in spans]
+    held, held_window = _watermark.get(chat, (0, None)) if chat else (0, None)
+    if held_window != window or held >= len(spans):
+        held = 0                                        # another window (a model switch), or turns deleted under it: start over
+    if held and raw * ratio <= CUT_TO * room and not warm:
+        held = 0                                        # the whole chat fits with room to spare again (and the cache is cold)
+    n, now = held, raw - sum(cost[:held])
+    if now * ratio > room:                              # over even past the watermark: cut down to ~65%
         fixed = raw - sum(cost)                         # system, tools, the live turn
         target = (fixed + CUT_TO * max(0, room / ratio - fixed)) * ratio
-        n, now = held, raw - sum(cost[:held])
-        if now * ratio > room:                          # past the watermark too: cut down to the target
-            while n < len(spans) and now * ratio > target:
-                now -= cost[n]
-                n += 1
-        if n:
-            cut = spans[n - 1][1] if n <= len(spans) else live_from
-            kept = msgs[:sys_end] + msgs[cut:]
-            if cut < live_from:
-                kept[sys_end] = _note(kept[sys_end], n)
-            live_from -= cut - sys_end
-            msgs, raw, out_of_view = kept, raw_of(kept), n
-        if chat:
-            with _lock:
-                if _watermark.get(chat) != n:
-                    logger.info(f"[CONTEXT] '{chat}': {n} oldest turn(s) out of view "
-                                f"(window {window}, ~{int(raw * ratio)} tokens now)")
-                _watermark[chat] = n
-    elif chat and _watermark.get(chat):
+        while n < len(spans) and now * ratio > target:
+            now -= cost[n]
+            n += 1
+    if chat:
         with _lock:
-            _watermark.pop(chat, None)                  # it all fits again (a bigger window, a cleared chat)
+            if (_watermark.get(chat) or (0,))[0] != n:
+                logger.info(f"[CONTEXT] '{label or chat}': {n} oldest turn(s) out of view "
+                            f"(window {window}, ~{int(now * ratio)} tokens now)")
+            if n:
+                _watermark[chat] = (n, window)
+            else:
+                _watermark.pop(chat, None)
+    out_of_view = 0
+    if n:
+        cut = spans[n - 1][1]
+        msgs = msgs[:sys_end] + msgs[cut:]
+        live_from = _live_index(msgs, live, sys_end)
+        first = next((k for k in range(sys_end, len(msgs)) if _is_person(msgs[k])), None)
+        if first is not None:                           # her note rides the first row she still sees, the live one at worst
+            msgs[first] = _note(msgs[first], n)
+            if first >= live_from and msgs[first] is not live:
+                live = msgs[first]
+        raw, out_of_view = now, n
 
     if raw * ratio > room:                              # no history left to cut: this turn's own old page views
-        msgs, more = _expire(msgs, live_from, expiry, pressure=True)
+        msgs, more, more_ids = _expire(msgs, live_from, expiry, pressure=True)
         stubbed += more
-        raw = raw_of(msgs)
+        ids |= more_ids
+        raw = schema + sum(_msg_tokens(m, family) for m in msgs)
     est = int(raw * ratio)
-    if est + margin + REPLY_FLOOR > window:
+    if est + margin + floor > window:
         raise ContextFull(_full_words(est, window, schema * ratio, limit, server))
 
     send = max_tokens
-    if server and window == server:                     # the server's own window: ask only for what's left
-        send = max(REPLY_FLOOR, min(asked, window - est - margin))
+    if max_tokens or (server and window == server):    # never ask for more reply than the window has left
+        send = max(floor, min(asked, window - est - margin))
     _remember(chat, est, server, out_of_view, stubbed)
+    _record(chat, key, ids)
     return Fit(msgs, send, window, limit, server, est, raw, reserve, out_of_view, stubbed, key)
+
+
+# --- the prompt cache ------------------------------------------------------------
+# Sapphire's catch (2026-10-27): every stub or cut changes the prompt from that
+# row on, so a warm cache is paid for again (Claude writes it anew; LM Studio
+# reprocesses from there). While a chat's cache is warm, the stubs it has
+# earned since wait - until it is cold, or until room runs out.
+
+def _ttl(provider, family) -> float:
+    """Seconds a provider keeps this chat's prompt cached after a call."""
+    if family == 'claude':
+        conf = getattr(provider, 'config', None)
+        return 3600.0 if isinstance(conf, dict) and conf.get('cache_ttl') == '1h' else 300.0
+    if server_window(provider):                         # a local server: one prompt's cache, kept while loaded
+        return 3600.0
+    return 300.0
+
+
+def _warm(chat, key, provider, family) -> bool:
+    """This chat's last send is still cached at that provider: the same model,
+    inside its cache time, and (a local server keeps only the last prompt) no
+    other chat has sent to it since."""
+    last = _sent.get(chat) if chat else None
+    if not last or last.get('key') != key:
+        return False
+    if server_window(provider) and _sender.get(key) != chat:
+        return False
+    return time.time() - last.get('at', 0) < _ttl(provider, family)
+
+
+def warm(chat) -> bool:
+    """For a plugin or the meter: was this chat's last send recent enough to
+    still be cached? (Without the provider: its own cache time is assumed 5 min.)"""
+    last = _sent.get(chat) if chat else None
+    return bool(last) and time.time() - last.get('at', 0) < 300
+
+
+def _record(chat, key, ids):
+    if chat:
+        with _lock:
+            _sent[chat] = {'at': time.time(), 'key': key, 'stubs': set(ids)}
+            _sender[key] = chat
 
 
 def _remember(chat, est, server, out_of_view, stubbed):
@@ -414,9 +530,15 @@ def learn_usage(f: Optional[Fit], usage: Optional[dict]):
                   'cache_write_tokens': usage.get('cache_write_tokens')})
 
 
-def tighten(provider_key='', model=''):
-    """The server said the request was too long though we counted it in: count
-    this model 25% heavier from now on (learn() walks it back if it overshoots)."""
+def tighten(provider_key='', model='', provider=None):
+    """The server said the request was too long though we counted it in: ask
+    the server its window again and count this model 25% heavier from now on
+    (learn() walks it back if it overshoots)."""
+    if provider is not None and hasattr(provider, 'forget_window'):
+        try:
+            provider.forget_window()
+        except Exception:
+            pass
     key = (provider_key or '', model or '')
     with _lock:
         _ratio[key] = min(2.5, (_ratio.get(key) or 1.05) * 1.25)
@@ -429,6 +551,8 @@ def forget(chat=None):
         if chat is None:
             _watermark.clear()
             _last.clear()
+            _sent.clear()
         else:
             _watermark.pop(chat, None)
             _last.pop(chat, None)
+            _sent.pop(chat, None)

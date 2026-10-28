@@ -250,13 +250,17 @@ def test_context_limit_zero_follows_the_global_setting():
     assert calls == 1 and result == "ok", "global 0 is the one place unlimited still lives"
 
 
-def test_executor_hands_the_reader_none_for_a_zero_task_limit():
-    """[REGRESSION_GUARD] history.read_chat_messages treats a literal 0 as
-    'never trim' and None as 'global CONTEXT_LIMIT' — the executor must pass
-    None for a task's 0, or the read-time trim silently vanishes again."""
+def test_the_task_limit_is_applied_at_send_time_not_read_time():
+    """[REGRESSION_GUARD] A task's history must never ride unbounded (Discord
+    Chat reached 271k a turn, 2026-09-26). Since 2026-10-27 the reader takes
+    the whole chat (context_limit=0: trimmed twice, the cut point drifted) and
+    ExecCtx fits every call to the task's limit or the global one
+    (core/chat/budget.py) - the test above proves the 1000-token cap holds."""
     import inspect
-    from core.continuity import executor
-    assert 'context_limit=task_settings.get("context_limit") or None' in inspect.getsource(executor)
+    from core.continuity import executor, execution_context
+    assert 'context_limit=0' in inspect.getsource(executor)
+    src = inspect.getsource(execution_context)
+    assert "limit=context_limit" in src and 'context_limit = self.task_settings.get("context_limit") or getattr(config, \'CONTEXT_LIMIT\', 0)' in src
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -480,8 +484,10 @@ def test_no_trim_unaffected_baseline():
 def test_inline_tool_image_base64_scrubbed_from_new_messages():
     """Tool-returned images are injected as base64 for the LLM THIS turn, but must
     NOT persist inline (replay bloat). new_messages must carry no type:image block
-    — the image lives in the DB behind its tool-result marker. The injected text
-    note survives. 2026-06-13."""
+    — the image lives in the DB behind its tool-result marker. 2026-06-13. The
+    injected note row (`_inject`) is turn-only too since 2026-10-27, as in the
+    chat lane: stored, it read as the person's turn and doubled the replay's
+    own picture row (core/chat/budget.py)."""
     ctx, te = _build_ctx(
         {"max_tool_rounds": 3, "context_limit": 100000},
         [_tool_call_response(), _text_response("Looked at it.")],
@@ -497,8 +503,9 @@ def test_inline_tool_image_base64_scrubbed_from_new_messages():
         if isinstance(content, list):
             assert not any(isinstance(b, dict) and b.get("type") == "image" for b in content), \
                 f"inline base64 image leaked into persisted {m.get('role')} message"
-    assert any("shown to the user" in str(m.get("content", "")) for m in new), \
-        "injected image note should survive the scrub as text"
+    assert not any("shown to the user" in str(m.get("content", "")) for m in new), \
+        "the app's image note row is turn-only, never persisted"
+    assert not any(m.get("_inject") for m in new)
 
 
 def test_trim_never_deletes_current_user_turn_short_history():

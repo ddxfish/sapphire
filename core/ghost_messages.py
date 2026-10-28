@@ -97,6 +97,22 @@ def _datetime_contribution() -> Optional[str]:
             return None
 
 
+def _idle_contribution(chat_name) -> Optional[str]:
+    """'Quiet here: 2 h 10 min since the last message.' or None."""
+    try:
+        floor = float(getattr(config, 'IDLE_NOTICE_MINUTES', 60) or 0)
+        if floor <= 0 or not chat_name:
+            return None
+        from core import idle
+        mins = idle.minutes(chat_name)
+        if mins is None or mins < floor:
+            return None
+        return f"Quiet here: {idle.words(mins)} since the last message in this chat."
+    except Exception as e:
+        logger.debug(f"[GHOST] idle line skipped: {e}")
+        return None
+
+
 def _spice_contribution() -> Optional[str]:
     """Build the active-spice line. None when no spice is set."""
     try:
@@ -114,6 +130,7 @@ def build_ghost_message(
     system,
     chat_settings: dict,
     user_input: str = "",
+    chat_name: Optional[str] = None,
 ) -> Optional[str]:
     """Build the ghost-message envelope for one LLM call.
 
@@ -125,6 +142,7 @@ def build_ghost_message(
     Args:
         system: VoiceChatSystem instance (for plugin hook metadata)
         chat_settings: current chat's settings dict (spice_enabled, inject_datetime)
+        chat_name: the chat this call is for (the idle line reads its clock)
         user_input: current user input — passed to the hook so plugins can
                     react to context, NOT for content fingerprinting (see
                     anti-pattern note in module docstring; store review
@@ -137,6 +155,13 @@ def build_ghost_message(
         dt_line = _datetime_contribution()
         if dt_line:
             contributions.append(("(core)", dt_line))
+
+    # Built-in: how long the chat was quiet before this message, once that is
+    # at least IDLE_NOTICE_MINUTES (0 = never). Per turn, after the history:
+    # it never touches the cached prefix.
+    idle_line = _idle_contribution(chat_name)
+    if idle_line:
+        contributions.append(("(core)", idle_line))
 
     # Built-in: spice — unless SPICE_DELIVERY routes it into the system prompt
     # instead (unattributed there; here it's labeled app context, which some

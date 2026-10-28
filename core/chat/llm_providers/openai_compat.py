@@ -96,6 +96,8 @@ _FOUND_TTL = 60.0
 # (server root, model) → (tokens it holds for one request | None, trusted_until).
 # A reload in LM Studio can change it, so it is asked again each minute.
 _WINDOW: Dict[tuple, tuple] = {}
+_LAST_WINDOW: Dict[tuple, int] = {}          # the last window a server really reported, per (root, model)
+_LAN_NAMES = ('.local', '.lan', '.home', '.home.arpa', '.internal', '.ts.net')
 _NOT_CHAT = re.compile(r'embed|rerank|whisper|tts|moderation', re.I)
 
 
@@ -359,9 +361,10 @@ class OpenAICompatProvider(BaseProvider):
         import ipaddress
         host = (urlparse(self.base_url or '').hostname or '').lower()
         try:
-            near = host == 'localhost' or ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
+            ip = ipaddress.ip_address(host)
+            near = ip.is_private or ip.is_loopback or ip in ipaddress.ip_network('100.64.0.0/10')   # + Tailscale
         except ValueError:
-            near = host.endswith('.local') or '.' not in host
+            near = host == 'localhost' or '.' not in host or host.endswith(_LAN_NAMES)
         if not (near or self.config.get('is_local')):
             return None
         root = re.sub(r'/v1/?$', '', self.base_url.rstrip('/'))
@@ -400,13 +403,23 @@ class OpenAICompatProvider(BaseProvider):
             else:
                 ps = ask('/api/ps')
                 if isinstance(ps, dict) and isinstance(ps.get('models'), list):
+                    tag = lambda n: str(n or '') if ':' in str(n or '') else f"{n}:latest"   # Ollama: llama3 = llama3:latest
                     pick = next((m for m in ps['models'] if isinstance(m, dict)
-                                 and self.model in (m.get('name'), m.get('model'))), None)
+                                 and tag(self.model) in (tag(m.get('name')), tag(m.get('model')))), None)
                     found = tokens(pick.get('context_length')) if pick else None
+        if found is None and _LAST_WINDOW.get(key):
+            found = _LAST_WINDOW[key]      # unloaded while idle: it reloads as it was, so the last real answer stands
+        elif found:
+            _LAST_WINDOW[key] = found
         if found != (hit[0] if hit else None):
             logger.info(f"[CONTEXT] {root} ({self.model or 'its loaded model'}) holds {found or 'an unknown number of'} tokens per request")
-        _WINDOW[key] = (found, now + _FOUND_TTL)
+        _WINDOW[key] = (found, now + (_FOUND_TTL if found else 10.0))      # a miss is asked again soon
         return found
+
+    def forget_window(self):
+        """The server refused a request as too long: ask its window afresh next time."""
+        root = re.sub(r'/v1/?$', '', (self.base_url or '').rstrip('/'))
+        _WINDOW.pop((root, self.model or ''), None)
 
     def _loaded_model(self):
         """LM Studio's native list (/api/v0/models: type + state per model):

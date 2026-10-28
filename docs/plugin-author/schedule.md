@@ -115,6 +115,22 @@ Schedule handlers use `def run(event)`. **Hook handlers do NOT** — they use th
 
 ---
 
+## How long it's been quiet: `core.idle`
+
+One clock for "how long since anyone talked", the same one her idle line and the context budgeter read:
+
+```python
+from core import idle
+idle.minutes('default')               # minutes since the last message in that chat (anyone's), or None
+idle.minutes('default', person=True)  # since the person last wrote there
+idle.minutes()                        # since the last message in ANY chat (app-wide)
+idle.since(chat, person=False)        # the same as an epoch time
+```
+
+It survives restarts (a chat's first ask reads its stored rows' timestamps). A sealed (vaulted) chat answers `None`. Use it in a scheduled handler to act only when things are quiet, instead of keeping your own timer.
+
+---
+
 ## Note on Webhook Tasks
 
 Webhook tasks are created by users in the Triggers UI (Webhooks), not declared in plugin manifests. They trigger when an HTTP request hits `/api/events/webhook/{path}`. Every webhook task gets an auto-generated secret — callers must include it in the `x-webhook-secret` header.
@@ -128,5 +144,6 @@ PLUGIN SCHEDULED TASKS:
 - Tasks appear under Triggers (Scheduled); removed when the plugin unloads (disable/uninstall/hot-reload). Plugin tasks are re-registered from the manifest+settings on every boot — Triggers-UI edits to them do NOT persist; settings-linked fields are the durable knobs, and the loader re-syncs the live task on every plugin settings save.
 - Handler contract: the file must export `def run(event)`. event = {"system": VoiceChatSystem, "config": config module, "task": task dict, "plugin_state": PluginState}. Optional return value is logged to the schedule activity feed.
 - PluginState: `state.get(key, default)` / `state.save(key, value)` — persistent per-plugin key-value store.
+- Idle clock: `from core import idle`; `idle.minutes(chat=None, person=False)` → minutes since the last message (None = no chat known; chat=None = any chat); `idle.since(...)` epoch. Stamped by history as rows land, seeded from stored timestamps after a restart, None for sealed chats.
 - Naming rule: `run(event)` is ONLY for schedule handlers. Hook handlers use the hook-point name (`def pre_chat(event)`, `def prompt_inject(event)`, ...) or `def handle(event)` as fallback — a hook handler named `run` silently fails to register.
 - Webhook tasks are user-created in Triggers (Webhooks), not manifest-declared: HTTP hits `/api/events/webhook/{path}` with the auto-generated secret in the `x-webhook-secret` header. Full docs: docs/DAEMONS-WEBHOOKS.md.
