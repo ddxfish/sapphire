@@ -1,3 +1,4 @@
+import { escapeHtml } from '../modal.js';
 // trigger-editor/ai-config.js - Shared AI configuration section for all trigger types
 // Persona, AI (prompt/toolset/provider/model), Chat, Voice, Mind (scopes), Execution Limits
 import { fetchPrompts, fetchToolsets, fetchLLMProviders,
@@ -11,6 +12,9 @@ import {
 } from '../scope-dropdowns.js';
 import { providerOptions, refreshModelControls, readModel } from '../llm-picker.js';
 import { wordsOf, errWords } from '../fetch.js';
+// One quote-safe escaper (modal.js): these copies didn't escape quotes, and
+// two of them fill value="..." (2026-10-27).
+const _esc = (str) => (str ? escapeHtml(String(str)) : '');
 
 let _ttsVoicesCache = null;
 
@@ -530,9 +534,3 @@ function _voicePreviewText(t, isHeartbeat) {
 // _renderScopeField deleted in Phase 2d — scope fields are now rendered by the
 // shared scope-dropdowns.js module driven by /api/init scope_declarations.
 
-function _esc(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}

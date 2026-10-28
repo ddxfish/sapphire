@@ -602,7 +602,8 @@ def get_full_status_sync(scope=_FROM_CHAT):
                 tasks_info["enabled"] = sum(1 for t in all_tasks if t.get("enabled"))
                 tasks_info["running"] = sum(1 for t in all_tasks if t.get("running"))
                 for t in all_tasks:
-                    tt = t.get("type", "task")
+                    from core.continuity.scheduler import task_type
+                    tt = task_type(t)
                     if tt == "heartbeat":
                         tasks_info["heartbeats"] += 1
                     elif tt == "daemon":

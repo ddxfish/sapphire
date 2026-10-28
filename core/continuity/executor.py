@@ -433,6 +433,82 @@ class ContinuityExecutor:
             )
         return settings
 
+    # ── one tail for both lanes (DRY scout, 2026-10-27: the background copy had
+    # drifted - a text-only browser TTS payload in the wrong voice, a doubled
+    # TTS gate that silenced public tasks, Discord errors swallowed) ──
+
+    def _reply_channel(self, task):
+        """Point Discord's auto-reply at the channel an event came from."""
+        reply_ch = task.get("_discord_reply_channel_id")
+        if not reply_ch:
+            return
+        try:
+            from plugins.discord.tools.discord_tools import _reply_channel_id
+            _reply_channel_id.set(reply_ch)
+        except ImportError:
+            pass                    # Discord plugin not loaded at all — expected path, quiet
+        except Exception as e:
+            # Loaded but broken: an auto-reply would land nowhere visible. Chaos scout #19.
+            logger.warning(f"[Continuity] Discord reply channel set failed (plugin loaded but broken): {e}")
+
+    def _deliver(self, task, response, private, response_cb, tts_enabled, browser_tts):
+        """A task's answer out: the reply callback (Discord/Telegram/email:
+        egress, never for a private chat or a privacy-required task), then
+        her voice - in the browser, or here."""
+        if not response:
+            return
+        if response_cb:
+            if private:
+                logger.info("[Continuity] reply callback suppressed — private chat or privacy-required task")
+            else:
+                try:
+                    response_cb(response)
+                except Exception as e:
+                    logger.error(f"[Continuity] Response callback failed: {e}")
+        if browser_tts:
+            if private:
+                logger.info("[Continuity] browser TTS skipped — private chat or privacy-required task")
+                return
+            # Carry the TASK's voice/pitch/speed in the payload: they're applied
+            # globally only for this run, and restored before the browser's
+            # /api/tts request can arrive - a text-only payload spoke the wrong voice.
+            tts = getattr(self.system, 'tts', None)
+            publish(Events.TTS_SPEAK, {
+                "text": response, "task": task.get("name", ""),
+                "voice": getattr(tts, "voice_name", None),
+                "pitch": getattr(tts, "pitch_shift", None),
+                "speed": getattr(tts, "speed", None),
+            })
+        elif tts_enabled and getattr(self.system, 'tts', None):
+            # The privacy gate rides INSIDE speak_sync (one rule for every lane,
+            # broadsword H3): a pre-gate here doubled it against the operator's
+            # active chat and silenced public tasks.
+            try:
+                self.system.tts.speak_sync(response, chat_settings={"private_chat": bool(private)})
+            except Exception as e:
+                logger.warning(f"[Continuity] TTS failed: {e}")
+
+    @staticmethod
+    def _message(task):
+        """The task's message, with {quiet} filled: how long the person has
+        been quiet, app-wide (core/idle.py) - "1 h 5 min", or "a while" when
+        it isn't known."""
+        msg = task.get("initial_message", "Hello.")
+        if isinstance(msg, str) and "{quiet}" in msg:
+            from core import idle
+            mins = idle.minutes(None, person=True)
+            msg = msg.replace("{quiet}", idle.words(mins) if mins is not None else "a while")
+        return msg
+
+    def _fail(self, result, task, prefix, e):
+        """One failure's words: logged, on the result, and to the UI."""
+        from core.chat.chat import friendly_llm_error
+        friendly = friendly_llm_error(e)
+        error_msg = f"{prefix}: {friendly or e}"
+        logger.error(f"[Continuity] {error_msg}", exc_info=True)
+        result["errors"].append(error_msg)
+        publish(Events.CONTINUITY_TASK_ERROR, {"task": task.get("name", "Unknown"), "error": friendly or str(e)})
+
     def _run_background(self, task: Dict[str, Any], result: Dict[str, Any],
                         progress_cb=None, response_cb=None, cancel_event=None) -> Dict[str, Any]:
         """Run task in background mode — fully isolated via ExecutionContext."""
@@ -459,18 +535,11 @@ class ContinuityExecutor:
                     cancel_check=(cancel_event.is_set if cancel_event is not None else None),
                 )
 
-                # Set Discord reply channel for auto-reply targeting
-                reply_ch = task.get("_discord_reply_channel_id")
-                if reply_ch:
-                    try:
-                        from plugins.discord.tools.discord_tools import _reply_channel_id
-                        _reply_channel_id.set(reply_ch)
-                    except ImportError:
-                        pass
+                self._reply_channel(task)
 
                 tts_enabled = task.get("tts_enabled", True)
                 browser_tts = task.get("browser_tts", False)
-                msg = task.get("initial_message", "Hello.")
+                msg = self._message(task)
                 # Ephemeral path doesn't persist — images are turn-only, shown to
                 # the LLM (vision-gated in ctx), no DB save / marker needed.
                 _ev_images = task.get("_event_images")
@@ -496,37 +565,10 @@ class ContinuityExecutor:
                     if getattr(ctx, "cancelled", False):
                         result["cancelled"] = True   # response is "" — nothing below fires
 
-                    if response_cb and response:
-                        # Same egress rule as the foreground lane: a
-                        # privacy_required task's response stays local.
-                        if bool(task_settings.get("privacy_required")):
-                            logger.info("[Continuity] reply callback suppressed — task requires privacy")
-                        else:
-                            try: response_cb(response)
-                            except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
-
-                    if response:
-                        # P3-T5 (background/ephemeral path — no target chat):
-                        # privacy_required is the carrier; local-only TTS via
-                        # the same gate a private chat uses.
-                        if browser_tts:
-                            # Same gate as the foreground twin: a privacy-required
-                            # task's text never rides SSE to every open tab.
-                            if bool(task_settings.get("privacy_required")):
-                                logger.info("[Continuity] browser TTS skipped — task requires privacy")
-                            else:
-                                publish(Events.TTS_SPEAK, {"text": response, "task": task_name})
-                        elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
-                            from core.voice_privacy import tts_gate_reason
-                            _gate = tts_gate_reason(
-                                {"private_chat": bool(task_settings.get("privacy_required"))})
-                            if _gate:
-                                logger.info(f"[Continuity] TTS gated: {_gate}")
-                            else:
-                                try:
-                                    self.system.tts.speak_sync(response)
-                                except Exception as tts_err:
-                                    logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                    # P3-T5 (background/ephemeral path — no target chat):
+                    # privacy_required is the carrier.
+                    self._deliver(task, response, bool(task_settings.get("privacy_required")),
+                                  response_cb, tts_enabled, browser_tts)
 
                     result["responses"].append({
                         "iteration": 1,
@@ -534,15 +576,7 @@ class ContinuityExecutor:
                         "output": response or None
                     })
                 except Exception as e:
-                    from core.chat.chat import friendly_llm_error
-                    friendly = friendly_llm_error(e)
-                    error_msg = f"Task failed: {friendly or e}"
-                    logger.error(f"[Continuity] {error_msg}", exc_info=True)
-                    result["errors"].append(error_msg)
-                    publish(Events.CONTINUITY_TASK_ERROR, {
-                        "task": task.get("name", "Unknown"),
-                        "error": friendly or str(e),
-                    })
+                    self._fail(result, task, "Task failed", e)
 
                 if progress_cb:
                     progress_cb(1, 1)
@@ -550,15 +584,7 @@ class ContinuityExecutor:
                 result["success"] = len(result["errors"]) == 0
 
             except Exception as e:
-                from core.chat.chat import friendly_llm_error
-                friendly = friendly_llm_error(e)
-                error_msg = f"Background task failed: {friendly or e}"
-                logger.error(f"[Continuity] {error_msg}", exc_info=True)
-                result["errors"].append(error_msg)
-                publish(Events.CONTINUITY_TASK_ERROR, {
-                    "task": task.get("name", "Unknown"),
-                    "error": friendly or str(e),
-                })
+                self._fail(result, task, "Background task failed", e)
 
             finally:
                 self._restore_voice(original_voice)
@@ -783,26 +809,11 @@ class ContinuityExecutor:
             )
 
             # Set Discord reply channel for auto-reply targeting
-            reply_ch = task.get("_discord_reply_channel_id")
-            if reply_ch:
-                try:
-                    from plugins.discord.tools.discord_tools import _reply_channel_id
-                    _reply_channel_id.set(reply_ch)
-                except ImportError:
-                    # Discord plugin not loaded at all — expected path, quiet.
-                    pass
-                except Exception as e:
-                    # Plugin loaded but discord_tools broken in some other way.
-                    # Silently ignoring would auto-reply land nowhere visible
-                    # with no diagnostic. Log loudly. Chaos scout #19.
-                    logger.warning(
-                        f"[Continuity] Discord reply channel set failed "
-                        f"(plugin loaded but broken): {e}"
-                    )
+            self._reply_channel(task)
 
             tts_enabled = task.get("tts_enabled", True)
             browser_tts = task.get("browser_tts", False)
-            msg = task.get("initial_message", "Hello.")
+            msg = self._message(task)
 
             # Plugin event images: save bytes to the chat DB (keyed to target_chat)
             # and append <<IMG::tool:id>> markers to the persisted text. The base64
@@ -891,6 +902,12 @@ class ContinuityExecutor:
                 if hasattr(ctx, 'new_messages') and ctx.new_messages:
                     from core.chat.chat_tool_calling import wire_to_canonical
                     canonical_messages = wire_to_canonical(ctx.new_messages)
+                    # The task's prompt is a user row the person never wrote: it
+                    # carries its origin, so the idle clock's restart seed never
+                    # takes a heartbeat for the person (core/idle.py).
+                    canonical_messages = [dict(m, origin=f"task:{task.get('name') or task.get('id')}")
+                                          if m.get("role") == "user" and not m.get("origin") else m
+                                          for m in canonical_messages]
                     appended = session_manager.append_messages_to_chat(
                         target_chat, canonical_messages)
                     if appended is False:
@@ -921,48 +938,10 @@ class ContinuityExecutor:
                             "error": degraded,
                         })
 
-                if response_cb and response:
-                    # Reply callbacks are egress (Discord/Telegram/email posts).
-                    # A private target chat's response must not leave the
-                    # machine — same rule the TTS gate below enforces.
-                    if bool(chat_settings.get("private_chat")) or bool(task_settings.get("privacy_required")):
-                        logger.info("[Continuity] reply callback suppressed — target chat is private")
-                    else:
-                        try: response_cb(response)
-                        except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
-
-                if response:
-                    # P3-T5: TTS evaluates the TASK's chat, not the operator's
-                    # (the brain override is already reset here, so the
-                    # client-side self-gate would read the wrong chat). A
-                    # private chat's response never broadcasts to every tab.
-                    _priv_chat = bool(chat_settings.get("private_chat"))
-                    if browser_tts:
-                        if _priv_chat:
-                            logger.info("[Continuity] browser TTS skipped — target chat is private")
-                        else:
-                            # Carry the TASK's voice/pitch/speed in the payload:
-                            # they're still applied globally here, but the
-                            # finally below restores the operator's before the
-                            # browser's /api/tts request can possibly arrive —
-                            # a text-only payload always spoke the wrong voice.
-                            publish(Events.TTS_SPEAK, {
-                                "text": response, "task": task.get("name", ""),
-                                "voice": getattr(self.system.tts, "voice_name", None),
-                                "pitch": getattr(self.system.tts, "pitch_shift", None),
-                                "speed": getattr(self.system.tts, "speed", None),
-                            })
-                    elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
-                        # The gate rides INSIDE speak_sync now (one rule for
-                        # every lane — broadsword H3). The old pre-gate here
-                        # was doubled by speak_sync's own self-gate reading
-                        # the operator's active chat, so a public task chat
-                        # went silent whenever the operator sat on a private one.
-                        try:
-                            self.system.tts.speak_sync(response, chat_settings={
-                                "private_chat": _priv_chat or bool(task_settings.get("privacy_required"))})
-                        except Exception as tts_err:
-                            logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                # P3-T5: privacy is the TASK's chat's, never the operator's.
+                self._deliver(task, response,
+                              bool(chat_settings.get("private_chat")) or bool(task_settings.get("privacy_required")),
+                              response_cb, tts_enabled, browser_tts)
 
                 result["responses"].append({
                     "iteration": 1,
@@ -970,15 +949,7 @@ class ContinuityExecutor:
                     "output": response or None
                 })
             except Exception as e:
-                from core.chat.chat import friendly_llm_error
-                friendly = friendly_llm_error(e)
-                error_msg = f"Task failed: {friendly or e}"
-                logger.error(f"[Continuity] {error_msg}", exc_info=True)
-                result["errors"].append(error_msg)
-                publish(Events.CONTINUITY_TASK_ERROR, {
-                    "task": task.get("name", "Unknown"),
-                    "error": friendly or str(e),
-                })
+                self._fail(result, task, "Task failed", e)
 
             if progress_cb:
                 progress_cb(1, 1)
@@ -986,15 +957,7 @@ class ContinuityExecutor:
             result["success"] = len(result["errors"]) == 0
 
         except Exception as e:
-            from core.chat.chat import friendly_llm_error
-            friendly = friendly_llm_error(e)
-            error_msg = f"Persistent chat task failed: {friendly or e}"
-            logger.error(f"[Continuity] {error_msg}", exc_info=True)
-            result["errors"].append(error_msg)
-            publish(Events.CONTINUITY_TASK_ERROR, {
-                "task": task.get("name", "Unknown"),
-                "error": friendly or str(e),
-            })
+            self._fail(result, task, "Persistent chat task failed", e)
 
         finally:
             # Voice lock is already held by this thread from the acquire above —
@@ -1031,7 +994,22 @@ class ContinuityExecutor:
             result["errors"].append(f"Plugin task missing handler or plugin_dir")
             return result
 
-        full_path = Path(plugin_dir) / handler_path
+        # Only a handler inside the directory of the plugin the task names, as
+        # the loader knows it: a task's fields are data, never a path to run.
+        try:
+            from core.plugin_loader import plugin_loader as _pl
+            known = (_pl._plugins.get(plugin_name) or {}).get("path")
+            root = Path(known).absolute() if known else None
+            full_path = (Path(plugin_dir) / handler_path).absolute()
+            inside = (root is not None and Path(plugin_dir).resolve() == root.resolve()
+                      and full_path.resolve().is_relative_to(root.resolve()))
+        except Exception:
+            inside = False
+        if not inside:
+            logger.warning(f"[Continuity] Plugin task '{task.get('name')}' refused: its handler is not "
+                           f"inside the '{plugin_name}' plugin's own folder")
+            result["errors"].append("Plugin task refused: its handler is not inside its plugin's folder")
+            return result
         if not full_path.exists():
             result["errors"].append(f"Handler not found: {full_path}")
             return result

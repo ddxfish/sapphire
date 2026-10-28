@@ -271,7 +271,7 @@ def test_images_ephemeral_persists_the_words_only():
         sc.images_ephemeral = True
         list(sc.chat_stream('the cue', images=frames))
         mock_main._build_base_messages.assert_called_with('the cue', images=frames, files=None)   # the model saw them
-        sm.add_user_message.assert_called_once_with('the cue')                                    # the row did not
+        sm.add_user_message.assert_called_once_with('the cue', source=None)                                    # the row did not
         sm.reset_mock(); mock_main._build_base_messages.reset_mock()
         provider.chat_completion_stream.return_value = iter([{'type': 'content', 'text': 'ok'}, {'type': 'done', 'response': None}])
         sc2 = StreamingChat(mock_main)

@@ -94,13 +94,25 @@ Use `*` for "any value". Use `*/N` for "every N". Use `1-5` for ranges (1=Monday
 
 | View | What lives there |
 |------|------------------|
-| 💓 **Heartbeat** | Recurring self-pulses on a simple interval ("beats every 30 minutes"). Vitals cards plus a heartbeat timeline. |
+| 💓 **Heartbeat** | Recurring self-pulses on a simple interval ("beats every 30 minutes"), and beside them **Idle Heartbeats** that wake her once you have been quiet a while (below). Vitals cards plus a heartbeat timeline. |
 | 📅 **Scheduled** | Tasks at set times—one-off or recurring. Two columns: what **you** scheduled, and what **Sapphire** scheduled herself (via her `schedule_task` tool) or her plugins declared. |
 | 📡 **Daemons** | Event listeners (Discord, email, Telegram) that wake her when something happens. |
 | ⚡ **Realtime** | Live inbound session rules—phone lines she answers and holds open. |
 | 🔗 **Webhooks** | HTTP triggers so outside services can poke her. |
 
 Heartbeat and Scheduled are the time-driven views this doc covers. Each item can be toggled, edited, exported, run manually (▶), stopped mid-run (⏹ appears on a running card; toggling off stops it too), or deleted, and a timeline strip shows what ran and what's coming up, with chance percentages. Daemons, Realtime, and Webhooks fire on incoming events rather than the clock—see [Daemons & Webhooks](DAEMONS-WEBHOOKS.md).
+
+### Idle Heartbeats
+
+An Idle Heartbeat (Triggers › Heartbeat › **+ Idle**) is a heartbeat that waits for your quiet: once you have said nothing to her, anywhere, for its **Time To Activate** (default 60 min), she gets its message. Her own replies and her scheduled tasks never count as you, so she can't keep herself awake.
+
+- **Looks every** N minutes is how often it checks the quiet (5 is plenty).
+- **Back off** (on by default): she beats at 1x, 2x and 4x the quiet (60, 120, 240 min), then rests until you speak. Off: she beats on every look while you stay quiet.
+- **Chance** is rolled on each look, so a miss is just a later beat.
+- **Active hours** still apply: an idle beat at 3 AM waits for the window.
+- Put `{quiet}` in the message and it becomes how long it's been ("It's been quiet for {quiet}." becomes "It's been quiet for 2 h 10 min.").
+- A laptop asleep counts as quiet: open it after a night away and she may greet you.
+- They have their own column and their own 4 slots.
 
 ## Tips
 
@@ -117,7 +129,8 @@ Heartbeat and Scheduled are the time-driven views this doc covers. Each item can
 Continuity runs scheduled autonomous tasks. UI: **Triggers** nav group with five views — Heartbeat, Scheduled, Daemons, Realtime, Webhooks.
 
 TASK CREATION (UI):
-- Triggers > Scheduled > "+ Task" (heartbeats: Triggers > Heartbeat > "+ Heartbeat")
+- Triggers > Scheduled > "+ Task" (heartbeats: Triggers > Heartbeat > "+ Heartbeat"; idle heartbeats: "+ Idle")
+- Idle Heartbeat = a heartbeat with `idle_minutes` > 0: fires once the person has been quiet that long app-wide (core/idle.py, person=True); `idle_backoff` (default on) = 1x/2x/4x then rest until they speak; `{quiet}` in the message = the quiet in words
 - Set schedule (cron or simple time picker), initial message, prompt, toolset; picking a Persona auto-fills prompt/voice/toolset/model/scopes
 - Accordions: AI, Chat, Voice, Mind (scopes), Execution Limits
 

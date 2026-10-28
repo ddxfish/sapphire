@@ -413,8 +413,12 @@ class ConversationHistory:
         self._messages = value
         self._needs_full_resync = True
 
-    def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None):
-        """Add user message - accepts string or content list with images."""
+    def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None,
+                         origin: Optional[str] = None):
+        """Add user message - accepts string or content list with images.
+        origin: the source of a turn the person did not write (cadence, an
+        agent, MCP, a task) - kept on the row so the idle clock's restart
+        seed never takes it for the person (core/idle.py)."""
         msg = {
             "role": "user",
             "content": content,
@@ -422,6 +426,8 @@ class ConversationHistory:
         }
         if persona:
             msg["persona"] = persona
+        if origin:
+            msg["origin"] = str(origin)[:80]
         self.messages.append(msg)
 
     def add_assistant_with_tool_calls(
@@ -4096,13 +4102,19 @@ class ChatSessionManager:
         except Exception as e:
             logger.warning(f"post-migration WAL scrub failed: {e}")
 
-    def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None):
+    def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None,
+                         source: Optional[str] = None):
+        """source: the turn's lane (cadence.run_turn's source); None = a direct
+        engine call (the web chat, the wake word): the person."""
+        from core.idle import is_person
+        person = is_person(source)
         if persona is None:
             persona = self.get_chat_settings().get("persona")
         with self._lock:
-            self._effective_chat().add_user_message(content, persona=persona)
+            self._effective_chat().add_user_message(content, persona=persona,
+                                                    origin=None if person else source)
             self._save_current_chat()
-        _landed(self._effective_chat_name(), "user")
+        _landed(self._effective_chat_name(), "user" if person else "assistant")
         publish(Events.MESSAGE_ADDED, {"role": "user", "chat_name": self._effective_chat_name()})
 
     def add_assistant_with_tool_calls(
@@ -4391,7 +4403,10 @@ class ChatSessionManager:
                     "(SELECT chat_name, MAX(seq) s FROM chat_messages {w} GROUP BY chat_name) t "
                     "ON m.chat_name = t.chat_name AND m.seq = t.s")
         where, args = ("WHERE chat_name = ?", (chat_name,)) if chat_name else ("", ())
-        where_user = (where + " AND" if where else "WHERE") + " role = 'user'"
+        # the person's rows only: a turn from her own lanes carries `origin`
+        # (sealed rows aren't JSON - json_valid first, or json_extract throws)
+        where_user = ((where + " AND" if where else "WHERE") + " role = 'user' AND "
+                      "(CASE WHEN json_valid(message_json) THEN json_extract(message_json, '$.origin') END) IS NULL")
         out = {}
         with self._get_connection() as conn:
             anyrows = conn.execute(last_any.format(w=where), args).fetchall()

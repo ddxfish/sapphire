@@ -554,16 +554,18 @@ async def list_continuity_tasks(request: Request, _=Depends(require_login), syst
              for t in system.continuity_scheduler.list_tasks()]
 
     # Type filter (new)
+    from core.continuity.scheduler import task_type
     type_filter = request.query_params.get("type")
     if type_filter:
-        tasks = [t for t in tasks if t.get("type", "task") == type_filter]
+        tasks = [t for t in tasks if task_type(t) == type_filter]
 
-    # Legacy heartbeat filter (backward compat) — excludes daemon/webhook types
+    # The Heartbeat / Scheduled tabs: heartbeat=true|false, by TYPE (the old
+    # bool is derived from it) - daemon and webhook are neither
     hb_filter = request.query_params.get("heartbeat")
     if hb_filter is not None:
         want_hb = hb_filter.lower() in ("true", "1", "yes")
-        tasks = [t for t in tasks if t.get("heartbeat", False) == want_hb
-                 and t.get("type", "task") in ("task", "heartbeat")]
+        tasks = [t for t in tasks if task_type(t) in ("task", "heartbeat")
+                 and (task_type(t) == "heartbeat") == want_hb]
     return {"tasks": tasks}
 
 

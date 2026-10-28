@@ -4,7 +4,10 @@ import { fetchAIConfigData, renderAIConfig, wireAIConfig, readAIConfig } from '.
 import { renderCronTrigger, wireCronTrigger, readCronTrigger } from './trigger-cron.js';
 import { renderEventTrigger, wireEventTrigger, readEventTrigger } from './trigger-event.js';
 import { fetchDevices, renderDeviceAction, wireDeviceAction, readDeviceAction } from './device-action.js';
-import { setupModalClose } from '../modal.js';
+import { setupModalClose, escapeHtml } from '../modal.js';
+// One quote-safe escaper (modal.js): these copies didn't escape quotes, and
+// two of them fill value="..." (2026-10-27).
+const _esc = (str) => (str ? escapeHtml(String(str)) : '');
 
 const EMOJI_PICKS = [
     '\u2764\uFE0F', '\uD83E\uDE77', '\uD83E\uDDE1', '\uD83D\uDC9B', '\uD83D\uDC9A', '\uD83D\uDC99', '\uD83D\uDC9C',
@@ -23,6 +26,7 @@ const TYPE_CONFIG = {
     daemon:    { label: 'Daemon', blurb: 'Daemons respond to external events \u2014 a Discord message, a sensor alert, or any event source plugin.', trigger: 'event', hasEmoji: true },
     webhook:   { label: 'Webhook', blurb: 'Webhooks listen for HTTP requests and trigger Sapphire when called from external services.', trigger: 'event', hasEmoji: false },
 };
+const IDLE_CONFIG = { label: 'Idle Heartbeat', blurb: 'Idle Heartbeats wake Sapphire once you have been quiet a while - her own nudge to check in. Put {quiet} in the message to tell her how long.', trigger: 'cron', hasEmoji: true };
 
 /**
  * Open the unified trigger editor modal
@@ -33,14 +37,19 @@ const TYPE_CONFIG = {
 export async function openTriggerEditor(task, type, callbacks = {}) {
     document.querySelector('.sched-editor-overlay')?.remove();
 
-    const config = TYPE_CONFIG[type];
-    if (!config) { console.error('Unknown trigger type:', type); return; }
-
     const isEdit = !!task;
     const t = task || {};
+    // An Idle Heartbeat: a heartbeat that waits for the person's quiet
+    const isIdle = type === 'heartbeat' && (!!callbacks.idle || (t.idle_minutes || 0) > 0);
+    const config = isIdle ? IDLE_CONFIG : TYPE_CONFIG[type];
+    if (!config) { console.error('Unknown trigger type:', type); return; }
 
     // Set defaults for new items
     if (!isEdit) {
+        if (isIdle) {
+            t.idle_minutes = 60; t.idle_backoff = true; t.emoji = t.emoji || '\uD83D\uDCA4';
+            t.initial_message = t.initial_message || "It's been quiet for {quiet}. Check in if it feels right.";
+        }
         if (type === 'heartbeat') { t.tts_enabled = false; t.emoji = t.emoji || '\u2764\uFE0F'; }
         if (type === 'daemon') { t.emoji = t.emoji || '\uD83D\uDCE1'; }
     }
@@ -52,7 +61,7 @@ export async function openTriggerEditor(task, type, callbacks = {}) {
 
     // Build trigger section
     const triggerHTML = config.trigger === 'cron'
-        ? renderCronTrigger(t, { isHeartbeat: type === 'heartbeat' })
+        ? renderCronTrigger(t, { isHeartbeat: type === 'heartbeat', isIdle })
         : renderEventTrigger(t, { type });
 
     // Build AI config section
@@ -276,9 +285,3 @@ function _messageHintForType(type) {
     }
 }
 
-function _esc(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}

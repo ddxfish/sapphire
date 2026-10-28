@@ -1,14 +1,18 @@
 // trigger-editor/trigger-cron.js - Cron schedule picker (simple/advanced) + helpers
+import { escapeHtml } from '../modal.js';
+// One quote-safe escaper (modal.js): these copies didn't escape quotes, and
+// two of them fill value="..." (2026-10-27).
+const _esc = (str) => (str ? escapeHtml(String(str)) : '');
 
 /**
  * Render the cron trigger section HTML
  * @param {Object} t - Existing task data (or {})
- * @param {Object} opts - { isHeartbeat: bool }
+ * @param {Object} opts - { isHeartbeat: bool, isIdle: bool (an Idle Heartbeat: the interval is how often it looks) }
  * @returns {string} HTML string
  */
 export function renderCronTrigger(t, opts = {}) {
-    const { isHeartbeat } = opts;
-    const parsed = t.schedule ? parseCron(t.schedule) : (isHeartbeat ? { mode: 'interval', value: 15, unit: 'minutes' } : { mode: 'daily', time: '09:00' });
+    const { isHeartbeat, isIdle } = opts;
+    const parsed = t.schedule ? parseCron(t.schedule) : (isHeartbeat ? { mode: 'interval', value: isIdle ? 5 : 15, unit: 'minutes' } : { mode: 'daily', time: '09:00' });
     const isEdit = !!t.id;
 
     const simpleOk = isHeartbeat ? parsed.mode === 'interval' : (parsed.mode === 'daily' || parsed.mode === 'weekly');
@@ -41,7 +45,7 @@ export function renderCronTrigger(t, opts = {}) {
             <div class="sched-pick-panel" data-tab-panel="simple" ${initTab !== 'simple' ? 'style="display:none"' : ''}>
                 ${isHeartbeat ? `
                 <div class="sched-sentence">
-                    Beats every
+                    ${isIdle ? 'Looks every' : 'Beats every'}
                     <input type="number" id="ed-interval-val" value="${intervalValue}" min="1" style="width:60px">
                     <select id="ed-interval-unit">
                         <option value="minutes" ${intervalUnit === 'minutes' ? 'selected' : ''}>minutes</option>
@@ -69,6 +73,19 @@ export function renderCronTrigger(t, opts = {}) {
         </div>
 
         <div class="sched-modifiers">
+            ${isIdle ? `
+            <label class="sched-modifier">
+                Time To Activate
+                <span class="help-tip" data-tip="She beats once you have been quiet this long - anywhere, not only in this chat. Her own messages and scheduled tasks don't count as you. Put {quiet} in the message to tell her how long it's been.">?</span>
+                <span class="sched-modifier-inputs">
+                    <input type="number" id="ed-idle-minutes" value="${t.idle_minutes || 60}" min="5" max="10080" style="width:70px"> min of quiet
+                </span>
+            </label>
+            <label class="sched-modifier">
+                <input type="checkbox" id="ed-idle-backoff" ${t.idle_backoff === false ? '' : 'checked'}>
+                Back off
+                <span class="help-tip" data-tip="On: she beats at 1x, 2x and 4x the quiet (60, 120, 240 min), then waits until you speak. Off: she beats on every look for as long as you stay quiet.">?</span>
+            </label>` : ''}
             ${renderActiveHours(t, 'Restrict to a time window. Outside these hours, cron matches are skipped. Supports overnight (e.g. 8PM-4AM).')}
             <label class="sched-modifier">
                 <input type="checkbox" id="ed-chance-on" ${(t.chance ?? 100) < 100 ? 'checked' : ''}>
@@ -168,10 +185,15 @@ export function wireCronTrigger(modal, opts = {}) {
  */
 export function readCronTrigger(modal, getCurrentCron) {
     const chanceOn = modal.querySelector('#ed-chance-on')?.checked;
+    const idleEl = modal.querySelector('#ed-idle-minutes');
     return {
         schedule: getCurrentCron(),
         chance: chanceOn ? (parseInt(modal.querySelector('#ed-chance')?.value) || 100) : 100,
         ...readActiveHours(modal),
+        ...(idleEl ? {
+            idle_minutes: Math.max(5, parseInt(idleEl.value) || 60),
+            idle_backoff: !!modal.querySelector('#ed-idle-backoff')?.checked,
+        } : {}),
     };
 }
 
@@ -275,9 +297,3 @@ function _hourOptions(selected) {
     }).join('');
 }
 
-function _esc(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}

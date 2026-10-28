@@ -1,3 +1,7 @@
+import { escapeHtml } from '../modal.js';
+// One quote-safe escaper (modal.js): these copies didn't escape quotes, and
+// two of them fill value="..." (2026-10-27).
+const _esc = (str) => (str ? escapeHtml(String(str)) : '');
 // trigger-editor/device-action.js - the "Device" side of a Task (2026-10-06).
 // A Device task runs one device action on its cron with no LLM in the loop:
 // device → capability → action → value, from what the device describes
@@ -116,9 +120,3 @@ export function readDeviceAction(modal) {
     };
 }
 
-function _esc(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}

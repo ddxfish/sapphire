@@ -1,8 +1,9 @@
 # core/idle.py - how long a chat (or the whole app) has been quiet
 #
 # One clock for everything that asks "how long since anyone talked here":
-# her idle line in the ghost message (IDLE_NOTICE_MINUTES), the context
-# budgeter's warm-cache hold (core/chat/budget.py), and plugins.
+# her idle line in the ghost message (IDLE_NOTICE_MINUTES), the Idle
+# Heartbeat (core/continuity/scheduler.py), and plugins. (The context
+# budgeter's warm-cache hold keeps its own per-provider send times.)
 #
 #   from core import idle
 #   idle.minutes('default')               # since the last message there (anyone's)
@@ -11,7 +12,9 @@
 #   idle.since(chat, person=False)        # the same as an epoch time, or None
 #
 # History stamps the clock as each message lands (touch, from history.py's
-# MESSAGE_ADDED sites: a new row, never an edit). After a restart a chat's
+# MESSAGE_ADDED sites: a new row, never an edit). The person is stamped only
+# from a person lane (is_person); a row from her own lanes carries `origin`
+# and the restart seed skips it. After a restart a chat's
 # first ask reads its last rows' own timestamps, so a quiet night survives a
 # reboot. A sealed (vaulted) chat answers None: its rows are not read.
 import logging
@@ -21,6 +24,18 @@ from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Inbox/cadence sources that are the person speaking (core/rooms.py reads it
+# too). Anything else - cadence ticks, agents, MCP, timers, tasks - is her own
+# activity: it counts as "anyone", never as the person.
+PERSON_SOURCES = ('web', 'voice', 'conversation', 'device')
+
+
+def is_person(source) -> bool:
+    """A turn from this source is the person's. None = a direct engine call
+    (the web chat, the wake word), which is the person."""
+    return source is None or str(source).split(':', 1)[0] in PERSON_SOURCES
+
 
 _lock = threading.Lock()
 _any = {}           # chat → epoch of its last message (anyone's)
@@ -33,7 +48,7 @@ def touch(chat: str, role: str = 'assistant', at: Optional[float] = None):
     """A message landed in `chat`. role 'user' (or 'pair') is the person."""
     if not chat:
         return
-    now = at or time.time()
+    now = min(at or time.time(), time.time())       # a stamp from the future never pins the clock
     with _lock:
         _any[chat] = max(now, _any.get(chat, 0))
         if role in ('user', 'pair'):
@@ -55,10 +70,14 @@ def forget(chat: str, new_name: Optional[str] = None):
 
 
 def _epoch(stamp) -> Optional[float]:
+    """A stored naive local stamp as epoch, or None. Windows raises OSError on
+    a pre-1970 local time; a stamp in the future (a clock that ran ahead) is
+    taken as now."""
     try:
-        return datetime.fromisoformat(str(stamp)).timestamp()
-    except (TypeError, ValueError):
+        t = datetime.fromisoformat(str(stamp)).timestamp()
+    except (TypeError, ValueError, OSError, OverflowError):
         return None
+    return min(t, time.time()) if t > 946684800 else None      # before 2000: not a real message time
 
 
 def _seed(chat: Optional[str]):

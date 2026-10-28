@@ -101,9 +101,28 @@ export function formatTime(isoString) {
 
 // ── Heartbeat helpers (timeline is the merged-timeline object) ────────
 
+export const isIdle = (hb) => (hb.idle_minutes || 0) > 0;
+
+// '45 min', '2 h 10 min', '3 days 4 h' (core/idle.py words)
+export function quietWords(mins) {
+    let m = Math.floor(mins || 0);
+    if (m < 60) return `${m} min`;
+    let h = Math.floor(m / 60); m %= 60;
+    if (h < 24) return m ? `${h} h ${m} min` : `${h} h`;
+    const d = Math.floor(h / 24); h %= 24;
+    return `${d} day${d !== 1 ? 's' : ''}` + (h ? ` ${h} h` : '');
+}
+
 export function getHeartbeatState(hb, timeline) {
     if (!hb.enabled) return { label: 'Flatlined', cls: 'flatlined' };
     if (hb.running) return { label: hb.cancelling ? 'Stopping…' : 'Ba-bump', cls: 'babump' };
+    if (isIdle(hb)) {
+        const recent = (timeline.past || []).filter(a => a.task_id === hb.id);
+        if (recent.length > 0 && recent[0].status === 'error') return { label: 'Irregular', cls: 'irregular' };
+        if (hb.quiet_min == null) return { label: 'Waiting for you to say something', cls: 'warmup' };
+        if (hb.idle_next_min == null) return { label: 'Resting until you speak', cls: 'warmup' };
+        return { label: 'Listening for quiet', cls: 'beating' };
+    }
     if (!hb.last_run) return { label: 'Warming up', cls: 'warmup' };
     const recent = (timeline.past || []).filter(a => a.task_id === hb.id);
     if (recent.length > 0 && recent[0].status === 'error') return { label: 'Irregular', cls: 'irregular' };
@@ -220,9 +239,16 @@ export function renderHeartbeatCard(hb, timeline) {
     const beats = getBeatsForTask(timeline, hb.id, 20);
 
     const lastAgo = hb.last_run ? timeAgo(hb.last_run) : null;
-    const nextIn = getNextIn(timeline, hb.id);
+    const nextIn = isIdle(hb) ? null : getNextIn(timeline, hb.id);
+    // An Idle Heartbeat has no clock time: what it waits for, and the quiet so far
+    const idleParts = isIdle(hb) ? [
+        hb.idle_next_min != null ? `beats after ${quietWords(hb.idle_next_min)} quiet` : null,
+        hb.quiet_min != null ? `quiet ${quietWords(hb.quiet_min)}` : null,
+        hb.idle_backoff !== false && hb.idle_fires_now ? `beat ${hb.idle_fires_now}/3 this quiet` : null,
+    ] : [];
     const timeParts = [
         state.label,
+        ...idleParts,
         hb.active_hours_start != null ? formatHourRange(hb.active_hours_start, hb.active_hours_end) : null,
         lastAgo ? `ran ${lastAgo}` : null,
         nextIn ? `next in ${nextIn}` : null
@@ -263,9 +289,9 @@ export function renderHeartbeatCard(hb, timeline) {
         </div>`;
 }
 
-export function renderMission(heartbeats, timeline) {
+export function renderMission(heartbeats, timeline, empty = 'Create a heartbeat to monitor vitals here') {
     if (!heartbeats.length) {
-        return '<div class="text-muted" style="padding:20px;text-align:center;font-size:var(--font-sm)">Create a heartbeat to monitor vitals here</div>';
+        return `<div class="text-muted" style="padding:20px;text-align:center;font-size:var(--font-sm)">${esc(empty)}</div>`;
     }
     return `<div class="sched-vitals-grid">
         ${heartbeats.map(hb => renderHeartbeatCard(hb, timeline)).join('')}
@@ -414,8 +440,9 @@ export function renderTimeline(timeline, liveItems) {
 
 // ── Editor / actions (refresh = view's reload+rerender callback) ───────
 
-export function openEditor(task, type, refresh) {
+export function openEditor(task, type, refresh, opts = {}) {
     openTriggerEditor(task, type, {
+        idle: !!opts.idle,          // a new Idle Heartbeat (an existing one says so itself)
         onSave: async (id, data) => {
             try {
                 if (id) await updateTask(id, data);
@@ -506,24 +533,21 @@ export async function importTask(type, allTasks, refresh) {
             task.name = name;
             task.type = task.type || type;
             task.enabled = false;
-            delete task.id;
-            delete task.last_run;
-            delete task.last_response;
-            delete task.created;
+            EXPORT_STRIP_KEYS.forEach(k => delete task[k]);   // one list both ways: an import never carries a handler to run
 
             const skippedScopes = [];
             for (const key of Object.keys(scopeSets)) {
                 const val = task[key];
                 if (val && !scopeSets[key].has(val)) {
                     skippedScopes.push(`${key}: "${val}"`);
-                    task[key] = 'default';
+                    task[key] = 'none';      // never her real ('default') memory for a scope this install lacks
                 }
             }
 
             await createTask(task);
 
             if (skippedScopes.length) {
-                ui.showToast(`Imported (${skippedScopes.length} scopes reset to default: ${skippedScopes.join(', ')})`, 'warning');
+                ui.showToast(`Imported (${skippedScopes.length} scopes this Sapphire lacks set to none: ${skippedScopes.join(', ')})`, 'warning');
             }
         },
         onDone: async () => { await refresh(); },

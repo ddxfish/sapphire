@@ -630,3 +630,103 @@ def test_a_task_writing_into_a_chat_never_counts_as_the_person():
     body = body[:body.index('\n    def ', 10)]
     assert '_landed(chat_name, "assistant")' in body and '"user"' not in body.split('_landed(')[1][:40]
     assert "idle.touch(chat, 'user')" in (ROOT / 'core' / 'rooms.py').read_text()
+
+
+# --- a clean person clock (Idle Heartbeat prerequisite, 2026-10-27) -------------------
+
+def test_only_a_person_lane_is_the_person():
+    from core import idle
+    for src in (None, 'web', 'voice', 'conversation', 'device', 'device:den'):
+        assert idle.is_person(src), src
+    for src in ('cadence', 'agent:research', 'mcp:claude', 'midi', 'task:hb', 'game'):
+        assert not idle.is_person(src), src
+    from core import rooms
+    assert rooms.PERSON_SOURCES is idle.PERSON_SOURCES
+
+
+def test_her_own_turns_carry_their_origin_and_stamp_only_activity(monkeypatch):
+    from core.chat.history import ConversationHistory
+    h = ConversationHistory.__new__(ConversationHistory)
+    h._messages, h._needs_full_resync = [], False
+    h.add_user_message('tick', origin='cadence')
+    h.add_user_message('hi')
+    assert h.messages[0]['origin'] == 'cadence' and 'origin' not in h.messages[1]
+    src = (ROOT / 'core' / 'chat' / 'chat_streaming.py').read_text()
+    assert src.count("source=getattr(self, 'turn_source', None)") == 4
+    assert 'stream.turn_source = source' in (ROOT / 'core' / 'cadence.py').read_text()
+    assert 'origin=f"task:' in (ROOT / 'core' / 'continuity' / 'executor.py').read_text()
+
+
+def test_the_restart_seed_skips_her_own_rows(tmp_path):
+    import json as _json, sqlite3, types
+    from contextlib import contextmanager
+    from core.chat.history import ChatSessionManager
+    db = tmp_path / 'h.db'
+    c = sqlite3.connect(db)
+    c.execute('CREATE TABLE chat_messages (chat_name TEXT, seq INTEGER, role TEXT, message_json TEXT)')
+    rows = [('c', 1, 'user', {'role': 'user', 'content': 'me', 'timestamp': '2026-10-27T10:00:00'}),
+            ('c', 2, 'user', {'role': 'user', 'content': 'beat', 'origin': 'task:hb', 'timestamp': '2026-10-27T11:00:00'}),
+            ('c', 3, 'assistant', {'role': 'assistant', 'content': 'hey', 'timestamp': '2026-10-27T11:00:05'}),
+            ('s', 1, 'user', 'SEALEDBLOB')]
+    for ch, seq, role, mj in rows:
+        c.execute('INSERT INTO chat_messages VALUES (?,?,?,?)', (ch, seq, role, mj if isinstance(mj, str) else _json.dumps(mj)))
+    c.commit()
+
+    @contextmanager
+    def conn():
+        k = sqlite3.connect(db)
+        yield k
+        k.close()
+    fake = types.SimpleNamespace(_ensure_db=lambda: None, _get_connection=conn, _vault_hidden=lambda n: n == 's')
+    got = ChatSessionManager.last_activity(fake)
+    assert got == {'c': ('2026-10-27T11:00:05', '2026-10-27T10:00:00')}
+
+
+def test_the_clock_survives_bad_stamps():
+    from core import idle
+    assert idle._epoch('1970-01-01T00:00:00') is None                # pre-2000: not a message time (OSError on Windows)
+    assert idle._epoch('not a time') is None
+    assert abs(idle._epoch('2999-01-01T00:00:00') - _time.time()) < 5  # a future stamp is now
+
+
+# --- the task door (DRY scout's security find, 2026-10-27) ----------------------------
+
+def test_a_request_body_never_plants_a_handler_to_run(tmp_path, monkeypatch):
+    from core.continuity.scheduler import ContinuityScheduler
+    s = ContinuityScheduler.__new__(ContinuityScheduler)
+    import threading as _th
+    s._lock, s._tasks = _th.RLock(), {}
+    monkeypatch.setattr(s, '_save_tasks', lambda: None, raising=False)
+    monkeypatch.setattr(s, '_vault_ref_sync', lambda *a: None, raising=False)
+    monkeypatch.setattr(s, '_check_llm_provider', lambda d: None, raising=False)
+    monkeypatch.setattr(s, '_check_device_action', lambda d: None, raising=False)
+    t = s.create_task({'name': 'x', 'source': 'plugin:clock', 'handler': '../../evil.py',
+                       'plugin_dir': '/', 'runtime': True, 'run_count': 99})
+    assert t['handler'] == '' and t['plugin_dir'] == '' and t['source'] == '' and not t['runtime'] and t['run_count'] == 0
+    t2 = s.create_task({'name': 'y', 'source': 'plugin:clock', 'handler': 'alarm_handler.py',
+                        'plugin_dir': '/p', 'runtime': True}, trusted=True)
+    assert t2['handler'] == 'alarm_handler.py' and t2['runtime'] is True
+
+
+def test_the_runner_only_runs_a_handler_inside_its_plugin(tmp_path, monkeypatch):
+    from core.continuity.executor import ContinuityExecutor
+    from core import plugin_loader as pl_mod
+    plug = tmp_path / 'clock'
+    plug.mkdir()
+    (plug / 'ok.py').write_text('def run(event):\n    return "ran"\n')
+    (tmp_path / 'evil.py').write_text('def run(event):\n    return "evil"\n')
+    monkeypatch.setattr(pl_mod.plugin_loader, '_plugins', {'clock': {'path': plug}}, raising=False)
+    ex = ContinuityExecutor.__new__(ContinuityExecutor)
+    bad = ex._run_plugin_task({'name': 'a', 'source': 'plugin:clock', 'plugin_dir': str(plug), 'handler': '../evil.py'})
+    assert not bad['success'] and 'refused' in bad['errors'][0]
+    bad2 = ex._run_plugin_task({'name': 'b', 'source': 'plugin:clock', 'plugin_dir': str(tmp_path), 'handler': 'evil.py'})
+    assert not bad2['success'] and 'refused' in bad2['errors'][0]
+
+
+def test_runtime_plugin_tasks_survive_the_boot_purge():
+    src = (ROOT / 'core' / 'continuity' / 'scheduler.py').read_text()
+    assert 'startswith("plugin:") and not all_tasks[tid].get("runtime")' in src
+    clock = (ROOT / 'core' / 'plugins' / 'clock' / 'tools' / 'clock_tools.py').read_text()
+    assert '"runtime": True' in clock and '}, trusted=True)' in clock
+    js = (ROOT / 'interfaces' / 'web' / 'static' / 'shared' / 'trigger-common.js').read_text()
+    assert 'EXPORT_STRIP_KEYS.forEach(k => delete task[k])' in js and "task[key] = 'none'" in js

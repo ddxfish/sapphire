@@ -434,9 +434,10 @@ def _set_alarm(arguments):
             "handler": "alarm_handler.py",
             "plugin_dir": str(_PLUGIN_DIR),
             "delete_after_run": True,
+            "runtime": True,              # survives a reboot (manifest schedules are re-registered instead)
             "emoji": "⏰",
             "initial_message": f"Alarm: {name}",
-        })
+        }, trusted=True)
     except Exception as e:
         return f"Couldn't create alarm: {e}", False
 

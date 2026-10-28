@@ -10,6 +10,7 @@ import uuid
 import random
 import logging
 import threading
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -88,6 +89,17 @@ def _value_matches(ev_val, filter_val):
         if ev_phone and cand_phone and ev_phone == cand_phone:
             return True
     return False
+
+
+EVENT_TYPES = ("daemon", "webhook")      # fired by events, never by the cron loop
+
+
+def task_type(task) -> str:
+    """A task's type: its `type`, else the legacy `heartbeat` bool's. The ONE
+    reading (DRY scout, 2026-10-27: two defaults disagreed - 'task' vs the
+    bool - so an API heartbeat with no bool landed in Scheduled)."""
+    t = task.get("type") if isinstance(task, dict) else None
+    return t or ("heartbeat" if isinstance(task, dict) and task.get("heartbeat") else "task")
 
 
 class ContinuityScheduler:
@@ -170,7 +182,10 @@ class ContinuityScheduler:
             plugin_count = 0
             migrated = 0
             for tid in list(all_tasks):
-                if all_tasks[tid].get("source", "").startswith("plugin:"):
+                # Manifest schedules are re-registered from the manifest each
+                # boot; a plugin's runtime tasks (alarms) are the person's own
+                # and stay (the clock promised "Survives reboot" - 2026-10-27).
+                if all_tasks[tid].get("source", "").startswith("plugin:") and not all_tasks[tid].get("runtime"):
                     del all_tasks[tid]
                     plugin_count += 1
                     continue
@@ -286,8 +301,49 @@ class ContinuityScheduler:
     
     # =========================================================================
     # TASK CRUD
+    def _log_result(self, task_id, task_name, result, **extra):
+        """One activity row for a finished run - the same fields from the cron,
+        manual and event paths (the event path had dropped `errors`)."""
+        status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
+        self._log_activity(task_id, task_name, status, {
+            **extra,
+            "responses": len(result.get("responses", [])),
+            "errors": result.get("errors", []),
+        })
+
+    def _record_run(self, task_id: str, clear_progress: bool = True):
+        """A run finished: stamp last_run, count it (auto-disable or delete at
+        its limit), save. The one copy for the cron, manual and event paths
+        (DRY scout, 2026-10-27). A delete's vault reference is released after
+        the lock (its scan re-enters it)."""
+        gone = None
+        with self._lock:
+            if task_id in self._tasks:
+                self._tasks[task_id]["last_run"] = _user_now().isoformat()
+                gone = self._increment_run_count(task_id)
+                self._save_tasks()
+            if clear_progress:
+                self._task_progress.pop(task_id, None)
+        if gone:
+            self._vault_ref_sync(None, gone)
+
+    def _forget_task(self, task_id: str, stop: bool = True):
+        """Drop a task and every piece of its runtime state. Call under
+        self._lock. stop=True also stops a live run. Returns the prompt name
+        it referred to (release it with _vault_ref_sync after the lock)."""
+        old_prompt = self._tasks.pop(task_id, {}).get("prompt")
+        self._task_pending.pop(task_id, None)
+        self._task_running.pop(task_id, None)
+        self._task_last_matched.pop(task_id, None)
+        self._task_progress.pop(task_id, None)
+        _ev = self._cancel_events().pop(task_id, None)
+        if _ev is not None and stop:
+            _ev.set()   # a deleted task's live run stops too
+        return old_prompt
+
     def _increment_run_count(self, task_id: str):
-        """Increment run counter, auto-disable/delete if limits reached. Call under self._lock."""
+        """Increment run counter, auto-disable/delete if limits reached. Call
+        under self._lock. Returns the deleted task's prompt name, or None."""
         task = self._tasks.get(task_id)
         if not task:
             return
@@ -305,11 +361,7 @@ class ContinuityScheduler:
                 if queued:
                     logger.warning(f"[Continuity] '{task_name}' — delete_after_run dropping {queued} queued events")
                 logger.info(f"[Continuity] '{task_name}' — delete_after_run, removing task")
-                del self._tasks[task_id]
-                self._task_pending.pop(task_id, None)
-                self._task_running.pop(task_id, None)
-                self._task_last_matched.pop(task_id, None)
-                return
+                return self._forget_task(task_id, stop=False)
 
         # Auto-disable at max runs
         if max_runs > 0 and task.get("run_count", 0) >= max_runs:
@@ -334,7 +386,18 @@ class ContinuityScheduler:
                     if progress.get("timestamp"):
                         task["last_run"] = progress["timestamp"]
                 tasks.append(task)
-            return tasks
+        # The Idle Heartbeat card's line, outside the lock (the idle clock's
+        # first ask after a boot reads the chat database): how long the person
+        # has been quiet, how many beats this quiet has had, when the next is due.
+        for task in tasks:
+            if is_idle(task):
+                due, stretch, fires, quiet = idle_state(task)
+                mins = int(task.get("idle_minutes") or 0)
+                task["quiet_min"] = None if quiet is None else round(quiet, 1)
+                task["idle_fires_now"] = fires
+                done = task.get("idle_backoff", True) and fires >= self.IDLE_MAX_FIRES
+                task["idle_next_min"] = None if done else mins * (2 ** fires if task.get("idle_backoff", True) else 1)
+        return tasks
     
     def get_task(self, task_id: str) -> Optional[Dict]:
         """Get single task by ID."""
@@ -346,6 +409,8 @@ class ContinuityScheduler:
     # tasks, so they share the daemon cap (2026-09-23). Heartbeat and
     # webhook caps stay fixed.
     MAX_HEARTBEATS = 4
+    MAX_IDLE_HEARTBEATS = 4         # their own column, their own slots
+    IDLE_MAX_FIRES = 3              # with backoff: at 1x, 2x, 4x the quiet, then it waits for the person
     MAX_WEBHOOKS = 10
 
     @staticmethod
@@ -420,14 +485,29 @@ class ContinuityScheduler:
         if p not in providers_config():
             raise ValueError(f"Unknown LLM provider '{p}' — pick one from Settings › LLM")
 
-    def create_task(self, data: Dict) -> Dict:
-        """Create new task, returns the created task."""
+    # A task's internal fields: set by core and plugins in-process, never by a
+    # request body or an imported file. `handler` + `plugin_dir` name a file
+    # the executor runs - from a REST post or a task import that was a way to
+    # run any file on disk (DRY scout, 2026-10-27).
+    INTERNAL_FIELDS = ('id', 'handler', 'plugin_dir', 'run_count', 'last_run', 'last_response', 'created',
+                       'runtime', 'idle_stretch', 'idle_fires')
+
+    def create_task(self, data: Dict, trusted: bool = False) -> Dict:
+        """Create new task, returns the created task. trusted=True: an
+        in-process caller (the plugin loader, a plugin's own runtime task) may
+        set the internal fields; anyone else's are dropped, and a `plugin:`
+        source with them."""
+        if not trusted:
+            data = {k: v for k, v in data.items() if k not in self.INTERNAL_FIELDS}
+            if str(data.get("source") or "").startswith("plugin:"):
+                data.pop("source")
         # P3-T14: the sealed-vault display mask is never a real target.
         if data.get("chat_target") == "__locked__":
             data = {k: v for k, v in data.items() if k != "chat_target"}
         self._check_llm_provider(data)
         device_action = self._check_device_action(data)
-        task_type = data.get("type", "heartbeat" if data.get("heartbeat") else "task")
+        ttype = task_type(data)
+        idle_minutes, idle_backoff = _idle_fields(data, ttype)
         import config
         max_daemons = int(config.MAX_DAEMON_TASKS)
         max_total = int(config.MAX_TOTAL_TASKS)
@@ -436,13 +516,15 @@ class ContinuityScheduler:
             total = len(self._tasks)
             type_counts = {}
             for t in self._tasks.values():
-                tt = t.get("type", "heartbeat" if t.get("heartbeat") else "task")
+                tt = "idle heartbeat" if is_idle(t) else task_type(t)
                 type_counts[tt] = type_counts.get(tt, 0) + 1
 
-            limits = {"heartbeat": self.MAX_HEARTBEATS, "daemon": max_daemons, "webhook": self.MAX_WEBHOOKS}
-            if task_type in limits and type_counts.get(task_type, 0) >= limits[task_type]:
-                hint = " - raise Max Daemon Tasks in Settings > System > Advanced" if task_type == "daemon" else ""
-                raise ValueError(f"Maximum {task_type} tasks reached ({limits[task_type]}){hint}")
+            limits = {"heartbeat": self.MAX_HEARTBEATS, "idle heartbeat": self.MAX_IDLE_HEARTBEATS,
+                      "daemon": max_daemons, "webhook": self.MAX_WEBHOOKS}
+            kind = "idle heartbeat" if idle_minutes else ttype
+            if kind in limits and type_counts.get(kind, 0) >= limits[kind]:
+                hint = " - raise Max Daemon Tasks in Settings > System > Advanced" if kind == "daemon" else ""
+                raise ValueError(f"Maximum {kind} tasks reached ({limits[kind]}){hint}")
             if total >= max_total:
                 raise ValueError(f"Maximum tasks reached ({max_total}) - raise Max Total Tasks in Settings > System > Advanced")
 
@@ -452,7 +534,7 @@ class ContinuityScheduler:
         provider, model = normalize_pair(data.get("provider", "auto"), data.get("model", ""))
         task = {
             "id": str(uuid.uuid4()),
-            "type": task_type,
+            "type": ttype,
             "name": data.get("name", "Unnamed Task"),
             "enabled": data.get("enabled", True),
             "schedule": data.get("schedule", "0 9 * * *"),
@@ -472,7 +554,11 @@ class ContinuityScheduler:
             "voice": data.get("voice", ""),
             "pitch": data.get("pitch", None),
             "speed": data.get("speed", None),
-            "heartbeat": data.get("heartbeat", False),
+            "heartbeat": ttype == "heartbeat",      # derived from type, never its own truth
+            # Idle Heartbeat: fires once the person has been quiet this many
+            # minutes (0 = a plain heartbeat); backoff = 1x, 2x, 4x, then wait
+            "idle_minutes": idle_minutes,
+            "idle_backoff": idle_backoff,
             "emoji": data.get("emoji", ""),
             "context_limit": data.get("context_limit", 0),
             "max_parallel_tools": data.get("max_parallel_tools", 0),
@@ -485,6 +571,9 @@ class ContinuityScheduler:
             "max_runs": data.get("max_runs", 0),
             "run_count": data.get("run_count", 0),
             "delete_after_run": data.get("delete_after_run", False),
+            # a plugin's own runtime task (a clock alarm), not a manifest
+            # schedule: it survives a reboot (manifest ones are re-registered)
+            "runtime": bool(data.get("runtime", False)),
             "last_run": None,
             "last_response": None,
             "created": _user_now().isoformat()
@@ -506,7 +595,7 @@ class ContinuityScheduler:
             task[setting_key] = data.get(setting_key, "none")
 
         # Auto-generate webhook secret if not provided
-        if task_type == "webhook":
+        if ttype == "webhook":
             tc = task.get("trigger_config", {})
             if not tc.get("secret"):
                 import secrets as _secrets
@@ -567,12 +656,19 @@ class ContinuityScheduler:
                 "heartbeat", "emoji",
                 "context_limit", "max_parallel_tools", "max_tool_rounds",
                 "active_hours_start", "active_hours_end",
-                "max_runs", "delete_after_run", "privacy_required"
+                "max_runs", "delete_after_run", "privacy_required",
+                "idle_minutes", "idle_backoff",
             }
             allowed.update(scope_setting_keys())
             for key in allowed:
                 if key in data:
                     task[key] = data[key]
+            if "idle_minutes" in data or "idle_backoff" in data or "type" in data:
+                task["idle_minutes"], task["idle_backoff"] = _idle_fields(task, task_type(task))
+            if "type" in data or "heartbeat" in data:
+                if "type" not in data:
+                    task["type"] = task_type({"heartbeat": data["heartbeat"]})
+                task["heartbeat"] = task_type(task) == "heartbeat"     # one truth: the type
 
             # Re-stamp the privacy carrier whenever the prompt or the flag
             # changed: stored value OR derived-from-prompt. A user can't
@@ -617,15 +713,7 @@ class ContinuityScheduler:
                 return False
             
             name = self._tasks[task_id].get("name", task_id)
-            old_prompt = self._tasks[task_id].get("prompt")
-            del self._tasks[task_id]
-            self._task_pending.pop(task_id, None)
-            self._task_running.pop(task_id, None)
-            self._task_last_matched.pop(task_id, None)
-            self._task_progress.pop(task_id, None)
-            _ev = self._cancel_events().pop(task_id, None)
-            if _ev is not None:
-                _ev.set()   # a deleted task's live run stops too
+            old_prompt = self._forget_task(task_id)
             self._save_tasks()
             logger.info(f"[Continuity] Deleted task: {name} ({task_id})")
         self._vault_ref_sync(None, old_prompt)
@@ -772,21 +860,11 @@ class ContinuityScheduler:
                     cancel_event=ev,
                 )
 
-                with self._lock:
-                    if task_id in self._tasks:
-                        self._tasks[task_id]["last_run"] = _user_now().isoformat()
-                        self._increment_run_count(task_id)
-                        self._save_tasks()
-                    self._task_progress.pop(task_id, None)
+                self._record_run(task_id)
 
                 # The executor's own verdict, not the Event: a ⏹ landing
                 # after the run finished must not relabel real work.
-                status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
-
-                self._log_activity(task_id, task_name, status, {
-                    "responses": len(result.get("responses", [])),
-                    "errors": result.get("errors", [])
-                })
+                self._log_result(task_id, task_name, result)
             except Exception as e:
                 logger.error(f"[Continuity] Task '{task_name}' execution failed: {e}", exc_info=True)
                 self._log_activity(task_id, task_name, "error", {"exception": str(e)})
@@ -832,8 +910,7 @@ class ContinuityScheduler:
                 continue
 
             # Event-triggered tasks don't fire via cron
-            task_type = task.get("type", "task")
-            if task_type in ("daemon", "webhook"):
+            if task_type(task) in EVENT_TYPES:
                 continue
 
             task_id = task["id"]
@@ -859,6 +936,16 @@ class ContinuityScheduler:
                 logger.info(f"[Continuity] '{task_name}' outside active hours ({start}:00-{end}:00), skipping")
                 continue
 
+            # Idle Heartbeat: only once the person has been quiet long enough
+            # (the cron above is how often it looks). Before the chance roll, so
+            # a missed roll is simply a later look (Krem: random delay).
+            idle_due = None
+            if is_idle(task):
+                due, stretch, fires, quiet = idle_state(task)
+                if not due:
+                    continue
+                idle_due = (stretch, fires)
+
             # Chance roll — gates the entire firing
             chance = task.get("chance", 100)
             if chance < 100:
@@ -875,6 +962,8 @@ class ContinuityScheduler:
             # fire per matched minute, then machine-gunned them all on
             # release. Missed fires beyond the cap coalesce into nothing.
             with self._lock:
+                if self._task_running.get(task_id, False) and idle_due is not None:
+                    continue                    # an idle beat never queues: its next look re-checks the quiet
                 if self._task_running.get(task_id, False):
                     queue = self._task_pending.setdefault(task_id, [])
                     if len(queue) >= 3:
@@ -887,6 +976,10 @@ class ContinuityScheduler:
                     continue
                 self._task_running[task_id] = True
                 self._arm_cancel(task_id)
+                if idle_due is not None and task_id in self._tasks:
+                    # counted at dispatch: a run that fails still counts (no error loop)
+                    self._tasks[task_id]["idle_stretch"], self._tasks[task_id]["idle_fires"] = idle_due[0], idle_due[1] + 1
+                    self._save_tasks()
 
             # Run on a separate thread so different tasks can run concurrently.
             # LOAD-BEARING: fresh threading.Thread per task is required for scope
@@ -944,19 +1037,9 @@ class ContinuityScheduler:
                 cancel_event=ev,
             )
 
-            with self._lock:
-                if task_id in self._tasks:
-                    self._tasks[task_id]["last_run"] = _user_now().isoformat()
-                    self._increment_run_count(task_id)
-                    self._save_tasks()
+            self._record_run(task_id, clear_progress=False)
 
-            status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
-
-            self._log_activity(task_id, task_name, status, {
-                "manual": True,
-                "responses": len(result.get("responses", [])),
-                "errors": result.get("errors", [])
-            })
+            self._log_result(task_id, task_name, result, manual=True)
 
             return result
 
@@ -992,51 +1075,19 @@ class ContinuityScheduler:
         if not task.get("enabled", True):
             return {"success": False, "error": "Task is disabled"}
 
-        task_type = task.get("type", "task")
-        if task_type not in ("daemon", "webhook"):
-            return {"success": False, "error": f"Task type '{task_type}' is not event-triggered"}
+        ttype = task_type(task)
+        if ttype not in EVENT_TYPES:
+            return {"success": False, "error": f"Task type '{ttype}' is not event-triggered"}
 
         task_name = task.get("name", "Unnamed")
 
-        # Auto-filter by account: if task specifies an account in trigger_config,
-        # only process events from that account (e.g., multi-bot Discord/Telegram)
-        trigger_config = task.get("trigger_config", {})
-        task_account = trigger_config.get("account", "")
-        if task_account:
-            try:
-                event_obj = json.loads(event_data) if isinstance(event_data, str) else event_data
-                event_account = event_obj.get("account", "") if isinstance(event_obj, dict) else ""
-                if event_account and event_account != task_account:
-                    logger.debug(f"[Continuity] '{task_name}' skipped — event from '{event_account}', task wants '{task_account}'")
-                    return {"success": False, "error": "Account mismatch"}
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # Active hours (2026-09-25): an event task answers only inside its window
-        # (the daemon editor's "Active hours"; Discord shows the bot away outside
-        # it). The owner's own clock (skip_filter — greetings) fires a task, not
-        # a message, and is not gated.
-        if not skip_filter and not task_in_active_hours(task):
-            logger.debug(f"[Continuity] '{task_name}' outside active hours, event skipped")
-            return {"success": False, "error": "Outside active hours"}
-
-        # Check filter (daemon and webhook tasks)
-        # skip_filter: plugin_loader.fire_task — the owning daemon's own clock
-        # firing its task (a greeting is not a message; a "mentioned=True"
-        # filter must not swallow it). Account match above still applies.
-        if task_type in ("daemon", "webhook") and not skip_filter:
-            trigger_config = task.get("trigger_config", {})
-            task_filter = trigger_config.get("filter")
-            if task_filter and isinstance(task_filter, dict):
-                try:
-                    event_obj = json.loads(event_data) if isinstance(event_data, str) else event_data
-                    if isinstance(event_obj, dict):
-                        if not self.filter_matches(task_filter, event_obj, task_name):
-                            return {"success": False, "error": "Event filtered out"}
-                except (json.JSONDecodeError, TypeError):
-                    # Can't parse event as JSON — filter can't run, reject for safety
-                    logger.debug(f"[Continuity] '{task_name}' filter active but event data not parseable as JSON, rejecting")
-                    return {"success": False, "error": "Event data not JSON-parseable, filter requires JSON"}
+        # The one gate (event_gate): account, active hours, message filter.
+        # skip_filter: plugin_loader.fire_task - the owning daemon's own clock
+        # firing its task (a greeting is not a message); the account still applies.
+        why = event_gate(task, parse_event(event_data), skip_filter=skip_filter)
+        if why:
+            logger.debug(f"[Continuity] '{task_name}' event not answered: {why}")
+            return {"success": False, "error": why}
 
         # If already running, queue with actual event data (not just a counter)
         with self._lock:
@@ -1122,7 +1173,7 @@ class ContinuityScheduler:
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-                self._log_activity(task_id, task_name, "started", {"trigger": task_type})
+                self._log_activity(task_id, task_name, "started", {"trigger": ttype})
                 ev = self._run_cancel(task_id)
                 try:
                     result = self.executor.run(
@@ -1132,21 +1183,12 @@ class ContinuityScheduler:
                         response_callback=_make_reply_cb(active_task, cur_event_data, cur_reply_callback),
                         cancel_event=ev,
                     )
-                    with self._lock:
-                        if task_id in self._tasks:
-                            self._tasks[task_id]["last_run"] = _user_now().isoformat()
-                            self._increment_run_count(task_id)
-                            self._save_tasks()
-                        self._task_progress.pop(task_id, None)
+                    self._record_run(task_id)
 
-                    status = "cancelled" if result.get("cancelled") else ("complete" if result.get("success") else "error")
-                    self._log_activity(task_id, task_name, status, {
-                        "trigger": task_type,
-                        "responses": len(result.get("responses", [])),
-                    })
+                    self._log_result(task_id, task_name, result, trigger=ttype)
                 except Exception as e:
                     logger.error(f"[Continuity] Event task '{task_name}' failed: {e}", exc_info=True)
-                    self._log_activity(task_id, task_name, "error", {"exception": str(e)})
+                    self._log_activity(task_id, task_name, "error", {"trigger": ttype, "exception": str(e)})
                     with self._lock:
                         self._task_progress.pop(task_id, None)
 
@@ -1173,7 +1215,7 @@ class ContinuityScheduler:
         self._event_threads = [t for t in self._event_threads if t.is_alive()]  # prune dead
         self._event_threads.append(thread)
 
-        logger.info(f"[Continuity] Event-triggered: {task_name} ({task_type})")
+        logger.info(f"[Continuity] Event-triggered: {task_name} ({ttype})")
         return {"success": True, "queued": False}
 
     @staticmethod
@@ -1333,8 +1375,8 @@ class ContinuityScheduler:
             for task in self._tasks.values():
                 if not task.get("enabled"):
                     continue
-                if task.get("type", "task") in ("daemon", "webhook"):
-                    continue
+                if task_type(task) in EVENT_TYPES or is_idle(task):
+                    continue                    # an idle beat has no clock time: it waits for quiet
 
                 try:
                     cron = _get_croniter()(task.get("schedule", ""), now)
@@ -1361,12 +1403,27 @@ class ContinuityScheduler:
         now = _user_now()
         end = now + timedelta(hours=hours)
         timeline = []
-        
+        from core import idle as _idle
+        since = _idle.since(None, person=True)          # read outside the lock (a boot's first ask reads the DB)
+
         with self._lock:
             for task in self._tasks.values():
                 if not task.get("enabled"):
                     continue
-                if task.get("type", "task") in ("daemon", "webhook"):
+                if task_type(task) in EVENT_TYPES:
+                    continue
+                if is_idle(task):
+                    # one point, not every cron look: when the next beat is due
+                    # if the person stays quiet (never, when backoff is spent)
+                    at = _idle_next_at(task, since)
+                    if at is not None:
+                        when = max(datetime.fromtimestamp(at, tz=now.tzinfo), now)
+                        if when <= end and self._in_active_hours(task, when.hour):
+                            timeline.append({
+                                "task_id": task["id"], "task_name": task.get("name"),
+                                "scheduled_for": when.isoformat(), "chance": task.get("chance", 100),
+                                "heartbeat": True, "emoji": task.get("emoji", ""),
+                                "task_type": task_type(task), "idle": True, "type": "upcoming"})
                     continue
 
                 try:
@@ -1388,7 +1445,7 @@ class ContinuityScheduler:
                             "chance": task.get("chance", 100),
                             "heartbeat": task.get("heartbeat", False),
                             "emoji": task.get("emoji", ""),
-                            "task_type": task.get("type", "task"),
+                            "task_type": task_type(task),
                             "type": "upcoming"
                         })
                 except Exception:
@@ -1438,6 +1495,104 @@ class ContinuityScheduler:
         }
 
 
+def _idle_fields(data, ttype):
+    """(idle_minutes, idle_backoff), checked: minutes 0 (a plain heartbeat) or
+    5..10080 (a week); only a heartbeat can be idle."""
+    try:
+        mins = int(data.get("idle_minutes") or 0)
+    except (TypeError, ValueError):
+        raise ValueError("Time To Activate must be a number of minutes")
+    if mins and ttype != "heartbeat":
+        mins = 0
+    if mins and not 5 <= mins <= 10080:
+        raise ValueError("Time To Activate must be between 5 minutes and a week (10080)")
+    return mins, bool(data.get("idle_backoff", True))
+
+
+def is_idle(task) -> bool:
+    """An Idle Heartbeat: a heartbeat that waits for the person's quiet."""
+    try:
+        return task_type(task) == "heartbeat" and int(task.get("idle_minutes") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def idle_state(task, now=None):
+    """For an Idle Heartbeat: (due, stretch, fires, quiet_minutes). The quiet
+    is the person's, app-wide (core/idle.py: the last thing they said to her
+    anywhere; her own replies and tasks never count). A new stretch (they
+    spoke since) re-arms it. Backoff on: due at 1x, 2x, 4x the threshold,
+    IDLE_MAX_FIRES times, then it waits for them. Off: due on every check
+    while quiet. Unknown quiet (nothing said yet, sealed) is never due."""
+    from core import idle
+    since = idle.since(None, person=True)
+    if since is None:
+        return False, None, 0, None
+    stretch = int(since)
+    fires = int(task.get("idle_fires") or 0) if task.get("idle_stretch") == stretch else 0
+    now = now or time.time()
+    at = _idle_next_at(task, since)
+    return at is not None and now >= at, stretch, fires, max(0.0, (now - since) / 60.0)
+
+
+def _idle_next_at(task, since):
+    """Epoch when an Idle Heartbeat's next beat comes due if the quiet goes
+    on, or None (quiet unknown, or the backoff is spent until they speak)."""
+    if since is None:
+        return None
+    stretch = int(since)
+    fires = int(task.get("idle_fires") or 0) if task.get("idle_stretch") == stretch else 0
+    mins = int(task.get("idle_minutes") or 0)
+    if task.get("idle_backoff", True):
+        if fires >= ContinuityScheduler.IDLE_MAX_FIRES:
+            return None
+        return since + mins * (2 ** fires) * 60
+    return since + mins * 60
+
+
+def live_filter(task) -> dict:
+    """A task's message filter with its blank fields dropped: an empty field
+    in the editor means "any", never "must be empty"."""
+    tc = task.get("trigger_config") or {}
+    raw = tc.get("filter") if isinstance(tc.get("filter"), dict) else {}
+    return {k: v for k, v in raw.items() if str(v).strip()}
+
+
+def event_gate(task, event_obj, skip_filter=False, hour=None):
+    """Why an event task would NOT answer this event, or None: the one gate
+    fire_event_task, tasks_matching and the plugin loader share (DRY scout,
+    2026-10-27: three copies had drifted - account types, blank filters,
+    active hours). event_obj: the parsed event (None = not JSON).
+    skip_filter: the owner's own clock firing (a greeting) - no hours, no filter."""
+    tc = task.get("trigger_config") or {}
+    want = str(tc.get("account") or "")
+    got = str(event_obj.get("account") or "") if isinstance(event_obj, dict) else ""
+    if want and got and got != want:
+        return "Account mismatch"
+    if skip_filter:
+        return None
+    if not task_in_active_hours(task, hour):
+        return "Outside active hours"
+    flt = live_filter(task)
+    if flt:
+        if not isinstance(event_obj, dict):
+            return "Event data not JSON-parseable, filter requires JSON"
+        if not ContinuityScheduler.filter_matches(flt, event_obj, str(task.get("name") or "")):
+            return "Event filtered out"
+    return None
+
+
+def parse_event(event_data):
+    """The event payload as a dict, or None (parsed once, at the door)."""
+    if isinstance(event_data, dict):
+        return event_data
+    try:
+        obj = json.loads(event_data) if isinstance(event_data, str) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
 def tasks_matching(tasks, event_obj, hour=None) -> list:
     """The enabled event tasks that WOULD fire for `event_obj` — fire_event_task's
     gates (account match, active hours, message filter) as a read-only question.
@@ -1445,19 +1600,4 @@ def tasks_matching(tasks, event_obj, hour=None) -> list:
     2.3.0: which task, hence which memory scope, is about to answer)."""
     if not isinstance(event_obj, dict):
         return []
-    out = []
-    for task in tasks or []:
-        if not task.get("enabled", True):
-            continue
-        tc = task.get("trigger_config") or {}
-        want = str(tc.get("account") or "")
-        got = str(event_obj.get("account") or "")
-        if want and got and got != want:
-            continue
-        if not task_in_active_hours(task, hour):
-            continue
-        flt = tc.get("filter")
-        if flt and isinstance(flt, dict) and not ContinuityScheduler.filter_matches(flt, event_obj, str(task.get("name") or "")):
-            continue
-        out.append(task)
-    return out
+    return [t for t in tasks or [] if t.get("enabled", True) and event_gate(t, event_obj, hour=hour) is None]

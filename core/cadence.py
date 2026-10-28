@@ -336,6 +336,7 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
         # no brain there (which seat would it be?). A failed turn, not a drop.
         raise RuntimeError(f"'{chat}' is a chat room; nothing runs an unprompted turn on it")
     stream, sid, chat_name = llm.begin_stream(chat, exclusive=True)
+    stream.turn_source = source          # whose turn: only a person lane stamps the person (core/idle.py)
     if brain is not None:
         stream.brain = brain
     if on_stream is not None:

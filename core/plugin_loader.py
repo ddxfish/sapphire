@@ -1139,7 +1139,7 @@ class PluginLoader:
             for sched in schedules:
                 try:
                     task = self._scheduler.create_task(
-                        self._sched_task_def(name, sched, plugin_dir))
+                        self._sched_task_def(name, sched, plugin_dir), trusted=True)
                     task_ids.append(task["id"])
                     logger.debug(f"[PLUGINS] Registered schedule task '{sched.get('name')}' for {name}")
                 except Exception as e:
@@ -1963,7 +1963,7 @@ class PluginLoader:
             for sched in schedules:
                 try:
                     task = self._scheduler.create_task(
-                        self._sched_task_def(name, sched, plugin_dir))
+                        self._sched_task_def(name, sched, plugin_dir), trusted=True)
                     task_ids.append(task["id"])
                     logger.info(f"[PLUGINS] Deferred schedule registration: '{sched.get('name')}' for {name}")
                 except Exception as e:
@@ -2574,15 +2574,17 @@ class PluginLoader:
         match at all -> None (the daemon should decline the session)."""
         if not self._scheduler:
             return None
+        from core.continuity.scheduler import live_filter, task_in_active_hours
         catch_all = None
         for task in self._scheduler.find_tasks_by_event(source_name):
             tc = task.get("trigger_config", {})
-            if account is not None and tc.get("account") != account:
+            if account is not None and str(tc.get("account") or "") != str(account):
                 continue
+            if not task_in_active_hours(task):
+                continue                                     # outside its hours it doesn't answer (as every event gate)
             if payload is None:
                 return task                                  # legacy: first match
-            raw = tc.get("filter") if isinstance(tc.get("filter"), dict) else {}
-            task_filter = {k: v for k, v in raw.items() if str(v).strip()}
+            task_filter = live_filter(task)
             if not task_filter:
                 catch_all = catch_all or task
             elif self._scheduler.filter_matches(task_filter, payload,

@@ -77,6 +77,7 @@ Per-chat data scopes
 Global overlay
 ### Triggers
 Heartbeat
+Idle heartbeat
 Cron tasks
 Daemons event listeners
 Webhooks

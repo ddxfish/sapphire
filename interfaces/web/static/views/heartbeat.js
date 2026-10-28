@@ -1,5 +1,6 @@
 // views/heartbeat.js - Triggers › Heartbeat. Recurring self-pulses Sapphire
-// runs on her own rhythm. Vitals grid + heartbeat-scoped timeline.
+// runs on her own rhythm, and beside them the Idle Heartbeats that wake her
+// once you have been quiet a while. Timeline across both, two columns.
 import { renderSectionHeader, bindSectionHeader } from '../shared/section-header.js';
 import { helpPills } from '../features/video-link.js';
 import * as TR from '../shared/trigger-common.js';
@@ -36,18 +37,28 @@ function render() {
     container.innerHTML = `
         ${renderSectionHeader({ tabs: TR.TRIGGER_TABS, active: 'heartbeat', help: helpPills('Heartbeat', { video: '-XGqK8MsIK8', doc: 'CONTINUITY.md', inline: true }), status: '' })}
         <div class="view-body view-scroll">
-            <div class="trigger-single">
-                <div class="sched-col-header">
-                    <h3>Heartbeats</h3>
-                    <button class="btn-sm" id="hb-import" title="Import heartbeat">⬇</button>
-                    <button class="btn-sm btn-primary" id="hb-new">+ Heartbeat</button>
+            <div id="hb-timeline"></div>
+            <div class="sched-layout trigger-2col">
+                <div id="hb-beat-col">
+                    <div class="sched-col-header">
+                        <h3>Heartbeats</h3>
+                        <button class="btn-sm" id="hb-import" title="Import heartbeat">⬇</button>
+                        <button class="btn-sm btn-primary" id="hb-new">+ Heartbeat</button>
+                    </div>
+                    <div id="hb-vitals"></div>
                 </div>
-                <div id="hb-timeline"></div>
-                <div id="hb-vitals"></div>
+                <div id="hb-idle-col">
+                    <div class="sched-col-header">
+                        <h3>Idle Heartbeats</h3>
+                        <button class="btn-sm btn-primary" id="hb-new-idle">+ Idle</button>
+                    </div>
+                    <div id="hb-idle-vitals"></div>
+                </div>
             </div>
         </div>`;
     bindSectionHeader(container);
     container.querySelector('#hb-new')?.addEventListener('click', () => TR.openEditor(null, 'heartbeat', refresh));
+    container.querySelector('#hb-new-idle')?.addEventListener('click', () => TR.openEditor(null, 'heartbeat', refresh, { idle: true }));
     container.querySelector('#hb-import')?.addEventListener('click', () => TR.importTask('heartbeat', heartbeats, refresh));
     TR.bindActions(container.querySelector('.view-body'), () => heartbeats, refresh);
     update();
@@ -57,22 +68,24 @@ function update() {
     const scrollEl = container?.querySelector('.view-scroll');
     const scrollTop = scrollEl?.scrollTop || 0;
     const vitals = container?.querySelector('#hb-vitals');
+    const idleVitals = container?.querySelector('#hb-idle-vitals');
+    const body = container?.querySelector('.view-body');
 
     // Preserve expanded response accordions across the surgical update
     const openCards = new Set();
-    if (vitals) {
-        for (const d of vitals.querySelectorAll('details.hb-response-wrap[open]')) {
-            const card = d.closest('.hb-card');
-            if (card) openCards.add(card.id);
-        }
+    for (const d of body?.querySelectorAll('details.hb-response-wrap[open]') || []) {
+        const card = d.closest('.hb-card');
+        if (card) openCards.add(card.id);
     }
 
     const tl = container?.querySelector('#hb-timeline');
     if (tl) tl.innerHTML = TR.renderTimeline(timeline, heartbeats);
-    if (vitals) vitals.innerHTML = TR.renderMission(heartbeats, timeline);
+    if (vitals) vitals.innerHTML = TR.renderMission(heartbeats.filter(h => !TR.isIdle(h)), timeline);
+    if (idleVitals) idleVitals.innerHTML = TR.renderMission(heartbeats.filter(TR.isIdle), timeline,
+        'An Idle Heartbeat wakes her once you have been quiet a while.');
 
     for (const id of openCards) {
-        const det = vitals?.querySelector(`#${id} details.hb-response-wrap`);
+        const det = body?.querySelector(`#${id} details.hb-response-wrap`);
         if (det) det.open = true;
     }
     if (scrollEl) scrollEl.scrollTop = scrollTop;
@@ -81,6 +94,6 @@ function update() {
     const statusEl = container?.querySelector('.section-status');
     if (statusEl) statusEl.innerHTML = TR.statusRow({
         enabled, total: heartbeats.length, running: status.running,
-        desc: 'Recurring self-pulses — Sapphire checks in on her own rhythm.'
+        desc: 'Recurring self-pulses — Sapphire checks in on her own rhythm, or once you have been quiet a while.'
     });
 }

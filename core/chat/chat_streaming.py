@@ -573,7 +573,7 @@ class StreamingChat:
                     response = hook_event.response or ""
                     if response:
                         if not hook_event.ephemeral:
-                            self.main_chat.session_manager.add_user_message(user_input)
+                            self.main_chat.session_manager.add_user_message(user_input, source=getattr(self, 'turn_source', None))
                             self.main_chat.session_manager.add_assistant_final(response)
                         else:
                             self.ephemeral = True
@@ -639,11 +639,11 @@ class StreamingChat:
                                 part["data"] = img.get("data", "")   # store refused → inline, as before
                             user_content.append(part)
                     if len(user_content) == 1 and user_content[0].get("type") == "text":
-                        self.main_chat.session_manager.add_user_message(user_input)
+                        self.main_chat.session_manager.add_user_message(user_input, source=getattr(self, 'turn_source', None))
                     else:
-                        self.main_chat.session_manager.add_user_message(user_content)
+                        self.main_chat.session_manager.add_user_message(user_content, source=getattr(self, 'turn_source', None))
                 else:
-                    self.main_chat.session_manager.add_user_message(user_input)
+                    self.main_chat.session_manager.add_user_message(user_input, source=getattr(self, 'turn_source', None))
             else:
                 logger.info("[CONTINUE] Skipping user message addition (continuing from existing)")
             

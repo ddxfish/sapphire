@@ -100,7 +100,7 @@ CUE_IMAGES = 6                  # the newest pictures a cue carries (the rest ar
 # 3 while we get used to it, 50 for a coding session.
 RULES = {'human_every': 1, 'pause_s': 0.0, 'max_rounds': 0, 'bots_enabled': True, 'shuffle': False,
          'blind': False, 'mention_max': 3}
-PERSON_SOURCES = ('web', 'voice', 'conversation', 'device')    # inbox sources that are the person speaking
+from core.idle import PERSON_SOURCES       # inbox sources that are the person speaking (one list: core/idle.py)
 
 _lock = threading.RLock()
 _rooms = {}                     # chat -> _Runtime

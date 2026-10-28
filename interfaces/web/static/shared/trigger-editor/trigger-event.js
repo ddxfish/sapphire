@@ -1,3 +1,4 @@
+import { escapeHtml } from '../modal.js';
 // trigger-editor/trigger-event.js - Event trigger section (daemons + webhooks)
 // Response routing is implicit: daemons always reply to source, webhooks always reply via HTTP.
 // Chat history + TTS are configured in the existing Chat/Voice accordions (from ai-config).
@@ -7,6 +8,9 @@ import { renderActiveHours, wireActiveHours, readActiveHours } from './trigger-c
 const DAEMON_HOURS_TIP = 'Only answer between these hours. Outside them, incoming events are skipped (a Discord bot shows away). Supports overnight (e.g. 8PM-4AM).';
 
 import { editableFocused } from '../dom-guard.js';
+// One quote-safe escaper (modal.js): these copies didn't escape quotes, and
+// two of them fill value="..." (2026-10-27).
+const _esc = (str) => (str ? escapeHtml(String(str)) : '');
 
 // Cache sources data so filter hints update on source change
 let _sourcesCache = [];
@@ -480,9 +484,3 @@ function _renderTaskFields(modal) {
 // rows a daemon uses.
 export { _buildFilterRows as buildFilterRows, _readFilterRows as readFilterRows, _wireFilterRows as wireFilterRows };
 
-function _esc(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML.replace(/"/g, '&quot;');
-}
