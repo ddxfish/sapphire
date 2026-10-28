@@ -115,7 +115,16 @@ def execute(function_name, arguments, config=None):
 
         # Active session
         s = data.get("session", {})
-        lines.append(f"Chat: {s.get('chat', '?')} | Prompt: {s.get('prompt', '?')} | Persona: {s.get('persona') or 'none'}")
+        _where = s.get('chat') or 'none (a background run)'
+        lines.append(f"Chat: {_where}{' (private)' if s.get('private') else ''} | Prompt: {s.get('prompt', '?')} | "
+                     f"Persona: {s.get('persona') or 'none'} | Via: {s.get('channel', 'chat')}")
+        if s.get('quiet_words'):
+            here = f" (in this chat: {s['quiet_here_words']})" if s.get('quiet_here_words') else ""
+            lines.append(f"Quiet: the person last spoke to you {s['quiet_words']} ago{here}")
+        ctx = s.get('context')
+        if ctx:
+            gone = f" · {ctx['out_of_view']} older turns out of view" if ctx.get('out_of_view') else ""
+            lines.append(f"Context: {ctx['used']:,} / {ctx['limit']:,} tokens ({ctx.get('percent', 0)}%){gone}")
         _llm = s.get('llm_display') or s.get('llm_primary', '?')
         _mdl = s.get('llm_effective_model') or s.get('llm_model') or 'default'
         lines.append(f"LLM: {_llm} ({_mdl}) | Toolset: {s.get('toolset', '?')} ({s.get('function_count', 0)} tools)")
@@ -133,7 +142,10 @@ def execute(function_name, arguments, config=None):
         ww = svc.get("wakeword", {})
         emb = svc.get("embeddings", {})
         tts_str = f"{tts.get('provider', 'off')}" + (f" ({tts.get('voice', '')})" if tts.get('voice') else "")
-        lines.append(f"TTS: {tts_str} | STT: {stt.get('provider', 'off')} | Wakeword: {'ON' if ww.get('enabled') else 'OFF'} | Embeddings: {emb.get('provider', 'off')}")
+        stt_str = stt.get('provider', 'off')
+        if stt.get('enabled') and stt.get('ready') is False:
+            stt_str += " (NOT RUNNING" + (f": {stt['why']}" if stt.get('why') else "") + ")"
+        lines.append(f"TTS: {tts_str} | STT: {stt_str} | Wakeword: {'ON' if ww.get('enabled') else 'OFF'} | Embeddings: {emb.get('provider', 'off')}")
 
         # Audio
         audio = data.get("audio", {})

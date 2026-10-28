@@ -23,6 +23,7 @@ class Secrets(dict):
 
 KEY = Secrets(token='body-key-abcdefgh')
 
+
 REAL = {
     ('GET', '/health'): {"ok": True, "body_name": "sapphire-pi2", "temp_c": 39.4, "uptime_s": 7500.4,
                          "led": {"state": "idle", "animation": "heartbeat-step", "blackout": False},
@@ -50,6 +51,7 @@ REAL = {
 class Reply:
     def __init__(self, data=None, status=200, content=b''):
         self._data, self.status_code, self.content = data, status, content
+        self.headers = {}
 
     def json(self):
         if self._data is None:
@@ -834,3 +836,9 @@ def test_the_engine_asks_the_driver_what_a_dynamic_select_offers(monkeypatch):
     assert seen['key'] == 'wake_model' and seen['device']['fingerprint'] == 'aa:bb' and seen['device']['takes'] == ['wake.model']
     monkeypatch.setattr(engine, '_driver', lambda d, p='': (_ for _ in ()).throw(RuntimeError('off')))
     assert engine._options(row, part, field) == [{'value': 'hey_gone', 'label': 'hey_gone (not in the library now)'}]
+
+
+def test_versions_compare_number_by_number():
+    assert sat._older('0.9.3', '0.10.0') and not sat._older('0.10.0', '0.9.3')
+    assert sat._older('0.5.1', '0.5.2') and not sat._older('0.9.4', '0.9.4')
+    assert not sat._older('0.9.4', '0.9.4-dev') or sat._older('0.9.4', '0.9.4-dev')   # odd tails never raise

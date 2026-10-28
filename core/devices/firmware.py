@@ -274,7 +274,17 @@ def _boards(fresh=False):
     for base in bases:
         try:
             entries = _json_of(_read(base, 'index.json', TEXT_MAX), 'index').get('boards') or []
-            for b in (_board(e) for e in entries if isinstance(e, dict)):
+            good, bad = [], []
+            for e in (x for x in entries if isinstance(x, dict)):
+                try:                                       # one bad entry hid every board of its source (scouts, 2026-10-28)
+                    good.append(_board(e))
+                except FirmwareError as why:
+                    bad.append(str(why))
+            if bad and not good:
+                raise FirmwareError(bad[0])                # nothing usable here: said, as a source that cannot be read
+            for why in bad:
+                logger.warning(f"[DEVICES] firmware index from {base[:80]}: an entry skipped: {why}")
+            for b in good:
                 boards.setdefault(b['id'], dict(b, source=base))
         except Exception as e:
             logger.warning(f"[DEVICES] firmware index from {base[:80]}: {e}")

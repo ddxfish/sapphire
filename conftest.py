@@ -40,3 +40,24 @@ def _hermetic_notify(tmp_path, monkeypatch):
     monkeypatch.setattr(_n, '_rows', {})
     monkeypatch.setattr(_n, '_last_tick', {})
     monkeypatch.setattr(_n, '_loaded', False)
+
+
+class _AlwaysOld(dict):
+    """Every key a board from before signing: it is sent Bearer, one call per request."""
+    def get(self, k, default=None):
+        return dict.get(self, k, float('inf'))
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_satellite_signing(tmp_path, monkeypatch):
+    """The satellite driver remembers in user/device_signed.json which boards sign; a fake
+    board answering 200 would write the dev box's real file. Boards in tests take the key
+    itself unless a test says otherwise (tests/test_devices_satellite_signed.py sets _old)."""
+    try:
+        from core.devices.drivers import satellite as _s
+    except Exception:
+        return
+    monkeypatch.setattr(_s, 'SIGNED_FILE', tmp_path / 'device_signed.json')
+    monkeypatch.setattr(_s, '_signed', set())
+    monkeypatch.setattr(_s, '_old', _AlwaysOld())
+    monkeypatch.setattr(_s, '_skew', {})

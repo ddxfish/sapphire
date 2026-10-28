@@ -16,10 +16,59 @@ logger = logging.getLogger(__name__)
 _boot_time = time.time()
 
 
+def _uptime_seconds():
+    """Since this process started (a restart resets it, as it should). Not
+    this module's import time: the tool imports it lazily, often as a fresh
+    copy at the first call, and a plugin reload re-imports it - uptime read 0."""
+    try:
+        import psutil
+        return int(time.time() - psutil.Process().create_time())
+    except Exception:
+        return int(time.time() - _boot_time)
+
+
 # ── Hardware / disk / activity / custom-command helpers ─────────────────
 # All wrapped in try/except so a single failure (e.g. torch missing on a
 # stripped-down install, psutil quirk on Windows, etc.) just hides that
 # section instead of breaking get_self_info wholesale.
+
+def _now_local():
+    """The app's clock (USER_TIMEZONE), the one her schedules fire on; the OS
+    clock can differ on a box set to another zone."""
+    try:
+        from core.continuity.scheduler import _user_now
+        return _user_now()
+    except Exception:
+        return datetime.now()
+
+
+def _quiet_and_context(chat) -> dict:
+    """How long the person has been quiet (app-wide and here) and how full
+    this chat's context is: what she most often has to guess at."""
+    out = {}
+    try:
+        from core import idle
+        q = idle.minutes(None, person=True)
+        if q is not None:
+            out["quiet_min"] = round(q, 1)
+            out["quiet_words"] = idle.words(q)
+        if chat:
+            qc = idle.minutes(chat, person=True)
+            if qc is not None:
+                out["quiet_here_words"] = idle.words(qc)
+    except Exception:
+        pass
+    try:
+        if chat:
+            from core.chat import budget
+            m = budget.meter(chat, 0) or {}
+            if m.get("limit") and m.get("measured"):
+                out["context"] = {"used": m.get("used", 0), "limit": m["limit"],
+                                  "percent": m.get("percent"), "out_of_view": m.get("out_of_view", 0)}
+    except Exception:
+        pass
+    return out
+
 
 def _get_hardware_info() -> dict:
     """Cross-platform hardware summary. Falls back gracefully — every
@@ -211,6 +260,12 @@ def _get_upcoming_tasks(scheduler, hours: int = 4) -> list:
                 continue
             if _is_plugin_heartbeat(t, cron_expr):
                 continue
+            try:
+                from core.continuity.scheduler import is_idle
+                if is_idle(t):
+                    continue        # fires on the person's quiet, not on its cron look
+            except Exception:
+                pass
             try:
                 it = croniter(cron_expr, now)
                 nxt = it.get_next(datetime)
@@ -424,11 +479,11 @@ def get_full_status_sync(scope=_FROM_CHAT):
             "python_version": platform.python_version(),
             "os": f"{platform.system()} {platform.release()}",
             "docker": _is_docker(),
-            "uptime_seconds": int(time.time() - _boot_time),
+            "uptime_seconds": _uptime_seconds(),
             "hostname": platform.node(),
             "branch": _get_git_branch(),
             "timezone": f"{tz_name} ({tz_offset})",
-            "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "datetime": _now_local().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
         # Active session. Two context-awareness layers (2026-08-06 — a Discord
@@ -442,6 +497,7 @@ def get_full_status_sync(scope=_FROM_CHAT):
         #    routing. Web-path calls have neither set → byte-identical output.
         chat_settings = session.get_chat_settings()
         chat_name = session.get_active_chat_name()
+        _o = None
         try:
             from core.chat.stream_brain import get_override
             _o = get_override()
@@ -457,12 +513,28 @@ def get_full_status_sync(scope=_FROM_CHAT):
                 _tc = _c
         except Exception:
             pass
+        if _tc:
+            # A task / daemon run (Discord, Telegram, heartbeats): its own chat
+            # (none for a chatless background run), never the operator's web chat.
+            chat_name = _tc.get("chat") or (None if (_o or {}).get("ephemeral") else chat_name)
+        # The tools THIS turn was given (function_manager.turn_tools, set by
+        # execute_function on every lane). The live palette is the operator's
+        # web chat: a Discord turn read "80 tools" it did not have (2026-10-28).
+        try:
+            from core.chat.function_manager import turn_tools
+            _names = turn_tools.get()
+        except Exception:
+            _names = None
+        if _names is None and _o and _o.get("tools"):
+            _names = {t['function']['name'] for t in _o["tools"] if isinstance(t, dict) and 'function' in t}
+        tool_names = sorted(_names) if _names is not None else sorted(t['function']['name'] for t in fm._enabled_tools)
         memory_plugin = _memory_plugin()
         if scope is _FROM_CHAT:
             scope = _norm_scope(chat_settings.get("memory_scope", "default"))
         active_session = {
             "chat": chat_name,
-            "prompt": chat_settings.get("prompt", ""),
+            # a task runs its own prompt (tool_context 'persona' carries it), not the target chat's
+            "prompt": _tc.get("persona") or chat_settings.get("prompt", ""),
             "persona": chat_settings.get("persona", ""),
             "llm_primary": _tc.get("provider") or chat_settings.get("llm_primary", "auto"),
             "llm_model": _tc.get("model") or chat_settings.get("llm_model", ""),
@@ -473,8 +545,11 @@ def get_full_status_sync(scope=_FROM_CHAT):
             **_llm_display(_tc.get("provider") or chat_settings.get("llm_primary", "auto"),
                            _tc.get("model") or chat_settings.get("llm_model", "")),
             "toolset": _tc.get("toolset") or fm.current_toolset_name,
-            "function_count": len(fm._enabled_tools),
-            "tool_names": sorted(t['function']['name'] for t in fm._enabled_tools),
+            "function_count": len(tool_names),
+            "tool_names": tool_names,
+            "channel": _tc.get("channel") or ("chat" if not _o else "voice/device" if _o.get("chat") else "background"),
+            "private": bool(chat_settings.get("private_chat")),
+            **_quiet_and_context(chat_name),
             "scopes": _session_scopes(chat_settings, memory_plugin[0]),
             "parallel_tool_calls": getattr(config, 'MAX_PARALLEL_TOOLS', 1),
             "max_iterations": getattr(config, 'MAX_TOOL_ITERATIONS', 10),
@@ -514,13 +589,20 @@ def get_full_status_sync(scope=_FROM_CHAT):
         except Exception:
             pass
 
+        stt_ready, stt_why = True, getattr(system, 'stt_why', None)
+        try:
+            from core.stt.stt_null import NullWhisperClient
+            stt_ready = not isinstance(getattr(system, 'whisper_client', None), NullWhisperClient)
+        except Exception:
+            pass
+
         stt_device_configured = (getattr(config, 'FASTER_WHISPER_DEVICE', 'cuda') or 'cuda').strip().lower()
         stt_device_actual = None
         try:
             # WhisperModel.model.device is the post-init device. Faster-whisper
             # stores the underlying ctranslate2 model; its .device attr is the
             # cleanest source of truth.
-            stt_obj = getattr(system, 'stt', None)
+            stt_obj = getattr(system, 'whisper_client', None)    # 'stt' never existed: the device always read unknown
             wm = getattr(stt_obj, 'model', None) if stt_obj else None
             if wm is not None:
                 # ctranslate2 model exposes .device as a string ('cuda' or 'cpu')
@@ -532,12 +614,17 @@ def get_full_status_sync(scope=_FROM_CHAT):
             "tts": {
                 "provider": tts_provider,
                 "enabled": bool(tts_provider and tts_provider != 'none'),
-                "voice": getattr(system.tts, '_voice', '') if hasattr(system, 'tts') else '',
+                # the voice THIS turn speaks with (its chat's), else the client's;
+                # '_voice' never existed, so the voice always read blank
+                "voice": (chat_settings.get("tts_voice") or chat_settings.get("voice")
+                          or (getattr(system.tts, 'voice_name', '') if hasattr(system, 'tts') else '')),
                 "device_configured": tts_device_configured,
                 "device_actual": tts_device_actual,  # None = couldn't query
             },
             "stt": {
                 "provider": stt_provider,
+                "ready": stt_ready,
+                "why": stt_why,
                 "enabled": bool(stt_provider and stt_provider != 'none'),
                 "device_configured": stt_device_configured,
                 "device_actual": stt_device_actual,  # None = couldn't query
@@ -668,16 +755,15 @@ def get_full_status_sync(scope=_FROM_CHAT):
         except Exception:
             pass
 
-        # Update check (use cached result if available)
+        # Update check: the updater's own last answer (no network here). The
+        # old read of user/webui/update_check.json found a file nothing writes,
+        # so "UPDATE AVAILABLE" could never show.
         update_info = {}
         try:
-            update_file = PROJECT_ROOT / "user" / "webui" / "update_check.json"
-            if update_file.exists():
-                import json as _json
-                cached = _json.loads(update_file.read_text(encoding="utf-8"))
-                update_info["available"] = cached.get("update_available", False)
-                update_info["latest_version"] = cached.get("latest_version", "")
-                update_info["current_version"] = APP_VERSION
+            from core.updater import updater as _upd
+            update_info["available"] = bool(getattr(_upd, "update_available", False))
+            update_info["latest_version"] = getattr(_upd, "latest_version", "") or ""
+            update_info["current_version"] = APP_VERSION
         except Exception:
             pass
 

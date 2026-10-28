@@ -38,6 +38,10 @@ scope_private:   ContextVar[bool] = ContextVar('scope_private',   default=False)
 # the same rail scopes do. Consumers read it via set at chat setup →
 # snapshot → restore in execute_function. First consumer: mindpalace metadata.
 tool_context:    ContextVar       = ContextVar('tool_context',    default=None)
+# The tool names THIS turn was given (execute_function's allowed_tools, set on
+# every lane): get_self_info's tool list. The live palette is the operator's
+# web chat, never a Discord / task / satellite turn's (hunt, 2026-10-28).
+turn_tools:      ContextVar       = ContextVar('turn_tools',      default=None)
 
 # Scope registry — single source of truth for all scope operations.
 # Only rag + private at module load; everything else added by plugin_loader.
@@ -1541,6 +1545,19 @@ class FunctionManager:
 
     def execute_function(self, function_name, arguments, scopes=None, allowed_tools=None, executor_snapshot=None,
                          with_success=False):
+        """_execute_function with this turn's tool names in `turn_tools` for the
+        call's duration (get_self_info reads them), reset after so they never
+        outlive it into an unrelated call on the same thread."""
+        token = turn_tools.set(frozenset(allowed_tools)) if allowed_tools else None
+        try:
+            return self._execute_function(function_name, arguments, scopes, allowed_tools,
+                                          executor_snapshot, with_success)
+        finally:
+            if token is not None:
+                turn_tools.reset(token)
+
+    def _execute_function(self, function_name, arguments, scopes=None, allowed_tools=None, executor_snapshot=None,
+                          with_success=False):
         """Execute a function using the mapped executor.
 
         scopes: optional dict to re-apply ContextVars before execution.

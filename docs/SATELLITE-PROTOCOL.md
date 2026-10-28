@@ -82,6 +82,22 @@ so it holds while the board is off):
 
 A board answers only the addresses of what it has.
 
+Every request carries the key Sapphire sends, signed, so the key itself never crosses the network
+(firmware 0.9.4, the readers 0.5.2):
+
+```
+Authorization: Sapphire ts=<unix ms>,n=<16 hex>,sig=<64 hex>
+sig = hex(HMAC-SHA256(key, METHOD "\n" URI "\n" ts "\n" n "\n" X-Sha256))
+```
+
+The URI is the path with its query as sent; X-Sha256 is that header's value or empty (a program
+or a backup is signed by its hash). The board takes a signature once, within 30 s of its own clock;
+every 401 carries `X-Board-Time` (its unix ms) and Sapphire retries once with the difference, so a
+board needs no clock of its own. A board that answers 401 without `X-Board-Time` is from before
+signing and is sent `Authorization: Bearer <key>`; a board once seen signing never is. Signing
+protects the key only: what is sent and answered is still plain HTTP on the LAN. A board that ran
+before 0.9.4 / 0.5.2 sent its key in the clear: give it new keys (Reflash or Change WiFi in Settings > Devices).
+
 | Has | Request | What it does |
 |---|---|---|
 | `speaker` | `POST /audio/speak` | Plays the sound. Answers when it has taken the sound, within 150 s - a board that plays as it goes may still be sounding its last second: `{"ok": true}`, or `{"ok": true, "stopped": true}` when the board's own button cut it short |

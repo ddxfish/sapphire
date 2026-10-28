@@ -317,6 +317,74 @@ def _engine_error(text):
     return DeviceError(text)
 
 
+# --- signed calls (firmware auth.c) -------------------------------------------
+# Our calls to a board are plain HTTP on the LAN: a Bearer key there was readable by anyone on
+# the WiFi, and with it came every door, a new program among them (scouts, 2026-10-28). A board
+# from 0.9.4 / 0.5.2 takes the call signed with the key instead (HMAC-SHA256 over the method, the
+# URI, our clock fitted to its own, a nonce and X-Sha256), so the key never travels. A board that
+# once answered signed is remembered on disk and is never sent the key again (a forged "old board"
+# refusal cannot downgrade it); one that refuses without its clock (X-Board-Time) is from before,
+# and gets Bearer, asked signed again every OLD_AGAIN_S in case it was updated.
+SIGNED_FILE = Path(__file__).resolve().parent.parent.parent.parent / 'user' / 'device_signed.json'
+OLD_AGAIN_S = 600
+_skew = {}                    # board url -> its clock minus ours, ms
+_old = {}                     # key id -> when it last refused a signed call as a board from before
+_signed = None                # key ids of boards that answered signed (SIGNED_FILE)
+
+
+def _key_id(key):
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def _signed_ids():
+    global _signed
+    if _signed is None:
+        try:
+            import json
+            _signed = set(json.loads(SIGNED_FILE.read_text()))
+        except (OSError, ValueError, TypeError):
+            _signed = set()
+    return _signed
+
+
+def _mark_signed(kid):
+    with _lock:
+        ids = _signed_ids()
+        if kid in ids:
+            return
+        ids.add(kid)
+        import json
+        tmp = SIGNED_FILE.with_suffix('.tmp')
+        try:
+            SIGNED_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(sorted(ids)))
+            os.replace(tmp, SIGNED_FILE)
+        except OSError as e:
+            logger.warning(f"[DEVICES] could not keep that a board signs: {e}")
+
+
+def _signature(method, url, key, base, headers, params):
+    p = requests.models.PreparedRequest()
+    p.prepare_url(url, params)                 # the URI exactly as requests will send it
+    ts = str(int(time.time() * 1000) + _skew.get(base, 0))
+    nonce = os.urandom(8).hex()
+    text = '\n'.join([method.upper(), p.path_url, ts, nonce, str((headers or {}).get('X-Sha256', ''))])
+    import hmac
+    sig = hmac.new(key.encode(), text.encode(), hashlib.sha256).hexdigest()
+    return f"Sapphire ts={ts},n={nonce},sig={sig}"
+
+
+def _again(kw):
+    """The body can be sent a second time: nothing, bytes, JSON, or a file put back at its start."""
+    data = kw.get('data')
+    if data is None or isinstance(data, (bytes, bytearray, str, dict)):
+        return True
+    if hasattr(data, 'seek'):
+        data.seek(0)
+        return True
+    return False
+
+
 def _call(method, path, config, secrets, timeout=QUICK, headers=None, **kw):
     key = secrets.get('token')
     if not key:
@@ -325,11 +393,43 @@ def _call(method, path, config, secrets, timeout=QUICK, headers=None, **kw):
     if not base:
         raise Problem(WAITING)
     where = urlsplit(base).netloc or base
-    try:
+    kid = _key_id(key)
+    known = kid in _signed_ids()
+    old = not known and time.time() - _old.get(kid, 0) < OLD_AGAIN_S
+
+    def send(auth):
         # Connection: close. A small board has a handful of sockets; kept open, ours were held on
         # it for good, and after it restarted or lost WiFi the next call met a dead one (scouts, 2026-10-11).
-        r = net.request(method, base + path, timeout=timeout,
-                        headers=dict(headers or {}, Authorization='Bearer ' + key, Connection='close'), **kw)
+        return net.request(method, base + path, timeout=timeout,
+                           headers=dict(headers or {}, Authorization=auth, Connection='close'), **kw)
+
+    def signed():
+        return send(_signature(method, base + path, key, base, headers, kw.get('params')))
+
+    try:
+        if old:
+            r = send('Bearer ' + key)
+        else:
+            if base not in _skew and not _again(kw) and (method, path) != ('GET', '/health'):
+                try:                           # a body that cannot be sent twice: the board's clock first
+                    _call('GET', '/health', config, secrets)
+                except Problem:
+                    pass
+            r, used = signed(), True
+            told = r.headers.get('X-Board-Time', '')
+            if r.status_code == 401 and told.lstrip('-').isdigit():
+                _skew[base] = int(told) - int(time.time() * 1000)
+                if _again(kw):
+                    r = signed()
+            elif r.status_code == 401 and not known:
+                _old[kid] = time.time()        # a board from before: it reads only the key itself
+                if _again(kw):
+                    r, used = send('Bearer ' + key), False
+            if used and r.status_code < 300:   # a 404 comes before the key is looked at: only a 2xx proves it
+                _skew.setdefault(base, 0)
+                _old.pop(kid, None)
+                if not known:
+                    _mark_signed(kid)
     except requests.exceptions.Timeout:
         raise Problem(f"No answer from {where} within {timeout}s.")
     except requests.exceptions.RequestException:
@@ -810,6 +910,18 @@ def _has(device):
     return [str(c) for c in has] if isinstance(has, list) else []
 
 
+def _older(a, b):
+    """Version a is before version b, number by number ("0.9.3" before "0.10.0"). Only a
+    difference was looked at before: a board on a newer build of its own was offered the
+    source's older one as an "update" (scouts, 2026-10-28)."""
+    def parts(v):
+        return [int(x) if x.isdigit() else -1 for x in re.split(r'[.\-+]', str(v).strip())]
+    try:
+        return parts(a) < parts(b)
+    except TypeError:
+        return False
+
+
 def _check(device, config, secrets):
     """The source read now, against what the board runs. Fills what the
     status strip reads from (firmware.known_version)."""
@@ -825,6 +937,8 @@ def _check(device, config, secrets):
         return f"{device['id']} runs {running}. {e}", False
     if b['version'] == running:
         return f"{device['id']} runs {running}, the newest the source has.", True
+    if _older(b['version'], running):
+        return f"{device['id']} runs {running}, newer than the source's {b['version']}. 'update' with 'again' would put the older one back.", True
     return f"{device['id']} runs {running}; the source has {b['version']}. 'update' installs it.", True
 
 
@@ -842,8 +956,11 @@ def _update(device, config, secrets, value):
     except firmware.FirmwareError as e:
         return f"No program to send: {e}", False
     running = str(h.get('firmware') or '?')
-    if version == running and str(value or '').strip().lower() != 'again':
+    again = str(value or '').strip().lower() == 'again'
+    if version == running and not again:
         return f"{device['id']} already runs {version}. Say 'again' to install it once more.", True
+    if _older(version, running) and not again:
+        return f"{device['id']} runs {running}, newer than the source's {version}. Say 'again' to go back to {version}.", True
     sha = hashlib.sha256()
     with open(path, 'rb') as f:
         for piece in iter(lambda: f.read(1 << 20), b''):
@@ -964,7 +1081,7 @@ def status(device, config, secrets):
     if h.get('model') and h.get('firmware') and 'firmware' in (h.get('has') or []) and config.get('ota', True) is not False:
         from core.devices import firmware                               # the source's newest, from what is known: no network here
         newest = firmware.known_version(h['model'])
-        if newest and newest != str(h['firmware']):
+        if newest and _older(str(h['firmware']), newest):
             readings['update'] = f"{newest} is in the firmware source (Firmware tab)"
     if isinstance(h.get('volume'), (int, float)):
         readings['volume'] = f"{int(h['volume'])}%"
