@@ -2,6 +2,7 @@
 - Tells the AI when it's been idle more than 60 min
 - Settable in settings
 - Idle Heartbeat - new heartbeat that fires only when idle
+- Rebuild Gemini provider
 # 2.15.7 - Token Improvements
 - Tools can decay and drop out of chat after X turns
 - Token calculation is better, reads tools and images

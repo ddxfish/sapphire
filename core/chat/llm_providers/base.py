@@ -169,10 +169,14 @@ class ToolCall:
     id: str
     name: str
     arguments: str  # JSON string
-    
+    # Provider-opaque data that must ride back with this call (Gemini's
+    # thought_signature). Stored as-is in history; only a provider that opts
+    # in (OpenAICompatProvider.REPLAYS_TOOL_EXTRA) ever sends it back.
+    extra_content: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to OpenAI-style dict format (used internally)."""
-        return {
+        d = {
             "id": self.id,
             "type": "function",
             "function": {
@@ -180,6 +184,9 @@ class ToolCall:
                 "arguments": self.arguments
             }
         }
+        if self.extra_content:
+            d["extra_content"] = self.extra_content
+        return d
 
 
 # finish reasons that mean the reply hit the token ceiling: openai-compat says

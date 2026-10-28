@@ -908,6 +908,8 @@ class StreamingChat:
                                 tool_calls[idx]["function"]["name"] = event["name"]
                             if event.get("arguments"):
                                 tool_calls[idx]["function"]["arguments"] = event["arguments"]
+                            if event.get("extra_content"):   # Gemini thought_signature — rides into history
+                                tool_calls[idx]["extra_content"] = event["extra_content"]
 
                             # Early UI hint: show accordion as soon as we know the tool name
                             # Only for indices within MAX_PARALLEL_TOOLS — excess tools won't execute

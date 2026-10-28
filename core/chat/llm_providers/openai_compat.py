@@ -128,7 +128,14 @@ class OpenAICompatProvider(BaseProvider):
     - POST /v1/chat/completions
     - GET /v1/models (for health check)
     """
-    
+
+    # A subclass that speaks its own thinking switch (Gemini) sets this, so the
+    # family dispatch in _inject_thinking_control stays out of its way.
+    OWNS_THINKING_SWITCH = False
+    # Send a tool call's provider-opaque `extra_content` back to the endpoint.
+    # Off by default: strict endpoints 400 on fields they don't know.
+    REPLAYS_TOOL_EXTRA = False
+
     def __init__(self, llm_config: Dict[str, Any], request_timeout: float = 240.0):
         super().__init__(llm_config, request_timeout)
         
@@ -718,6 +725,8 @@ class OpenAICompatProvider(BaseProvider):
                                 'arguments': args
                             }
                         }
+                        if self.REPLAYS_TOOL_EXTRA and isinstance(tc.get('extra_content'), dict):
+                            normalized_tc['extra_content'] = tc['extra_content']
                         normalized_calls.append(normalized_tc)
                 if normalized_calls:
                     clean_msg['tool_calls'] = normalized_calls
@@ -844,8 +853,9 @@ class OpenAICompatProvider(BaseProvider):
         prefill), or the legacy `disable_thinking_qwen` flag (migrated transparently).
         """
         cfg = self.config
-        disable = (want_disable or cfg.get('disable_thinking', False)
-                   or cfg.get('disable_thinking_qwen', False))
+        disable = not self.OWNS_THINKING_SWITCH and (
+            want_disable or cfg.get('disable_thinking', False)
+            or cfg.get('disable_thinking_qwen', False))
         raw = cfg.get('extra_body')
         if not (disable or raw):
             return                                    # OFF path — leave kwargs untouched
@@ -1028,7 +1038,16 @@ class OpenAICompatProvider(BaseProvider):
             # Tool call chunks
             if delta.tool_calls:
                 for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index if tc_delta.index is not None else 0
+                    idx = tc_delta.index
+                    if idx is None:
+                        # No index (Gemini streams each parallel call whole): a new
+                        # id is a new call, no id continues the last. Defaulting to
+                        # 0 glued Paris+Rome into one call, '{..}{..}' → '{}'.
+                        ids = [a["id"] for a in tool_calls_acc]
+                        if tc_delta.id in ids:
+                            idx = ids.index(tc_delta.id)
+                        else:
+                            idx = len(ids) if (tc_delta.id or not ids) else len(ids) - 1
 
                     # Expand list if needed
                     while len(tool_calls_acc) <= idx:
@@ -1037,25 +1056,32 @@ class OpenAICompatProvider(BaseProvider):
                             "name": "",
                             "arguments": ""
                         })
-                    
+
                     if tc_delta.id:
                         tool_calls_acc[idx]["id"] = tc_delta.id
                     if tc_delta.function and tc_delta.function.name:
                         tool_calls_acc[idx]["name"] = tc_delta.function.name
                     if tc_delta.function and tc_delta.function.arguments:
                         tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
-                    
-                    yield {
+                    extra = (getattr(tc_delta, 'model_extra', None) or {}).get('extra_content')
+                    if isinstance(extra, dict):
+                        tool_calls_acc[idx]["extra_content"] = extra
+
+                    event = {
                         "type": "tool_call",
                         "index": idx,
                         "id": tool_calls_acc[idx]["id"],
                         "name": tool_calls_acc[idx]["name"],
                         "arguments": tool_calls_acc[idx]["arguments"]
                     }
-        
+                    if tool_calls_acc[idx].get("extra_content"):
+                        event["extra_content"] = tool_calls_acc[idx]["extra_content"]
+                    yield event
+
         # Build final response
         final_tool_calls = [
-            ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
+            ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"],
+                     extra_content=tc.get("extra_content"))
             for tc in tool_calls_acc
             if tc["id"] and tc["name"]
         ]
@@ -1112,10 +1138,12 @@ class OpenAICompatProvider(BaseProvider):
         tool_calls = []
         if message.tool_calls:
             for tc in message.tool_calls:
+                extra = (getattr(tc, 'model_extra', None) or {}).get('extra_content')
                 tool_calls.append(ToolCall(
                     id=tc.id,
                     name=tc.function.name,
-                    arguments=tc.function.arguments
+                    arguments=tc.function.arguments,
+                    extra_content=extra if isinstance(extra, dict) else None,
                 ))
         
         # Parse usage if present
