@@ -178,3 +178,12 @@ def test_the_legacy_thinning_drops_the_old_stock_sampling():
     assert thin == {'my-model': {'temperature': 0.3}}
     chosen = sm._thin_profiles({'gemini-3.8-flash': {'temperature': 1.0}}, legacy=True)
     assert chosen == {'gemini-3.8-flash': {'temperature': 1.0}}
+
+
+def test_a_comment_never_survives_thinning_so_the_migration_runs_once():
+    """Hunt 21: a user `_comment` that differed from stock was kept as theirs,
+    so the one-time migration (keyed on it) re-ran and saved every boot."""
+    from core.settings_manager import SettingsManager
+    sm = SettingsManager.__new__(SettingsManager)
+    sm._defaults = {'MODEL_GENERATION_PROFILES': {'_comment': 'new words', '__fallback__': {'max_tokens': 8192}}}
+    assert '_comment' not in sm._thin_profiles({'_comment': 'old words', 'm': {'temperature': 0.3}}, legacy=True)

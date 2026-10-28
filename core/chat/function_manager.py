@@ -274,6 +274,25 @@ def _coerce_args(arguments, parameters):
     return arguments, None
 
 
+def _tool_load_error(plugin_name, error, hint):
+    """A plugin's tool file that would not import: on the boot-toast lane
+    (plugin_loader._load_errors, read by /api/init) as well as the bus. A bare
+    publish at boot reached no tab, so the AI just lost the tools and the
+    plugin still looked on (hunt 21)."""
+    err = {"plugin": plugin_name, "error": error, "hint": hint}
+    try:
+        from core.plugin_loader import plugin_loader
+        if not any(e.get("plugin") == plugin_name and e.get("error") == error for e in plugin_loader._load_errors):
+            plugin_loader._load_errors.append(err)
+    except Exception:
+        pass
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.PLUGIN_LOAD_ERROR, err)
+    except Exception:
+        pass
+
+
 class FunctionManager:
     
     def __init__(self):
@@ -670,13 +689,12 @@ class FunctionManager:
 
             except ModuleNotFoundError as e:
                 logger.error(f"Missing dependency for plugin tool '{tool_path}': {e}")
-                from core.event_bus import publish, Events
-                publish(Events.PLUGIN_LOAD_ERROR, {
-                    "plugin": plugin_name, "error": f"Missing pip package: {e.name or e}",
-                    "hint": f"pip install {e.name}" if e.name else str(e)
-                })
+                _tool_load_error(plugin_name, f"Missing pip package: {e.name or e}",
+                                 f"pip install {e.name}" if e.name else str(e))
             except Exception as e:
                 logger.error(f"Failed to load plugin tool '{tool_path}': {e}", exc_info=True)
+                _tool_load_error(plugin_name, f"Its tools in {tool_path} failed to load: {e}",
+                                 "The plugin is on, but the AI can't use these tools until it's fixed")
 
     @staticmethod
     def _shutdown_tool_module(canonical, plugin_name):

@@ -524,6 +524,26 @@ def _prompt_switch(args):
     if not prompt_data:
         return f"Prompt '{args.get('name')}' not found. Available: {', '.join(prompts.list_prompts())}", False
 
+    # A turn under a stream override (a task, a satellite, a room seat) is not
+    # the operator's chat: activating there swapped the persona of whatever
+    # chat the person had open and wiped its moods (hunt 21, the toolset
+    # tool's own guard below). Its own chat takes the prompt from its next turn.
+    _ov = None
+    try:
+        from core.chat.stream_brain import get_override
+        _ov = get_override()
+    except Exception:
+        pass
+    if _ov and _ov.get("ephemeral"):
+        return ("You're not in a chat right now (background task) — prompt unchanged.", False)
+    if _ov and _ov.get("chat"):
+        from core.event_bus import publish, Events
+        sm = _system().llm_chat.session_manager
+        if not sm.update_chat_settings({"prompt": name}):
+            return "Failed to update chat settings.", False
+        publish(Events.CHAT_SETTINGS_CHANGED, {"chat": _ov["chat"], "settings": {"prompt": name}, "origin": None})
+        return f"Switched to '{name}' for this chat (applies from its next turn).", True
+
     prompts.clear_transients()  # a mood doesn't survive becoming someone else
     ok, msg = prompts.activate_prompt(name, _system())
     if not ok:
@@ -856,7 +876,19 @@ def _set_voice(args):
         return "Failed to update chat settings.", False
     # Apply ONLY the keys we changed. _apply_chat_settings(full dict) would
     # also re-apply prompt/scopes/spice/toolset — snapping a live toolset
-    # back to the persisted one mid-conversation.
+    # back to the persisted one mid-conversation. Not under a stream override
+    # (a task, a satellite): the live voice is the operator's chat's, and the
+    # turn's own voice comes from its chat settings (hunt 21).
+    _ov = None
+    try:
+        from core.chat.stream_brain import get_override
+        _ov = get_override()
+    except Exception:
+        pass
+    if _ov:
+        publish(Events.CHAT_SETTINGS_CHANGED, {"chat": sm._effective_chat_name(), "settings": updates, "origin": None})
+        changed = ', '.join(f"{k}={v}" for k, v in updates.items())
+        return f"Voice settings updated for this chat: {changed}.", True
     try:
         if 'voice' in updates:
             system.tts.set_voice(updates['voice'])

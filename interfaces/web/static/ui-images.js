@@ -125,6 +125,14 @@ export const removePendingFile = (index) => {
 
 export const clearPendingFiles = () => { pendingFiles = []; };
 
+// A send that never reached her gives its attachments back (send-handlers
+// restoreDraft). Their object URLs were revoked on send: previews fall back
+// to the data URI (createUploadPreview).
+export const restorePending = (images = [], files = []) => {
+    pendingUploadImages = [...images.map(img => ({ ...img, previewUrl: null })), ...pendingUploadImages];
+    pendingFiles = [...files, ...pendingFiles];
+};
+
 export const hasPendingFiles = () => pendingFiles.length > 0;
 
 export const getFilesForApi = () => {

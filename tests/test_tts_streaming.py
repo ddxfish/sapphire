@@ -84,7 +84,27 @@ def test_time_with_colon_no_split_mid_sentence():
 def test_url_does_not_split():
     chunks = _collect(["Visit https://example.com for info."])
     assert len(chunks) == 1
-    assert "example.com" in chunks[0]["text"]
+    assert "example.com" not in chunks[0]["text"]       # never spoken (hunt 21)
+    assert chunks[0]["text"].startswith("Visit") and chunks[0]["text"].endswith("for info.")
+
+
+def test_streamed_markdown_and_tool_calls_are_never_spoken():
+    """Hunt 21 (proven): cleanup ran on token-sized pieces, so links, table
+    rows, inline code and text-format tool calls were read aloud."""
+    from core.tts.streaming import SpeechChunker
+
+    def run(text, step=4):
+        c = SpeechChunker(min_chars=1, split_mode='sentence')
+        out = []
+        for i in range(0, len(text), step):
+            out += c.push(text[i:i + step])
+        return ' | '.join(x['text'] for x in out + c.flush())
+    assert run("See [the guide](https://example.com/p?x=1) for more. Done.") == "See the guide for more. | Done."
+    assert 'Alice' not in run("Here:\n\n| Name | Age |\n|---|---|\n| Alice | 30 |\n\nThat's it.")
+    assert 'pip' not in run("Run `pip install sapphire-core` now. Okay.")
+    said = run('Looking. <tool_call>{"name": "web_search", "arguments": {"query": "home address"}}</tool_call> Found it.')
+    assert 'address' not in said and 'Found it.' in said
+    assert 'boston' not in run('Checking. <function=web_search><parameter=query>boston</parameter></function> Sunny.')
 
 
 def test_lowercase_after_period_splits_via_casual_rule():

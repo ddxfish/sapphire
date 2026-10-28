@@ -144,8 +144,10 @@ export async function handleDeleteChat() {
     const displayName = chatSelect.options[chatSelect.selectedIndex].text;
     if (!confirm(`Delete "${displayName}"?\n\nThis will permanently remove the chat history AND any custom settings for this chat.`)) return;
     
+    let moved = false;
     try {
         await api.activateChat('default');
+        moved = true;
         await api.deleteChat(selectedChat);
         await populateChatDropdown();
         chatSelect.value = 'default';
@@ -155,6 +157,15 @@ export async function handleDeleteChat() {
     } catch (e) {
         console.error('Failed to delete chat:', e);
         ui.showToast(`Couldn't delete the chat. ${e.message}`, 'error');
+        // Refused after the move (a heartbeat or her voice still running in
+        // it): go back to it, so the picker, the transcript and the server
+        // agree - the picker said X while the server sat on default (hunt 21).
+        if (moved) {
+            try { await api.activateChat(selectedChat); } catch {}
+            await populateChatDropdown();
+            chatSelect.value = selectedChat;
+            setHistLen(await refresh(false));
+        }
     }
 }
 

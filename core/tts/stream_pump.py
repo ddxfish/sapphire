@@ -127,6 +127,8 @@ class StreamingTTSPump:
         self._speed = speed_override or getattr(self.tts, "speed", None) or 1.0
         self._pitch = pitch_override or getattr(self.tts, "pitch_shift", None) or 1.0
         self._default_voice = getattr(self.tts, "voice_name", None) or "af_heart"
+        self._explicit = (bool(speed_override), bool(pitch_override))
+        self._own_bound = False     # _bind_own, at the first chunk
         self._provider_pitch = getattr(self.provider, "supports_pitch", False)
         # Chunker bounds — user-tunable via Settings → TTS. Sensible
         # clamps so a typo in settings can't yield zero-size chunks or
@@ -442,6 +444,31 @@ class StreamingTTSPump:
             )
         return self.executor
 
+    def _bind_own(self):
+        """A turn pinned to its own chat (a satellite, a room seat, a turn
+        whose pointer moved) speaks with THAT chat's voice/speed/pitch, bound
+        once at its first chunk, inside the turn (the override is set after
+        this pump is built). The client holds the operator's active chat's,
+        and chats store the voice as `voice`: only the phone and Discord lanes
+        wrote the `tts_voice` read before (hunt 21)."""
+        self._own_bound = True
+        try:
+            from core.chat.stream_brain import get_override
+            own = (get_override() or {}).get("settings") or {}
+        except Exception:
+            return
+
+        def num(v):
+            try:
+                return float(v) if v not in (None, '') else None
+            except (TypeError, ValueError):
+                return None
+        if not self._explicit[0] and num(own.get("speed")):
+            self._speed = num(own.get("speed"))
+        if not self._explicit[1] and num(own.get("pitch")):
+            self._pitch = num(own.get("pitch"))
+        self._default_voice = own.get("tts_voice") or own.get("voice") or self._default_voice
+
     def _submit(self, chunk: dict):
         # Fire tts_chunk_text hook BEFORE synth — plugin can mutate text
         # or skip this chunk entirely via skip_tts.
@@ -503,6 +530,8 @@ class StreamingTTSPump:
             "pause_after_ms": chunk["pause_after_ms"],
             "text": text_to_synth,
         }
+        if not self._own_bound:
+            self._bind_own()
         # Per-stream voice: a chat's stored `tts_voice` (e.g. a phone rule's
         # persona voice, patched by the twilio daemon) beats the global voice.
         # Resolved here in _submit — still inside the stream's context, so the
@@ -513,7 +542,8 @@ class StreamingTTSPump:
                 from core.chat.stream_brain import get_override
                 _o = get_override()
                 if _o:
-                    voice = (_o.get("settings") or {}).get("tts_voice") or None
+                    _st = _o.get("settings") or {}
+                    voice = _st.get("tts_voice") or _st.get("voice") or None
             except Exception:
                 pass
         voice = voice or self._default_voice

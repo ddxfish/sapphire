@@ -23,9 +23,14 @@ export async function handleTrash(idx) {
     if (len !== null) setHistLen(len);
 }
 
+// One regen at a time from this tab, from the click: busy is only set after
+// the history fetch, so a slow link let a second confirmed click start a
+// second flow that hid Stop for the first (hunt 21).
+let _regenning = false;
+
 export async function handleRegen(idx) {
-    if (getIsProc()) {
-        console.log('Regenerate blocked: isProc is true');
+    if (getIsProc() || _regenning) {
+        console.log('Regenerate blocked: busy');
         return;
     }
     // Same guard as handleSend — and it must run BEFORE chat.handleRegen,
@@ -50,22 +55,27 @@ export async function handleRegen(idx) {
     // last answer until the new voice arrives. Krem's ruling A, 2026-09-08.
     audio.stop(true);
 
-    const abortController = new AbortController();
-    setAbortController(abortController);
-    setIsCancelling(false);
+    _regenning = true;
+    try {
+        const abortController = new AbortController();
+        setAbortController(abortController);
+        setIsCancelling(false);
 
-    const audioFn = getTtsEnabled() ? audio.playText : null;
+        const audioFn = getTtsEnabled() ? audio.playText : null;
 
-    const len = await chat.handleRegen(
-        idx, 
-        setProc, 
-        audioFn, 
-        refresh, 
-        abortController,
-        getIsCancelling
-    );
-    
-    if (len !== null) setHistLen(len);
+        const len = await chat.handleRegen(
+            idx,
+            setProc,
+            audioFn,
+            refresh,
+            abortController,
+            getIsCancelling
+        );
+
+        if (len !== null) setHistLen(len);
+    } finally {
+        _regenning = false;
+    }
 }
 
 const _msgEls = () => document.querySelectorAll('#chat-container .message:not(.status):not(.error)');

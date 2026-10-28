@@ -67,7 +67,7 @@ export async function handleMicPress() {
 
     // If any TTS is playing (browser or local), stop it instead of recording
     if (audio.isTtsPlaying() || audio.isLocalTtsPlaying()) {
-        audio.stop(true);
+        audio.stop(true, true);
         updateMicButtonState();
         return;
     }

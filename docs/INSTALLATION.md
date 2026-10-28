@@ -257,6 +257,9 @@ Environment="PYTHONUNBUFFERED=1"
 ExecStart=/bin/bash -c 'source /home/YOURUSERNAME/miniconda3/etc/profile.d/conda.sh && conda activate sapphire && python3 /home/YOURUSERNAME/sapphire/main.py'
 Restart=on-failure
 RestartSec=90
+# 43 = another Sapphire (or another program) has the port; 44 = a config error.
+# Restarting can't fix either, so systemd must not loop on them.
+RestartPreventExitStatus=43 44
 
 [Install]
 WantedBy=default.target

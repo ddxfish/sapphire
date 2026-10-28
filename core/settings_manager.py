@@ -53,6 +53,7 @@ def _fsync_dir(path):
 
 class SettingsManager:
     """Manages application settings with hot-reload and persistence."""
+    corrupt_error = None     # see __init__ (class default: test doubles skip __init__)
     
     # Serializes every settings.json tmp-write+rename across ALL instances.
     # CLASS attribute on purpose: (1) all four persist sites share ONE tmp
@@ -69,6 +70,10 @@ class SettingsManager:
         self._user = {}
         self._config = {}
         self._runtime = {}  # Non-persisted runtime overrides (survive file reload)
+        # Why user/settings.json can't be read, or None. While set every save
+        # is refused (Krem, hunt 21): the file is the person's, and the
+        # defaults she runs on meanwhile must not quietly look like theirs.
+        self.corrupt_error = None
         self._reload_callbacks = {}
         self._lock = threading.RLock()
         
@@ -163,9 +168,14 @@ class SettingsManager:
                 with open(user_path, 'r', encoding='utf-8-sig') as f:
                     nested = json.load(f)
                 self._user = self._flatten_dict(nested)
+                self.corrupt_error = None
                 logger.info(f"Loaded user settings from {user_path}")
             except Exception as e:
                 logger.error(f"Corrupt settings file at {user_path}: {e} — using defaults until fixed")
+                self.corrupt_error = (
+                    f"Your settings file (user/settings.json) can't be read ({e}), so Sapphire is running on "
+                    f"default settings and won't save changes over it. Fix the file (a copy is beside it as "
+                    f"settings.json.corrupt) or reset settings in Settings › System.")
                 try:
                     backup = user_path.with_suffix('.json.corrupt')
                     shutil.copy2(user_path, backup)
@@ -334,6 +344,9 @@ class SettingsManager:
         stock = self._defaults.get('MODEL_GENERATION_PROFILES') or {}
         out = {}
         for model, p in (user or {}).items():
+            if model == '_comment':
+                continue        # never the user's own: it is the one-time migration's trigger, and a
+                                # differing copy kept it re-running (and saving) every boot (hunt 21)
             base = stock.get(model)
             if model not in stock:
                 out[model] = p
@@ -598,6 +611,9 @@ class SettingsManager:
     def save(self):
         """Persist current user settings to disk in nested format"""
         user_path = self.BASE_DIR / 'user' / 'settings.json'
+        if self.corrupt_error:
+            logger.error("[SETTINGS] save refused: the settings file is unreadable — fix it or reset settings")
+            return False
         try:
             # Load existing nested structure or start fresh
             if user_path.exists():
@@ -726,6 +742,7 @@ class SettingsManager:
                     replace_with_retry(tmp_path, user_path)
                     _fsync_dir(user_path.parent)
                     self._last_mtime = user_path.stat().st_mtime
+                self.corrupt_error = None       # reset IS the fix for an unreadable file
                 logger.info("Settings reset to defaults")
                 return True
             except Exception as e:

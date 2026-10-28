@@ -73,9 +73,11 @@ class STTProviderRegistry(BaseProviderRegistry):
             if not entry:
                 return None
         try:
+            self.last_error = None
             return entry['class']()
         except Exception as e:
             logger.error(f"[stt] Failed to create '{key}': {e}")
+            self.last_error = e         # the boot says why (sapphire.py), never "loading..." forever
             from core.stt.stt_null import NullWhisperClient
             return NullWhisperClient()
 

@@ -12,7 +12,7 @@ def _run(tmp_path, monkeypatch, body):
     import core.plugin_loader as pl
     monkeypatch.setattr(pl.plugin_loader, "get_plugin_state", lambda name: None)
     # the runner only runs a handler inside a plugin the loader knows (2026-10-27)
-    monkeypatch.setattr(pl.plugin_loader, "_plugins", {"x": {"path": tmp_path}}, raising=False)
+    monkeypatch.setattr(pl.plugin_loader, "_plugins", {"x": {"path": tmp_path, "loaded": True}}, raising=False)
     task = {"id": "t1", "name": "tick", "source": "plugin:x", "handler": "h.py", "plugin_dir": str(tmp_path)}
     return ContinuityExecutor._run_plugin_task(SimpleNamespace(system=None), task)
 

@@ -3,6 +3,7 @@
 - Settable in settings
 - Idle Heartbeat - new heartbeat that fires only when idle
 - Rebuild Gemini provider
+- Fixed Windows backup issue Errno 13
 # 2.15.7 - Token Improvements
 - Tools can decay and drop out of chat after X turns
 - Token calculation is better, reads tools and images

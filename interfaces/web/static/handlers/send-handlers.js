@@ -71,6 +71,10 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
     // starts the next turn within milliseconds of this one ending.
     const { input, sendBtn } = getElements();
     const fromCard = typeof text === 'string';
+    if (attach && _uploading > 0) {
+        ui.showToast('A picture is still uploading. Send again in a moment.', 'info', 2500);
+        return;
+    }
     const txt = fromCard ? text.trim() : input.value.trim();
     if (!txt && !(attach && (Images.hasPendingUploadImages() || Images.hasPendingFiles()))) return;
 
@@ -95,6 +99,8 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
     const hasFiles = pendingFilesForApi.length > 0;
 
     ui.addUserMessage(txt, hasImages ? Images.getPendingUploadImages() : null, hasFiles ? Images.getPendingFiles() : null);
+    const sentImages = attach ? [...(Images.getPendingUploadImages() || [])] : [];   // restoreDraft puts them back
+    const sentFiles = attach ? [...(Images.getPendingFiles() || [])] : [];
     if (attach) {
         Images.clearPendingUploadImages();
         Images.clearPendingFiles();
@@ -293,17 +299,21 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         }
         if (statusCode === 409) {
             // Server gate (a sealed or missing chat): undo the optimistic
-            // paint — text back in the box, bubble gone. Attached images/files
-            // are dropped (rare).
-            if (!fromCard) {
-                input.value = txt;
-                input.dispatchEvent(new Event('input'));
-            }
-            myBubble?.remove();
+            // paint — text back in the box, bubble gone.
+            restoreDraft();
             ui.showToast(e.message, 'error');
             return;
         }
         console.error('Stream failed:', e.message);
+        if (!ctl.ticket && !ctl.streamOk && !e.uncertain) {
+            // Never reached her (offline, a restart, a refused request): no
+            // turn ran and nothing was saved, so the words go back in the box
+            // and the bubble goes - a failed send used to lose them (hunt 21).
+            restoreDraft();
+            ui.showToast(`Not sent: ${e.message}`, 'error');
+            release();
+            return;
+        }
         // not a Stop: the turn failed and saved its own row (words + Details).
         // Paint THAT now - the bus refresh skips while this send still holds
         // the busy flag, and a "Cancelled" partial is the wrong story.
@@ -312,6 +322,21 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         if (!ctl.headless) { release(); await refresh(false); }
     };
     const liveHandlers = { onChunk, onComplete, onError, onToolStart, onToolEnd, onStreamStarted, onIterationStart, onResync };
+
+    // Everything this send took from the composer goes back: the words (when
+    // the box is still empty - never over a new draft) and the pictures and
+    // files it carried. The bubble goes.
+    function restoreDraft() {
+        myBubble?.remove();
+        if (!fromCard && !input.value) {
+            input.value = txt;
+            input.dispatchEvent(new Event('input'));
+        }
+        if (attach && (sentImages.length || sentFiles.length)) {
+            Images.restorePending(sentImages, sentFiles);
+            updateImagePreviewArea();
+        }
+    }
 
     // ── the owner's life after its first socket ──────────────────────────
     ctl.started = () => {                       // the bus: our turn began with no socket on it
@@ -322,11 +347,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         release();
     };
     ctl.dropped = (reason) => {
-        myBubble?.remove();
-        if (!fromCard && !input.value) {
-            input.value = txt;
-            input.dispatchEvent(new Event('input'));
-        }
+        restoreDraft();
         ui.showToast(`Not sent: ${reason}`, 'warning');
         release();
     };
@@ -339,7 +360,10 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         if (ctl.streamOk && document.getElementById('streaming-message')) ui.detachStreaming();
         release();
         await refresh(false);
-        if (reason === 'unknown') ui.showToast("Lost track of that message (she restarted?) — check the chat", 'warning');
+        if (reason === 'unknown') {
+            restoreDraft();             // she never ran it: the words come back (hunt 21)
+            ui.showToast("Lost track of that message (she restarted?) — it's back in the box", 'warning');
+        }
         if (reason === 'unreachable') ui.showToast("Couldn't reconnect — her reply lands in the chat when she finishes", 'error');
     };
     ctl.follow = async () => {
@@ -489,6 +513,10 @@ export async function handleFileUpload(file) {
 }
 
 // Handle image file selection/paste/drop
+// Pictures still on their way up: a Send now went out without them, and they
+// rode the NEXT message instead (hunt 21).
+let _uploading = 0;
+
 export async function handleImageUpload(file) {
     if (!file.type.startsWith('image/')) {
         ui.showToast('Only image files are supported', 'error');
@@ -501,6 +529,7 @@ export async function handleImageUpload(file) {
         return;
     }
     
+    _uploading++;
     try {
         const result = await api.uploadImage(file);
         
@@ -519,6 +548,8 @@ export async function handleImageUpload(file) {
     } catch (e) {
         console.error('Image upload failed:', e);
         ui.showToast(e.message, 'error');
+    } finally {
+        _uploading--;
     }
 }
 
@@ -617,7 +648,7 @@ export async function handleStop() {
         }
 
         controller.abort();
-        audio.stop(true);
+        audio.stop(true, true);
         // Only if the turn we stopped still holds the slot: during the await
         // the inbox may have started the NEXT turn, which is now live and
         // not ours to tear down (race scout, 2026-10-07).

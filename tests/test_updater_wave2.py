@@ -42,6 +42,7 @@ def _marker(tmp_path, monkeypatch, **overrides):
     result = tmp_path / 'result.json'
     monkeypatch.setattr(upd, 'PENDING_UPDATE_FILE', pending)
     monkeypatch.setattr(upd, 'UPDATE_RESULT_FILE', result)
+    monkeypatch.setattr(upd, '_clear_stale_index_lock', lambda *a, **k: None)   # never the real repo's .git
     data = {'branch': 'main', 'from_version': '2.6.0', 'to_version': '2.6.1',
             'target_sha': 'abc123def', 'from_sha': 'aaa111', 'requested_at': time.time()}
     data.update(overrides)
@@ -123,7 +124,9 @@ def test_apply_expired_marker_refuses_without_touching_git(tmp_path, monkeypatch
 
     upd.apply_pending_update()
 
-    assert git.calls == [], "expired marker must not run ANY git"
+    # Only the read-only resume probe (hunt 21: is the merge already in?);
+    # never a fetch, merge or reset.
+    assert all(c[0] == 'rev-parse' for c in git.calls), git.calls
     r = json.loads(result.read_text())
     assert r['success'] is False
     assert 'expired' in r['message'].lower()
@@ -250,3 +253,21 @@ def test_do_update_marker_contains_from_sha(tmp_path, monkeypatch):
     marker = json.loads((tmp_path / 'pending.json').read_text())
     assert marker['from_sha'] == 'fromsha'
     assert marker['target_sha'] == 'targetsha'
+
+
+def test_a_run_killed_during_pip_resumes_offline(tmp_path, monkeypatch):
+    """Hunt 21: HEAD already at the target (the merge landed, pip was killed).
+    The next boot said "expired" or "fetch failed... Kept previous version"
+    over new code and never re-ran pip. Now it goes straight to pip."""
+    import core.updater as upd
+    pending, result = _marker(tmp_path, monkeypatch, requested_at=time.time() - 90000)
+    target = json.loads(pending.read_text()).get('target_sha')
+    if not target:
+        pytest.skip("marker fixture carries no target_sha")
+    git = GitRecorder({'rev-parse': MagicMock(returncode=0, stdout=target + '\n', stderr='')})
+    monkeypatch.setattr(upd, '_run_git', git)
+    ran = []
+    monkeypatch.setattr(upd.subprocess, 'run', lambda *a, **k: ran.append(a) or MagicMock(returncode=0, stdout='', stderr=''))
+    upd.apply_pending_update()
+    assert not any(c[0] in ('fetch', 'merge') for c in git.calls)
+    assert ran, "pip ran"

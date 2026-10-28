@@ -25,14 +25,17 @@ export function connect(replay = false) {
     console.log(`[EventBus] Connecting to ${url}`);
     
     eventSource = new EventSource(url);
+    armStall();
     
     eventSource.onopen = () => {
         console.log('[EventBus] Connected');
         reconnectAttempts = 0;
+        armStall();
         dispatch('bus_connected', {});
     };
     
     eventSource.onmessage = (e) => {
+        armStall();
         try {
             const event = JSON.parse(e.data);
 
@@ -65,15 +68,33 @@ export function connect(replay = false) {
     
     eventSource.onerror = (e) => {
         console.warn('[EventBus] Connection error, will reconnect');
+        clearTimeout(stallTimer);
         eventSource.close();
         scheduleReconnect();
     };
+}
+
+// A half-open stream (phone lock, wifi handoff, a NAT that forgot it) stays
+// "OPEN" and silent: every switch, delete and vault lock was missed with no
+// sign (hunt 21). The server says something every 15 s, so 45 s of nothing
+// means it is dead: close it and reconnect, which resyncs.
+const STALL_MS = 45000;
+let stallTimer = null;
+function armStall() {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+        if (!eventSource || eventSource.readyState === EventSource.CLOSED) return;
+        console.warn('[EventBus] Silent for 45 s: reconnecting');
+        eventSource.close();
+        scheduleReconnect();
+    }, STALL_MS);
 }
 
 /**
  * Disconnect from the event bus
  */
 export function disconnect() {
+    clearTimeout(stallTimer);
     if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = null;

@@ -96,3 +96,23 @@ def test_commits_follow_confirmed_writes():
     # tools: save() rethrows, so a commit after `await save(` is confirmed-only
     t = _tab('tools')
     assert 'throw e;' in t[t.index('async function save(patch)'):t.index('function rerender')]
+
+
+def test_an_unreadable_settings_file_refuses_every_save(tmp_path):
+    """Hunt 21 (Krem 4a): a corrupt settings.json ran on defaults and every
+    change "saved" in memory, then vanished at restart, all silently."""
+    from core.settings_manager import SettingsManager
+    sm = SettingsManager.__new__(SettingsManager)
+    sm.BASE_DIR = tmp_path
+    (tmp_path / 'user').mkdir()
+    bad = tmp_path / 'user' / 'settings.json'
+    bad.write_text('{"identity": {"X": 1,}}', encoding='utf-8')          # a trailing comma
+    sm.corrupt_error = None
+    sm._load_user_settings()
+    assert sm.corrupt_error and 'settings.json' in sm.corrupt_error
+    sm._user = {'X': 2}
+    assert sm.save() is False
+    assert bad.read_text(encoding='utf-8') == '{"identity": {"X": 1,}}'     # their file is never written over
+    bad.write_text('{"identity": {"X": 1}}', encoding='utf-8')            # fixed by hand: the watcher reloads
+    sm._load_user_settings()
+    assert sm.corrupt_error is None

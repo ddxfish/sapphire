@@ -770,7 +770,10 @@ class VoiceChatSystem:
         if isinstance(self.wake_detector, NullWakeWordDetector):
             return
         try:
-            self.wake_word_recorder.start_recording()
+            # Settled: the conversation's stream may still be releasing the
+            # device. A False here used to pass as success - deaf, shown ON.
+            if not self.wake_word_recorder.start_recording_settled():
+                raise RuntimeError("the microphone did not reopen")
             self.wake_detector.start_listening()
         except Exception as e:
             logger.error(f"[CONV] wakeword restore failed ({e}); hard reset via toggle_wakeword")
@@ -1178,6 +1181,16 @@ class VoiceChatSystem:
         }
         self.tts.speak(error_messages.get(error_type, "Error"))
 
+    def _landed_in_room(self):
+        """Whether a wake turn's words went to an open chat room (the landing
+        chat) rather than to her."""
+        try:
+            from core.chat.history import landing_chat
+            from core import rooms
+            return rooms.is_room(landing_chat(self.llm_chat.session_manager))
+        except Exception:
+            return False
+
     def process_llm_query(self, query, skip_tts=False, voice_turn=False):
         """Blocking turn for the non-streaming doors.
 
@@ -1243,6 +1256,11 @@ class VoiceChatSystem:
                         logger.warning(
                             "[VOICE] active chat changed during the turn "
                             "(vault eviction) — reply withheld from TTS")
+                    elif self._landed_in_room():
+                        # The words went into an open room as the person's line:
+                        # the answer is the room's note ("Posted to the room..."),
+                        # never speech. The seats speak their own turns (hunt 21).
+                        logger.info("[VOICE] wake line landed in a room — the seats answer, nothing spoken here")
                     else:
                         self.tts.speak(response_text)
                 return response_text
@@ -1303,6 +1321,14 @@ class VoiceChatSystem:
             try:
                 self.whisper_client = get_stt_provider(provider)
                 self.stt_why = None
+                if isinstance(self.whisper_client, NullWhisperClient):
+                    # The registry fell back to null (offline with no model,
+                    # a broken CUDA, a missing package): say so - it used to
+                    # read "Speech model loading..." forever (hunt 21).
+                    from core.stt.providers import stt_registry
+                    self._publish_stt_fallback_event(
+                        provider, getattr(stt_registry, 'last_error', None) or RuntimeError("it failed to load"))
+                    return False
                 # Router/API providers don't need local mic — audio comes via browser
                 if provider == 'sapphire_router':
                     from core.stt.stt_null import NullAudioRecorder
@@ -1397,6 +1423,36 @@ def run():
         signal.signal(signal.SIGHUP, handle_shutdown_signal)
     if hasattr(signal, 'SIGBREAK'):
         signal.signal(signal.SIGBREAK, handle_shutdown_signal)   # Windows: the launcher's graceful stop
+
+    # Another server already LISTENS on the web port: say so now, before a
+    # whole boot (bots logging in, schedulers arming, Kokoro) that could only
+    # end at the bind (hunt 21). A port merely lingering from the last run's
+    # connections (no listener) is left to the bind's own wait.
+    try:
+        from core.single_instance import bind_listener, is_port_taken, port_holder, EXIT_ANOTHER_INSTANCE
+        try:
+            bind_listener(config.WEB_UI_HOST, config.WEB_UI_PORT).close()
+        except OSError as _e:
+            _who = port_holder(config.WEB_UI_PORT) if is_port_taken(_e) else ''
+            if _who:
+                logger.error(f"Port {config.WEB_UI_PORT} is already taken by {_who}. Not starting: stop that "
+                             f"program or change WEB_UI_PORT.")
+                return EXIT_ANOTHER_INSTANCE
+    except Exception as e:
+        logger.debug(f"early port probe skipped: {e}")
+
+    # An unreadable settings file: she runs on defaults and refuses every save
+    # (core/settings_manager.py corrupt_error) - and says so, every boot, until
+    # it is fixed or reset (hunt 21: the wizard came back, the port and SSL
+    # changed, and every change vanished at the next restart, all silently).
+    try:
+        from core.settings_manager import settings as _sm_boot
+        if _sm_boot.corrupt_error:
+            from core import notify
+            notify.notify("Settings file can't be read", 'error', _sm_boot.corrupt_error, source='settings',
+                          key='settings-corrupt', go={'view': 'settings', 'tab': 'system'})
+    except Exception as e:
+        logger.debug(f"settings-corrupt notice skipped: {e}")
     
     # Auto-detect timezone if unset (upgrades skip setup wizard)
     _tz = getattr(config, 'USER_TIMEZONE', '') or ''

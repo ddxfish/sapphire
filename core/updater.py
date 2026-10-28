@@ -78,6 +78,27 @@ def _run_git(args, timeout=60):
     )
 
 
+def _say(msg):
+    """One line on the runner's console per update step: fetch, merge and pip
+    can take minutes with nothing printed, which is exactly when people kill it."""
+    logger.info(f"[update] {msg}")
+    try:
+        print(f"[update] {msg}", flush=True)
+    except Exception:
+        pass
+
+
+def _clear_stale_index_lock(max_age_s=600):
+    """A `.git/index.lock` older than any git run of ours is a killed git's
+    leftover: every later update failed on it until removed by hand."""
+    try:
+        lock = REPO_DIR / '.git' / 'index.lock'
+        if lock.exists() and time.time() - lock.stat().st_mtime > max_age_s:
+            lock.unlink()
+    except Exception:
+        pass
+
+
 def _clear_index_lock():
     """Clear a stale `.git/index.lock` left behind by a killed/timed-out git.
 
@@ -188,69 +209,89 @@ def apply_pending_update():
     from_sha = data.get('from_sha')
     target_sha = data.get('target_sha')
 
-    # Markers can be days old (crashed restart, manual boot much later). A
-    # stale marker fast-forwarding through releases nobody reviewed is worse
-    # than asking again — refuse and let the user re-run the check.
-    requested_at = data.get('requested_at') or 0
-    if requested_at and (time.time() - requested_at) > 86400:
-        _write_result(False, "Pending update expired (scheduled more than 24h ago). "
-                             "Kept previous version — run the update check again.")
-        _clear_pending()
-        return
+    # Resume (hunt 21): a run killed after the merge landed - during pip -
+    # left HEAD at the target with deps half-synced. The old path then said
+    # "expired" or "fetch failed... Kept previous version" (false: the code
+    # IS new) and never re-ran pip. HEAD at the target = go straight to pip,
+    # offline or not.
+    _clear_stale_index_lock()
+    resumed = False
+    if target_sha:
+        try:
+            head = _run_git(['rev-parse', 'HEAD'], timeout=15)
+            resumed = head.returncode == 0 and head.stdout.strip() == target_sha
+        except Exception:
+            resumed = False
+    if resumed:
+        _say(f"Update to {target_sha[:8]} already merged; finishing its dependencies")
+    else:
+        _say(f"Applying the pending update ({branch}): fetching, then merging")
 
-    # Slim re-preflight: the full check ran at schedule time, but the tree can
-    # change between then and this boot. A merge over local edits half-applies
-    # — the one outcome worse than not updating.
-    try:
-        status = _run_git(['status', '--porcelain'], timeout=15)
-        if status.returncode == 0 and status.stdout.strip():
-            _write_result(False, "Working tree changed while the update was pending. "
+    if not resumed:
+        # Markers can be days old (crashed restart, manual boot much later). A
+        # stale marker fast-forwarding through releases nobody reviewed is worse
+        # than asking again — refuse and let the user re-run the check.
+        requested_at = data.get('requested_at') or 0
+        if requested_at and (time.time() - requested_at) > 86400:
+            _write_result(False, "Pending update expired (scheduled more than 24h ago). "
+                                 "Kept previous version — run the update check again.")
+            _clear_pending()
+            return
+
+        # Slim re-preflight: the full check ran at schedule time, but the tree can
+        # change between then and this boot. A merge over local edits half-applies
+        # — the one outcome worse than not updating.
+        try:
+            status = _run_git(['status', '--porcelain'], timeout=15)
+            if status.returncode == 0 and status.stdout.strip():
+                _write_result(False, "Working tree changed while the update was pending. "
+                                     "Kept previous version.")
+                _clear_pending()
+                return
+        except FileNotFoundError:
+            _write_result(False, "git is not installed. Update skipped.")
+            _clear_pending()
+            return
+        except Exception:
+            pass  # advisory probe — fetch/merge below still gate hard
+
+        # Fetch + ff-only merge to the EXACT SHA advertised at check time. A bare
+        # `git pull` lands whatever origin HEAD is at restart time — target_sha
+        # was written-but-never-read before the 2026-08-06 hunt (H5). No SHA in
+        # the marker (older format) → merge the fetched branch head instead.
+        try:
+            fetch = _run_git(['fetch', 'origin', branch], timeout=180)
+        except subprocess.TimeoutExpired:
+            _clear_index_lock()
+            _write_result(False, "git fetch timed out after 180s. Kept previous version.")
+            _clear_pending()
+            return
+        except FileNotFoundError:
+            _write_result(False, "git is not installed. Update skipped.")
+            _clear_pending()
+            return
+        if fetch.returncode != 0:
+            err = (fetch.stderr or '').strip() or (fetch.stdout or '').strip() or 'unknown error'
+            _write_result(False, f"git fetch failed: {err}. Kept previous version.")
+            _clear_pending()
+            return
+
+        merge_ref = target_sha or f'origin/{branch}'
+        try:
+            merge = _run_git(['merge', '--ff-only', merge_ref], timeout=120)
+        except subprocess.TimeoutExpired:
+            _clear_index_lock()
+            _write_result(False, "git merge timed out. Kept previous version.")
+            _clear_pending()
+            return
+        if merge.returncode != 0:
+            err = (merge.stderr or '').strip() or (merge.stdout or '').strip() or 'unknown error'
+            _write_result(False, f"Could not fast-forward to the advertised release: {err}. "
                                  "Kept previous version.")
             _clear_pending()
             return
-    except FileNotFoundError:
-        _write_result(False, "git is not installed. Update skipped.")
-        _clear_pending()
-        return
-    except Exception:
-        pass  # advisory probe — fetch/merge below still gate hard
 
-    # Fetch + ff-only merge to the EXACT SHA advertised at check time. A bare
-    # `git pull` lands whatever origin HEAD is at restart time — target_sha
-    # was written-but-never-read before the 2026-08-06 hunt (H5). No SHA in
-    # the marker (older format) → merge the fetched branch head instead.
-    try:
-        fetch = _run_git(['fetch', 'origin', branch], timeout=180)
-    except subprocess.TimeoutExpired:
-        _clear_index_lock()
-        _write_result(False, "git fetch timed out after 180s. Kept previous version.")
-        _clear_pending()
-        return
-    except FileNotFoundError:
-        _write_result(False, "git is not installed. Update skipped.")
-        _clear_pending()
-        return
-    if fetch.returncode != 0:
-        err = (fetch.stderr or '').strip() or (fetch.stdout or '').strip() or 'unknown error'
-        _write_result(False, f"git fetch failed: {err}. Kept previous version.")
-        _clear_pending()
-        return
-
-    merge_ref = target_sha or f'origin/{branch}'
-    try:
-        merge = _run_git(['merge', '--ff-only', merge_ref], timeout=120)
-    except subprocess.TimeoutExpired:
-        _clear_index_lock()
-        _write_result(False, "git merge timed out. Kept previous version.")
-        _clear_pending()
-        return
-    if merge.returncode != 0:
-        err = (merge.stderr or '').strip() or (merge.stdout or '').strip() or 'unknown error'
-        _write_result(False, f"Could not fast-forward to the advertised release: {err}. "
-                             "Kept previous version.")
-        _clear_pending()
-        return
-
+    _say("Installing the update's dependencies (pip)")
     # Pip sync — new deps are a silent-brick risk if skipped.
     req_file = REPO_DIR / 'requirements.txt'
 

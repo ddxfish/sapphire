@@ -31,7 +31,7 @@ With the vault open, the moment you send a message in an ordinary chat, that cha
 
 It's one-way from the padlock's side: locking the vault doesn't un-mark anything. To release a chat, open **Chat Manager** and click the **🔓** on its row.
 
-**Never auto-marked:** game, story, and librarian chats (they belong to plugin surfaces), chats that are already private, and anything running in managed mode.
+**Never auto-marked:** game, story, and librarian chats (they belong to plugin surfaces), chat rooms (a private room turns away its guest and door seats, so it is your choice: the key icon in Chat Manager), chats that are already private, and anything running in managed mode.
 
 You can tell a private chat by the glow on the chat area border, the 🗝 next to its name in the chat picker, and its badge in Chat Manager.
 
@@ -142,7 +142,7 @@ VAULT LIFECYCLE:
 
 PRIVATE CHATS:
 - Talking in a chat while the vault is UNLOCKED marks it `private_chat` automatically (one-way)
-- Skipped: mode-tagged chats (game/story/librarian/limbo), already-private, managed mode
+- Skipped: mode-tagged chats (game/story/librarian/limbo/room), already-private, managed mode
 - Release only via Chat Manager 🔓 (decrypts back to plaintext storage)
 - Enforcement: local-only LLM providers, network tools refuse, cloud STT/TTS refuse
 - At rest: message rows, chat settings, tool images, and plugin chat data stored as `@enc1:` AES-256-GCM under a chat data key wrapped inside the vault frame

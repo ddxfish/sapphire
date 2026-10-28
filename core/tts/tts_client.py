@@ -49,6 +49,9 @@ class TTSClient:
         self.pitch_shift = 0.98
         self.speed = 1.3
         self.voice_name = "af_heart"
+        # One call's own voice (speak_sync voice=): a task speaks as itself
+        # without retuning the client every other lane reads (hunt 21).
+        self._call = threading.local()
         self.temp_dir = get_temp_dir()
 
         # Provider handles audio generation (Kokoro, ElevenLabs, etc.)
@@ -78,6 +81,23 @@ class TTSClient:
         else:
             logger.warning("Audio playback unavailable - TTS will be silent")
     
+    _REPROBE_S = 30
+
+    def _audio_ready(self):
+        """Whether there is an output to play on, looking again at most every
+        30 s while there isn't: a speaker lost at boot (Sapphire up before
+        PipeWire) or mid-play (a Bluetooth or HDMI sink dropping) left her
+        voice off until a restart (hunt 21)."""
+        if self.audio_available:
+            return True
+        now = time.monotonic()
+        if now - getattr(self, '_last_probe', 0.0) >= self._REPROBE_S:
+            self._last_probe = now
+            self._init_output_device()
+            if self.audio_available:
+                logger.info(f"[TTS] output device found again: {getattr(self, 'output_device_name', '?')}")
+        return self.audio_available
+
     def _init_output_device(self):
         """Find a working output device via DeviceManager (respects AUDIO_OUTPUT_DEVICE setting)."""
         self.audio_available = False
@@ -230,6 +250,9 @@ class TTSClient:
         # Remove block-level content entirely
         block_patterns = [
             r'<tools>.*?</tools>',           # Tools tags
+            r'<tool_call>.*?</tool_call>',   # text-format tool calls: her input, not speech
+            r'<function=.*?</function>',
+            r'\b(?:https?://|www\.)\S+',      # bare web addresses (hunt 21)
             r'```[\s\S]*?```',               # Code blocks (fenced)
             r'`[^`]+`',                      # Inline code
             r'!\[.*?\]\(.*?\)',              # Image markdown ![alt](url)
@@ -283,7 +306,7 @@ class TTSClient:
             logger.info(f"[TTS] {_gate} — speech skipped")
             return False
 
-        if not self.audio_available:
+        if not self._audio_ready():
             logger.warning("Audio playback unavailable - skipping TTS")
             return False
 
@@ -351,16 +374,25 @@ class TTSClient:
             return self._generate_and_play_audio
         return self._generate_and_play_audio_stream
 
-    def speak_sync(self, text, chat_settings=None):
+    def _cur(self, field):
+        """This call's voice/speed/pitch when speak_sync was given one, else the client's."""
+        v = (getattr(getattr(self, '_call', None), 'voice', None) or {}).get(field)
+        if v is not None and v != '':
+            return v
+        return {'voice': self.voice_name, 'speed': self.speed, 'pitch': self.pitch_shift}[field]
+
+    def speak_sync(self, text, chat_settings=None, voice=None):
         """Send text to TTS server, play audio, and block until playback finishes.
-        chat_settings: see speak() — the producing chat's settings for the gate."""
+        chat_settings: see speak() — the producing chat's settings for the gate.
+        voice: {voice, speed, pitch} for this call only (a task's own), played
+        on this thread; the client's settings are never touched."""
         from core.voice_privacy import tts_gate_reason
         _gate = tts_gate_reason(chat_settings)
         if _gate:
             logger.info(f"[TTS] {_gate} — speech skipped")
             return False
 
-        if not self.audio_available:
+        if not self._audio_ready():
             logger.warning("Audio playback unavailable - skipping TTS")
             return False
 
@@ -390,7 +422,11 @@ class TTSClient:
         # Run synchronously on calling thread — no daemon, no race.
         # Same streaming-vs-blob dispatch as speak().
         target = self._select_play_target()
-        target(processed_text)
+        self._call.voice = voice or None
+        try:
+            target(processed_text)
+        finally:
+            self._call.voice = None
         return True
         
     def _apply_pitch_shift(self, audio_data, samplerate, pitch=None):
@@ -422,8 +458,8 @@ class TTSClient:
         """Fetch audio from provider. Returns (audio_data, samplerate) or (None, None)."""
         temp_path = None
         try:
-            kw = {"pitch": self.pitch_shift} if getattr(self._provider, "supports_pitch", False) else {}
-            audio_bytes = self._provider.generate(text, self.voice_name, self.speed, **kw)
+            kw = {"pitch": self._cur('pitch')} if getattr(self._provider, "supports_pitch", False) else {}
+            audio_bytes = self._provider.generate(text, self._cur('voice'), self._cur('speed'), **kw)
             if not audio_bytes:
                 return None, None
 
@@ -445,8 +481,8 @@ class TTSClient:
             # Legacy client-side pitch — ONLY for providers that can't shift at
             # synthesis time; supports_pitch providers already applied it
             # server-side (double-shift guard, 2026-08-08).
-            if self.pitch_shift != 1.0 and not getattr(self._provider, "supports_pitch", False):
-                audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate)
+            if self._cur('pitch') != 1.0 and not getattr(self._provider, "supports_pitch", False):
+                audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate, self._cur('pitch'))
 
             return audio_data, samplerate
 
@@ -466,7 +502,7 @@ class TTSClient:
         
     def _generate_and_play_audio(self, text, gen=None):
         """Generate audio from server and play it using sounddevice OutputStream"""
-        if not self.audio_available:
+        if not self._audio_ready():
             return
 
         def _stale():
@@ -587,7 +623,7 @@ class TTSClient:
         back transparently if the provider's generate_stream() yields just
         one blob (base-class default).
         """
-        if not self.audio_available:
+        if not self._audio_ready():
             return
 
         def _stale():
@@ -614,8 +650,8 @@ class TTSClient:
             # browser turns honored the setting (found via Krem's 0.78 test,
             # 2026-08-17; broken since supports_pitch landed 2026-08-08).
             _provider_pitch = getattr(self._provider, "supports_pitch", False)
-            kw = {"pitch": self.pitch_shift} if _provider_pitch else {}
-            chunk_iter = self._provider.generate_stream(text, self.voice_name, self.speed, **kw)
+            kw = {"pitch": self._cur('pitch')} if _provider_pitch else {}
+            chunk_iter = self._provider.generate_stream(text, self._cur('voice'), self._cur('speed'), **kw)
 
             for chunk_bytes in chunk_iter:
                 if self.should_stop.is_set() or _stale():
@@ -636,8 +672,8 @@ class TTSClient:
                 # synthesis time — same double-shift guard as the blob path.
                 # Before the output-rate resample: the shift works at the
                 # chunk's native rate.
-                if self.pitch_shift != 1.0 and not _provider_pitch:
-                    audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate)
+                if self._cur('pitch') != 1.0 and not _provider_pitch:
+                    audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate, self._cur('pitch'))
                 if samplerate != self.output_rate:
                     audio_data = self._resample(audio_data, samplerate, self.output_rate)
                     samplerate = self.output_rate

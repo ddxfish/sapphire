@@ -15,5 +15,11 @@
 let _bound = null;
 
 export const getBoundChat = () => _bound;
+// The chat this tab SHOWS: its bound rail, else the Chat view's picker. Every
+// write (a turn, Stop, a message edit) names it, so a pointer that moved
+// elsewhere - a phone's switch, a vault eviction, a delete - can't send these
+// words to another chat or stop its streams (hunt 21). Reads still follow the
+// pointer: that is how an unbound tab learns the pointer moved.
+export const getViewedChat = () => _bound || document.getElementById('chat-select')?.value || null;
 export const setBoundChat = (name) => { _bound = (name && String(name)) || null; };
 export const clearBoundChat = () => { _bound = null; };

@@ -1622,3 +1622,43 @@ def test_a_line_from_before_stop_does_not_restart(world, monkeypatch):
     rt.said, rt.read = 2, 1
     rooms.stop(chat)
     assert rt.stopped_at == 2                          # only a line after Stop runs the seats again
+
+
+# --- hunt 21: a private room's words never leave through a seat -------------
+
+def _private(world, chat):
+    world.llm_chat.session_manager.chats[chat]['settings']['private_chat'] = True
+
+
+def test_a_private_room_turns_away_the_door(world):
+    """Her key's holder answers over MCP (Claude Code, a cloud model): no door
+    seat may be added, read, waited at or listed in a private room."""
+    chat, a, b = _salon()
+    door = rooms.add_seat(chat, 'sapphire', name='Claude', door=True)       # public room: allowed
+    assert any(r['room'] == chat for r in rooms.door_rooms('sapphire'))
+    _private(world, chat)
+    with pytest.raises(rooms.RoomError, match='private'):
+        rooms.add_seat(chat, 'sapphire', name='Claude 2', door=True)
+    with pytest.raises(rooms.RoomError, match='private'):
+        rooms.door_read('sapphire', chat)
+    with pytest.raises(rooms.RoomError, match='private'):
+        rooms.door_wait('sapphire', chat, seconds=1)
+    assert not any(r['room'] == chat for r in rooms.door_rooms('sapphire'))
+
+
+def test_a_seat_chat_is_as_private_as_its_room(world, monkeypatch):
+    """create_chat births every chat public (a private birth is the vault's
+    flip): the seat chat held a private room's lines in plaintext."""
+    sm = world.llm_chat.session_manager
+    real_create = sm.create_chat
+
+    def create_public(c, settings=None):                 # the real store's rule
+        return real_create(c, {k: v for k, v in (settings or {}).items() if k != 'private_chat'})
+    monkeypatch.setattr(sm, 'create_chat', create_public)
+    chat, a, b = _salon()
+    own = f"seat-{a['id']}"
+    assert not sm.chats[own]['settings'].get('private_chat')
+    _private(world, chat)                                 # made private after the seats sat down
+    s_room, _room = rooms._room(chat)
+    rooms.seat_chat(chat, s_room, rooms._room(chat)[1]['seats'][0])
+    assert sm.chats[own]['settings']['private_chat'] is True

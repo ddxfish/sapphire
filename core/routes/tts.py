@@ -325,6 +325,12 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
         _body = {}
     _sid = _body.get("stream_id") if isinstance(_body, dict) else None
     _sid = str(_sid) if _sid else None
+    # `chat_wide`: the person pressed stop meaning this chat's voice (the mic
+    # button, Stop). Without it - a tab switching chats, a Replay starting, a
+    # playback ending - only what this tab names and the speakers stop: an
+    # idle tab's housekeeping muted every pump on the active chat, a
+    # satellite mid-reply included, and cancelled conversation mode (hunt 21).
+    _wide = bool(_body.get("chat_wide")) if isinstance(_body, dict) else False
     system.tts.stop()
     # A persona speaking through the MCP door plays on this machine too, on
     # its own stream: the same button ends it.
@@ -358,6 +364,8 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
             # Precise: the browser named the pump it's hearing. Phone-call
             # chats stay excluded — their pumps never reach a browser.
             system.llm_chat.stop_tts_streams(stream_id=_sid, exclude_chats=_ext)
+        elif not _wide:
+            pass
         elif _active and _active in _ext:
             logger.info(f"[TTS-STOP] '{_active}' belongs to a live phone call — web stop leaves it alone")
         else:
@@ -369,7 +377,7 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
     # Conversation mode plays through a separate sink and the LLM may still be
     # streaming — but ONLY when the conversation is the operator's own
     # (local/browser: driver._chat_name None). A phone call's driver is off-limits.
-    if getattr(system, "conversation_mode_enabled", False):
+    if _wide and getattr(system, "conversation_mode_enabled", False):
         mgr = getattr(system, "_conversation_manager", None)
         drv = getattr(mgr, "driver", None)
         if drv is not None and getattr(drv, "_chat_name", None) is None:

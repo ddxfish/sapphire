@@ -140,7 +140,11 @@ class ConversationDriver:
             # / cadence turn mid-sentence (broadsword H9 ×2). Resolve the
             # active chat for the operator's own driver; if even that fails,
             # at least spare the external (phone) chats like the web routes do.
-            chat = self._chat_name
+            # The chat the live turn actually runs in, first: with a room open,
+            # the landing chat is the room while the turn ran in the Chat
+            # view's chat - the cancel found no stream, her LLM kept going and
+            # the old answer resumed after the person spoke over it (hunt 21).
+            chat = self._chat_name or getattr(self, '_turn_chat', None)
             exclude = None
             if chat is None:
                 try:
@@ -267,6 +271,7 @@ class ConversationDriver:
                 # active chat AT QUEUE TIME (pinned only if the pointer moved).
                 target = self._chat_name or self.system.llm_chat.queued_target(_queue_chat)
                 stream, sid, chat = self.system.llm_chat.begin_stream(target, exclusive=True)
+                self._turn_chat = chat                  # what a barge-in cancels
                 if self._tts_split:
                     # Phone surface: force the sentence-split pump so the first
                     # sentence synthesizes while the rest still generates. Inert
@@ -316,6 +321,8 @@ class ConversationDriver:
                             break
                 finally:
                     self.system.llm_chat.end_stream(sid, chat)
+                    if getattr(self, '_turn_chat', None) == chat:
+                        self._turn_chat = None
 
             from core.chat import inbox
             _queue_chat = self._chat_name or _active or ''

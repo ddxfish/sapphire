@@ -1,7 +1,7 @@
 // api.js - Backend communication
 import { fetchWithTimeout } from './shared/fetch.js';
 import { dispatch, on, Events } from './core/event-bus.js';
-import { getBoundChat } from './core/bound-chat.js';
+import { getBoundChat, getViewedChat } from './core/bound-chat.js';
 import { wordsOf } from './shared/fetch.js';
 
 export { fetchWithTimeout };
@@ -12,6 +12,11 @@ export { fetchWithTimeout };
 const _boundQS = (sep = '?') => {
     const b = getBoundChat();
     return b ? `${sep}chat=${encodeURIComponent(b)}` : '';
+};
+// Writes name the chat this tab shows, bound or not (core/bound-chat.js).
+const _viewQS = (sep = '?') => {
+    const v = getViewedChat();
+    return v ? `${sep}chat=${encodeURIComponent(v)}` : '';
 };
 
 // The context bar (core/chat/budget.py meter): Context Limit is the full width,
@@ -78,24 +83,24 @@ export const fetchHistory = async () => (await fetchHistoryFull()).messages;
 export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw' + _boundQS());
 // timestamp: the row itself (two identical lines - a re-send after an error -
 // are told apart by it); the text is the server's fallback.
-export const removeFromUserMessage = (userMessage, timestamp) => fetchWithTimeout('/api/history/messages' + _boundQS(), {
+export const removeFromUserMessage = (userMessage, timestamp) => fetchWithTimeout('/api/history/messages' + _viewQS(), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user_message: userMessage, timestamp: timestamp || null })
 }, 10000);
-export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant' + _boundQS(), {
+export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant' + _viewQS(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
-export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}` + _boundQS(), {
+export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}` + _viewQS(), {
     method: 'DELETE'
 }, 10000);
 // Legacy - kept for backwards compatibility, prefer fetchStatus
 export const fetchSystemStatus = () => fetchWithTimeout('/api/system/status', {}, 5000);
 
 // Chat management
-export const cancelGeneration = () => fetchWithTimeout('/api/cancel' + _boundQS(), {
+export const cancelGeneration = () => fetchWithTimeout('/api/cancel' + _viewQS(), {   // only this chat's turn: an unscoped Stop flagged every stream in the app (hunt 21)
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }
 }, 5000);
@@ -144,7 +149,7 @@ export const activateChat = async (name) => {
 export const setLanding = (name, on = true) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/landing`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }),
 }, 10000);
-export const clearChat = () => fetchWithTimeout('/api/history/messages' + _boundQS(), {
+export const clearChat = () => fetchWithTimeout('/api/history/messages' + _viewQS(), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ count: -1 })
@@ -459,16 +464,33 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
                                    onQueued = null, onQueuedDropped = null, onMerged = null, onTicket = null }) => {
     onChunk = _wrapChunkWithAvatarScan(onChunk);
     let res;
+    // A half-dead socket can swallow the request and never answer: no
+    // headers, no ticket, "Connecting..." forever, and a re-send made a
+    // duplicate turn (hunt 21). After HEADERS_MS the send gives up - marked
+    // `uncertain`: she may have taken it, so the caller checks the chat
+    // instead of putting the words back.
+    const HEADERS_MS = 45000;
+    const giveUp = new AbortController();
+    const headerTimer = setTimeout(() => giveUp.abort(), HEADERS_MS);
+    if (signal) signal.addEventListener('abort', () => giveUp.abort(), { once: true });
     try {
         const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
         res = await fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
             body: JSON.stringify(body),
-            signal
+            signal: giveUp.signal
         });
     } catch (e) {
-        return onError(e.name === 'AbortError' ? new Error('Cancelled') : e);
+        if (signal?.aborted) return onError(new Error('Cancelled'));
+        if (e.name === 'AbortError') {
+            const lost = new Error("No answer from Sapphire yet. Check the chat before sending again.");
+            lost.uncertain = true;
+            return onError(lost);
+        }
+        return onError(e);
+    } finally {
+        clearTimeout(headerTimer);
     }
     if (!res.ok) {
         if (res.status === 401) {
@@ -505,7 +527,7 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
 // resumes the chat's last reply from its own row (no user row is sent or
 // saved, the row is edited on success and untouched on Stop).
 export const streamChatContinue = (timestamp, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) =>
-    _streamTurn({ text: '', continue_from: timestamp },
+    _streamTurn({ text: '', continue_from: timestamp, ...(getViewedChat() ? { chat: getViewedChat() } : {}) },
                 { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart });
 
 // Reattach to the live turn this tab lost its feed on (server-owned turns,
@@ -660,8 +682,8 @@ export const streamChat = (text, onChunk, onComplete, onError, signal = null, pr
     if (prefill) body.prefill = prefill;
     if (images && images.length > 0) body.images = images;
     if (files && files.length > 0) body.files = files;
-    const bound = getBoundChat();
-    if (bound) body.chat = bound;   // F1: a bound rail's turn names its session
+    const viewed = getViewedChat();
+    if (viewed) body.chat = viewed;   // the chat on screen, never wherever the pointer moved (hunt 21)
     return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart,
                                onQueued: queueHooks?.onQueued || null, onQueuedDropped: queueHooks?.onQueuedDropped || null,
                                onMerged: queueHooks?.onMerged || null, onTicket: queueHooks?.onTicket || null });
@@ -706,7 +728,7 @@ export const postAudio = async (blob) => {
 };
 
 export const editMessage = (role, timestamp, newContent) => 
-  fetchWithTimeout('/api/history/messages/edit' + _boundQS(), {
+  fetchWithTimeout('/api/history/messages/edit' + _viewQS(), {
     method: 'POST', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ role, timestamp, new_content: newContent }) 
@@ -730,10 +752,11 @@ export const toggleSpice = async (chatName, enabled) => {
 export const getTtsStatus = () => fetchWithTimeout('/api/tts/status', {}, 2000);
 // streamId: the streaming-TTS pump the browser is hearing — the server mutes
 // exactly that one (never the next turn still thinking). 2026-09-08.
-export const stopLocalTts = (streamId = null) => fetchWithTimeout('/api/tts/stop', {
+// chatWide: the person meant this chat's voice (mic button, Stop) - see the route.
+export const stopLocalTts = (streamId = null, chatWide = false) => fetchWithTimeout('/api/tts/stop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(streamId ? { stream_id: streamId } : {})
+    body: JSON.stringify({ ...(streamId ? { stream_id: streamId } : {}), ...(chatWide ? { chat_wide: true } : {}) })
 }, 2000);
 
 // Image upload
@@ -742,11 +765,17 @@ export const uploadImage = async (file) => {
     formData.append('image', file);
     
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-    const res = await fetch('/api/upload/image', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': csrf },
-        body: formData
-    });
+    let res;
+    try {
+        res = await fetch('/api/upload/image', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrf },
+            body: formData,
+            signal: AbortSignal.timeout(90000),     // a dead link: say so, never hold Send forever (hunt 21)
+        });
+    } catch (e) {
+        throw new Error(e.name === 'TimeoutError' ? 'The picture took too long to upload. Try again.' : e.message);
+    }
     
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));

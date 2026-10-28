@@ -592,11 +592,15 @@ export async function fullResync() {
 function initEventBus() {
     // Debounced refresh - prevents multiple /api/history calls from racing
     let refreshTimer = null;
+    // Busy = owed, not dropped: a refresh skipped mid-turn (merged sends, a
+    // remote delete or trim) left bubbles and rows out of step, so the
+    // buttons acted on the wrong message (hunt 21). It runs once the turn ends.
     const debouncedRefresh = () => {
         if (refreshTimer) clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(() => {
+        refreshTimer = setTimeout(function tryRefresh() {
+            if (getIsProc()) { refreshTimer = setTimeout(tryRefresh, 500); return; }
             refreshTimer = null;
-            if (!getIsProc()) refresh(false);
+            refresh(false);
         }, 100);
     };
 
@@ -631,19 +635,27 @@ function initEventBus() {
     const _roomsNotMine = (data) => data?.source === 'room' && getBoundChat() !== data?.chat;
     let _voiceTurnId = null;      // the live turn's message id: its END settles the rail even after the view moved on
 
+    // The chat the mirror was armed for. Its END releases the mirror whatever
+    // `foreign` says by then: a pointer that moved mid-turn turned the END
+    // foreign and the tab sat on Stop / Generating forever (hunt 21).
+    let _mirrorChat = null;
+
     eventBus.on(eventBus.Events.AI_TYPING_START, (data) => {
         if (_notMine(data)) return;
         console.log('[EventBus] AI typing started');
         if (getAbortController() || _voiceTurnActive) return;
+        _mirrorChat = data?.chat || null;
         setProc(true);
         ui.showStatus();
         ui.updateStatus('Generating...');
     });
 
     eventBus.on(eventBus.Events.AI_TYPING_END, (data) => {
-        if (_notMine(data)) return;
+        const armedHere = _mirrored() && _mirrorChat && data?.chat === _mirrorChat;
+        if (_notMine(data) && !armedHere) return;
         console.log('[EventBus] AI typing ended');
         if (_mirrored()) {
+            _mirrorChat = null;
             ui.hideStatus(); setProc(false);
             // A bubble left live by a regen/continue lane that lost its feed
             // finalizes here so the refresh below can paint the row (a typed
@@ -679,9 +691,12 @@ function initEventBus() {
         updateMicButtonState();
     });
 
+    // The SPEAKERS stopped (their reply ended, or a task's speech did): the
+    // indicator follows. Never this tab's own playback - every tab killed its
+    // reply mid-sentence and muted its pump whenever a heartbeat finished
+    // talking on the speakers (hunt 21).
     eventBus.on(eventBus.Events.TTS_STOPPED, (data) => {
         if (data?.surface === 'phone') return;
-        audio.stop(true);
         audio.setLocalTtsPlaying(false);
         updateMicButtonState();
     });

@@ -75,6 +75,17 @@ def _no_real_metrics_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_git_lock_sweep(monkeypatch):
+    """core.updater clears a stale .git/index.lock on entry: never the dev
+    repo's from a test."""
+    try:
+        import core.updater as _u
+        monkeypatch.setattr(_u, "_clear_stale_index_lock", lambda *a, **k: None)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_real_idle_clock(tmp_path, monkeypatch):
     """core.idle keeps the person's app-wide clock in user/idle.json; every
     history test that lands a user row would move the dev box's real one."""

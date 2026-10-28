@@ -51,7 +51,11 @@ PAUSE_AFTER_MS = {
 # Block-level openers that are hidden entirely. Each (opener, closer) pair.
 # The thinking pairs come from core.think (the one list of those tags).
 from core import think as _think
-BLOCK_TAGS: list = [*_think.PAIRS, ("<tools>", "</tools>")]
+# Text-format tool calls (LM Studio / Qwen / GLM put them in the reply) are
+# her tool input, never speech: held back until they close, then dropped
+# (hunt 21: she read `{"query": ...}` aloud).
+BLOCK_TAGS: list = [*_think.PAIRS, ("<tools>", "</tools>"),
+                    ("<tool_call>", "</tool_call>"), ("<function=", "</function>")]
 
 # Secondary punctuation splits when the chunk has grown past this fraction
 # of max_chars. Avoids splitting "Yes:" into its own tiny chunk.
@@ -128,7 +132,7 @@ class SpeechChunker:
             self._raw_buf = ""
         out.extend(self._drain())
         # Final chunk for whatever's left (regardless of min_chars)
-        final_text = self._clean_buf.strip()
+        final_text = _finish_chunk(self._clean_buf)
         if final_text:
             out.append(_make_chunk(final_text, "end", self._chunk_index, self.pause_overrides))
             self._chunk_index += 1
@@ -140,6 +144,12 @@ class SpeechChunker:
         # Apply stage-direction prosody substitution before splitting.
         # Complete *X* and (X) pairs get wrapped with the configured marker;
         # unclosed ones remain as-is and get processed when the closer arrives.
+        # Whole links, pictures and inline code first: a link's `(url)` half
+        # is a parenthetical to the stage-prosody pass, which wrapped it and
+        # left "[the guide]," to be spoken (hunt 21). Only complete ones match;
+        # a half-arrived one waits for its closer in the buffer.
+        for pat, repl in _WHOLE_FIRST:
+            self._clean_buf = pat.sub(repl, self._clean_buf)
         self._clean_buf = _apply_stage_prosody(self._clean_buf, self.stage_pause_style)
         out: list = []
         while True:
@@ -147,7 +157,7 @@ class SpeechChunker:
             if cut is None:
                 break
             chunk_text, boundary, remainder = cut
-            chunk_text = chunk_text.strip()
+            chunk_text = _finish_chunk(chunk_text)
             self._clean_buf = remainder
             if not chunk_text:
                 continue
@@ -289,6 +299,8 @@ _INLINE_PATTERNS = [
     (_AVATAR_RE, " "),                                      # avatar display tokens
     (_think.BLOCK_RE, " "),                                # a whole thinking block, any tag name
     (re.compile(r"<tools>.*?</tools>", re.DOTALL), " "),
+    (re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL), " "),     # text-format tool calls (BLOCK_TAGS)
+    (re.compile(r"<function=.*?</function>", re.DOTALL), " "),
     (re.compile(r"```[\s\S]*?```"), " "),
     (re.compile(r"`[^`]+`"), " "),                          # inline code
     (re.compile(r"!\[.*?\]\(.*?\)"), " "),                  # image markdown
@@ -296,6 +308,12 @@ _INLINE_PATTERNS = [
     (re.compile(r"<[^>]+>"), " "),                          # complete HTML tag
     (re.compile(r"\[([^\]]+)\]\([^)]+\)"), r"\1"),          # markdown link → text
     (re.compile(r"(?<!\w)_+(?!\w)"), ""),                   # underscore emphasis
+]
+
+_WHOLE_FIRST = [
+    (re.compile(r"!\[[^\]\n]*\]\([^)\n]*\)"), " "),         # picture
+    (re.compile(r"\[([^\]\n]+)\]\([^)\n]+\)"), r"\1"),      # link -> its words
+    (re.compile(r"`[^`\n]+`"), " "),                       # inline code
 ]
 
 # Stage-prosody marker per style. (before, after) wrappers substituted around
@@ -355,6 +373,18 @@ def _clean_piece(text: str) -> str:
     for pat, repl in _INLINE_PATTERNS:
         text = pat.sub(repl, text)
     return text
+
+
+# A bare web address is never speech (Kokoro spells it into gibberish).
+URL_RE = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
+
+
+def _finish_chunk(text: str) -> str:
+    """The inline cleanup again, on a WHOLE chunk: on token-sized pieces a
+    link, a table row or inline code never matched, so URLs, `| a | b |` rows
+    and code were spoken (hunt 21, proven). Then bare URLs go."""
+    text = URL_RE.sub(" ", _clean_piece(text))
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
 # Sentence boundary: . ! ? optionally followed by closing quote/paren,

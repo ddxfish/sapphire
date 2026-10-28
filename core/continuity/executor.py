@@ -473,18 +473,20 @@ class ContinuityExecutor:
             # globally only for this run, and restored before the browser's
             # /api/tts request can arrive - a text-only payload spoke the wrong voice.
             tts = getattr(self.system, 'tts', None)
+            tv = self._task_voice(task)
             publish(Events.TTS_SPEAK, {
                 "text": response, "task": task.get("name", ""),
-                "voice": getattr(tts, "voice_name", None),
-                "pitch": getattr(tts, "pitch_shift", None),
-                "speed": getattr(tts, "speed", None),
+                "voice": tv["voice"] or getattr(tts, "voice_name", None),
+                "pitch": tv["pitch"] if tv["pitch"] is not None else getattr(tts, "pitch_shift", None),
+                "speed": tv["speed"] if tv["speed"] is not None else getattr(tts, "speed", None),
             })
         elif tts_enabled and getattr(self.system, 'tts', None):
             # The privacy gate rides INSIDE speak_sync (one rule for every lane,
             # broadsword H3): a pre-gate here doubled it against the operator's
             # active chat and silenced public tasks.
             try:
-                self.system.tts.speak_sync(response, chat_settings={"private_chat": bool(private)})
+                self.system.tts.speak_sync(response, chat_settings={"private_chat": bool(private)},
+                                           voice=self._task_voice(task))
             except Exception as e:
                 logger.warning(f"[Continuity] TTS failed: {e}")
 
@@ -1010,6 +1012,17 @@ class ContinuityExecutor:
                            f"inside the '{plugin_name}' plugin's own folder")
             result["errors"].append("Plugin task refused: its handler is not inside its plugin's folder")
             return result
+        try:
+            _on = bool((_pl._plugins.get(plugin_name) or {}).get("loaded"))
+        except Exception:
+            _on = True
+        if not _on:
+            # A runtime task (a clock alarm) outlives its plugin being switched
+            # off; it waits until the plugin is back instead of running a
+            # disabled plugin's code (hunt 21).
+            logger.info(f"[Continuity] Plugin task '{task.get('name')}' skipped: '{plugin_name}' is off")
+            result["errors"].append(f"Skipped: the {plugin_name} plugin is off")
+            return result
         if not full_path.exists():
             result["errors"].append(f"Handler not found: {full_path}")
             return result
@@ -1205,60 +1218,23 @@ class ContinuityExecutor:
         return validate_voice(voice)
 
     def _restore_voice(self, snapshot: Dict[str, Any]) -> None:
-        """Restore TTS voice/pitch/speed from snapshot. Each setter gets its own
-        try — a single failure can't short-circuit the others, and we log which
-        one failed rather than swallowing the whole restore. Scout chaos #1/#2/#14."""
-        if not snapshot:
-            return
-        tts = getattr(self.system, 'tts', None)
-        if not tts:
-            return
-        for field, setter_name in (("voice", "set_voice"), ("pitch", "set_pitch"), ("speed", "set_speed")):
-            val = snapshot.get(field)
-            if val is None:
-                continue
-            try:
-                setter = getattr(tts, setter_name)
-                if field == "voice":
-                    setter(self._validate_voice(val))
-                else:
-                    setter(val)
-            except Exception as e:
-                logger.warning(f"[Continuity] Failed to restore TTS {field}={val!r}: {e}")
-        logger.debug(f"[Continuity] Restored voice settings: {snapshot}")
+        """Nothing to restore: a task no longer retunes the shared TTS client
+        (hunt 21). It used to set the task's voice globally for the whole run
+        and put back a snapshot at the end - a chat switch meanwhile was
+        undone, and any reply born during the run spoke in the task's voice.
+        The task's voice now rides its own speech (_task_voice)."""
+        return None
 
     def _apply_voice(self, task: Dict[str, Any]) -> None:
-        """Apply voice/pitch/speed settings to TTS. Per-setter try so a
-        mid-apply failure doesn't silently leave TTS half-configured — we
-        RAISE on any failure so the caller (_run_foreground / _run_background)
-        can restore from snapshot and mark the task errored, rather than
-        continuing with a mixed voice that then persists across tasks.
-        Scout chaos #1/#2/#14 — 2026-04-21."""
-        tts = getattr(self.system, 'tts', None)
-        if not tts:
-            return
-        for field, setter_name in (("voice", "set_voice"), ("pitch", "set_pitch"), ("speed", "set_speed")):
-            val = task.get(field)
-            # "voice" uses truthy check (empty string = unset); numeric fields
-            # use is-not-None (0.0 is a legit speed-multiplier on some setups,
-            # although unusual).
-            if field == "voice":
-                if not val:
-                    continue
-            else:
-                if val is None:
-                    continue
-            try:
-                setter = getattr(tts, setter_name)
-                if field == "voice":
-                    setter(self._validate_voice(val))
-                else:
-                    setter(val)
-            except Exception as e:
-                # Re-raise so the caller rolls back to snapshot. Logging here
-                # identifies WHICH setter failed — restore path will log its
-                # own recovery attempt.
-                logger.error(f"[Continuity] TTS apply failed at {field}={val!r}: {e}")
-                raise
+        """Validate the task's voice up front (a bad one fails the task early,
+        as before); nothing global is set. See _restore_voice."""
+        self._task_voice(task)
+
+    def _task_voice(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """{voice, speed, pitch} the task speaks with; a field it doesn't set is
+        None (the client's own, the operator's chat's)."""
+        voice = task.get("voice") or None
+        return {"voice": self._validate_voice(voice) if voice else None,
+                "speed": task.get("speed"), "pitch": task.get("pitch")}
 
     # _apply_task_settings removed — ExecutionContext handles all isolation now

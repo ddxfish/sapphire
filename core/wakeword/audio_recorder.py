@@ -11,6 +11,7 @@ import numpy as np
 from core.audio.backend import sd
 import logging
 import threading
+import time
 
 from core.audio import (
     get_device_manager,
@@ -92,6 +93,17 @@ class AudioRecorder:
         self.actual_blocksize = device_config.blocksize
         self._resample_ratio = device_config.resample_ratio
         self._needs_stereo_downmix = device_config.needs_stereo_downmix
+
+    def start_recording_settled(self, waits=(0, 0.2, 0.4, 0.6, 1.0, 2.0)):
+        """start_recording, waiting out a device that is still being let go
+        (Windows keeps a mic busy a moment after a stream closes; her own
+        reply's output stream on a non-duplex backend). True once open."""
+        for w in waits:
+            if w:
+                time.sleep(w)
+            if self.start_recording():
+                return True
+        return False
 
     def start_recording(self):
         """Open audio input stream. Retries once with device re-resolution on

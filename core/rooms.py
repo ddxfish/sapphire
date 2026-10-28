@@ -287,6 +287,10 @@ def add_seat(chat, persona, name=None, door=False):
                 'persona': str(persona), 'context': '', 'memory_write': False, 'enabled': True, 'tts': True,
                 'color': str(seed.get('trim_color') or ''), 'avatar': p.get('avatar'), 'settings': seed}
         if door:
+            if s.get('private_chat'):
+                # Her key's holder is a client over MCP (Claude Code: a cloud
+                # model): a private room's words never go to the door (hunt 21).
+                raise RoomError(_PRIVATE_DOOR)
             seat['kind'] = DOOR
         else:
             seat_chat(chat, s, seat)                 # her own chat first: no seat without one
@@ -403,6 +407,10 @@ def _wait_idle(name, timeout=15.0):
     except AttributeError:
         pass
 
+_PRIVATE_DOOR = ("This room is private: its words stay on this machine, and a seat at the door is "
+                 "answered from outside it (an MCP client, often a cloud model). Make the room public to use it.")
+
+
 def _seat_chat_name(seat):
     return f"seat-{seat['id']}"
 
@@ -421,7 +429,12 @@ def _seat_chat_settings(chat, s_room, seat):
 def seat_chat(chat, s_room, seat):
     """The name of a local seat's own chat, made if missing (an imported seat,
     a chat deleted by hand). None for a guest (hers is on her box) and for a
-    seat at the door (her key's holder keeps his own)."""
+    seat at the door (her key's holder keeps his own).
+
+    As private as the room, checked every time it is asked for: create_chat
+    births every chat public (a private birth is the vault's flip), and a room
+    made private later never told its seats - their chats held the room's
+    lines in plaintext, open to a cloud model (hunt 21)."""
     if not _local(seat):
         return None
     sm = _sm()
@@ -429,6 +442,10 @@ def seat_chat(chat, s_room, seat):
     if not sm.chat_exists(name):
         if not sm.create_chat(name, settings=_seat_chat_settings(chat, s_room, seat)):
             raise RoomError(f"{seat.get('name')}'s own chat could not be made.")
+    if s_room.get('private_chat') and not (sm.read_chat_settings(name) or {}).get('private_chat'):
+        if not sm.set_named_chat_settings(name, {'private_chat': True}):
+            raise RoomError(f"{seat.get('name')}'s own chat could not be made private like the room, "
+                            f"so she sits this one out.")
     return name
 
 
@@ -1717,7 +1734,9 @@ def _door_seat(persona, chat):
     if not str(persona or '').strip():
         raise RoomError('This needs an API token that speaks as a persona (Settings > System > API Keys): '
                         "her seat at a room's door is found by that name.")
-    _, room = _room(str(chat or ''))
+    s, room = _room(str(chat or ''))
+    if s.get('private_chat'):
+        raise RoomError(_PRIVATE_DOOR)
     seat = _door_for(room, persona)
     if seat is None:
         raise RoomError(f"The persona '{persona}' has no seat at the door of '{chat}'. The host adds one in the "
@@ -1743,12 +1762,15 @@ def _door_gone(chat, seat_id):
 
 
 def door_rooms(persona):
-    """The rooms where this persona has a seat at the door: [{room, you, purpose, running}]."""
+    """The rooms where this persona has a seat at the door: [{room, you, purpose, running}].
+    A private room is never listed: its name and purpose stay here too."""
     out = []
     for r in list_rooms():
         try:
-            _, room = _room(r['chat'])
+            s, room = _room(r['chat'])
         except RoomError:
+            continue
+        if s.get('private_chat'):
             continue
         seat = _door_for(room, persona)
         if seat is not None:
@@ -1853,6 +1875,9 @@ def _door_turn(chat, seat, rt, prep=None):
     from core.cadence import visible_text
     name = seat.get('name')
     d = _door_of(rt, seat['id'])
+    if (settings_of(chat) or {}).get('private_chat'):        # made private after she sat down
+        _notice(chat, f"{name} was skipped: this room is private, and her door leads off this machine.")
+        return ''
     if not d.here():
         logger.info(f"[ROOM] '{chat}': {name} passed (away: nobody at the door)")
         return ''

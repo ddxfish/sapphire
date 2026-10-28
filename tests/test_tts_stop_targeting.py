@@ -86,10 +86,21 @@ def test_stop_route_passes_stream_id(client, mock_system):
     assert kw.get('stream_id') == 'abc123'
 
 
-def test_stop_route_without_body_is_chat_scoped(client, mock_system):
+def test_stop_route_without_body_mutes_no_pump(client, mock_system):
+    """Hunt 21: a tab's housekeeping stop (a chat switch, a Replay starting)
+    muted every pump on the active chat, a satellite mid-reply included."""
     c, csrf = client
     mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
     r = c.post('/api/tts/stop', headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200
+    assert not mock_system.llm_chat.stop_tts_streams.called
+
+
+def test_stop_route_chat_wide_is_chat_scoped(client, mock_system):
+    """The person's own stop (mic button, Stop) still means this chat's voice."""
+    c, csrf = client
+    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
+    r = c.post('/api/tts/stop', headers={'X-CSRF-Token': csrf}, json={'chat_wide': True})
     assert r.status_code == 200
     kw = mock_system.llm_chat.stop_tts_streams.call_args.kwargs
     assert kw.get('chat_name') == 'trinity'

@@ -126,12 +126,23 @@ def get_prompt(name: str):
         components = {k: (list(v) if isinstance(v, list) else v)
                       for k, v in prompt_state._assembled_state.items()
                       if k not in ('spice', 'next_spice', 'active_preset')}
+        # Its privacy is the live preset's (hunt 21, Krem 1a): a task or a
+        # stream brain resolving 'default' while a private (or vaulted)
+        # scenario preset is active ran that persona's text on a cloud model
+        # with privacy forced off. Now it carries the flag and the resolver
+        # keeps it local, fail closed.
+        active = prompt_state.get_active_preset_name()
+        try:
+            private = bool(prompt_state.is_current_prompt_private()) or (
+                bool(active) and active != 'unknown' and is_vault_prompt(active))
+        except Exception:
+            private = True
         return {
             'name': 'default',
             'type': 'assembled',
             'components': components,
             'content': prompt_state.assemble_prompt()['content'],
-            'privacy_required': False
+            'privacy_required': private
         }
 
     return None

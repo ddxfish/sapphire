@@ -164,6 +164,24 @@ class LocalEmbedder:
         return self.session is not None
 
 
+def _private_turn_refuses(url) -> bool:
+    """A private chat's words never go to an embedder off this machine or its
+    LAN (Krem, hunt 21): this turn is private and the embedder is not near.
+    The caller gets None - the row saves unembedded, search falls back to
+    keywords - exactly as for an embedder that is down."""
+    try:
+        from core.chat.function_manager import scope_private
+        if not scope_private.get():
+            return False
+        from core.chat.llm_providers.openai_compat import near_host
+        if near_host(url):
+            return False
+    except Exception:
+        return True                     # can't tell: fail closed
+    logger.info("[embedding] private turn: remote embedder skipped")
+    return True
+
+
 class RemoteEmbedder:
     """OpenAI-compatible embedding API client (for Nomic via TEI, etc.)."""
 
@@ -208,7 +226,7 @@ class RemoteEmbedder:
     def embed(self, texts, prefix='search_document'):
         raw_url = getattr(config, 'EMBEDDING_API_URL', '')
         url = self._normalize_url(raw_url)
-        if not url:
+        if not url or _private_turn_refuses(url):
             return None
         try:
             from core.credentials_manager import credentials
@@ -269,7 +287,7 @@ class SapphireRouterEmbedder:
 
     def embed(self, texts, prefix='search_document'):
         url = self._get_url()
-        if not url:
+        if not url or _private_turn_refuses(url):
             return None
         try:
             headers = {'Content-Type': 'application/json'}

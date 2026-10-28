@@ -28,6 +28,8 @@ def _fake_system():
     s.wake_detector = MagicMock()
     s.wake_word_recorder = MagicMock()
     s.wake_word_recorder.start_recording.return_value = True
+    # the real settled reopen calls start_recording (hunt 21)
+    s.wake_word_recorder.start_recording_settled.side_effect = lambda *a: s.wake_word_recorder.start_recording()
     s.enter_conversation_mode = VoiceChatSystem.enter_conversation_mode.__get__(s)
     s.exit_conversation_mode = VoiceChatSystem.exit_conversation_mode.__get__(s)
     s._restore_wakeword = VoiceChatSystem._restore_wakeword.__get__(s)

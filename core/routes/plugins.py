@@ -1212,8 +1212,8 @@ def install_plugin(
             if is_update:
                 # Unload before replacing
                 info = plugin_loader.get_plugin_info(name)
-                if info and info.get("loaded"):
-                    plugin_loader.unload_plugin(name)
+                if info:
+                    plugin_loader.unload_plugin(name)     # "loaded" or not (hunt 21)
 
                 # Drop stale cache entry so rescan re-reads the new manifest
                 with plugin_loader._lock:
@@ -1353,8 +1353,7 @@ def revert_plugin_update(plugin_name: str, _=Depends(require_login)):
 
     dest = USER_PLUGINS_DIR / plugin_name
     with _install_lock:
-        if info.get("loaded"):
-            plugin_loader.unload_plugin(plugin_name)
+        plugin_loader.unload_plugin(plugin_name)          # "loaded" or not (hunt 21)
         with plugin_loader._lock:
             plugin_loader._plugins.pop(plugin_name, None)
 

@@ -112,3 +112,17 @@ class TestExtractCssPreview:
 
         colors = _extract_css_preview(css_file)
         assert colors == {}
+
+
+def test_purging_a_plugin_never_takes_a_longer_named_plugins_files(tmp_path, monkeypatch):
+    """Hunt 21: the `{name}-*` sweep deleted claude-code's state when 'claude'
+    was purged (google -> google-calendar tokens, mcp -> mcp_client keys)."""
+    import core.plugin_loader as pl
+    loader = pl.PluginLoader.__new__(pl.PluginLoader)
+    loader._plugins = {'claude': {}, 'claude-code': {}}
+    monkeypatch.setattr(pl, 'SYSTEM_PLUGINS_DIR', tmp_path / 'sys')
+    monkeypatch.setattr(pl, 'USER_PLUGINS_DIR', tmp_path / 'usr')
+    assert loader._owned_by_other('claude', 'claude-code.json')
+    assert loader._owned_by_other('claude', 'claude-code-sessions')
+    assert not loader._owned_by_other('claude', 'claude-logs')
+    assert not loader._owned_by_other('claude', 'claude_sessions.json')

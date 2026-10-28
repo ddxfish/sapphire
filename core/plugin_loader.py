@@ -786,7 +786,31 @@ class PluginLoader:
             pass
 
     def _load_plugin(self, name: str) -> bool:
-        """Load an enabled plugin — check cached verification, register hooks, voice commands.
+        """Load an enabled plugin, or leave NOTHING of it behind. True if loaded.
+
+        A load that raised half-way (a bad manifest field, a route that isn't a
+        regex, a plugin calling sys.exit at import) used to leave its hooks,
+        tools, routes, schedules and daemon live on every path but boot's:
+        rescan, reload, toggle. Uninstall then skipped the unload ("not
+        loaded") and a reinstall registered on top - hooks fired twice (hunt
+        21, reproduced). Every path now gets the unwind boot had."""
+        try:
+            return self._load_plugin_inner(name)
+        except (Exception, SystemExit) as e:          # SystemExit: one plugin never ends her
+            logger.error(f"[PLUGINS] {name} failed to load: {e!r}", exc_info=True)
+            try:
+                self.unload_plugin(name)
+            except Exception as ue:
+                logger.warning(f"[PLUGINS] {name}: cleanup after the failed load: {ue!r}")
+            with self._lock:
+                if name in self._plugins:
+                    self._plugins[name]["loaded"] = False
+            self._load_errors.append({"plugin": name, "error": f"Failed to load: {e}",
+                                      "hint": "Check the plugin's plugin.json and its code"})
+            return False
+
+    def _load_plugin_inner(self, name: str) -> bool:
+        """_load_plugin's body: check cached verification, register hooks, voice commands.
         Returns True if loaded, False if blocked."""
         info = self._plugins.get(name)
         if not info:
@@ -1299,12 +1323,20 @@ class PluginLoader:
             spec = importlib.util.spec_from_file_location(pkg_name, str(full_path))
             mod = importlib.util.module_from_spec(spec)
             sys.modules[pkg_name] = mod
-            spec.loader.exec_module(mod)
+            try:
+                spec.loader.exec_module(mod)
+            except BaseException:
+                # A half-run module must not stay importable (a later import
+                # would hide the real cause), and the raise goes to the
+                # caller, whose branches tell the person - swallowed here, the
+                # plugin showed "on" with no bot and no toast (hunt 21).
+                sys.modules.pop(pkg_name, None)
+                raise
             mod._pkg_name = pkg_name  # For sys.modules cleanup on unload
             return mod
         except Exception as e:
             logger.error(f"[PLUGINS] Failed to load daemon module {full_path}: {e}", exc_info=True)
-            return None
+            raise
 
     def _load_dependents(self, host: str):
         """Retry add-ons that failed earlier for want of `host` (toggle-on lane).
@@ -1582,7 +1614,8 @@ class PluginLoader:
         import sys as _sys
         plugin_path = self._plugins.get(name, {}).get("path")
         if plugin_path:
-            plugin_path_str = str(plugin_path)
+            # With the separator: user/plugins/foo must not evict foo-bar's modules (hunt 21)
+            plugin_path_str = str(plugin_path).rstrip("/\\") + os.sep
             evict = [
                 mod_name for mod_name, mod in list(_sys.modules.items())
                 if getattr(mod, "__file__", None)
@@ -1725,6 +1758,23 @@ class PluginLoader:
                         if name in self._plugins:
                             self._plugins[name]["loaded"] = False
 
+    def _owned_by_other(self, name: str, fname: str) -> bool:
+        """Whether `fname` (in plugin_state) belongs to a LONGER plugin name that
+        starts with `name`: purging `claude` swept `claude-code.json`, `google`
+        took google-calendar's tokens, `mcp` the MCP client keys (hunt 21)."""
+        others = set(self._plugins)
+        for d in (SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR):
+            try:
+                others.update(p.name for p in d.iterdir() if p.is_dir())
+            except OSError:
+                pass
+        stem = fname.split('.', 1)[0]
+        for other in others:
+            if other != name and len(other) > len(name) and other.startswith(name):
+                if stem == other or stem.startswith(other + '-') or stem.startswith(other + '_'):
+                    return True
+        return False
+
     def purge_plugin_data(self, name: str) -> dict:
         """Delete everything a plugin stores ABOUT THE USER, leaving the
         plugin itself installed and configured: user/plugin_state/<name>.json,
@@ -1763,6 +1813,8 @@ class PluginLoader:
         try:
             for prefix in (f"{name}-", f"{name}_"):
                 for extra in PLUGIN_STATE_DIR.glob(f"{prefix}*"):
+                    if self._owned_by_other(name, extra.name):
+                        continue
                     try:
                         if extra.is_dir():
                             _rmtree_robust(extra)
@@ -1785,9 +1837,9 @@ class PluginLoader:
         if info["band"] != "user":
             raise ValueError(f"Cannot uninstall system plugin: {name}")
 
-        # Unload if loaded
-        if info.get("loaded"):
-            self.unload_plugin(name)
+        # Unload whatever it registered, "loaded" or not: a half-failed load
+        # left live registrations on a plugin marked unloaded (hunt 21).
+        self.unload_plugin(name)
 
         # Best-effort conda env cleanup in the background — multi-GB envs take
         # tens of seconds to remove and nothing else will ever reclaim them
@@ -1804,8 +1856,15 @@ class PluginLoader:
         with self._lock:
             self._plugins.pop(name, None)
 
+        # A user copy SHADOWING a shipped plugin of the same name (a local
+        # fork): its settings, state and chat rows are the shipped plugin's
+        # too, so uninstall removes the copy and keeps all of them; the
+        # shipped one takes its place (hunt 21: it wiped the shipped data).
+        shadowed = (SYSTEM_PLUGINS_DIR / name).is_dir()
+
         # Remove from enabled list on disk
-        self._remove_from_enabled_list([name])
+        if not shadowed:
+            self._remove_from_enabled_list([name])
 
         # Delete plugin directory (use actual path, not name — they may differ)
         plugin_dir = info["path"] if info else USER_PLUGINS_DIR / name
@@ -1817,6 +1876,16 @@ class PluginLoader:
         prev_dir = PLUGIN_PREV_DIR / name
         if prev_dir.exists():
             _rmtree_robust(prev_dir)
+
+        if shadowed:
+            with self._plugin_state_cache_lock:
+                self._plugin_state_cache.pop(name, None)
+            logger.info(f"[PLUGINS] Uninstalled the user copy of {name}; the shipped {name} is back, its data kept")
+            try:
+                self.rescan()
+            except Exception as e:
+                logger.warning(f"[PLUGINS] rescan after removing {name}'s user copy: {e}")
+            return
 
         # Delete settings
         settings_file = PROJECT_ROOT / "user" / "webui" / "plugins" / f"{name}.json"
@@ -1890,7 +1959,7 @@ class PluginLoader:
                     rel_in_state = candidate.relative_to(plugin_state_root)
                     first_seg = rel_in_state.parts[0] if rel_in_state.parts else ""
                     if not (first_seg == name or first_seg.startswith(f"{name}-")
-                            or first_seg.startswith(f"{name}_")):
+                            or first_seg.startswith(f"{name}_")) or self._owned_by_other(name, first_seg):
                         logger.warning(
                             f"[PLUGINS] Uninstall cleanup REFUSED — state path "
                             f"must start with plugin name '{name}': {rel}"

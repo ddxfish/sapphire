@@ -61,9 +61,9 @@ export const stopLocalTtsPoll = () => {
     localTtsPlaying = false;
 };
 
-export const stopLocalTts = async (streamId = null) => {
+export const stopLocalTts = async (streamId = null, chatWide = false) => {
     try {
-        await api.stopLocalTts(streamId);
+        await api.stopLocalTts(streamId, chatWide);
         localTtsPlaying = false;
     } catch {}
     // Re-check server state after a delay to catch races where TTS
@@ -106,7 +106,10 @@ const _stopLegacyPlayer = () => {
     cleanup();
 };
 
-export const stop = (force = false) => {
+// chatWide: the person pressed stop meaning this chat's voice (the mic
+// button, Stop) - the server then mutes this chat's pumps too. Every other
+// caller stops only what this tab plays and the speakers (hunt 21).
+export const stop = (force = false, chatWide = false) => {
     if (isStreaming && !force) return;
     // Name the pump we're hearing BEFORE the queue teardown moves it to
     // _stoppedStreamId — the server mutes exactly that pump, never the next
@@ -119,7 +122,7 @@ export const stop = (force = false) => {
     isStreaming = false;
     // Always tell server to stop TTS — even if we don't think it's playing yet.
     // Server stop is idempotent and prevents races where TTS starts after our check.
-    stopLocalTts(sid);
+    stopLocalTts(sid, chatWide);
 };
 
 export const isTtsPlaying = () => isStreaming;

@@ -129,6 +129,15 @@ async def get_all_settings(request: Request, _=Depends(require_login)):
         raise server_error("load settings", e)
 
 
+def _writable():
+    """Every settings write refuses while user/settings.json is unreadable
+    (hunt 21, Krem 4a): it used to "save" in memory and lose it at restart.
+    Reset (the fix) stays open."""
+    from core.settings_manager import settings
+    if getattr(settings, 'corrupt_error', None):
+        raise HTTPException(status_code=409, detail=settings.corrupt_error)
+
+
 @router.post("/api/settings/reload")
 async def reload_settings(request: Request, _=Depends(require_login)):
     """Reload settings from disk."""
@@ -171,6 +180,7 @@ async def get_tiers(request: Request, _=Depends(require_login)):
 @router.put("/api/settings/batch")
 async def update_settings_batch(request: Request, _=Depends(require_login)):
     """Update multiple settings at once."""
+    _writable()
     from core.settings_manager import settings
     data = await request.json()
     if not data or 'settings' not in data:
@@ -343,6 +353,7 @@ async def get_chat_defaults(request: Request, _=Depends(require_login)):
 @router.put("/api/settings/chat-defaults")
 async def save_chat_defaults(request: Request, _=Depends(require_login)):
     """Save chat defaults."""
+    _writable()
     data = await request.json()
     defaults_path = PROJECT_ROOT / "user" / "settings" / "chat_defaults.json"
     defaults_path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,6 +367,7 @@ async def save_chat_defaults(request: Request, _=Depends(require_login)):
 @router.delete("/api/settings/chat-defaults")
 async def reset_chat_defaults(request: Request, _=Depends(require_login)):
     """Reset chat defaults."""
+    _writable()
     defaults_path = PROJECT_ROOT / "user" / "settings" / "chat_defaults.json"
     if defaults_path.exists():
         defaults_path.unlink()
@@ -481,6 +493,7 @@ async def _guard_embedding_swap(settings, new_provider, confirmed: bool):
 @router.put("/api/settings/{key}")
 async def update_setting(key: str, request: Request, _=Depends(require_login)):
     """Update a setting."""
+    _writable()
     from core.settings_manager import settings
     from core.socks_proxy import clear_session_cache
     if settings.is_locked(key):
@@ -525,6 +538,7 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
 @router.delete("/api/settings/{key}")
 async def delete_setting(key: str, request: Request, _=Depends(require_login)):
     """Remove user override for a setting."""
+    _writable()
     from core.settings_manager import settings
     if settings.is_locked(key):
         raise HTTPException(status_code=403, detail=f"Setting '{key}' is locked in managed mode")
@@ -660,6 +674,7 @@ async def get_llm_providers(request: Request, _=Depends(require_login)):
 @router.put("/api/llm/providers/{provider_key}")
 async def update_llm_provider(provider_key: str, request: Request, _=Depends(require_login)):
     """Update LLM provider settings (core or custom)."""
+    _writable()
     from core.settings_manager import settings
     from core.chat.llm_providers import provider_registry
     data = await request.json()
@@ -712,6 +727,7 @@ async def llm_generation_params(provider: str = '', model: str = '', _=Depends(r
 @router.put("/api/llm/fallback-order")
 async def update_fallback_order(request: Request, _=Depends(require_login)):
     """Update LLM fallback order."""
+    _writable()
     from core.settings_manager import settings
     data = await request.json()
     order = data.get('order', [])
@@ -948,6 +964,7 @@ async def test_llm_thinking(provider_key: str, request: Request, _=Depends(requi
 @router.post("/api/llm/custom-providers")
 async def add_custom_provider(request: Request, _=Depends(require_login)):
     """Create a new custom provider instance."""
+    _writable()
     from core.settings_manager import settings
     from core.chat.llm_providers import provider_registry
     data = await request.json()
@@ -1019,6 +1036,7 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
 @router.delete("/api/llm/custom-providers/{provider_key}")
 async def delete_custom_provider(provider_key: str, request: Request, _=Depends(require_login)):
     """Remove a custom provider instance."""
+    _writable()
     from core.settings_manager import settings
     from core.chat.llm_providers import provider_registry
 

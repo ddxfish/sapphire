@@ -350,8 +350,11 @@ class WakeWordDetector:
             # avoids PortAudio device contention between TTS OutputStream
             # and the wakeword InputStream on backends that don't support
             # simultaneous streams on the same device
+            # 300 s, not 60: a long reply still playing at 60 s reopened the mic
+            # on her own voice, and a false wake on it had her answer herself
+            # (hunt 21). The cap only guards a playing flag that never clears.
             try:
-                self.system.tts.wait(timeout=60)
+                self.system.tts.wait(timeout=300)
             except Exception:
                 pass
 
@@ -362,7 +365,19 @@ class WakeWordDetector:
             if (self.audio_recorder and self.running
                     and threading.current_thread() is self.listen_thread):
                 logger.debug("Restarting wakeword audio stream after STT/TTS")
-                self.audio_recorder.start_recording()
+                # Settled, and loud when it still can't: one failed reopen
+                # left her deaf for good while every status said ON (hunt 21).
+                if not self.audio_recorder.start_recording_settled():
+                    logger.error("[WAKE] the microphone did not reopen after a wake turn — not listening")
+                    try:
+                        from core import notify
+                        notify.notify("Wake word stopped listening", level='error', source='wakeword',
+                                      key='wakeword-mic-reopen',
+                                      body="The microphone didn't reopen after she answered. Turn the wake word "
+                                           "off and on in Settings › Wakeword, or check the microphone.",
+                                      go={'view': 'settings', 'tab': 'wakeword'})
+                    except Exception:
+                        pass
 
     def _listen_loop(self):
         """Main listening loop - polls OWW for predictions."""
