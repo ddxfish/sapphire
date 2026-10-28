@@ -136,3 +136,22 @@ def test_the_heartbeat_tab_has_an_idle_column_and_editor():
     assert 'idle: !!opts.idle' in common and 'beats after ${quietWords(hb.idle_next_min)} quiet' in common
     ed = (ROOT / 'interfaces' / 'web' / 'static' / 'shared' / 'trigger-editor' / 'editor.js').read_text()
     assert "const IDLE_CONFIG = { label: 'Idle Heartbeat'" in ed and '{quiet}' in ed
+
+
+def test_the_card_says_when_it_next_looks(quiet):
+    """Krem, 2026-10-27: 2 h 41 min quiet, a 60-min threshold, and no beat -
+    its looks were hourly (*/60 = on the hour) with a 50% chance. The card
+    and timeline say when the look that will find it due comes."""
+    from datetime import datetime
+    from core.continuity.scheduler import idle_next_look, _user_now
+    since = quiet(161)
+    now = _user_now()
+    look = idle_next_look(beat(schedule='*/60 * * * *'), since, now)
+    assert look.minute == 0 and 0 < (look - now).total_seconds() <= 3600
+    soon = idle_next_look(beat(schedule='*/5 * * * *'), since, now)
+    assert soon.minute % 5 == 0 and (soon - now).total_seconds() <= 300
+    later = quiet(10)
+    due_look = idle_next_look(beat(schedule='*/5 * * * *'), later, now)
+    assert (due_look - now).total_seconds() >= 49 * 60            # due at 60 min quiet, not before
+    common = (ROOT / 'interfaces' / 'web' / 'static' / 'shared' / 'trigger-common.js').read_text()
+    assert 'next look ${lookIn(hb.idle_next_look)}' in common

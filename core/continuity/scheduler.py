@@ -397,6 +397,8 @@ class ContinuityScheduler:
                 task["idle_fires_now"] = fires
                 done = task.get("idle_backoff", True) and fires >= self.IDLE_MAX_FIRES
                 task["idle_next_min"] = None if done else mins * (2 ** fires if task.get("idle_backoff", True) else 1)
+                look = idle_next_look(task, None if stretch is None else time.time() - quiet * 60, _user_now())
+                task["idle_next_look"] = look.isoformat() if look else None
         return tasks
     
     def get_task(self, task_id: str) -> Optional[Dict]:
@@ -1413,11 +1415,10 @@ class ContinuityScheduler:
                 if task_type(task) in EVENT_TYPES:
                     continue
                 if is_idle(task):
-                    # one point, not every cron look: when the next beat is due
-                    # if the person stays quiet (never, when backoff is spent)
-                    at = _idle_next_at(task, since)
-                    if at is not None:
-                        when = max(datetime.fromtimestamp(at, tz=now.tzinfo), now)
+                    # one point, not every cron look: the look that will find it
+                    # due if the person stays quiet (never, when backoff is spent)
+                    when = idle_next_look(task, since, now)
+                    if when is not None:
                         if when <= end and self._in_active_hours(task, when.hour):
                             timeline.append({
                                 "task_id": task["id"], "task_name": task.get("name"),
@@ -1548,6 +1549,21 @@ def _idle_next_at(task, since):
             return None
         return since + mins * (2 ** fires) * 60
     return since + mins * 60
+
+
+def idle_next_look(task, since, now):
+    """When an Idle Heartbeat will actually look and find itself due: the
+    first cron look at or after the moment the quiet reaches it (a look
+    every 60 min = on the hour). None = not coming (quiet unknown, or the
+    backoff is spent until the person speaks). `now`: a tz-aware datetime."""
+    at = _idle_next_at(task, since)
+    if at is None:
+        return None
+    start = max(datetime.fromtimestamp(at, tz=now.tzinfo), now) - timedelta(seconds=1)
+    try:
+        return _get_croniter()(task.get("schedule", ""), start).get_next(datetime)
+    except Exception:
+        return None
 
 
 def live_filter(task) -> dict:

@@ -103,6 +103,11 @@ export function formatTime(isoString) {
 
 export const isIdle = (hb) => (hb.idle_minutes || 0) > 0;
 
+function lookIn(iso) {
+    const mins = Math.round((new Date(iso) - Date.now()) / 60000);
+    return mins <= 0 ? 'now' : `in ${quietWords(mins)}`;
+}
+
 // '45 min', '2 h 10 min', '3 days 4 h' (core/idle.py words)
 export function quietWords(mins) {
     let m = Math.floor(mins || 0);
@@ -245,6 +250,9 @@ export function renderHeartbeatCard(hb, timeline) {
         hb.idle_next_min != null ? `beats after ${quietWords(hb.idle_next_min)} quiet` : null,
         hb.quiet_min != null ? `quiet ${quietWords(hb.quiet_min)}` : null,
         hb.idle_backoff !== false && hb.idle_fires_now ? `beat ${hb.idle_fires_now}/3 this quiet` : null,
+        // when it next LOOKS and will find itself due (its "Looks every" sets this:
+        // every 60 min = on the hour), and the chance it rolls then
+        hb.idle_next_look ? `next look ${lookIn(hb.idle_next_look)}${(hb.chance ?? 100) < 100 ? ` (${hb.chance}% chance)` : ''}` : null,
     ] : [];
     const timeParts = [
         state.label,

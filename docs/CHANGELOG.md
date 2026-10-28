@@ -1,5 +1,5 @@
 # 2.15.8 - Idle manager
-- Tells the AI when it's been idle more than 60 min
+- Tells the AI when it's been idle more than 60 min in ghost message
 - Settable in settings
 - Idle Heartbeat - new heartbeat that fires only when idle
 - Rebuild Gemini provider
