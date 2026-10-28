@@ -189,9 +189,8 @@ class TestBackwardCompat:
     def test_generation_params_returns_defaults(self):
         """get_generation_params should return sane defaults."""
         params = get_generation_params('claude', 'claude-sonnet-4-6', {})
-        assert 'temperature' in params
         assert 'max_tokens' in params
-        assert params['temperature'] == DEFAULT_GENERATION_PARAMS['temperature']
+        assert 'temperature' not in params          # hunt 20: never baked; the server's own default
 
     def test_generation_params_instance_override(self):
         """Instance generation_params should override defaults."""

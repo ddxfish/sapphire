@@ -81,7 +81,11 @@ OPTIONAL_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty',
                    'top_k', 'stream_options')
 # Not in the OpenAI SDK's signature — passing them as kwargs is a TypeError,
 # so they ride extra_body (LM Studio / llama.cpp honor them there).
-EXTRA_BODY_PARAMS = ('repeat_penalty', 'top_k')
+EXTRA_BODY_PARAMS = ('repeat_penalty', 'top_k',
+                     # local-server samplers someone adds by hand (hunt 20: a
+                     # min_p as a kwarg raised TypeError on every turn)
+                     'min_p', 'typical_p', 'repetition_penalty', 'tfs_z',
+                     'mirostat', 'mirostat_tau', 'mirostat_eta')
 PENALTY_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty', 'top_k')
 
 
@@ -98,6 +102,22 @@ _FOUND_TTL = 60.0
 _WINDOW: Dict[tuple, tuple] = {}
 _LAST_WINDOW: Dict[tuple, int] = {}          # the last window a server really reported, per (root, model)
 _LAN_NAMES = ('.local', '.lan', '.home', '.home.arpa', '.internal', '.ts.net')
+
+
+def near_host(base_url) -> bool:
+    """This machine, the LAN or Tailscale: a server the person runs, never a
+    cloud API. One test for the window probe (context_window) and Continue
+    (resolve.continues_in_place)."""
+    from urllib.parse import urlparse
+    import ipaddress
+    host = (urlparse(base_url or '').hostname or '').lower()
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip in ipaddress.ip_network('100.64.0.0/10')   # + Tailscale
+    except ValueError:
+        return host == 'localhost' or '.' not in host or host.endswith(_LAN_NAMES)
 _NOT_CHAT = re.compile(r'embed|rerank|whisper|tts|moderation', re.I)
 
 
@@ -364,15 +384,7 @@ class OpenAICompatProvider(BaseProvider):
         (/api/ps). Asked of a local or LAN server only, once a minute; None =
         unknown (a cloud API, a server that doesn't say), and the app's own
         Context Limit stands alone. core/chat/budget.py reads it."""
-        from urllib.parse import urlparse
-        import ipaddress
-        host = (urlparse(self.base_url or '').hostname or '').lower()
-        try:
-            ip = ipaddress.ip_address(host)
-            near = ip.is_private or ip.is_loopback or ip in ipaddress.ip_network('100.64.0.0/10')   # + Tailscale
-        except ValueError:
-            near = host == 'localhost' or '.' not in host or host.endswith(_LAN_NAMES)
-        if not (near or self.config.get('is_local')):
+        if not (near_host(self.base_url) or self.config.get('is_local')):
             return None
         root = re.sub(r'/v1/?$', '', self.base_url.rstrip('/'))
         key, now = (root, self.model or ''), time.time()

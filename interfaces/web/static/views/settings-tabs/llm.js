@@ -552,7 +552,7 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
             if (!res.ok || mine !== inheritSeq) return;
             const gen = await res.json();
             [['temp', 'temperature'], ['maxtok', 'max_tokens'], ['topp', 'top_p']].forEach(([id, k]) => {
-                if (g(id) && gen[k] != null) g(id).placeholder = gen[k];
+                if (g(id)) g(id).placeholder = gen[k] != null ? gen[k] : 'server default';
             });
         } catch {}
     };

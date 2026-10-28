@@ -182,12 +182,50 @@ class StreamingChat:
             pass
         return self.main_chat.function_manager.enabled_tools
 
+    def _add_user(self, content, **kw):
+        """The turn's user row, written: from here an error row follows it."""
+        self._user_row_pending = None
+        return self.main_chat.session_manager.add_user_message(content, **kw)
+
+    def _keep_partial(self, e, provider_key, partial, thinking=None):
+        """A turn that died after some of the reply streamed keeps it: the
+        prose as a real reply (she sees it, Continue can finish it) with the
+        failure as its note (metadata.cutoff, the amber line), not an error
+        row in its place. The person deletes it if they want (Krem, hunt 20).
+        True when it was saved."""
+        partial = (partial or '').strip()
+        if not partial or self.llm_done:        # llm_done: her row is already written
+            return False
+        from core.chat.llm_errors import history_row
+        try:
+            sm = self.main_chat.session_manager
+            if sm._in_tool_cycle:
+                self._close_dangling_tool_calls()
+            words, _meta = history_row(e, provider_key)
+            sm.add_assistant_final(content=partial, thinking=thinking or None,
+                                   metadata={'cutoff': f"{words} What came before it is kept."})
+            return True
+        except Exception as se:
+            logger.warning(f"[STREAMING] partial reply not kept: {se}")
+            return False
+
     def _save_error_row(self, e, provider_key):
         """A failed turn's row: plain words that show, the raw text under its
         Details fold, marked so it never reaches the LLM (a model repeats the
         errors it reads). Also keeps history from ending on a dangling user
-        row. Returns the words."""
+        row. Returns the words.
+
+        A failure before the user row was written (building the prompt, the
+        ghost, a paste) wrote it first now: the error row followed her
+        previous reply, the person's words were lost, and Regen on it redid
+        the turn before (hunt 20)."""
         from core.chat.llm_errors import history_row
+        pending = getattr(self, '_user_row_pending', None)
+        if pending:
+            try:
+                self._add_user(pending, source=getattr(self, 'turn_source', None))
+            except Exception as ue:
+                logger.warning(f"[STREAMING] the failed turn's user row was not saved: {ue}")
         text, meta = history_row(e, provider_key)
         self.main_chat.session_manager.add_assistant_final(text, metadata=meta)
         return text
@@ -217,7 +255,7 @@ class StreamingChat:
             except Exception as e:
                 logger.warning(f"[STREAMING] stop_tts failed: {e}")
 
-    def _emit_llm_done(self, tts_pump):
+    def _emit_llm_done(self, tts_pump, refused=False):
         """The LLM half of the turn is over — history row written, metrics
         saved. Returns the wire event. The audio tail (flush_and_close) can
         take seconds on a slow CPU and nothing that isn't audio should wait
@@ -236,9 +274,13 @@ class StreamingChat:
         # `ephemeral` rides here, not only on `done`: the browser settles the
         # turn at llm_done, so a flag that only arrived on the later `done`
         # was never read (pre-push hunt 2026-09-08, E1#2).
+        # `refused`: the turn never ran (vault, a Continue the provider can't
+        # do). The browser neither speaks nor swaps in the previous reply
+        # as if it were this turn's (hunt 20: a refused Continue re-read it).
         return {"type": "llm_done",
                 "ephemeral": bool(getattr(self, "ephemeral", False)),
-                "tts_streamed": bool(getattr(tts_pump, "_stream_started", False))}
+                "tts_streamed": bool(getattr(tts_pump, "_stream_started", False)),
+                "refused": bool(refused or getattr(self, "_refused", False))}
 
     def _typing_payload(self):
         """AI_TYPING_* payload. `foreign` = this turn's chat is NOT the one
@@ -307,6 +349,8 @@ class StreamingChat:
             files: Optional list of {"filename": "...", "text": "..."}
         """
         logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, continue_from={continue_from!r}, images={len(images) if images else 0}, files={len(files) if files else 0}")
+        # the person's words until their row is written (_save_error_row)
+        self._user_row_pending = None if (skip_user_message or continue_from or not user_input) else user_input
 
         # Publish typing start event. D4: tag the surface so the operator's browser
         # ignores a phone call / background conversation's typing (target_chat set =
@@ -383,6 +427,7 @@ class StreamingChat:
             self.tts_stopped = False
             self.current_stream = None
             self.ephemeral = False
+            self._refused = False      # set when the turn ends having changed nothing (see _emit_llm_done)
             # begin_stream() stamped the route-accept active chat on us; the
             # gap between that and this generator starting is UNCOUNTED — an
             # eviction may have landed in it.
@@ -406,7 +451,7 @@ class StreamingChat:
                                 "in flight and the active chat changed. "
                                 "Please resend.")
                     yield {"type": "content", "text": _refusal}
-                    yield self._emit_llm_done(tts_pump)
+                    yield self._emit_llm_done(tts_pump, refused=True)
                     yield {"type": "final", "text": _refusal,
                            "cancelled": False, "error": True}
                     return
@@ -421,7 +466,7 @@ class StreamingChat:
                                     "private — unlock the vault to continue "
                                     "here.")
                         yield {"type": "content", "text": _refusal}
-                        yield self._emit_llm_done(tts_pump)
+                        yield self._emit_llm_done(tts_pump, refused=True)
                         yield {"type": "final", "text": _refusal,
                                "cancelled": False, "error": True}
                         return
@@ -479,7 +524,7 @@ class StreamingChat:
                     _refusal = (f"🔒 Chat '{_tgt}' isn't reachable right now "
                                 f"(missing or sealed) — the turn was not run.")
                     yield {"type": "content", "text": _refusal}
-                    yield self._emit_llm_done(tts_pump)
+                    yield self._emit_llm_done(tts_pump, refused=True)
                     yield {"type": "final", "text": _refusal,
                            "cancelled": False, "error": True}
                     return
@@ -535,7 +580,7 @@ class StreamingChat:
                             "now. This is just a holding room — create a "
                             "new chat (or unlock the vault) to talk.")
                 yield {"type": "content", "text": _refusal}
-                yield self._emit_llm_done(tts_pump)
+                yield self._emit_llm_done(tts_pump, refused=True)
                 yield {"type": "final", "text": _refusal,
                        "cancelled": False, "error": True}
                 return
@@ -558,7 +603,7 @@ class StreamingChat:
                     logger.info(f"[CONTINUE] refused — turn {continue_from} is not the chat's last prose row")
                     yield {"type": "notice", "severity": "warning",
                            "message": "Continue works on the last reply only, and only when it ended in prose."}
-                    yield self._emit_llm_done(tts_pump)
+                    yield self._emit_llm_done(tts_pump, refused=True)
                     yield {"type": "final", "text": "", "cancelled": False, "error": True}
                     return
                 skip_user_message = True
@@ -573,7 +618,7 @@ class StreamingChat:
                     response = hook_event.response or ""
                     if response:
                         if not hook_event.ephemeral:
-                            self.main_chat.session_manager.add_user_message(user_input, source=getattr(self, 'turn_source', None))
+                            self._add_user(user_input, source=getattr(self, 'turn_source', None))
                             self.main_chat.session_manager.add_assistant_final(response)
                         else:
                             self.ephemeral = True
@@ -639,11 +684,11 @@ class StreamingChat:
                                 part["data"] = img.get("data", "")   # store refused → inline, as before
                             user_content.append(part)
                     if len(user_content) == 1 and user_content[0].get("type") == "text":
-                        self.main_chat.session_manager.add_user_message(user_input, source=getattr(self, 'turn_source', None))
+                        self._add_user(user_input, source=getattr(self, 'turn_source', None))
                     else:
-                        self.main_chat.session_manager.add_user_message(user_content, source=getattr(self, 'turn_source', None))
+                        self._add_user(user_content, source=getattr(self, 'turn_source', None))
                 else:
-                    self.main_chat.session_manager.add_user_message(user_input, source=getattr(self, 'turn_source', None))
+                    self._add_user(user_input, source=getattr(self, 'turn_source', None))
             else:
                 logger.info("[CONTINUE] Skipping user message addition (continuing from existing)")
             
@@ -740,7 +785,7 @@ class StreamingChat:
                     yield {"type": "notice", "severity": "warning",
                            "message": f"{display_name(provider_key)} can't continue a reply in place. "
                                       f"Ask it to go on in a new message instead."}
-                    yield self._emit_llm_done(tts_pump)
+                    yield self._emit_llm_done(tts_pump, refused=True)
                     yield {"type": "final", "text": "", "cancelled": False, "error": True}
                     return
 
@@ -1346,6 +1391,7 @@ class StreamingChat:
                         # answer a trailing assistant message with nothing. The
                         # row is untouched — say so instead of a silent no-op.
                         logger.info("[CONTINUE] provider added nothing — row left as it was")
+                        self._refused = True
                         yield {"type": "notice", "severity": "warning",
                                "message": "Nothing to add — this provider doesn't continue a reply in place. The message is unchanged."}
                     elif in_place:
@@ -1556,7 +1602,9 @@ class StreamingChat:
             logger.warning(f"[STREAMING] {e}")
             # Save error so history doesn't end with a dangling user message
             # (a Continue's history already ends on the reply row — leave it).
-            if not continue_from:
+            # What streamed before the failure is kept as her reply (hunt 20).
+            if not continue_from and not self._keep_partial(
+                    e, provider_key, locals().get('current_content'), locals().get('current_thinking')):
                 self._save_error_row(e, provider_key)
             # Synthetic tts_stream_end so the frontend's audio queue can
             # finalize even though we're aborting before flush_and_close.
@@ -1594,7 +1642,9 @@ class StreamingChat:
             # Save error so history doesn't end with a dangling user message
             # (consecutive user messages break Claude's alternating requirement;
             # a Continue's history already ends on the reply row — leave it).
-            if not continue_from:
+            # What streamed before the failure is kept as her reply (hunt 20).
+            if not continue_from and not self._keep_partial(
+                    e, provider_key, locals().get('current_content'), locals().get('current_thinking')):
                 self._save_error_row(e, provider_key)
             if tts_pump._stream_started and not tts_pump._closed:
                 yield {

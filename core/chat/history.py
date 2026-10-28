@@ -851,7 +851,17 @@ class ConversationHistory:
             )
         ]
 
-        return msgs
+        # A tool step that ends with no reply before the next user row, for
+        # any reason (the error row after it deleted by the person, a crash
+        # mid-step), gets the same stand-in close: tool -> user made strict
+        # servers refuse every later send (hunt 20). Last, after the belts,
+        # so a stray result they drop never leaves a stand-in behind.
+        closed = []
+        for m in msgs:
+            if m.get("role") == "user" and not m.get("_inject") and closed and closed[-1].get("role") == "tool":   # the image replay rides there by design
+                closed.append({"role": "assistant", "content": "(no response)"})
+            closed.append(m)
+        return closed
 
     def clear_thinking_raw(self):
         """
@@ -878,8 +888,13 @@ class ConversationHistory:
         self.messages = self.messages[:-count]
         return True
 
-    def remove_from_user_message(self, user_content: str) -> bool:
+    def remove_from_user_message(self, user_content: str, timestamp: Optional[str] = None) -> bool:
         """Remove all messages starting from a specific user message to the end.
+
+        By the row's own `timestamp` when the caller has it (hunt 20: matching
+        text from the end hit the LATER of two identical lines - the person
+        re-sending after an error - so Regen on the first error deleted the
+        retry's turn and kept the error). Text is the fallback.
 
         Matches on the message's TEXT content. For multimodal messages (image
         paste, file attachments), `content` is a list-of-parts shape rather
@@ -903,11 +918,18 @@ class ConversationHistory:
             return ""
 
         user_index = -1
-        for i in range(len(self.messages) - 1, -1, -1):
-            msg = self.messages[i]
-            if msg["role"] == "user" and _text_of(msg.get("content")) == user_content:
-                user_index = i
-                break
+        if timestamp:
+            for i in range(len(self.messages) - 1, -1, -1):
+                msg = self.messages[i]
+                if msg["role"] == "user" and msg.get("timestamp") == timestamp:
+                    user_index = i
+                    break
+        if user_index == -1:
+            for i in range(len(self.messages) - 1, -1, -1):
+                msg = self.messages[i]
+                if msg["role"] == "user" and _text_of(msg.get("content")) == user_content:
+                    user_index = i
+                    break
 
         if user_index == -1:
             # Never the text itself — logs are plaintext at rest (ruling F3).
@@ -4665,8 +4687,8 @@ class ChatSessionManager:
             publish(Events.MESSAGE_REMOVED, {"count": count})
         return result
 
-    def remove_from_user_message(self, user_content: str) -> bool:
-        result = self.current_chat.remove_from_user_message(user_content)
+    def remove_from_user_message(self, user_content: str, timestamp: Optional[str] = None) -> bool:
+        result = self.current_chat.remove_from_user_message(user_content, timestamp)
         if result:
             self._save_current_chat()
             self._prune_orphaned_tool_images(self.active_chat_name)
@@ -4759,6 +4781,9 @@ class ChatSessionManager:
             msgs[tail]['content'] = clean
             if thinking:
                 msgs[tail]['thinking'] = thinking
+            meta = msgs[tail].get('metadata')         # a rewritten error row is a reply now
+            if isinstance(meta, dict) and meta.pop('error', None) is not None and not meta:
+                msgs[tail].pop('metadata', None)
             return True
         return False
 
@@ -5437,11 +5462,14 @@ class ChatSessionManager:
                       if m.get('role') == 'assistant' and m.get('timestamp') == timestamp), None)
         if start is None:
             return None
+        from core.chat.llm_errors import is_error_row
         tail = start
         for i in range(start + 1, len(msgs)):
             role = msgs[i].get('role')
             if role == 'user':
                 break
+            if is_error_row(msgs[i]):
+                break       # its own bubble (display_format), as the active edit walks (hunt 20)
             if role == 'assistant':
                 tail = i
         return tail

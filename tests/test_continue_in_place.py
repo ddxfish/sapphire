@@ -395,3 +395,14 @@ class TestWiring:
         assert "act === 'continue' && (failed || !(role === 'assistant' && idx === total - 1))" in ui_js
         assert "state.paraBuf = adopt.seed" in stream_js
         assert "if (!adopt) container.appendChild(messageElement)" in stream_js
+
+
+def test_a_server_on_the_lan_continues_without_the_privacy_tick():
+    """Hunt 20: Continue rode the 'private server' box, refusing every
+    hand-added llama.cpp / vLLM / Kobold on another machine."""
+    from core.chat.llm_providers.resolve import continues_in_place
+    for url in ('http://192.168.1.5:8080/v1', 'http://localhost:1234/v1', 'http://gpu-box:5000/v1',
+                'http://100.101.3.4:8000/v1', 'http://tower.local:11434/v1'):
+        assert continues_in_place('x', {'template': 'openai', 'base_url': url}), url
+    assert not continues_in_place('x', {'template': 'openai', 'base_url': 'https://api.fireworks.ai/inference/v1'})
+    assert continues_in_place('x', {'template': 'openai', 'base_url': 'https://my.host.example/v1', 'is_local': True})

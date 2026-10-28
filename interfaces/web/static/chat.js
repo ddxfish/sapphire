@@ -114,7 +114,7 @@ export const handleTrash = async (idx, refreshFn) => {
         if (clicked.role === 'user') {
             // Delete user message and everything after
             console.log('[TRASH DEBUG] Deleting from user message...');
-            await api.removeFromUserMessage(clicked.content);
+            await api.removeFromUserMessage(clicked.content, clicked.timestamp);
         } else {
             // Delete assistant message and everything after (leaves user message intact)
             console.log('[TRASH DEBUG] Deleting from assistant message...');
@@ -165,7 +165,7 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                     ui.hideStatus();
                 }
             },
-            async (ephemeral, { ttsStreamed = false } = {}) => {
+            async (ephemeral, { ttsStreamed = false, refused = false } = {}) => {
                 const myStreamId = ui.getCurrentStreamId();   // see handleRegen
                 if (isCancellingGetter && isCancellingGetter()) {
                     console.log('Stream completed but cancellation in progress - skipping finishStreaming');
@@ -180,7 +180,9 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                     return;
                 }
 
-                if (streamOk) {
+                if (streamOk && refused) {
+                    await ui.finishStreaming(false, true);    // nothing ran: keep its words, say nothing more
+                } else if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
@@ -257,10 +259,11 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         const clicked = hist[idx];
         console.log(`[REGEN DEBUG] Clicked message role: ${clicked.role}`);
         
-        let userMessage;
+        let userMessage, userStamp;
         
         if (clicked.role === 'user') {
             userMessage = clicked.content;
+            userStamp = clicked.timestamp;
             console.log(`[REGEN DEBUG] User message selected`);
         } else {
             console.log('[REGEN DEBUG] Assistant message, finding previous user message...');
@@ -269,6 +272,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                 if (hist[i].role === 'user') {
                     userIdx = i;
                     userMessage = hist[i].content;
+                    userStamp = hist[i].timestamp;
                     break;
                 }
             }
@@ -289,7 +293,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         setProc(true);
         
         console.log('[REGEN DEBUG] Removing from user message...');
-        await api.removeFromUserMessage(userMessage);
+        await api.removeFromUserMessage(userMessage, userStamp);
         console.log('[REGEN DEBUG] Messages removed, refreshing...');
         await refreshFn(false);
         
@@ -314,7 +318,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     ui.hideStatus();
                 }
             },
-            async (ephemeral, { ttsStreamed = false } = {}) => {
+            async (ephemeral, { ttsStreamed = false, refused = false } = {}) => {
                 // Captured synchronously: at llm_done this is OUR stream. Send
                 // returns during finishStreaming's sleep (llm-done split), so
                 // a newer turn can bump the id before the fallback below runs.
@@ -333,7 +337,9 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                 }
                 
                 console.log('[REGEN DEBUG] Stream complete');
-                if (streamOk) {
+                if (streamOk && refused) {
+                    await ui.finishStreaming(false, true);    // nothing ran: keep its words, say nothing more
+                } else if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
 
@@ -494,13 +500,14 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 ui.appendStream(chunk);
                 if (ui.hasVisibleContent()) ui.hideStatus();
             },
-            async (ephemeral, { ttsStreamed = false } = {}) => {
+            async (ephemeral, { ttsStreamed = false, refused = false } = {}) => {
                 const myStreamId = ui.getCurrentStreamId();   // see handleRegen
                 if (isCancellingGetter && isCancellingGetter()) return;
                 await ui.finishStreaming();   // swaps the bubble for the saved row
                 // Whole-blob playback ONLY when the server's streaming-TTS
                 // pump never ran this turn (see send-handlers.handleSend).
-                if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
+                // A refused Continue added nothing: nothing to say (it re-read the reply).
+                if (!refused && !ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
                     const el = document.querySelector('.message.assistant:last-child .message-content');
                     if (el) audioFn(ui.extractProseText(el));
                 }

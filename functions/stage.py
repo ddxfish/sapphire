@@ -81,7 +81,7 @@ def execute(function_name, arguments, config=None):
     if _private_turn():
         return "open_stage: private chats have no stage, so nothing opened. Tell the user in words.", False
     a = apps[name]
-    from core.ui_markers import mint
-    marker = mint("<!--STAGE:" + json.dumps({"app": name, "label": a["label"], "icon": a["icon"]}, ensure_ascii=True) + "-->")
+    from core.ui_markers import widget
+    marker = widget('STAGE', {"app": name, "label": a["label"], "icon": a["icon"]})
     return (f"Opened {a['label']} beside the chat for the user (a card in your reply opens it on any "
             f"screen showing this chat).\n{marker}"), True

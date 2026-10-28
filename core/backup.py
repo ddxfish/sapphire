@@ -82,6 +82,11 @@ def _privacy_excluded(rel: str) -> bool:
     # MCP keys above, and local backups are plaintext by design.
     if rel.endswith('sapphire-health.token'):
         return True
+    # .instance.lock - where the instance lock lived before 2026-10-27. A
+    # runner from before then still holds it (byte-locked on Windows) until
+    # it is fully restarted: runtime state, never data (hunt 20).
+    if rel == '.instance.lock':
+        return True
     # browser/ — the browser plugin's Chromium profiles (2026-10-25): live
     # session cookies for every site she or the user logged into there, plus
     # history and cache. Same class as the keys above; a restore simply
@@ -1089,7 +1094,14 @@ class Backup:
                     # the corpse (X1 F7, negspace 2026-08-31).
                     logger.critical(f"Backup scheduler iteration failed: {e} — retrying in 1h")
                     wait_seconds = 3600.0
-                if self._stop_event.wait(wait_seconds):
+                # By the wall clock, a minute at a time: one long wait does not
+                # count time asleep (Windows), so a PC that slept overnight ran
+                # the 3am backup hours late. Now it runs at 3am, or on waking.
+                end = time.time() + wait_seconds
+                stopped = False
+                while not stopped and (left := end - time.time()) > 0:
+                    stopped = self._stop_event.wait(min(60.0, left))
+                if stopped:
                     break  # Stop requested during sleep
 
                 # Run DB housekeeping FIRST so integrity failures write their

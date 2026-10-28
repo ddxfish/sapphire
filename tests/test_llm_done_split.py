@@ -278,7 +278,7 @@ def test_llm_done_carries_ephemeral():
     s.ephemeral = True
     pump = MagicMock()
     pump._stream_started = False
-    assert s._emit_llm_done(pump) == {"type": "llm_done", "ephemeral": True, "tts_streamed": False}
+    assert s._emit_llm_done(pump) == {"type": "llm_done", "ephemeral": True, "tts_streamed": False, "refused": False}
     s2 = StreamingChat.__new__(StreamingChat)
     s2.llm_done = False
     s2._typing_ended = True

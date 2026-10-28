@@ -21,7 +21,7 @@ import time
 import uuid
 from typing import Dict, Any, List, Optional, Generator
 
-from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, probe_failed
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class AnthropicCompatProvider(BaseProvider):
             return True
         except Exception as e:
             logger.debug(f"Anthropic-compat health check failed: {e}")
-            return False
+            return probe_failed(self, e)
 
     def test_connection(self) -> dict:
         """Test with an actual API call."""
@@ -257,7 +257,17 @@ class AnthropicCompatProvider(BaseProvider):
         if api_messages and api_messages[0].get("role") == "assistant":
             api_messages.insert(0, {"role": "user", "content": "[conversation started]"})
 
-        return system_prompt, api_messages
+        # Two user rows side by side (a failed turn's error row is never
+        # replayed, so the retry's line follows the failed one) are one turn:
+        # Anthropic itself merges them, MiniMax / Z.AI-style hosts 400 (hunt 20).
+        merged = []
+        for m in api_messages:
+            if merged and m["role"] == "user" and merged[-1]["role"] == "user":
+                as_blocks = lambda c: c if isinstance(c, list) else [{"type": "text", "text": c}]
+                merged[-1] = {"role": "user", "content": as_blocks(merged[-1]["content"]) + as_blocks(m["content"])}
+            else:
+                merged.append(m)
+        return system_prompt, merged
 
     def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI tool format to Anthropic format."""

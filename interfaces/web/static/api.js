@@ -75,11 +75,13 @@ export const fetchHistoryFull = async () => {
 
 export const fetchHistory = async () => (await fetchHistoryFull()).messages;
 
-export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw');
-export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages' + _boundQS(), {
-    method: 'DELETE', 
-    headers: { 'Content-Type': 'application/json' }, 
-    body: JSON.stringify({ user_message: userMessage }) 
+export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw' + _boundQS());
+// timestamp: the row itself (two identical lines - a re-send after an error -
+// are told apart by it); the text is the server's fallback.
+export const removeFromUserMessage = (userMessage, timestamp) => fetchWithTimeout('/api/history/messages' + _boundQS(), {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_message: userMessage, timestamp: timestamp || null })
 }, 10000);
 export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history/messages/remove-from-assistant' + _boundQS(), {
     method: 'POST',
@@ -368,7 +370,7 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
     const finishTurn = (data = {}) => {
         if (turnDone) return;
         turnDone = true;
-        onTurnDone(data.ephemeral || false, { ttsStreamed: !!data.tts_streamed });
+        onTurnDone(data.ephemeral || false, { ttsStreamed: !!data.tts_streamed, refused: !!data.refused });
     };
     // The belts name THIS turn's pump: an id-less end flagged a NEWER
     // stream's queue as ended (mic flicker, false "couldn't play" toast) when

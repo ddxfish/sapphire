@@ -260,16 +260,14 @@ class TestGenerationParams:
         # The function takes provider_key, model, and providers_config
         params = get_generation_params("claude", "claude-3-sonnet", {})
         
-        # Should have default values
-        assert "temperature" in params
-        assert "max_tokens" in params
-        assert isinstance(params["temperature"], (int, float))
+        # Max Tokens always; temperature only when set (hunt 20: blank = the server's default)
+        assert "max_tokens" in params and "temperature" not in params
     
     def test_get_generation_params_has_required_keys(self):
         """Should include all required generation parameters."""
         params = get_generation_params("openai", "gpt-4", {})
         
-        required_keys = ["temperature", "max_tokens"]
+        required_keys = ["max_tokens"]
         for key in required_keys:
             assert key in params, f"Missing required key: {key}"
 

@@ -744,11 +744,20 @@ export const endTool = (toolId, toolName, result, isError) => {
     if (!isError) refreshScopesForTool(toolName);
 };
 
-export const finishStreaming = async (ephemeral = false) => {
+export const finishStreaming = async (ephemeral = false, keep = false) => {
     const streamingMsg = document.getElementById('streaming-message');
 
     Streaming.finishStreaming(updateToolbars);
-    
+
+    // keep: a refused turn (the server ran nothing and saved nothing). Its
+    // words stay where they streamed; a swap put the previous reply there as
+    // if it were this turn's. The keyless bubble goes at the next redraw.
+    if (keep) {
+        streamingMsg?.removeAttribute('id');
+        scrollToBottomIfSticky();
+        return;
+    }
+
     // Ephemeral: just remove the message, no swap with history
     if (ephemeral) {
         if (streamingMsg) {
@@ -789,9 +798,19 @@ export const finishStreaming = async (ephemeral = false) => {
                             ? { ...p, text: p.text.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '') }
                             : p);
                     }
-                    const { clone } = createMessage(lastMsg, li, hist.length, true);
-
-                    streamingMsg.replaceWith(clone);
+                    // A turn that ended as more than one row (a tool step, then
+                    // its error row) is not one bubble: swapping in the last row
+                    // dropped the step and left the buttons one row off (Delete
+                    // took two). Redraw it all, when no next turn has begun (hunt 20).
+                    let first = li;
+                    while (first > 0 && hist[first - 1]?.role === 'assistant') first--;
+                    if (first < li && li === hist.length - 1) {
+                        streamingMsg.remove();
+                        renderHistory(hist);
+                    } else {
+                        const { clone } = createMessage(lastMsg, li, hist.length, true);
+                        streamingMsg.replaceWith(clone);
+                    }
                     // a question card rebuilt from history is live again; if the
                     // user already answered (their reply queued while she wrote)
                     // it must stay locked - Send never fires twice

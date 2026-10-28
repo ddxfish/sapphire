@@ -187,5 +187,23 @@ def test_a_quota_with_a_clock_is_a_rate_not_an_empty_account():
     per_day = _status_err(openai.RateLimitError, 429, {'error': {'message': "You exceeded your current quota. "
         "quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier"}}, url)
     assert "today's request limit" in explain(per_day)['text']
-    broke = _status_err(openai.RateLimitError, 429, {'error': {'message': 'insufficient_quota: add billing'}}, url)
+    broke = _status_err(openai.RateLimitError, 429, {'error': {'message': 'insufficient_quota: add billing'}},
+                        'https://api.openai.com/v1/chat/completions')      # OpenAI's empty account, not Gemini's
     assert 'out of credits' in explain(broke)['text']
+
+
+def test_anthropics_input_plus_max_tokens_overflow_is_a_context_error():
+    """Hunt 20: no keyword matched it, so no fit-and-retry and unhelpful words."""
+    from core.chat.llm_errors import is_context_error
+    e = _status_err(openai.BadRequestError, 400, {'error': {'message':
+        'input length and `max_tokens` exceed context limit: 190000 + 16000 > 200000, decrease input length '
+        'or `max_tokens` and try again'}}, 'https://api.anthropic.com/v1/messages')
+    assert is_context_error(e)
+    assert 'Max Tokens' in explain(e)['text']
+
+
+def test_a_bare_gemini_quota_429_is_a_rate_not_empty_credits():
+    url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+    bare = _status_err(openai.RateLimitError, 429, {'error': {'message': "You exceeded your current quota, please "
+        "check your plan and billing details."}}, url)
+    assert 'too many requests' in explain(bare, 'gemini')['text']

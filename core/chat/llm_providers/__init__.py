@@ -34,11 +34,13 @@ logger = logging.getLogger(__name__)
 # Default generation params for new instances. Penalties / top_k are NOT
 # here on purpose (Krem 2026-08-23): blank = never sent. A 0.1 presence/
 # frequency penalty used to ride silently into every custom provider.
+# Temperature / top_p neither (Krem, hunt 20): blank = the server's own
+# default. A baked 0.7 loops Gemini 3 (Google: keep its 1.0), overrode a
+# local model's tuned samplers, and 400'd gateways that refuse them.
 DEFAULT_GENERATION_PARAMS = {
-    'temperature': 0.7,
-    'top_p': 0.9,
     'max_tokens': 8192,
 }
+_SAMPLING = ('temperature', 'top_p', 'max_tokens')
 
 
 from core.provider_registry import BaseProviderRegistry as _BaseRegistry
@@ -498,16 +500,19 @@ class ProviderRegistry(_BaseRegistry):
 
         config = providers_config.get(provider_key, {})
         inst = {k: v for k, v in (config.get('generation_params') or {}).items() if v is not None}
-        profile = {}
+        profile, named = {}, False
         try:
             import config as app_config
             profiles = getattr(app_config, 'MODEL_GENERATION_PROFILES', {}) or {}
-            profile = (profiles.get(model) if model and model in profiles
-                       else profiles.get('__fallback__')) or {}
+            named = bool(model and model in profiles)
+            profile = (profiles.get(model) if named else profiles.get('__fallback__')) or {}
         except ImportError:
             pass
         if not self.is_core_provider(provider_key):
-            profile = {k: v for k, v in profile.items() if k in DEFAULT_GENERATION_PARAMS}
+            # A custom card takes a profile's sampling only when the profile
+            # names its model; the catch-all's never rides in (hunt 20).
+            profile = {k: v for k, v in profile.items()
+                       if k in (_SAMPLING if named else DEFAULT_GENERATION_PARAMS)}
         return {**DEFAULT_GENERATION_PARAMS, **profile, **inst}
 
     # =========================================================================

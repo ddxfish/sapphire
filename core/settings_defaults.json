@@ -235,7 +235,7 @@
     "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "gemini", "openai"],
     "MODEL_GENERATION_PROFILES": {
       "_comment": "Balanced generation params per model. Edit values here to tune.",
-      "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192 },
+      "__fallback__": { "max_tokens": 8192 },
       
       "claude-fable-5-1": { "max_tokens": 16000 },
       "claude-opus-5-5": { "max_tokens": 16000 },
@@ -257,11 +257,11 @@
       "gpt-4o": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       "gpt-4o-mini": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
 
-      "gemini-3.8-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "gemini-3.7-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "gemini-3.5-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "gemini-3.5-flash-lite": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "gemini-3.1-pro-preview": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.8-flash": { "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.7-flash": { "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.5-flash": { "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.5-flash-lite": { "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "gemini-3.1-pro-preview": { "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "gemini-2.5-flash": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       "gemini-2.5-pro": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
 

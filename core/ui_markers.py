@@ -54,6 +54,14 @@ def mint(marker: str) -> str:
     return marker
 
 
+def widget(kind: str, payload, ensure_ascii: bool = True) -> str:
+    """`<!--KIND:{json}-->`, minted. Every `>` in the JSON is written \\u003e
+    (the same value once parsed), so a title holding `-->` can't end the
+    marker early and leave the rest as stray text (hunt 20)."""
+    body = json.dumps(payload, ensure_ascii=ensure_ascii).replace('>', '\\u003e')
+    return mint(f"<!--{kind}:{body}-->")
+
+
 def only_minted(result):
     """A tool's result with every widget marker core didn't make removed
     (str, or the {'text', 'images'} dict shape)."""

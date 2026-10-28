@@ -55,6 +55,23 @@ def http_status(exc: Exception):
     return code if isinstance(code, int) else None
 
 
+# Busy or briefly down, not dead: a real turn's own retries usually get
+# through. A completion-style probe (Claude, Anthropic-compat) seeing one of
+# these used to refuse a pinned chat outright (hunt 20).
+TRANSIENT_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+
+
+def probe_failed(provider, exc: Exception) -> bool:
+    """A completion probe's verdict on its exception: True = still usable
+    (a transient status), False = dead. Records why on the provider either
+    way, so the words name a refused key or an empty account (health_words)
+    instead of 'didn't answer'."""
+    status = http_status(exc)
+    provider.last_health_error = (type(exc).__name__ + (f" HTTP {status}" if status else "")
+                                  + (" credit" if 'credit' in str(exc).lower() else ""))   # Anthropic: a 400
+    return status in TRANSIENT_STATUSES
+
+
 def retry_on_rate_limit(func: Callable[..., T], *args, **kwargs) -> T:
     """
     Execute a function with exponential backoff retry on rate limit errors.

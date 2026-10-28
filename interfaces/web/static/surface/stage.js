@@ -116,6 +116,10 @@ export async function openStage(name) {
         return false;
     }
     await recheck();
+    // A chat switch's own read can supersede ours mid-flight, leaving `chat`
+    // on the previous chat: read again until it names the chat on screen, or
+    // the stage could mount for a moment beside a private chat (hunt 20).
+    for (let i = 0; i < 3 && chat.name !== (document.getElementById('chat-select')?.value || ''); i++) await recheck();
     if (my !== openSeq) return false;
     if (chat.private) {                                         // nothing saved: no surprise open in the next chat
         showToast('The stage stays closed in private chats.', 'info');

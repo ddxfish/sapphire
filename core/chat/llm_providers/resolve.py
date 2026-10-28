@@ -110,8 +110,14 @@ def continues_in_place(key: str, conf: Optional[dict] = None) -> bool:
     tpl = conf.get('template') or conf.get('provider') or key
     if tpl in ('claude', 'anthropic'):
         return True
+    if tpl != 'openai':
+        return False
+    # A server the person runs (this machine, the LAN, Tailscale) continues
+    # the final assistant turn, ticked private or not: Continue used to ride
+    # the privacy box, refusing every hand-added llama.cpp / vLLM (hunt 20).
     try:
-        return tpl == 'openai' and is_local(key, conf)
+        from core.chat.llm_providers.openai_compat import near_host
+        return near_host(conf.get('base_url')) or is_local(key, conf)
     except Exception:
         return False
 
@@ -139,8 +145,10 @@ def health_words(err, timeout=None) -> str:
     e = str(err or '').lower()
     if any(k in e for k in ('http 401', 'http 403', 'authentication', 'permissiondenied')):
         return "refused its API key (check the key in Settings › LLM)"
-    if 'http 402' in e:
+    if 'http 402' in e or 'credit' in e:
         return "says the account is out of credits"
+    if 'http 404' in e:
+        return "doesn't have that model (check the model name in Settings › LLM)"
     if 'timeout' in e:
         t = f" in {timeout} s" if timeout else ""
         return (f"didn't answer{t} (if it's just slow, raise its Health timeout in Settings › LLM)")

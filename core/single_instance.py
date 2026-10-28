@@ -28,6 +28,22 @@ import time
 EXIT_ANOTHER_INSTANCE = 43
 EXIT_CONFIG = 44
 ENV_HELD = 'SAPPHIRE_INSTANCE_LOCK'   # the runner sets it for its child: "I hold the lock"
+HELD_V = 'v2:'      # ... as "v2:<pid>": a runner that holds the config-dir lock (2026-10-27)
+
+
+def runner_holds_lock():
+    """Whether this process's runner holds the instance lock for it. A
+    runner started before the lock left user/ says a bare pid and holds only
+    the old file, so its child must take the new lock itself; otherwise an
+    in-app update left nothing guarding against a second launch (hunt 20)."""
+    return os.environ.get(ENV_HELD, '').startswith(HELD_V)
+
+
+def legacy_lock_held(root):
+    """A runner from before 2026-10-27 is still up and holds user/.instance.lock
+    (byte-locked on Windows): a restore cannot move user/ aside until it stops."""
+    return bool(os.environ.get(ENV_HELD)) and not runner_holds_lock() and \
+        os.path.exists(os.path.join(str(root), 'user', '.instance.lock'))
 
 
 def lock_path(root):
@@ -50,11 +66,18 @@ class InstanceLock:
         self._root = root
         self.path = lock_path(root)
         self._fh = None
+        self.error = ''         # why there is no lock file at all (then nothing guards, but she boots)
 
     def acquire(self):
-        """True when this process now holds the lock, False when another does."""
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        fh = open(self.path, 'a+b')          # never truncates another holder's note
+        """True when this process now holds the lock, False when another does.
+        A lock file that cannot be made at all (a read-only config dir) is True
+        with `error` set: the guard is lost, never the boot (hunt 20)."""
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            fh = open(self.path, 'a+b')          # never truncates another holder's note
+        except OSError as e:
+            self.error = f"{self.path}: {e}"
+            return True
         try:
             if sys.platform == 'win32':
                 import msvcrt
@@ -110,6 +133,10 @@ def acquire_or_exit(root, who, log=print):
     """Take the instance lock, or exit 43 with one line that names the holder."""
     lock = InstanceLock(root)
     if lock.acquire():
+        if lock.error:
+            log(f"Warning: the instance lock could not be made ({lock.error}). {who} starts without "
+                f"the guard against a second Sapphire on this user/ folder. Check that the config "
+                f"folder can be written.")
         return lock
     log(f"Another Sapphire is already running on this user/ ({lock.holder() or 'holder unknown'}). "
         f"{who} will not start a second one. Stop the other first (launcher Stop, Task Manager, systemctl).")
@@ -191,6 +218,26 @@ def tie_children_to_me(log=print):
     except Exception as e:
         log(f"Could not tie child processes to this runner (Job Object): {e}")
         return None
+
+
+def bind_when_free(host, port, wait=90, log=print):
+    """bind_listener, waiting while the port is taken but nobody listens on
+    it: Windows' exclusive bind refuses the port until the last connection of
+    the previous run is fully closed (a phone or satellite that dropped off
+    WiFi), so a restart used to exit 43 and stay down, blaming a second
+    Sapphire that did not exist (hunt 20). A real listener raises at once."""
+    deadline = time.monotonic() + wait
+    told = False
+    while True:
+        try:
+            return bind_listener(host, port)
+        except OSError as e:
+            if not is_port_taken(e) or port_holder(port) or time.monotonic() > deadline:
+                raise
+            if not told:
+                log(f"Port {port} is still held by the last run's connections; waiting up to {wait} s for it.")
+                told = True
+            time.sleep(2)
 
 
 def port_holder(port):

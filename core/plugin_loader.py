@@ -381,6 +381,10 @@ class PluginLoader:
             self._pin_memory_engine_once()
         except Exception as e:
             logger.warning(f"[PLUGINS] memory engine pin skipped: {e}")
+        try:
+            self._pin_featured_once()
+        except Exception as e:
+            logger.warning(f"[PLUGINS] featured plugin pin skipped: {e}")
         enabled_list = self._get_enabled_list()
         disabled_list = self._get_disabled_list()
 
@@ -657,6 +661,43 @@ class PluginLoader:
         tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
         tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         replace_with_retry(tmp_path, USER_PLUGINS_JSON)
+
+    # Flipped to default_enabled for the new setup wizard (2026-10-24), which
+    # shows them ticked so a new user chooses. An install that never saw that
+    # step must not wake up with a shell, a camera and a screen grabber on.
+    FEATURED_2026_10 = ("discord", "telegram", "email", "homeassistant",
+                        "coding-harness", "webcam", "screenshot")
+
+    def _pin_featured_once(self):
+        """Once per install: an install that finished setup before the new
+        wizard (complete, but no SETUP_CONSENT - only the new wizard stamps
+        it) gets the featured plugins it never chose pinned OFF. Names already
+        in a list were chosen either way and stay. A fresh install, or one that
+        walked the new wizard, keeps the defaults (hunt 20)."""
+        data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8")) if USER_PLUGINS_JSON.exists() else {}
+        if "featured-2026-10" in (data.get("pinned") or []):
+            return
+        from core.settings_manager import settings
+        pins = {"pinned": ["featured-2026-10"]}
+        off = []
+        if settings.get("SETUP_COMPLETE", False) and not settings.get("SETUP_CONSENT", None):
+            enabled, disabled = self._get_enabled_list(), self._get_disabled_list()
+            off = [n for n in self.FEATURED_2026_10 if n not in enabled and n not in disabled]
+            if off:
+                pins["disabled"] = off
+        self._append_plugins_json(pins)
+        if not off:
+            return
+        logger.info(f"[PLUGINS] featured plugins kept off for an existing install: {', '.join(off)}")
+        try:
+            from core import notify
+            notify.notify("Some plugins stay off until you turn them on", source="plugins",
+                          key="featured-pin", once=True,
+                          body=f"An update marked these as featured: {', '.join(off)}. This install never "
+                               f"chose them, so they stay off. Settings \u203a Plugins turns any of them on.",
+                          go={'view': 'settings', 'tab': 'plugins'})
+        except Exception as e:
+            logger.debug(f"[PLUGINS] featured pin notice skipped: {e}")
 
     def _pin_memory_engine_once(self):
         """2026-10: Mind Palace became the shipped default memory engine and

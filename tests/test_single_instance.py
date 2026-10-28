@@ -119,3 +119,45 @@ def test_job_object_is_windows_only_and_never_raises():
     out = si.tie_children_to_me(log=said.append)
     if sys.platform != 'win32':
         assert out is None and said == []
+
+
+# --- hunt 20 -----------------------------------------------------------------
+
+def test_an_unwritable_config_dir_loses_the_guard_not_the_boot(tmp_path, monkeypatch):
+    blocker = tmp_path / 'cfg'
+    blocker.write_text('a file where the config dir should be')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(blocker))
+    monkeypatch.setenv('APPDATA', str(blocker))
+    said = []
+    lock = si.acquire_or_exit(tmp_path, who='The runner', log=said.append)
+    assert lock.error and said and 'Warning' in said[0]
+
+
+def test_only_a_v2_runner_counts_as_holding_the_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv(si.ENV_HELD, '1234')                      # a runner from before the move
+    assert not si.runner_holds_lock()
+    (tmp_path / 'user').mkdir()
+    (tmp_path / 'user' / '.instance.lock').write_bytes(b'\npid=1\n')
+    assert si.legacy_lock_held(tmp_path)
+    monkeypatch.setenv(si.ENV_HELD, 'v2:1234')
+    assert si.runner_holds_lock() and not si.legacy_lock_held(tmp_path)
+
+
+def test_a_port_held_by_no_listener_is_waited_for(monkeypatch):
+    import errno
+    tries = []
+
+    def bind(host, port):
+        tries.append(1)
+        if len(tries) < 3:
+            raise OSError(errno.EADDRINUSE, 'in use')
+        return 'sock'
+    monkeypatch.setattr(si, 'bind_listener', bind)
+    monkeypatch.setattr(si, 'port_holder', lambda p: '')
+    monkeypatch.setattr(si.time, 'sleep', lambda s: None)
+    assert si.bind_when_free('127.0.0.1', 1, log=lambda m: None) == 'sock' and len(tries) == 3
+    tries.clear()
+    monkeypatch.setattr(si, 'port_holder', lambda p: 'pid 9 (python)')      # a real listener: at once
+    with pytest.raises(OSError):
+        si.bind_when_free('127.0.0.1', 1, log=lambda m: None)
+    assert len(tries) == 1

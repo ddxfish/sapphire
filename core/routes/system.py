@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import threading
 import time
 import logging
 from pathlib import Path
@@ -248,7 +249,34 @@ def _schedule_restart():
     asyncio.create_task(_delayed())
 
 
+_restore_lock = threading.Lock()
+_restore_staged = False         # one staged and the restart under way: nothing more until it lands
+
+
 def _stage_restore_from(source_path, password: str, source_label: str, trusted: bool = False):
+    """One restore at a time (the staging runs on a thread now, so two clicks
+    could interleave their marker and archive), and never while a runner from
+    before the lock left user/ still holds user/.instance.lock: the swap would
+    only fail after the restart, with a hint that can't help (hunt 20)."""
+    global _restore_staged
+    from core import restore as restore_mod
+    from core.single_instance import legacy_lock_held
+    if legacy_lock_held(restore_mod.BASE):
+        raise HTTPException(status_code=409, detail=(
+            "This Sapphire was last started before an update that changed how it guards against running "
+            "twice, and that old start still holds a file inside user/, so a restore can't swap the "
+            "folder. Stop Sapphire fully (launcher Stop, or the service), start it again, then restore."))
+    if _restore_staged or not _restore_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A restore is already under way. Wait for Sapphire to restart.")
+    try:
+        roots = _stage_restore_inner(source_path, password, source_label, trusted)
+        _restore_staged = True
+        return roots
+    finally:
+        _restore_lock.release()
+
+
+def _stage_restore_inner(source_path, password: str, source_label: str, trusted: bool = False):
     """Decrypt (if needed), validate (real tar.gz rooted at user/), and stage the
     backup for a restart-time swap. Returns the archive's top-level entries.
     `trusted` = the user's own backup (faithful extract); False = uploaded (strict).

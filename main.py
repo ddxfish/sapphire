@@ -210,7 +210,7 @@ def main():
     # this process and the child is told the runner holds it (2026-10-16).
     from core.single_instance import acquire_or_exit, ENV_HELD, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG
     _instance_lock = acquire_or_exit(Path(__file__).parent, who='The runner', log=lambda m: log(m, RED))
-    os.environ[ENV_HELD] = str(os.getpid())
+    os.environ[ENV_HELD] = f"v2:{os.getpid()}"   # v2: this runner holds the config-dir lock
     from core.single_instance import tie_children_to_me
     _job = tie_children_to_me(log=lambda m: log(m, YELLOW))   # Windows: no child outlives this runner
     

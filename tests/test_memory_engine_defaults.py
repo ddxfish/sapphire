@@ -116,3 +116,48 @@ def test_palace_already_chosen_is_left_alone(pin):
     before = state.read_text(encoding='utf-8')
     run()
     assert state.read_text(encoding='utf-8') == before and notices == []
+
+
+# --- hunt 20: the featured plugins (default_enabled since 2026-10-24) -------
+
+@pytest.fixture
+def featured(tmp_path, monkeypatch):
+    state = tmp_path / 'user' / 'webui' / 'plugins.json'
+    monkeypatch.setattr(pl, 'USER_PLUGINS_JSON', state)
+    import core.notify as notify
+    notices = []
+    monkeypatch.setattr(notify, 'notify', lambda *a, **k: notices.append(k.get('key')))
+    from core.settings_manager import settings
+    vals = {}
+    monkeypatch.setattr(settings, 'get', lambda k, d=None: vals.get(k, d))
+    loader = pl.PluginLoader.__new__(pl.PluginLoader)
+    return loader._pin_featured_once, state, vals, notices
+
+
+def test_an_upgrader_never_wakes_up_with_a_shell_and_a_camera(featured):
+    run, state, vals, notices = featured
+    vals['SETUP_COMPLETE'] = True                          # the old wizard, no SETUP_CONSENT
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({'enabled': ['telegram'], 'disabled': ['email']}))
+    run()
+    enabled, disabled = _lists(state)
+    assert 'telegram' in enabled and 'telegram' not in disabled          # chosen: stays on
+    for n in ('coding-harness', 'webcam', 'screenshot', 'discord', 'homeassistant', 'email'):
+        assert n in disabled
+    assert notices == ['featured-pin']
+    before = state.read_text()
+    run()                                                               # once per install
+    assert state.read_text() == before and notices == ['featured-pin']
+
+
+def test_a_fresh_install_or_the_new_wizard_keeps_the_defaults(featured):
+    run, state, vals, notices = featured
+    run()                                                               # fresh: setup not complete
+    assert _lists(state) == ([], []) and notices == []
+    vals.update(SETUP_COMPLETE=True)
+    run()                                                               # marked done: never later
+    assert _lists(state) == ([], [])
+    state.unlink()
+    vals.update(SETUP_CONSENT='2026-10-25T10:00:00+00:00')
+    run()                                                               # walked the new wizard
+    assert _lists(state) == ([], []) and notices == []

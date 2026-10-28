@@ -19,7 +19,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Generator
 
 import config
-from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, probe_failed
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class ClaudeProvider(BaseProvider):
             return True
         except Exception as e:
             logger.debug(f"Claude health check failed: {e}")
-            return False
+            return probe_failed(self, e)
 
     def test_connection(self) -> dict:
         """Test Claude with an actual API call, returning response text."""

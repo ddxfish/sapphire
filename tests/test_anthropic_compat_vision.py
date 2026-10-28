@@ -96,3 +96,13 @@ def test_a_usage_delta_without_input_tokens_does_not_kill_the_turn():
     done = [e for e in out if e.get("type") == "done"][-1]
     assert done["response"].content == "Hello"
     assert done["response"].usage["completion_tokens"] == 5
+
+
+def test_back_to_back_user_rows_are_one_turn():
+    """Hunt 20: an error row is never replayed, so the retry's line sat right
+    after the failed one; Anthropic-format hosts other than Anthropic 400."""
+    _sys, msgs = _provider(False)._convert_messages([
+        {"role": "user", "content": "hi"}, {"role": "user", "content": "hi again"},
+        {"role": "assistant", "content": "hello"}])
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert [b["text"] for b in msgs[0]["content"]] == ["hi", "hi again"]

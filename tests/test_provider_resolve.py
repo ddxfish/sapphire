@@ -461,3 +461,22 @@ def test_blank_model_with_nothing_served_is_refused_and_not_remembered():
          patch.object(oc.OpenAICompatProvider, 'list_models', return_value=None):
         assert p.ensure_model() is False
     assert not oc._FOUND_MODEL
+
+
+def test_a_busy_anthropic_probe_is_not_dead_and_a_refused_key_says_so():
+    """Hunt 20: the pinned Claude probe took a 429/529 as dead (a real turn's
+    retries would have worked) and named every failure 'didn't answer'."""
+    from types import SimpleNamespace as NS
+    from core.chat.llm_providers.base import probe_failed
+    from core.chat.llm_providers.resolve import health_words
+
+    class Err(Exception):
+        def __init__(self, msg, code):
+            super().__init__(msg)
+            self.status_code = code
+    p = NS(last_health_error='')
+    assert probe_failed(p, Err('overloaded', 529)) and probe_failed(p, Err('rate', 429))
+    assert not probe_failed(p, Err('invalid x-api-key', 401))
+    assert 'API key' in health_words(p.last_health_error)
+    assert not probe_failed(p, Err('Your credit balance is too low', 400))
+    assert 'credits' in health_words(p.last_health_error)

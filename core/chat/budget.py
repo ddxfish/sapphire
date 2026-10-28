@@ -52,6 +52,7 @@ STUB_LINE = 200             # chars of an expired result's first line kept
 _lock = threading.Lock()
 _watermark: Dict[str, tuple] = {}    # chat → (whole turns out of view at its front, the window they were cut for)
 _ratio: Dict[tuple, float] = {}      # (provider_key, model) → real tokens / our count
+_boost: Dict[tuple, float] = {}      # (provider_key, model) → one heavier fit, after a too-long refusal
 _dims: Dict[tuple, tuple] = {}       # an image's (len, head, tail) → (w, h)
 _last: Dict[str, dict] = {}          # chat → what its last fit sent (the meter)
 _sent: Dict[str, dict] = {}          # chat → its last send: at, key, stubs (the warm-cache hold)
@@ -362,6 +363,8 @@ def fit(messages, tools=None, provider=None, provider_key='', model='', max_toke
     limit, server = (int(limit) if limit else _limit()), server_window(provider)
     window = min([n for n in (limit, server) if n] or [0]) or None
     ratio = _ratio.get(key) or (1.2 if family == 'claude' else 1.05)
+    with _lock:
+        ratio *= _boost.pop(key, 1.0)                    # tighten() counts for the retry, not forever
     schema = tools_tokens(tools)
     tk = [_msg_tokens(m, family) for m in msgs]          # each row counted once per fit
     raw = schema + sum(tk)
@@ -538,8 +541,11 @@ def learn_usage(f: Optional[Fit], usage: Optional[dict]):
 
 def tighten(provider_key='', model='', provider=None):
     """The server said the request was too long though we counted it in: ask
-    the server its window again and count this model 25% heavier from now on
-    (learn() walks it back if it overshoots)."""
+    the server its window again and count the NEXT fit (the retry) 25%
+    heavier. Only that one: it used to stay, and it only came down on a
+    send that worked, so after a refusal or two every turn was refused here
+    before reaching the model, until a restart (hunt 20). The retry's own
+    usage report teaches the real ratio (learn)."""
     if provider is not None and hasattr(provider, 'forget_window'):
         try:
             provider.forget_window()
@@ -547,8 +553,8 @@ def tighten(provider_key='', model='', provider=None):
             pass
     key = (provider_key or '', model or '')
     with _lock:
-        _ratio[key] = min(2.5, (_ratio.get(key) or 1.05) * 1.25)
-    logger.warning(f"[CONTEXT] {key[0]} {key[1]}: refused as too long - counting it 25% heavier")
+        _boost[key] = 1.25
+    logger.warning(f"[CONTEXT] {key[0]} {key[1]}: refused as too long - counting the retry 25% heavier")
 
 
 def forget(chat=None):

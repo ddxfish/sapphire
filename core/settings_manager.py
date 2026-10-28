@@ -316,6 +316,14 @@ class SettingsManager:
         'MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.5', 'MiniMax-M2.1', 'zai-org/GLM-4.7',
         'Qwen/Qwen3-32B', 'openai/gpt-oss-120b', 'meta-llama/Llama-3.3-70B-Instruct'})
 
+    # Temperature / top_p that were stock until 2026-10-27 and are blank now
+    # (blank = the server's default; Gemini 3 wants its own 1.0). A frozen
+    # copy of them is not a choice either (hunt 20).
+    _OLD_STOCK_SAMPLING = {
+        '__fallback__': (0.7, 0.9), 'gemini-3.8-flash': (0.7, 0.9), 'gemini-3.7-flash': (0.7, 0.9),
+        'gemini-3.5-flash': (0.7, 0.9), 'gemini-3.5-flash-lite': (0.7, 0.9),
+        'gemini-3.1-pro-preview': (0.65, 0.85)}
+
     def _thin_profiles(self, user, legacy=False):
         """MODEL_GENERATION_PROFILES as only what the user changed: per model,
         the knobs that differ from stock. The core card used to PUT the whole
@@ -330,8 +338,10 @@ class SettingsManager:
             if model not in stock:
                 out[model] = p
             elif isinstance(p, dict) and isinstance(base, dict):
+                old = self._OLD_STOCK_SAMPLING.get(model) if legacy else None
                 mine = {k: v for k, v in p.items() if base.get(k, object()) != v
-                        and not (legacy and k == 'max_tokens' and v == 4096 and model in self._OLD_STOCK_4096)}
+                        and not (legacy and k == 'max_tokens' and v == 4096 and model in self._OLD_STOCK_4096)
+                        and not (old and (k, v) in (('temperature', old[0]), ('top_p', old[1])))}
                 if mine:
                     out[model] = mine
             elif p != base:

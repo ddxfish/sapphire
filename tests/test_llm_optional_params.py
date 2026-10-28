@@ -41,7 +41,7 @@ class _Refused(Exception):
 # ── defaults: blank = never sent ─────────────────────────────────────────────
 
 def test_penalties_are_not_silent_defaults():
-    assert set(DEFAULT_GENERATION_PARAMS) == {"temperature", "top_p", "max_tokens"}
+    assert set(DEFAULT_GENERATION_PARAMS) == {"max_tokens"}        # hunt 20: blank temp / top_p = the server's default
     params = provider_registry.get_generation_params(
         "lmstudio", "some-model", {"lmstudio": {"generation_params": {"temperature": 0.6}}})
     assert "presence_penalty" not in params and "repeat_penalty" not in params
@@ -143,3 +143,38 @@ def test_error_body_is_searched_too(monkeypatch):
     p._client.chat.completions.create = create
     assert p._create({"model": "m", "messages": [], "extra_body": {"top_k": 3}}) == "ok"
     assert p._rejected_params == {"top_k"}
+
+
+def test_blank_sampling_is_the_servers_own_and_a_named_profile_still_applies(monkeypatch):
+    """Hunt 20 (Krem A-b): Gemini 3 loops below its own 1.0, a local model has
+    tuned samplers, some gateways refuse them: blank sends nothing."""
+    import config
+    monkeypatch.setattr(config, 'MODEL_GENERATION_PROFILES', {
+        '__fallback__': {'max_tokens': 8192, 'temperature': 0.7},
+        'qwen-tuned': {'temperature': 0.6, 'top_p': 0.95, 'presence_penalty': 0.5}}, raising=False)
+    import json, pathlib
+    stock = json.loads((pathlib.Path(__file__).resolve().parent.parent / 'core' / 'settings_defaults.json')
+                       .read_text(encoding='utf-8'))['llm']['MODEL_GENERATION_PROFILES']
+    for name in ['__fallback__'] + [k for k in stock if k.startswith('gemini-3')]:
+        assert 'temperature' not in stock[name] and 'top_p' not in stock[name], name
+    custom = provider_registry.get_generation_params("lmstudio", "some-model", {"lmstudio": {}})
+    assert "temperature" not in custom                                   # the catch-all never rides into a custom card
+    tuned = provider_registry.get_generation_params("lmstudio", "qwen-tuned", {"lmstudio": {}})
+    assert tuned["temperature"] == 0.6 and tuned["top_p"] == 0.95 and "presence_penalty" not in tuned
+
+
+def test_the_legacy_thinning_drops_the_old_stock_sampling():
+    """A frozen full-map save holds gemini-3 at the old stock 0.7 / 0.9: that was
+    never the person's choice, so it does not survive as theirs (hunt 20). A
+    value they really chose does."""
+    from core.settings_manager import SettingsManager
+    sm = SettingsManager.__new__(SettingsManager)
+    sm._defaults = {'MODEL_GENERATION_PROFILES': {
+        '__fallback__': {'max_tokens': 8192}, 'gemini-3.8-flash': {'max_tokens': 8192}}}
+    frozen = {'__fallback__': {'temperature': 0.7, 'top_p': 0.9, 'max_tokens': 4096},
+              'gemini-3.8-flash': {'temperature': 0.7, 'top_p': 0.9, 'max_tokens': 8192},
+              'my-model': {'temperature': 0.3}}
+    thin = sm._thin_profiles(frozen, legacy=True)
+    assert thin == {'my-model': {'temperature': 0.3}}
+    chosen = sm._thin_profiles({'gemini-3.8-flash': {'temperature': 1.0}}, legacy=True)
+    assert chosen == {'gemini-3.8-flash': {'temperature': 1.0}}

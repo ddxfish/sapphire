@@ -227,7 +227,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         ui.appendStream(chunk);
         if (ui.hasVisibleContent()) ui.hideStatus();   // hide status once actual visible content appears
     };
-    const onComplete = async (ephemeral, { ttsStreamed = false } = {}) => {
+    const onComplete = async (ephemeral, { ttsStreamed = false, refused = false } = {}) => {
         if (ctl.headless) {
             ui.showToast(`Her reply landed in “${ctl.chat}”`, 'info');
             return;
@@ -243,6 +243,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             return;
         }
         if (!ctl.streamOk) return;
+        if (refused) { await ui.finishStreaming(false, true); return; }   // nothing ran: keep its words, say nothing more
         await ui.finishStreaming();
         // Note: finishStreaming already syncs with history - no refresh needed
         //

@@ -23,7 +23,7 @@ _CONTEXT = ('context size', 'context length', 'context_length', 'maximum context
 # (vLLM "N in the completion", TGI-style hosts "max_new_tokens").
 _OUT_CAP = ('maximum allowed number of output tokens', 'is too large', 'supports at most',
             'must be less than or equal', 'maximum value for')
-_OUT_ROOM = ('in the completion', 'max_new_tokens')
+_OUT_ROOM = ('in the completion', 'max_new_tokens', 'exceed context limit')   # Anthropic: "input length and `max_tokens` exceed context limit"
 _KEY_WORDS = ('api key not valid', 'api_key_invalid', 'invalid api key', 'incorrect api key',
               'invalid x-api-key', 'authentication', 'unauthorized')
 
@@ -204,8 +204,12 @@ def _explain(e, provider_key):
     if status == 429 and any(k in err for k in ('perday', 'per day', 'per_day')):
         return out(f"{Who} has used up today's request limit for this key. It resets tomorrow; "
                    f"or pick another provider in the chat sidebar.")
-    if status == 429 and any(k in err for k in ('perminute', 'per minute', 'per_minute', 'retry in',
-                                                  'retrydelay', 'rate limit', 'rate_limit')):
+    # Gemini has no prepaid credit: its 429 is a rate or a free-tier cap even
+    # when it only says "exceeded your current quota ... billing" (hunt 20).
+    gemini = 'generativelanguage' in (u or '') or 'gemini' in (name or '').lower() or \
+        str(provider_key or '').startswith('gemini')
+    if status == 429 and (gemini or any(k in err for k in ('perminute', 'per minute', 'per_minute', 'retry in',
+                                                            'retrydelay', 'rate limit', 'rate_limit'))):
         return out(f"{Who} is getting too many requests right now. Wait a minute, then send again.")
     if 'credit balance' in err or 'insufficient_quota' in err or (
             status in (402, 429) and any(k in err for k in ('billing', 'quota', 'credit', 'insufficient',

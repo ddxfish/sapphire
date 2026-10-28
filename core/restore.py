@@ -84,6 +84,13 @@ def validate_tar(path):
                         f"archive contains a Windows-reserved filename "
                         f"('{n}') — restore it on Linux, rename that file, "
                         f"and re-create the backup")
+                # A Linux-made backup can hold names Windows can't (a colon
+                # also makes an alternate data stream): refuse up front, not
+                # mid-extract with a bare OSError (hunt 20).
+                if any(c in part for c in ':*?"<>|') or (part != part.rstrip('. ')):
+                    raise ValueError(
+                        f"archive contains a name Windows can't hold ('{n}') — restore it "
+                        f"on Linux, or rename that file there and make the backup again")
     roots = sorted({n.split("/", 1)[0] for n in names if n})
     if "user" not in roots:
         raise ValueError("archive has no top-level user/ folder")
@@ -172,15 +179,15 @@ def apply_pending_restore(log=print):
         if USER_OLD.exists():
             if USER_OLD_PREV.exists():
                 rmtree_robust(USER_OLD_PREV)
-            replace_with_retry(USER_OLD, USER_OLD_PREV)
+            replace_with_retry(USER_OLD, USER_OLD_PREV, attempts=20, delay=0.25)
             rotated = True
         if USER.exists():
-            replace_with_retry(USER, USER_OLD)
+            replace_with_retry(USER, USER_OLD, attempts=20, delay=0.25)
             try:
                 USER_OLD.chmod(0o700)   # full plaintext copy of private data — owner-only
             except OSError:
                 pass
-        replace_with_retry(new_user, USER)
+        replace_with_retry(new_user, USER, attempts=20, delay=0.25)   # AV scans a fresh tree
 
         shutil.rmtree(USER_NEW, ignore_errors=True)
         MARKER.unlink(missing_ok=True)

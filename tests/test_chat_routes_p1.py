@@ -407,7 +407,7 @@ def test_delete_history_user_message_takes_precedence_over_count(chat_client):
         json={'user_message': 'hello', 'count': 3},
     )
     assert r.status_code == 200
-    sm.remove_from_user_message.assert_called_once_with('hello')
+    sm.remove_from_user_message.assert_called_once_with('hello', None)   # + the row's timestamp when sent (hunt 20)
     sm.remove_last_messages.assert_not_called()
     sm.clear.assert_not_called()
 

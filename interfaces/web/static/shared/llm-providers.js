@@ -276,11 +276,11 @@ export function renderGenerationParams(providerKey, modelName, genProfiles = {})
   // The old 0.1 seed here was harvested by collectGenParamsFromCard on any
   // touch and rode every request from then on (scout S12, 2026-09-20).
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 8192, ...fallback };
+  const defaults = { max_tokens: 8192, ...fallback };   // no temp / top_p: blank = the server's default (hunt 20)
   const params = genProfiles[modelName] || defaults;
 
-  const temp = params.temperature ?? defaults.temperature;
-  const topP = params.top_p ?? defaults.top_p;
+  const temp = params.temperature ?? defaults.temperature ?? '';
+  const topP = params.top_p ?? defaults.top_p ?? '';
   const maxTokens = params.max_tokens ?? defaults.max_tokens;
   const presencePen = params.presence_penalty ?? defaults.presence_penalty ?? '';
   const freqPen = params.frequency_penalty ?? defaults.frequency_penalty ?? '';
@@ -292,12 +292,12 @@ export function renderGenerationParams(providerKey, modelName, genProfiles = {})
         <div class="gen-param">
           <label>Temp</label>
           <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="temperature" 
-                 value="${temp}" step="0.05" min="0" max="2">
+                 value="${temp}" step="0.05" min="0" max="2" placeholder="default">
         </div>
         <div class="gen-param">
           <label>Top P</label>
           <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="top_p" 
-                 value="${topP}" step="0.05" min="0" max="1">
+                 value="${topP}" step="0.05" min="0" max="1" placeholder="default">
         </div>
         <div class="gen-param">
           <label>Max Tok</label>
@@ -403,7 +403,7 @@ export function renderProviderToggles(key, config) {
  */
 export function getGenerationParams(modelName, genProfiles) {
   const fallback = genProfiles['__fallback__'] || {};
-  const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 8192, ...fallback };
+  const defaults = { max_tokens: 8192, ...fallback };   // no temp / top_p: blank = the server's default (hunt 20)
   return genProfiles[modelName] || defaults;
 }
 
@@ -427,8 +427,8 @@ export function loadModelGenParamsIntoCard(card, modelName, genProfiles) {
     if (input) input.value = val;
   };
 
-  setVal('temperature', params.temperature ?? defaults.temperature);
-  setVal('top_p', params.top_p ?? defaults.top_p);
+  setVal('temperature', params.temperature ?? defaults.temperature ?? '');
+  setVal('top_p', params.top_p ?? defaults.top_p ?? '');
   setVal('max_tokens', params.max_tokens ?? defaults.max_tokens);
   setVal('presence_penalty', params.presence_penalty ?? defaults.presence_penalty ?? '');
   setVal('frequency_penalty', params.frequency_penalty ?? defaults.frequency_penalty ?? '');

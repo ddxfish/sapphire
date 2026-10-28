@@ -1072,7 +1072,7 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
     # Method 1: Delete from specific user message
     if user_message:
         try:
-            ok, err = _edit(system, target, 'remove_from_user', user_message)
+            ok, err = _edit(system, target, 'remove_from_user', user_message, (data or {}).get('timestamp'))
         except Exception as e:
             raise server_error("remove those messages", e)
         _edited(ok, err, 404, "User message not found", "Failed to remove")
@@ -1188,9 +1188,18 @@ async def edit_message(request: Request, _=Depends(require_login), system=Depend
 
 
 @router.get("/api/history/raw")
-async def get_raw_history(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Get raw history structure."""
-    return system.llm_chat.session_manager.get_messages()
+async def get_raw_history(request: Request, chat: str = None, _=Depends(require_login), system=Depends(get_system)):
+    """Get raw history structure: the active chat, or a chat by name (`?chat=`,
+    a rail bound to it: Continue read the active chat's tail there, hunt 20).
+    A sealed chat answers 404, like a missing one (export_chat)."""
+    sm = system.llm_chat.session_manager
+    chat = (chat or '').strip()
+    if chat and chat != sm.get_active_chat_name():
+        data = sm.export_chat(chat)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Chat '{chat}' not found")
+        return data.get("messages") or []
+    return sm.get_messages()
 
 
 @router.post("/api/history/import")

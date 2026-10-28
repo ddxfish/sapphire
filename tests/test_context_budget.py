@@ -34,11 +34,13 @@ class Prov:
 def clean(monkeypatch):
     budget.forget()
     budget._ratio.clear()
+    budget._boost.clear()
     monkeypatch.setattr(config, 'CONTEXT_LIMIT', 0, raising=False)
     monkeypatch.setattr(config, 'TOOL_EXPIRES_AFTER', 0, raising=False)
     yield
     budget.forget()
     budget._ratio.clear()
+    budget._boost.clear()
 
 
 def user(t):
@@ -254,7 +256,10 @@ def test_the_ratio_learns_from_the_providers_count():
     budget.learn_usage(f, {'prompt_tokens': f.raw, 'cache_read_tokens': 0})
     assert budget._ratio[('k', 'm')] == pytest.approx(0.7 * 2.0 + 0.3 * 1.0)
     budget.tighten('k', 'm')
-    assert budget._ratio[('k', 'm')] == pytest.approx((0.7 * 2.0 + 0.3) * 1.25)
+    assert budget._ratio[('k', 'm')] == pytest.approx(0.7 * 2.0 + 0.3)     # hunt 20: the learned ratio stays
+    heavy = budget.fit(msgs, None, Prov(None), 'k', 'm', 1024, live=live)
+    light = budget.fit(msgs, None, Prov(None), 'k', 'm', 1024, live=live)
+    assert heavy.estimate == pytest.approx(light.estimate * 1.25, rel=0.02)   # only the retry counts heavier
     before = budget._ratio[('k', 'm')]
     budget.learn_usage(f, {'prompt_tokens': int(f.raw * 0.1)})        # hunt 19: a KV-reuse report (only new tokens)
     assert budget._ratio[('k', 'm')] == before                          # teaches nothing
@@ -655,7 +660,7 @@ def test_her_own_turns_carry_their_origin_and_stamp_only_activity(monkeypatch):
     h.add_user_message('hi')
     assert h.messages[0]['origin'] == 'cadence' and 'origin' not in h.messages[1]
     src = (ROOT / 'core' / 'chat' / 'chat_streaming.py').read_text()
-    assert src.count("source=getattr(self, 'turn_source', None)") == 4
+    assert src.count("source=getattr(self, 'turn_source', None)") == 5     # + the failed turn's user row (hunt 20)
     assert 'stream.turn_source = source' in (ROOT / 'core' / 'cadence.py').read_text()
     assert 'origin=f"task:' in (ROOT / 'core' / 'continuity' / 'executor.py').read_text()
 

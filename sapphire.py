@@ -9,8 +9,10 @@ import errno
 from pathlib import Path
 
 # One Sapphire per user/ (2026-10-16): a bare `python sapphire.py` takes the
-# instance lock itself; under main.py the runner already holds it and says so.
-if __name__ == "__main__" and not os.environ.get('SAPPHIRE_INSTANCE_LOCK'):
+# instance lock itself; under main.py the runner already holds it and says so
+# ("v2:<pid>"). A runner from before the lock moved (a bare pid) holds only the
+# old file, so the child takes the new lock itself (hunt 20).
+if __name__ == "__main__" and not os.environ.get('SAPPHIRE_INSTANCE_LOCK', '').startswith('v2:'):
     from core.single_instance import acquire_or_exit as _acquire_or_exit
     _instance_lock = _acquire_or_exit(Path(__file__).parent, who='sapphire.py')
 
@@ -1552,9 +1554,9 @@ def run():
         # binding inside its daemon thread died with a swallowed SystemExit on a
         # taken port, and the rest of her kept running headless on the same
         # user/ as the instance that had the port (the twin, 2026-10-16).
-        from core.single_instance import bind_listener, is_port_taken, port_holder, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG
+        from core.single_instance import bind_when_free, is_port_taken, port_holder, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG
         try:
-            web_sock = bind_listener(config.WEB_UI_HOST, config.WEB_UI_PORT)
+            web_sock = bind_when_free(config.WEB_UI_HOST, config.WEB_UI_PORT, log=logger.warning)
         except OSError as e:
             if is_port_taken(e):
                 who = port_holder(config.WEB_UI_PORT)

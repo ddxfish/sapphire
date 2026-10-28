@@ -47,7 +47,7 @@ def test_lock_first_then_the_child_knows(runner):
     _runs(runner, [0])
     assert _main(runner) == 0
     assert runner.lines.index('LOCK') < runner.lines.index('RUN')
-    assert os.environ['SAPPHIRE_INSTANCE_LOCK'] == str(os.getpid())
+    assert os.environ['SAPPHIRE_INSTANCE_LOCK'] == f"v2:{os.getpid()}"
 
 
 def test_43_another_instance_is_terminal(runner):
