@@ -146,6 +146,7 @@ def apply_pending_restore(log=print):
         _write_result(False, source, "staged backup file was missing")
         return False
 
+    rotated = False
     try:
         if USER_NEW.exists():
             rmtree_robust(USER_NEW)
@@ -167,10 +168,12 @@ def apply_pending_restore(log=print):
         # AV scan, an editor) fails a bare rename/rmtree — robust rmtree
         # clears read-only bits, and the retried replaces outlast transient
         # holders. A real lock still aborts, with the cause named.
+        rotated = False
         if USER_OLD.exists():
             if USER_OLD_PREV.exists():
                 rmtree_robust(USER_OLD_PREV)
             replace_with_retry(USER_OLD, USER_OLD_PREV)
+            rotated = True
         if USER.exists():
             replace_with_retry(USER, USER_OLD)
             try:
@@ -195,11 +198,17 @@ def apply_pending_restore(log=print):
                 replace_with_retry(USER_OLD, USER)
             except Exception:
                 pass
+        if rotated and not USER_OLD.exists():      # the rollback point keeps its name
+            try:
+                replace_with_retry(USER_OLD_PREV, USER_OLD)
+            except Exception:
+                pass
         if USER_NEW.exists():
             shutil.rmtree(USER_NEW, ignore_errors=True)
         MARKER.unlink(missing_ok=True)  # never loop-retry a broken restore
-        hint = (" (a PermissionError here usually means something on Windows "
-                "holds a file open under user/ — close Explorer/editors and retry)"
+        hint = (" (a PermissionError here means another program holds a file "
+                "open under user/: an Explorer window inside it, an editor, a sync "
+                "client or antivirus. Close it and restart Sapphire to retry.)"
                 if isinstance(e, PermissionError) else "")
         log(f"[Restore] FAILED — kept existing user/: {e}{hint}")
         _write_result(False, source, str(e))

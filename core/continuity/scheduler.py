@@ -185,7 +185,7 @@ class ContinuityScheduler:
                 # Manifest schedules are re-registered from the manifest each
                 # boot; a plugin's runtime tasks (alarms) are the person's own
                 # and stay (the clock promised "Survives reboot" - 2026-10-27).
-                if all_tasks[tid].get("source", "").startswith("plugin:") and not all_tasks[tid].get("runtime"):
+                if str(all_tasks[tid].get("source") or "").startswith("plugin:") and not all_tasks[tid].get("runtime"):
                     del all_tasks[tid]
                     plugin_count += 1
                     continue
@@ -946,7 +946,7 @@ class ContinuityScheduler:
                 due, stretch, fires, quiet = idle_state(task)
                 if not due:
                     continue
-                idle_due = (stretch, fires)
+                idle_due = (stretch, idle_fired(task, fires, quiet))
 
             # Chance roll — gates the entire firing
             chance = task.get("chance", 100)
@@ -980,7 +980,7 @@ class ContinuityScheduler:
                 self._arm_cancel(task_id)
                 if idle_due is not None and task_id in self._tasks:
                     # counted at dispatch: a run that fails still counts (no error loop)
-                    self._tasks[task_id]["idle_stretch"], self._tasks[task_id]["idle_fires"] = idle_due[0], idle_due[1] + 1
+                    self._tasks[task_id]["idle_stretch"], self._tasks[task_id]["idle_fires"] = idle_due
                     self._save_tasks()
 
             # Run on a separate thread so different tasks can run concurrently.
@@ -1529,11 +1529,37 @@ def idle_state(task, now=None):
     since = idle.since(None, person=True)
     if since is None:
         return False, None, 0, None
-    stretch = int(since)
-    fires = int(task.get("idle_fires") or 0) if task.get("idle_stretch") == stretch else 0
+    stretch, fires, since = _idle_stretch(task, since)
     now = now or time.time()
     at = _idle_next_at(task, since)
     return at is not None and now >= at, stretch, fires, max(0.0, (now - since) / 60.0)
+
+
+def _idle_stretch(task, since):
+    """(stretch, fires, since) for this quiet. The stored stretch holds, with
+    its fires, unless the person spoke after it: a clock read a second off
+    (a restart's seed) or older (a chat cleared, a sealed chat unread) is
+    the same quiet, never a new one that re-arms the beats (hunt 19)."""
+    try:
+        stored = int(task.get("idle_stretch")) if task.get("idle_stretch") is not None else None
+    except (TypeError, ValueError):
+        stored = None
+    if stored is not None and since <= stored + 2:
+        return stored, int(task.get("idle_fires") or 0), max(since, stored)
+    return int(since), 0, since
+
+
+def idle_fired(task, fires, quiet):
+    """The fires count after a beat now, `quiet` minutes in. With backoff it
+    jumps to the rung the quiet has already reached: a beat that first looks
+    10 h into a quiet (active hours opening, a wake, a boot) is the last of
+    its ladder, not three beats on three looks (hunt 19)."""
+    n = fires + 1
+    if task.get("idle_backoff", True):
+        mins = int(task.get("idle_minutes") or 0)
+        while n < ContinuityScheduler.IDLE_MAX_FIRES and mins and quiet >= mins * 2 ** n:
+            n += 1
+    return n
 
 
 def _idle_next_at(task, since):
@@ -1541,8 +1567,7 @@ def _idle_next_at(task, since):
     on, or None (quiet unknown, or the backoff is spent until they speak)."""
     if since is None:
         return None
-    stretch = int(since)
-    fires = int(task.get("idle_fires") or 0) if task.get("idle_stretch") == stretch else 0
+    _, fires, since = _idle_stretch(task, since)
     mins = int(task.get("idle_minutes") or 0)
     if task.get("idle_backoff", True):
         if fires >= ContinuityScheduler.IDLE_MAX_FIRES:

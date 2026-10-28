@@ -252,20 +252,32 @@ def _install(job, spec):
             proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace',
                                     env=env, bufsize=1)
-            deadline = time.time() + PIP_WAIT
-            for line in proc.stdout:
-                log.write(line)
-                line = line.rstrip()
-                if line:
-                    with _lock:
-                        job['lines'].append(line[:200])
-                        del job['lines'][:-40]
-                    if job.get('nid'):
-                        notify.tick(job['nid'], text=line[:200])
-                if time.time() > deadline:
-                    proc.kill()
-                    raise ExtraError("pip took too long and was stopped.")
-            code = proc.wait(timeout=60)
+            # A timer, not a check per line: a pip that hangs silent (a stalled
+            # download) printed nothing, so the deadline was never read and the
+            # job sat 'running' until a restart, refusing every install (hunt 19).
+            timed_out = threading.Event()
+
+            def _expire():
+                timed_out.set()
+                proc.kill()
+            watchdog = threading.Timer(PIP_WAIT, _expire)
+            watchdog.daemon = True
+            watchdog.start()
+            try:
+                for line in proc.stdout:
+                    log.write(line)
+                    line = line.rstrip()
+                    if line:
+                        with _lock:
+                            job['lines'].append(line[:200])
+                            del job['lines'][:-40]
+                        if job.get('nid'):
+                            notify.tick(job['nid'], text=line[:200])
+                code = proc.wait(timeout=60)
+            finally:
+                watchdog.cancel()
+            if timed_out.is_set():
+                raise ExtraError("pip took too long and was stopped.")
         if code:
             raise ExtraError(f"pip failed (exit {code}). The log is user/logs/{log_path.name}.")
         if not _installed(spec):

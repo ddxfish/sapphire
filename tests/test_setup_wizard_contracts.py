@@ -96,7 +96,8 @@ def test_voice_step_is_cards_plus_one_fold():
 
 def test_consent_and_name_guards():
     c = _src('views/setup-steps/consent.js')
-    assert "if (!w.state?.consent) await w.putState({ consent: true });" in c    # the server stamps the time
+    assert "try { await w.putState({ consent: true }); }" in c                   # the server stamps the time
+    assert "return false; }" in c                                                # a failed stamp stays on the step (hunt 19)
     assert 'return false;' in c.split("Tick \"I understand\"")[1]
     y = _src('views/setup-steps/you.js')
     assert "const DEFAULT_NAME = 'Human Protagonist';" in y

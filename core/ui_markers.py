@@ -61,8 +61,17 @@ def only_minted(result):
         if not isinstance(text, str) or '<!--' not in text:
             return text
         now = time.monotonic()
+        keep = lambda m: m.group(0) if now - _minted.get(m.group(0), -1e9) < _MINT_TTL else ''
+        # Until nothing changes: cutting a forged inner marker joins the words
+        # around it, so `<!--GALLER<!--ASK:x-->Y:[…]-->` became a whole
+        # GALLERY one pass never saw (privacy scout, hunt 19). Each pass that
+        # changes the text shortens it, so this ends.
         with _mint_lock:
-            return _WIDGET_RE.sub(lambda m: m.group(0) if now - _minted.get(m.group(0), -1e9) < _MINT_TTL else '', text)
+            while True:
+                out = _WIDGET_RE.sub(keep, text)
+                if out == text:
+                    return out
+                text = out
     if isinstance(result, dict) and 'text' in result:
         return {**result, 'text': clean(result['text'])}
     return clean(result)

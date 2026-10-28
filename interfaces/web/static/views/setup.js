@@ -55,12 +55,17 @@ const w = {
     },
     // Flush typed fields, batch-save through the host (its toasts, its rows),
     // remember a restart for the end (only the audio device keys ask for one).
+    // false = the save failed or a key was refused: the host toasted why, and
+    // a step's leave() returns it so Next stays put (hunt 19: it moved on, and
+    // Finish could mark setup done with that step's choices lost).
     async save() {
         host.flushCurrentInputs();
         const r = await host.save();
         if (r?.restart_required) needsRestart = true;
+        if (r === false || (r?.results || []).some(x => x.status === 'error')) return false;
         return r;
     },
+    leaveSave: async dir => ((await w.save()) === false && dir > 0 ? false : undefined),
     // A tab asks for another tab (a plugin gear, "fix deps"): that is Settings' job.
     navigate(tab) {
         if (tab) window._settingsTab = tab;
@@ -76,7 +81,7 @@ function tabStep(id, title, tab) {
     return {
         id, title, tabs: [tab],
         render(body) { host.mount(tab, body); },
-        leave: () => w.save(),
+        leave: (body, dir) => w.leaveSave(dir),
         unmount(body) { host.unmount(tab, body); },
     };
 }

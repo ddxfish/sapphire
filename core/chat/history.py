@@ -259,11 +259,15 @@ def count_message_tokens(content, include_images: bool = False) -> int:
 
 
 def _forget_fit(chat_name):
-    """A chat cleared, renamed or deleted: the budgeter's cut point and meter
-    reading for that name go too (core/chat/budget.py)."""
+    """A chat cleared, renamed, deleted or rewritten (trim, compress, import,
+    row edits): the budgeter's cut point and meter reading for that name go
+    too, and the background lanes' `task:` one (core/chat/budget.py). A cut
+    point is a count of turns, so on a rewritten list it hid the wrong ones:
+    a compress summary stayed out of her view (hunt 19)."""
     try:
         from core.chat import budget
         budget.forget(chat_name)
+        budget.forget(f"task:{chat_name}")
     except Exception:
         pass
 
@@ -2606,6 +2610,7 @@ class ChatSessionManager:
                         # "compressed" while the store kept the old rows.
                         return False, ("Save was dropped (sealed vault or a "
                                        "concurrent chat operation) — nothing was written")
+                    _forget_fit(chat_name)
                     return True, ""
                 with self._get_connection() as conn:
                     row = conn.execute(
@@ -2634,6 +2639,7 @@ class ChatSessionManager:
                     # Stale watermark would corrupt a later windowed save;
                     # drop it — next activation re-derives from the store.
                     self._rows_state.pop(chat_name, None)
+            _forget_fit(chat_name)
             return True, ""
         except Exception as e:
             logger.error(f"replace_messages('{chat_name}') failed: {e}")

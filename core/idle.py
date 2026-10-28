@@ -17,10 +17,18 @@
 # and the restart seed skips it. After a restart a chat's
 # first ask reads its last rows' own timestamps, so a quiet night survives a
 # reboot. A sealed (vaulted) chat answers None: its rows are not read.
+#
+# The app-wide person clock (since(None, person=True), the Idle Heartbeat's)
+# is a high-water mark kept in user/idle.json: it never moves backwards. A
+# cleared or deleted chat, or a vaulted one the restart seed cannot read,
+# used to drop it to an older chat's stamp ("quiet 3 days" minutes after
+# they spoke, hunt 19). Only the time is stored, never a chat.
+import json
 import logging
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -42,6 +50,33 @@ _any = {}           # chat → epoch of its last message (anyone's)
 _person = {}        # chat → epoch of the person's last message
 _seeded = set()     # chats whose stored rows have been read once
 _all_seeded = False
+HW_FILE = Path(__file__).parent.parent / 'user' / 'idle.json'
+_hw = None          # epoch of the person's last word anywhere, never lowered
+_hw_loaded = False
+
+
+def _load_hw():
+    global _hw, _hw_loaded
+    if _hw_loaded:
+        return
+    _hw_loaded = True
+    try:
+        t = float(json.loads(HW_FILE.read_text(encoding='utf-8')).get('person'))
+        if 946684800 < t:
+            _hw = max(_hw or 0, min(t, time.time()))
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+
+
+def _save_hw(t):
+    try:
+        HW_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HW_FILE.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps({'person': t}), encoding='utf-8')
+        from core.fs_utils import replace_with_retry
+        replace_with_retry(tmp, HW_FILE)
+    except OSError as e:
+        logger.debug(f"[IDLE] person clock not saved: {e}")
 
 
 def touch(chat: str, role: str = 'assistant', at: Optional[float] = None):
@@ -49,11 +84,18 @@ def touch(chat: str, role: str = 'assistant', at: Optional[float] = None):
     if not chat:
         return
     now = min(at or time.time(), time.time())       # a stamp from the future never pins the clock
+    global _hw
+    raised = False
     with _lock:
         _any[chat] = max(now, _any.get(chat, 0))
         if role in ('user', 'pair'):
             _person[chat] = max(now, _person.get(chat, 0))
+            _load_hw()
+            if _hw is None or now > _hw:
+                _hw, raised = now, True
         _seeded.add(chat)               # what lands now is newer than anything stored
+    if raised:
+        _save_hw(now)
 
 
 def forget(chat: str, new_name: Optional[str] = None):
@@ -90,7 +132,7 @@ def _seed(chat: Optional[str]):
         rows = get_system().llm_chat.session_manager.last_activity(chat)
     except Exception as e:
         logger.debug(f"[IDLE] seed skipped: {e}")
-        rows = {}
+        return                          # not latched: the next ask tries again (early boot)
     with _lock:
         for name, (any_ts, person_ts) in rows.items():
             if name in _seeded:
@@ -114,7 +156,12 @@ def since(chat: Optional[str] = None, person: bool = False) -> Optional[float]:
     book = _person if person else _any
     with _lock:
         if chat is None:
-            return max(book.values(), default=None)
+            t = max(book.values(), default=None)
+            if person:
+                _load_hw()
+                if _hw is not None:
+                    t = max(t or 0, _hw)
+            return t
         return book.get(chat)
 
 

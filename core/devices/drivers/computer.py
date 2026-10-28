@@ -504,9 +504,17 @@ def _folder(config):
         from core.backup import backup_manager
         if p.resolve().is_relative_to(backup_manager.user_dir.resolve()):
             raise Problem("The backup folder cannot be inside Sapphire's own user/ folder.")
+        if p.resolve() == backup_manager.backup_dir.resolve():
+            # Its rotation (keep 3) would delete the local backups beside it.
+            raise Problem(f"The backup folder {raw} is Sapphire's own backup folder. "
+                          f"Pick a different one, on another drive if you can.")
     except OSError:
         pass
-    if not os.access(p, os.W_OK):
+    try:
+        import tempfile
+        with tempfile.TemporaryFile(dir=p):     # a real write: os.access ignores Windows permissions
+            pass
+    except OSError:
         raise Problem(f"The backup folder {raw} cannot be written.")
     return p
 

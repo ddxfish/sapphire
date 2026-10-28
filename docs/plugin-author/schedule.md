@@ -124,6 +124,7 @@ from core import idle
 idle.minutes('default')               # minutes since the last message in that chat (anyone's), or None
 idle.minutes('default', person=True)  # since the person last wrote there
 idle.minutes()                        # since the last message in ANY chat (app-wide)
+idle.minutes(person=True)             # since the person last wrote anywhere: never moves backwards
 idle.since(chat, person=False)        # the same as an epoch time
 ```
 

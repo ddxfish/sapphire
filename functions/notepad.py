@@ -132,7 +132,8 @@ def _write_lines(lines):
     content = '\n'.join(lines) + '\n' if lines else ''
     tmp = path.with_suffix('.tmp')
     tmp.write_text(content, encoding='utf-8')
-    tmp.replace(path)
+    from core.fs_utils import replace_with_retry
+    replace_with_retry(tmp, path)        # Windows: AV or an editor holding the file
 
 
 def _format_notepad(lines):

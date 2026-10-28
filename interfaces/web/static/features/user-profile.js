@@ -153,7 +153,8 @@ async function saveUsername() {
         updateInitialBadge(name, avatarCheck.exists ? avatarCheck.path : null);
         refreshInitData();
     } catch (e) {
-        console.warn('[Profile] Save username failed:', e);
+        usernameInput.value = currentUsername;
+        ui.showToast(`Name not saved: ${e.message}`, 'error');
     }
 }
 
@@ -193,7 +194,7 @@ async function saveTimezone() {
         });
         refreshInitData();
     } catch (e) {
-        console.warn('[Profile] Save timezone failed:', e);
+        ui.showToast(`Time zone not saved: ${e.message}`, 'error');
     }
 }
 
@@ -212,6 +213,6 @@ async function saveDefaultPersona() {
         }
         refreshInitData();
     } catch (e) {
-        console.warn('[Profile] Save default persona failed:', e);
+        ui.showToast(`Default persona not saved: ${e.message}`, 'error');
     }
 }

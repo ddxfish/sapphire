@@ -1,5 +1,6 @@
 # core/routes/content.py - Prompts, toolsets, spices, personas, and spice set routes
 import json
+import re
 import logging
 from pathlib import Path
 
@@ -1220,6 +1221,8 @@ async def _import_persona_from_bundle(data):
         if not isinstance(prompt_info, dict):
             raise HTTPException(status_code=400, detail="Invalid prompt data format")
         prompt_name = prompt_info.get("name", name)
+        if not isinstance(prompt_name, str) or not prompt_name.strip() or re.search(r'[<>"\'`&\x00-\x1f]', prompt_name):
+            raise HTTPException(status_code=400, detail="The prompt's name in this file has characters a name can't hold")
         prompt_data = prompt_info.get("data", {})
         if not isinstance(prompt_data, dict):
             raise HTTPException(status_code=400, detail="Invalid prompt data")
@@ -1261,18 +1264,21 @@ async def _import_persona_from_bundle(data):
                                         detail=f"Component save refused: {msg}")
 
     # Build persona settings
-    voice_data = data.get("voice", {})
+    voice_data = data.get("voice") if isinstance(data.get("voice"), dict) else {}
     persona_settings = {}
     if prompt_name:
         persona_settings["prompt"] = prompt_name
-    if voice_data.get("voice"):
+    if isinstance(voice_data.get("voice"), str) and not re.search(r'[<>"\'`]', voice_data["voice"]):
         persona_settings["voice"] = voice_data["voice"]
     if "speed" in voice_data:
         persona_settings["speed"] = voice_data["speed"]
     if "pitch" in voice_data:
         persona_settings["pitch"] = voice_data["pitch"]
-    if data.get("trim_color"):
-        persona_settings["trim_color"] = data["trim_color"]
+    # Values from a shared file are checked, not just keys (hunt 19): a
+    # trim_color of `"><img onerror=…>` drew script in Personas.
+    trim = data.get("trim_color")
+    if isinstance(trim, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", trim):
+        persona_settings["trim_color"] = trim
 
     # Create or overwrite the persona record
     persona_data = {

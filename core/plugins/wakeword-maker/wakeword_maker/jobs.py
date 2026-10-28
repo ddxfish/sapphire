@@ -294,6 +294,8 @@ def promote(root, publish=None):
                 os.replace(job_dir / 'status.json', job_dir / 'claim.json')
             except FileNotFoundError:
                 continue                        # someone else claimed it
+            except PermissionError:
+                continue                        # Windows: held open a moment; the next pass claims it
             try:
                 _launch(job_dir, j, publish)
                 started.append(read(job_dir))

@@ -1586,3 +1586,39 @@ def test_mentions_cue_only_the_seats_named_and_chain_to_the_cap(world, monkeypat
     rooms.say(chat, '@all speak up')                                                # @all: the usual round
     assert _wait(lambda: len(order) == 9 and rooms.state(chat)['waiting'])
     assert order[6:8] == ['Sapphire', 'Sapphire 2']
+
+
+def test_a_line_typed_as_the_run_ends_is_answered(world, monkeypatch):
+    """Hunt 19 (race scout, 18/18): a line typed during the last turn of a capped
+    run found the run still going and woke nothing; the run then ended and the
+    line sat unanswered. The exit now checks for it, under the lock."""
+    from core import cadence
+    chat, a, b = _salon()
+    rooms.update_room(chat, {'human_every': 0, 'max_rounds': 1})
+    rooms.append_line(chat, 'user', 'Boats?', 'user', 'Krem')
+    cues, gate = [], threading.Event()
+
+    def run_turn(own, cue, **kw):
+        seat = own.split('seat-', 1)[1]
+        cues.append((seat, cue))
+        kw['on_stream'](type('S', (), {'cancel_flag': False})())
+        if len(cues) == 2:
+            gate.wait(timeout=3)                       # the last turn of the capped run
+        kw['on_event']({'type': 'turn_report', 'text': f'{seat} says', 'tools': [], 'finish': 'stop', 'why': ''})
+        return f'{seat} says'
+    monkeypatch.setattr(cadence, 'run_turn', run_turn)
+    rooms.start(chat)
+    assert _wait(lambda: len(cues) == 2)
+    rooms.say(chat, 'one more thing')
+    assert _wait(lambda: rooms._rt(chat).said == 1)    # landed while the run still runs
+    gate.set()
+    assert _wait(lambda: any('one more thing' in c for _, c in cues[2:]))
+    assert _wait(lambda: not rooms.state(chat)['running'])
+
+
+def test_a_line_from_before_stop_does_not_restart(world, monkeypatch):
+    chat, a, b = _salon()
+    rt = rooms._rt(chat)
+    rt.said, rt.read = 2, 1
+    rooms.stop(chat)
+    assert rt.stopped_at == 2                          # only a line after Stop runs the seats again

@@ -107,7 +107,7 @@ Heartbeat and Scheduled are the time-driven views this doc covers. Each item can
 An Idle Heartbeat (Triggers › Heartbeat › **+ Idle**) is a heartbeat that waits for your quiet: once you have said nothing to her, anywhere, for its **Time To Activate** (default 60 min), she gets its message. Her own replies and her scheduled tasks never count as you, so she can't keep herself awake.
 
 - **Looks every** N minutes is how often it checks the quiet (5 is plenty).
-- **Back off** (on by default): she beats at 1x, 2x and 4x the quiet (60, 120, 240 min), then rests until you speak. Off: she beats on every look while you stay quiet.
+- **Back off** (on by default): she beats at 1x, 2x and 4x the quiet (60, 120, 240 min), then rests until you speak. A quiet already past a rung when she first looks (overnight, outside active hours) counts as that rung: one beat, not three in a row. Off: she beats on every look while you stay quiet.
 - **Chance** is rolled on each look, so a miss is just a later beat.
 - **Active hours** still apply: an idle beat at 3 AM waits for the window.
 - Put `{quiet}` in the message and it becomes how long it's been ("It's been quiet for {quiet}." becomes "It's been quiet for 2 h 10 min.").
@@ -130,7 +130,7 @@ Continuity runs scheduled autonomous tasks. UI: **Triggers** nav group with five
 
 TASK CREATION (UI):
 - Triggers > Scheduled > "+ Task" (heartbeats: Triggers > Heartbeat > "+ Heartbeat"; idle heartbeats: "+ Idle")
-- Idle Heartbeat = a heartbeat with `idle_minutes` > 0: fires once the person has been quiet that long app-wide (core/idle.py, person=True); `idle_backoff` (default on) = 1x/2x/4x then rest until they speak; `{quiet}` in the message = the quiet in words
+- Idle Heartbeat = a heartbeat with `idle_minutes` > 0: fires once the person has been quiet that long app-wide (core/idle.py, person=True); `idle_backoff` (default on) = 1x/2x/4x then rest until they speak (a long quiet at the first look jumps to its rung: one beat); `{quiet}` in the message = the quiet in words
 - Set schedule (cron or simple time picker), initial message, prompt, toolset; picking a Persona auto-fills prompt/voice/toolset/model/scopes
 - Accordions: AI, Chat, Voice, Mind (scopes), Execution Limits
 

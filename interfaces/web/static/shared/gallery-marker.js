@@ -16,18 +16,27 @@
 export const GALLERY_RE = /<!--GALLERY:([\[{][^\n]*[\]}])-->[ \t]*\n?/;
 const TOOL_IMAGE = '/api/tool-image/';
 
+// Pictures load only from Sapphire's own routes (a stash handle, a library
+// file) or the image proxy web hits already use (core/images.py _PROXY): a
+// tile pointing anywhere else would make the user's browser call a
+// stranger's server on render, around SOCKS (hunt 19). A page link is
+// http(s) only. Old markers with bare outside URLs draw nothing.
+const PROXY = 'https://external-content.duckduckgo.com/iu/?';
+const ours = u => (typeof u === 'string' && (/^\/(?![\/\\])/.test(u) || u.startsWith(PROXY))) ? u : '';
+const web = u => (typeof u === 'string' && /^https?:\/\//i.test(u)) ? u : '';
+
 export function normalizeEntries(raw) {
     const list = Array.isArray(raw) ? raw
         : (raw && typeof raw === 'object' && Array.isArray(raw.items)) ? raw.items : [];
     return list.map(e => {
-        if (typeof e === 'string') return e ? { thumb: e, full: e, handle: '', title: '', page: '' } : null;
+        if (typeof e === 'string') return ours(e) ? { thumb: e, full: e, handle: '', title: '', page: '' } : null;
         if (!e || typeof e !== 'object') return null;
         const handle = typeof e.handle === 'string' && e.handle.startsWith('img:') ? e.handle.slice(4) : '';
-        const thumb = handle ? TOOL_IMAGE + encodeURIComponent(handle) : (e.thumb || e.full || '');
+        const thumb = handle ? TOOL_IMAGE + encodeURIComponent(handle) : (ours(e.thumb) || ours(e.full));
         if (!thumb) return null;
-        return { thumb, full: e.full || thumb, handle,
+        return { thumb, full: ours(e.full) || thumb, handle,
                  title: typeof e.title === 'string' ? e.title : '',
-                 page: typeof e.page === 'string' ? e.page : '' };
+                 page: web(e.page) };
     }).filter(Boolean);
 }
 

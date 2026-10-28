@@ -133,7 +133,7 @@ def local_tz():
     # the offset as it is NOW, summer time and all (a Windows host has no zone file): right until
     # the next change of the clocks, and sent again whenever the board's stream opens
     here = time.localtime()
-    name = ''.join(c for c in (here.tm_zone or 'UTC') if c.isalpha())[:5] or 'UTC'
+    name = ''.join(c for c in (here.tm_zone or 'UTC') if c.isascii() and c.isalpha())[:5] or 'UTC'   # a localized Windows zone name
     name = name if len(name) >= 3 else 'LOC'          # POSIX wants three letters or more
     hours = -(here.tm_gmtoff or 0) / 3600             # POSIX counts west as positive
     return f"{name}{int(hours) if hours == int(hours) else hours:g}"

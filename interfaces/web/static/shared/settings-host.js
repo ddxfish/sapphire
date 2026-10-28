@@ -562,8 +562,8 @@ export function createHost(shell = {}) {
     // ── Save ──
 
     // The global batch save: every pending change in one PUT. Returns the batch
-    // result (restart_required, per-key results) or undefined when nothing was
-    // saved. The Settings shell's Save button and the wizard's Next both land here;
+    // result (restart_required, per-key results), undefined when nothing was
+    // saved, or false when the save failed (the wizard stays on its step). The Settings shell's Save button and the wizard's Next both land here;
     // plugin tabs with their own save flow never reach it (the shell routes those).
     async function saveChanges() {
         const valid = {};
@@ -661,6 +661,7 @@ export function createHost(shell = {}) {
             shell.repaint?.();
         } catch (e) {
             showToast('Save failed: ' + e.message, 'error');
+            result = false;
         } finally {
             _saveInFlight--;
             shell.onSaveBusy?.(false);

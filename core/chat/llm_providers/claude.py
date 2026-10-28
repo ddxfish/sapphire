@@ -546,10 +546,15 @@ class ClaudeProvider(BaseProvider):
                     if hasattr(event, 'delta') and hasattr(event.delta, 'stop_reason'):
                         finish_reason = event.delta.stop_reason
                     if hasattr(event, 'usage'):
+                        # The SDK types input_tokens Optional (None, not
+                        # absent): a gateway that sends only output_tokens
+                        # made None + int kill every turn at its end (hunt 19).
+                        _in = getattr(event.usage, 'input_tokens', None) or (usage or {}).get('prompt_tokens', 0) or 0
+                        _out = getattr(event.usage, 'output_tokens', None) or 0
                         usage = {
-                            "prompt_tokens": getattr(event.usage, 'input_tokens', 0),
-                            "completion_tokens": getattr(event.usage, 'output_tokens', 0),
-                            "total_tokens": getattr(event.usage, 'input_tokens', 0) + getattr(event.usage, 'output_tokens', 0)
+                            "prompt_tokens": _in,
+                            "completion_tokens": _out,
+                            "total_tokens": _in + _out
                         }
                         # Check for cache statistics
                         cache_read = getattr(event.usage, 'cache_read_input_tokens', 0) or 0

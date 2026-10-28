@@ -155,3 +155,52 @@ def test_the_card_says_when_it_next_looks(quiet):
     assert (due_look - now).total_seconds() >= 49 * 60            # due at 60 min quiet, not before
     common = (ROOT / 'interfaces' / 'web' / 'static' / 'shared' / 'trigger-common.js').read_text()
     assert 'next look ${lookIn(hb.idle_next_look)}' in common
+
+
+# --- hunt 19 ---------------------------------------------------------------
+
+def test_a_long_quiet_spends_the_ladder_in_one_beat(quiet):
+    """10 h quiet when it first looks (active hours opening, a wake, a boot):
+    one beat, not three on three looks."""
+    from core.continuity.scheduler import idle_fired
+    since = quiet(600)
+    due, stretch, fires, q = idle_state(beat())
+    assert due
+    after = beat(idle_stretch=stretch, idle_fires=idle_fired(beat(), fires, q))
+    assert after['idle_fires'] == 3 and not idle_state(after)[0]
+    assert idle_fired(beat(), 0, 90) == 1                      # a short quiet climbs one rung
+    assert idle_fired(beat(idle_backoff=False), 0, 600) == 1    # no backoff: counts, never jumps
+
+
+def test_an_older_or_slightly_off_clock_is_the_same_quiet(quiet):
+    """A cleared chat, a sealed chat the seed can't read, a seed a second off:
+    none of them re-arm a spent ladder."""
+    since = int(quiet(30))
+    spent = beat(idle_stretch=since, idle_fires=3)
+    quiet(3 * 24 * 60)                                          # the clock fell back to an old chat
+    assert not idle_state(spent, now=time.time() + 10 ** 6)[0]
+    assert sched._idle_stretch(spent, since + 1)[1] == 3        # a restart's seed, a second later
+    assert sched._idle_stretch(spent, since + 60)[1] == 0       # they really spoke again
+
+
+def test_the_person_clock_never_moves_back(tmp_path):
+    idle.touch('a', 'user', at=time.time() - 60)
+    t = idle.since(None, person=True)
+    idle.forget('a')                                            # cleared: its stamp goes
+    assert idle.since(None, person=True) == pytest.approx(t)
+    idle._hw, idle._hw_loaded = None, False                     # a restart: read back from disk
+    assert idle.since(None, person=True) == pytest.approx(t)
+    assert idle.HW_FILE.exists() and 'a' not in idle.HW_FILE.read_text()
+
+
+def test_room_notices_are_never_the_person(monkeypatch):
+    from core import rooms
+    rows = []
+
+    class SM:
+        def append_messages_to_chat(self, chat, new):
+            rows.extend(new); return True
+    monkeypatch.setattr(rooms, '_sm', lambda: SM())
+    rooms._notice('room', 'Nobody spoke')
+    rooms.append_line('room', 'user', 'hi', rooms.USER, 'Krem')
+    assert rows[0]['origin'].startswith('room:') and 'origin' not in rows[1]

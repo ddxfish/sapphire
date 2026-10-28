@@ -37,7 +37,7 @@ export default w => ({
         });
     },
 
-    leave: () => w.save(),
+    leave: (body, dir) => w.leaveSave(dir),
 
     unmount(body) {
         const el = body.querySelector('[data-tab="appearance"] .setup-sub-body');

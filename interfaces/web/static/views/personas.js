@@ -5,6 +5,7 @@ import { listPersonas, getPersona, createPersona, updatePersona, deletePersona,
          avatarUrl, avatarImg, avatarFallback } from '../shared/persona-api.js';
 import { confirmPersonaImport, extractBundleFromPng } from '../shared/persona-import-confirm.js';
 import { PERSONA_TABS } from '../shared/persona-tabs.js';
+import { escapeHtml } from '../shared/modal.js';
 import { deferWhileEditing, snapScroll } from '../shared/dom-guard.js';
 
 // Rename's roster repaint, held while the user is typing elsewhere in the
@@ -254,7 +255,7 @@ function renderDetail(p, isActive) {
                             <input class="pa-name-input" id="pa-name" value="${esc(p.name)}" placeholder="Name" spellcheck="false">
                             <input class="pa-tagline-input" id="pa-tagline" value="${esc(p.tagline || '')}" placeholder="Tagline...">
                         </div>
-                        <input type="color" id="pa-s-trim_color" class="pa-trim-swatch" value="${trim}" data-key="trim_color" title="Trim color">
+                        <input type="color" id="pa-s-trim_color" class="pa-trim-swatch" value="${esc(trim)}" data-key="trim_color" title="Trim color">
                     </div>
                     <div class="pa-header-actions">
                         <button class="btn-primary" id="pa-load">Activate</button>
@@ -418,7 +419,7 @@ function _refsVaultPrompt(p) {
 // option rather than letting the <select> silently fall to the first option.
 function _withMissing(opts, list, current, keyFn) {
     if (current && !list.some(keyFn)) {
-        opts.unshift(`<option value="${current}" selected>${current}</option>`);
+        opts.unshift(`<option value="${esc(current)}" selected>${esc(current)}</option>`);
     }
     return opts;
 }
@@ -426,7 +427,7 @@ function _withMissing(opts, list, current, keyFn) {
 function renderPromptOptions(current) {
     const list = initData?.prompts?.list || [];
     const opts = list.map(p =>
-        `<option value="${p.name}"${p.name === current ? ' selected' : ''}>${p.name}${p.vault ? ' \u{1F5DD}' : ''}</option>`
+        `<option value="${esc(p.name)}"${p.name === current ? ' selected' : ''}>${esc(p.name)}${p.vault ? ' \u{1F5DD}' : ''}</option>`
     );
     // Dangling vault name (locked): label the synthesized option so the
     // reference reads as asleep, not broken — and stays removable here.
@@ -438,39 +439,39 @@ function renderPromptOptions(current) {
         const label = current in vrefs ? '\u{1F5DD} vault prompt (locked)'
             : hidden[current] === 'story' ? `${current} \u{1F4D6} (story)`
             : current;
-        opts.unshift(`<option value="${current}" selected>${label}</option>`);
+        opts.unshift(`<option value="${esc(current)}" selected>${esc(label)}</option>`);
         return opts.join('');
     }
     return opts.join('')
-        || `<option value="${current || 'default'}">${current || 'default'}</option>`;
+        || `<option value="${esc(current || 'default')}">${esc(current || 'default')}</option>`;
 }
 
 function renderToolsetOptions(current) {
     const list = (initData?.toolsets?.list || []).filter(t => t.type !== 'module');
     const opts = list.map(t =>
-        `<option value="${t.name}"${t.name === current ? ' selected' : ''}>${t.name} (${t.function_count})</option>`
+        `<option value="${esc(t.name)}"${t.name === current ? ' selected' : ''}>${esc(t.name)} (${t.function_count})</option>`
     );
     return _withMissing(opts, list, current, t => t.name === current).join('')
-        || `<option value="${current || 'all'}">${current || 'all'}</option>`;
+        || `<option value="${esc(current || 'all')}">${esc(current || 'all')}</option>`;
 }
 
 function renderSpiceSetOptions(current) {
     const list = initData?.spice_sets?.list || [];
     const opts = list.map(s =>
-        `<option value="${s.name}"${s.name === current ? ' selected' : ''}>${s.emoji ? s.emoji + ' ' : ''}${s.name}</option>`
+        `<option value="${esc(s.name)}"${s.name === current ? ' selected' : ''}>${s.emoji ? esc(s.emoji) + ' ' : ''}${esc(s.name)}</option>`
     );
     return _withMissing(opts, list, current, s => s.name === current).join('')
-        || `<option value="${current || 'default'}">${current || 'default'}</option>`;
+        || `<option value="${esc(current || 'default')}">${esc(current || 'default')}</option>`;
 }
 
 function renderVoiceOptions(current) {
     const voices = voicesData?.voices || [];
     if (!voices.length) {
         // Fallback: show current saved voice as placeholder
-        return current ? `<option value="${current}" selected>${current}</option>` : '<option value="">No TTS active</option>';
+        return current ? `<option value="${esc(current)}" selected>${esc(current)}</option>` : '<option value="">No TTS active</option>';
     }
     return voices.map(v =>
-        `<option value="${v.voice_id}"${v.voice_id === current ? ' selected' : ''}>${v.name}${v.category ? ' (' + v.category + ')' : ''}</option>`
+        `<option value="${esc(v.voice_id)}"${v.voice_id === current ? ' selected' : ''}>${esc(v.name)}${v.category ? ' (' + esc(v.category) + ')' : ''}</option>`
     ).join('');
 }
 
@@ -881,8 +882,7 @@ function debouncedSave() {
     }, 600);
 }
 
+// Quote-safe: imported persona values land inside value="..." (hunt 19).
 function esc(str) {
-    const d = document.createElement('div');
-    d.textContent = str || '';
-    return d.innerHTML;
+    return escapeHtml(String(str || ''));
 }

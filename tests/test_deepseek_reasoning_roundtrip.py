@@ -318,3 +318,27 @@ def test_deepseek_official_preset_exists_and_is_well_formed():
     assert not model_ids & {"deepseek-chat", "deepseek-reasoner"}, (
         "Both legacy names were discontinued 2026-07-24 — offering them is a trap."
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hunt 19: max_tokens > 4096 sends chat_completion through the stream path,
+# which dropped the reasoning, so background tool loops 400'd on round 2.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_chat_completion_over_4096_keeps_the_reasoning():
+    from core.chat.llm_providers.base import LLMResponse, ToolCall
+    p = _make_provider("https://api.deepseek.com/v1", "deepseek-v4-pro")
+    tc = ToolCall(id="c1", name="get_time", arguments="{}")
+
+    def stream(messages, tools=None, generation_params=None):
+        yield {"type": "done", "thinking": "let me check the clock",
+               "response": LLMResponse(content="Checking.", tool_calls=[tc])}
+    p.chat_completion_stream = stream
+    r = p.chat_completion([{"role": "user", "content": "time?"}], generation_params={"max_tokens": 8192})
+    assert r.thinking == "let me check the clock"
+    assert "let me check the clock" in r.content and r.content.rstrip().endswith("Checking.")
+    wire = p._sanitize_messages([{"role": "assistant", "content": "Checking.", "thinking": r.thinking,
+                                  "tool_calls": [{"id": "c1", "type": "function",
+                                                  "function": {"name": "get_time", "arguments": "{}"}}]}])
+    assert wire[0].get("reasoning_content") == "let me check the clock"

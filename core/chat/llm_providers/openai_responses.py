@@ -526,9 +526,9 @@ class OpenAIResponsesProvider(BaseProvider):
         usage = None
         if hasattr(response, 'usage') and response.usage:
             usage = {
-                "prompt_tokens": getattr(response.usage, 'input_tokens', 0),
-                "completion_tokens": getattr(response.usage, 'output_tokens', 0),
-                "total_tokens": getattr(response.usage, 'input_tokens', 0) + getattr(response.usage, 'output_tokens', 0)
+                "prompt_tokens": getattr(response.usage, 'input_tokens', 0) or 0,
+                "completion_tokens": getattr(response.usage, 'output_tokens', 0) or 0,
+                "total_tokens": (getattr(response.usage, 'input_tokens', 0) or 0) + (getattr(response.usage, 'output_tokens', 0) or 0)
             }
             # Reasoning tokens
             if hasattr(response.usage, 'output_tokens_details'):

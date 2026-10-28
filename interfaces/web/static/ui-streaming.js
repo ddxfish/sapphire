@@ -9,6 +9,15 @@ import { openImageModal } from './ui-images.js';
 import { nextThinkCloser, nextThinkOpener, isSeedThink } from './shared/think.js';
 import { errWords } from './shared/fetch.js';
 
+// A tool name comes from the model's own output (a prompt-injected model can
+// name a tool `<img onerror=…>`), so it is text, never markup (hunt 19).
+function setToolSummary(summary, label, name, spinner = false) {
+    const parts = [];
+    if (spinner) { const sp = document.createElement('span'); sp.className = 'tool-spinner'; parts.push(sp); }
+    parts.push(document.createTextNode(`${spinner ? ' ' : ''}${label}: ${name}`));
+    summary.replaceChildren(...parts);
+}
+
 // Streaming state
 let streamMsg = null;
 let streamContent = '';
@@ -60,7 +69,7 @@ const createToolAccordionElement = (toolName, toolId, args) => {
     details.open = false;
     
     const summary = createElem('summary');
-    summary.innerHTML = `<span class="tool-spinner"></span> Running: ${toolName}`;
+    setToolSummary(summary, 'Running', toolName, true);
     
     // Add delete button (skip for pending placeholders)
     if (toolId && !String(toolId).startsWith('pending-')) {
@@ -445,7 +454,7 @@ const doStartTool = (toolId, toolName, args, scrollCallback) => {
             const existing = state.toolAccordions[pendingKey];
             delete state.toolAccordions[pendingKey];
             existing.acc.dataset.toolId = toolId;
-            existing.summary.innerHTML = `<span class="tool-spinner"></span> Running: ${toolName}`;
+            setToolSummary(existing.summary, 'Running', toolName, true);
             // Add delete button now that we have the real tool call id
             const deleteBtn = createElem('button', {
                 class: 'tool-delete-btn',
@@ -486,7 +495,7 @@ const doStartTool = (toolId, toolName, args, scrollCallback) => {
 
     // Pending tools show "Preparing..." instead of "Running..."
     if (isPending) {
-        summary.innerHTML = `<span class="tool-spinner"></span> Preparing: ${toolName}`;
+        setToolSummary(summary, 'Preparing', toolName, true);
         content.textContent = 'Assembling arguments...';
     }
 
@@ -542,7 +551,7 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
         const { acc, content, summary } = createToolAccordionElement(toolName, toolId, {});
         acc.classList.remove('loading');
         if (isError) acc.classList.add('error');
-        summary.innerHTML = `Tool Result: ${toolName}`;
+        setToolSummary(summary, 'Tool Result', toolName);
         content.textContent = 'Result:\n' + shownResult;
 
         if (state.curPara) {
@@ -557,7 +566,7 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
         const { acc, content, summary, toolName: storedName } = toolData;
         acc.classList.remove('loading');
         if (isError) acc.classList.add('error');
-        summary.innerHTML = `Tool Result: ${storedName || toolName}`;
+        setToolSummary(summary, 'Tool Result', storedName || toolName);
 
         const existingContent = content.textContent;
         if (existingContent && existingContent !== 'Running...') {

@@ -16,8 +16,31 @@ from core import single_instance as si
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def test_lock_file_lives_in_user_dir(tmp_path):
-    assert si.InstanceLock(tmp_path).path == os.path.join(str(tmp_path), 'user', '.instance.lock')
+@pytest.fixture(autouse=True)
+def _config_dir(tmp_path, monkeypatch):
+    """Locks land in a scratch config dir (subprocesses inherit the env)."""
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'cfg'))
+    monkeypatch.setenv('APPDATA', str(tmp_path / 'cfg'))
+
+
+def test_lock_file_lives_outside_user_dir(tmp_path):
+    """2026-10-27: inside user/ the locked byte failed every Windows backup
+    (Errno 13) and the open file refused the restore's folder swap."""
+    path = si.InstanceLock(tmp_path).path
+    assert os.path.join(str(tmp_path), 'user') not in path
+    assert path.startswith(str(tmp_path / 'cfg'))
+    assert si.InstanceLock(tmp_path).path == path                     # one folder, one lock
+    assert si.InstanceLock(tmp_path / 'other').path != path           # two installs, two locks
+
+
+def test_the_old_lock_file_in_user_is_cleared(tmp_path):
+    old = tmp_path / 'user' / '.instance.lock'
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b'\npid=1\n')
+    a = si.InstanceLock(tmp_path)
+    assert a.acquire()
+    assert not old.exists()
+    a.release()
 
 
 def test_lock_is_exclusive_readable_and_releasable(tmp_path):
@@ -49,7 +72,7 @@ def test_a_dead_holder_leaves_no_stale_lock(tmp_path):
     code = "import sys; from core.single_instance import InstanceLock; assert InstanceLock(sys.argv[1]).acquire()"
     env = dict(os.environ, PYTHONPATH=str(ROOT))
     assert subprocess.run([sys.executable, '-c', code, str(tmp_path)], cwd=str(ROOT), env=env, timeout=60).returncode == 0
-    assert os.path.exists(os.path.join(str(tmp_path), 'user', '.instance.lock'))
+    assert os.path.exists(si.InstanceLock(tmp_path).path)
     a = si.InstanceLock(tmp_path)
     assert a.acquire() is True
     a.release()

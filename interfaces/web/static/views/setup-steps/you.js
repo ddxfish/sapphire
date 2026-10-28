@@ -40,7 +40,7 @@ export default w => ({
         body.querySelector('#setup-tz').addEventListener('change', e => ctx.markChanged('USER_TIMEZONE', e.target.value));
     },
 
-    async leave(body) {
+    async leave(body, dir) {
         // the name field has no data-key on purpose (the generic flush would save
         // whatever it holds): read it here, with the guard
         const ctx = w.host.createCtx();
@@ -48,6 +48,7 @@ export default w => ({
         if (v && v !== DEFAULT_NAME && v !== (ctx.settings.DEFAULT_USERNAME || '')) ctx.markChanged('DEFAULT_USERNAME', v);
         else delete w.host.pendingChanges.DEFAULT_USERNAME;
         const r = await w.save();
+        if (r === false && dir > 0) return false;
         if (r) {
             // the nav rail's initial is painted at boot only
             const { refreshProfileBadge } = await import('../../features/user-profile.js');

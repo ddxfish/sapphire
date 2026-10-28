@@ -277,7 +277,7 @@ export function renderHeartbeatCard(hb, timeline) {
     return `
         <div class="hb-card ${state.cls}" id="vital-${hb.id}">
             <div class="hb-card-header">
-                <span class="hb-emoji">${emoji}</span>
+                <span class="hb-emoji">${esc(emoji)}</span>
                 <span class="hb-name" data-action="edit" data-id="${hb.id}">${esc(hb.name)}</span>
                 <label class="sched-toggle hb-toggle" title="${hb.enabled ? 'Pause' : 'Resume'}">
                     <input type="checkbox" ${hb.enabled ? 'checked' : ''} data-action="hb-toggle" data-id="${hb.id}">
@@ -424,7 +424,7 @@ export function renderTimeline(timeline, liveItems) {
 
     const pips = pipData.map(p => {
         const topPx = 4 + p.row * rowH;
-        return `<span class="hstrip-pip${p.isPast ? ' past' : ''}" style="left:${p.pct}%;top:${topPx}px" title="${esc(p.name)} — ${p.timeStr}">${p.icon}</span>`;
+        return `<span class="hstrip-pip${p.isPast ? ' past' : ''}" style="left:${p.pct}%;top:${topPx}px" title="${esc(p.name)} — ${p.timeStr}">${esc(p.icon)}</span>`;
     }).join('');
 
     const nowTimeStr = new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

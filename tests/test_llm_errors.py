@@ -175,3 +175,17 @@ def test_shapes_the_scouts_found(e, words):
 def test_port_12345_is_not_lm_studio():
     w = explain(openai.APIConnectionError(request=_req('http://127.0.0.1:12345/v1/x')))
     assert 'LM Studio' not in w['text']
+
+
+def test_a_quota_with_a_clock_is_a_rate_not_an_empty_account():
+    """Hunt 19: Gemini's per-minute 429 says "quota" and read as out of credits."""
+    url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
+    per_min = _status_err(openai.RateLimitError, 429, {'error': {'message': "You exceeded your current quota. "
+        "Quota exceeded for metric: generate_content_free_tier_requests, limit: 10, model: x. "
+        "Please retry in 31s. quotaId: GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}}, url)
+    assert 'too many requests' in explain(per_min)['text']
+    per_day = _status_err(openai.RateLimitError, 429, {'error': {'message': "You exceeded your current quota. "
+        "quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier"}}, url)
+    assert "today's request limit" in explain(per_day)['text']
+    broke = _status_err(openai.RateLimitError, 429, {'error': {'message': 'insufficient_quota: add billing'}}, url)
+    assert 'out of credits' in explain(broke)['text']

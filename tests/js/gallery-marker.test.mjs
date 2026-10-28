@@ -21,8 +21,8 @@ function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
 
 // ── parse ────────────────────────────────────────────────────────────────────
 {
-    const v2 = [{ thumb: 'https://p/t1', full: 'https://p/f1', title: 'One', page: 'https://site.example/a' },
-                { thumb: 'https://p/t2', full: 'https://p/f2', title: '', page: '' }];
+    const v2 = [{ thumb: '/p/t1', full: '/p/f1', title: 'One', page: 'https://site.example/a' },
+                { thumb: '/p/t2', full: '/p/f2', title: '', page: '' }];
     const text = 'Top 2 images:\n1. One\n<!--GALLERY:' + JSON.stringify(v2) + '-->';
     const r = parseGalleryMarker(text);
     ok(r.entries.length === 2, 'v2 entries parsed');
@@ -30,8 +30,8 @@ function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
     ok(r.entries[0].page === 'https://site.example/a', 'page kept');
 }
 {
-    const r = parseGalleryMarker('found\n<!--GALLERY:["https://a/1.jpg","https://a/2.jpg"]-->\n');
-    ok(r.entries.length === 2 && r.entries[1].full === 'https://a/2.jpg' && r.entries[1].thumb === 'https://a/2.jpg',
+    const r = parseGalleryMarker('found\n<!--GALLERY:["/a/1.jpg","/a/2.jpg"]-->\n');
+    ok(r.entries.length === 2 && r.entries[1].full === '/a/2.jpg' && r.entries[1].thumb === '/a/2.jpg',
        'legacy string entries: thumb == full');
     ok(r.text === 'found', 'trailing newline after marker trimmed');
 }
@@ -44,17 +44,17 @@ function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
 }
 {
     ok(normalizeEntries('nope').length === 0, 'non-array → empty');
-    const n = normalizeEntries([{ full: 'https://f' }, { thumb: 'https://t' }, {}, '', 42, null]);
-    ok(n.length === 2 && n[0].thumb === 'https://f' && n[1].full === 'https://t', 'thumb/full fill each other; junk dropped');
+    const n = normalizeEntries([{ full: '/f' }, { thumb: '/t' }, {}, '', 42, null]);
+    ok(n.length === 2 && n[0].thumb === '/f' && n[1].full === '/t', 'thumb/full fill each other; junk dropped');
     ok(GALLERY_RE.test('<!--GALLERY:[]-->') && !GALLERY_RE.test('<!--GALLERIES:[]-->'), 'only GALLERY, not the dead GALLERIES');
 }
 
 // ── build ────────────────────────────────────────────────────────────────────
 {
     const entries = normalizeEntries([
-        { thumb: 'https://p/t1', full: 'https://p/f1', title: 'One', page: 'https://site.example/a' },
-        { thumb: 'https://p/t2', full: 'https://p/f2', title: '', page: 'https://other.example/b' },
-        'https://legacy/3.jpg',
+        { thumb: '/p/t1', full: '/p/f1', title: 'One', page: 'https://site.example/a' },
+        { thumb: '/p/t2', full: '/p/f2', title: '', page: 'https://other.example/b' },
+        '/legacy/3.jpg',
     ]);
     const opened = [];
     const g = buildGallery(entries, (src, fulls, idx, fallbacks) => opened.push({ src, fulls, idx, fallbacks }), 'Cats');
@@ -70,12 +70,12 @@ function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
        'every tile no-referrer + lazy');
     ok(tiles.every(t => t.className === 'chat-img' && t.dataset.modalReady === 'true'),
        'tiles are chat-imgs already wired for the modal');
-    ok(tiles[0].src === 'https://p/t1' && tiles[0].dataset.full === 'https://p/f1', 'src = thumb, data-full = full');
+    ok(tiles[0].src === '/p/t1' && tiles[0].dataset.full === '/p/f1', 'src = thumb, data-full = full');
     tiles[1].listeners.click[0]({ stopPropagation() {} });
-    ok(opened.length === 1 && opened[0].src === 'https://p/f2' && opened[0].idx === 1
-       && opened[0].fulls.join() === 'https://p/f1,https://p/f2,https://legacy/3.jpg',
+    ok(opened.length === 1 && opened[0].src === '/p/f2' && opened[0].idx === 1
+       && opened[0].fulls.join() === '/p/f1,/p/f2,/legacy/3.jpg',
        'click opens the lightbox on the FULL url with the full list');
-    ok(opened[0].fallbacks.join() === 'https://p/t1,https://p/t2,https://legacy/3.jpg',
+    ok(opened[0].fallbacks.join() === '/p/t1,/p/t2,/legacy/3.jpg',
        'the tiles ride along as lightbox fallbacks');
     const cap0 = items[0].children[2];
     ok(cap0.tagName === 'A' && cap0.href === 'https://site.example/a' && cap0.textContent === 'One'
@@ -90,17 +90,17 @@ function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
 // ── v3: {title, items} with img: handles ─────────────────────────────────────
 {
     const v3 = { title: 'Top 3 for "red apple"', items: [
-        { handle: 'img:ab12.jpg', full: 'https://proxy/f1', title: 'Apple', page: 'https://site.example/p' },
+        { handle: 'img:ab12.jpg', full: '/proxy/f1', title: 'Apple', page: 'https://site.example/p' },
         { handle: 'img:cd34.jpg' },
-        { handle: 'nope', thumb: 'https://t/3' },
+        { handle: 'nope', thumb: '/t/3' },
     ] };
     const r = parseGalleryMarker('list\n<!--GALLERY:' + JSON.stringify(v3) + '-->\n');
     ok(r.title === v3.title && r.text === 'list', 'v3 title parsed, marker stripped');
     ok(r.entries.length === 3, 'v3 items parsed');
-    ok(r.entries[0].thumb === '/api/tool-image/ab12.jpg' && r.entries[0].full === 'https://proxy/f1'
+    ok(r.entries[0].thumb === '/api/tool-image/ab12.jpg' && r.entries[0].full === '/proxy/f1'
        && r.entries[0].handle === 'ab12.jpg', 'handle → OUR tool-image route; full kept for the lightbox');
     ok(r.entries[1].full === '/api/tool-image/cd34.jpg', 'no full → the tile is the full');
-    ok(r.entries[2].thumb === 'https://t/3' && r.entries[2].handle === '', 'a non-img: handle is ignored, thumb used');
+    ok(r.entries[2].thumb === '/t/3' && r.entries[2].handle === '', 'a non-img: handle is ignored, thumb used');
     const g = buildGallery(r.entries, () => {}, r.title);
     const tile = g.children[1].children[0].children[1];
     ok(tile.dataset.handle === 'img:ab12.jpg', 'tile carries the handle she holds');
@@ -109,4 +109,18 @@ function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; }
     ok(GALLERY_RE.test('<!--GALLERY:{"items":[]}-->'), 'object marker matches the regex');
 }
 
+
+// ── hunt 19: tiles only from our routes or the image proxy; links http(s) only ──
+{
+    const n = normalizeEntries([
+        { thumb: 'https://evil.example/b.png?leak=1', full: 'https://evil.example/f', page: 'javascript:alert(1)' },
+        { thumb: '//evil.example/x.png' },
+        'https://evil.example/legacy.png',
+        { thumb: 'https://external-content.duckduckgo.com/iu/?u=x&f=1', page: 'https://ok.example/' },
+        { handle: 'img:ok.jpg', full: 'https://evil.example/f', page: 'javascript:x' },
+    ]);
+    ok(n.length === 2, 'outside tiles dropped, proxy and handle kept');
+    ok(n[0].thumb.startsWith('https://external-content.duckduckgo.com/iu/?') && n[0].page === 'https://ok.example/', 'proxy tile kept');
+    ok(n[1].full === '/api/tool-image/ok.jpg' && n[1].page === '', 'outside full falls back to the tile; javascript: page dropped');
+}
 console.log(`gallery-marker corpus: ${passed} checks passed`);

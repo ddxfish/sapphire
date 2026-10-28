@@ -7,6 +7,7 @@ import json
 import os
 import re
 import threading
+import time
 from pathlib import Path
 
 SAMPLE_RATE = 16000
@@ -69,6 +70,15 @@ def write_text(path, text):
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
+    # Windows refuses a replace onto a file another process has open (the
+    # parent polling status.json, Defender scanning it): a short retry
+    # outlasts both. The training child runs this too, so stdlib only.
+    for _ in range(19):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.1)
     os.replace(tmp, path)
 
 

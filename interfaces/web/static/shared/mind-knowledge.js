@@ -7,7 +7,7 @@ import { showExportDialog, showImportDialog } from './import-export.js';
 import { setupModalClose } from './modal.js';
 import * as ui from '../ui.js';
 import { snapScroll } from './dom-guard.js';
-import { errWords } from './fetch.js';
+import { errWords, errorText } from './fetch.js';
 
 export async function renderKnowledge(el, tabType, scope) {
     if (!el) return;   // a held refresh draining after a palace↔classic engine swap (D1#3)
@@ -74,6 +74,7 @@ export async function renderKnowledge(el, tabType, scope) {
             try {
                 const r = await fetch(`/api/knowledge/tabs/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (r.ok) { ui.showToast('Deleted', 'success'); await renderKnowledge(el, tabType, scope); }
+                else ui.showToast(`Not deleted: ${await errorText(r)}`, 'error');
             } catch (e) { ui.showToast(errWords(e), 'error'); }
         });
     });

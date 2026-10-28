@@ -18,6 +18,7 @@ import logging
 import re
 import threading
 
+from core.fs_utils import replace_with_retry
 from core.paths import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ def _write(data):
         LIB.parent.mkdir(parents=True, exist_ok=True)
         tmp = LIB.with_suffix('.json.tmp')
         tmp.write_text(json.dumps(data, indent=2), encoding='utf-8')
-        tmp.replace(LIB)
+        replace_with_retry(tmp, LIB)     # Windows: AV or an editor holding the file
 
 
 def _norm(s):

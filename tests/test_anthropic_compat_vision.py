@@ -67,3 +67,32 @@ def test_plain_string_user_unaffected():
     _sys, msgs = _provider(True)._convert_messages([{"role": "user", "content": "hi"}])
     user = [m for m in msgs if m["role"] == "user"][-1]
     assert user["content"] == "hi"
+
+
+def test_a_usage_delta_without_input_tokens_does_not_kill_the_turn():
+    """Hunt 19: the SDK types input_tokens Optional, so a gateway sending only
+    output_tokens in message_delta made `None + int` raise after the reply."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace as NS
+    from anthropic.types import MessageDeltaUsage
+
+    events = [
+        NS(type="content_block_start", index=0, content_block=NS(type="text", text="")),
+        NS(type="content_block_delta", index=0, delta=NS(type="text_delta", text="Hello")),
+        NS(type="content_block_stop", index=0),
+        NS(type="message_delta", delta=NS(stop_reason="end_turn"),
+           usage=MessageDeltaUsage.construct(output_tokens=5)),
+    ]
+
+    @contextmanager
+    def stream(**kw):
+        yield iter(events)
+    p = _provider(False)
+    p.model = "m"
+    p._thinking_enabled, p._thinking_budget = False, 0
+    p._hdr_kwargs = lambda: {}
+    p._client = NS(messages=NS(stream=stream))
+    out = list(p.chat_completion_stream([{"role": "user", "content": "hi"}]))
+    done = [e for e in out if e.get("type") == "done"][-1]
+    assert done["response"].content == "Hello"
+    assert done["response"].usage["completion_tokens"] == 5

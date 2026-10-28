@@ -12,7 +12,7 @@ import { switchView, getCurrentView } from '../core/router.js';
 import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
 import { initAgentStatus } from '../features/agent-status.js';
 import { mountScenePicker } from '../shared/scene-picker.js';
-import { setupModalClose } from '../shared/modal.js';
+import { setupModalClose, escapeHtml as quoteSafe } from '../shared/modal.js';
 import { getMotions, setChatMotion, chatMotionId } from '../core/motions.js';
 import { initAccordions } from '../shared/accordion.js';
 import {
@@ -741,7 +741,7 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
         const promptSel = container.querySelector('#sb-prompt');
         if (promptSel && init?.prompts?.list) {
             promptSel.innerHTML = init.prompts.list.map(p =>
-                `<option value="${p.name}">${p.name.charAt(0).toUpperCase() + p.name.slice(1)}${p.vault ? ' \u{1F5DD}' : ''}</option>`
+                `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name.charAt(0).toUpperCase() + p.name.slice(1))}${p.vault ? ' \u{1F5DD}' : ''}</option>`
             ).join('');
             setSelect(promptSel, settings.prompt || 'sapphire');
             // Dangling vault name (locked): setSelect synthesized a bare
@@ -1361,9 +1361,7 @@ function _bindStripDnD(gridEl) {
 }
 
 function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
+    return quoteSafe(String(str || ''));     // quote-safe: names land inside value="..." (hunt 19)
 }
 
 // Helpers

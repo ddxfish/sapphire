@@ -331,7 +331,7 @@ def ship_now(to=None):
     with backup_manager._backup_op_lock:
         fn = backup_manager.create_backup("manual")
         if fn:
-            backup_manager.rotate_backups()
+            backup_manager.rotate_backups(hold=bool(backup_manager.last_backup_omitted))
     if not fn:
         raise BackupRefused(backup_manager.last_backup_error or "Backup creation failed")
     return fn, ship(fn, to=to)

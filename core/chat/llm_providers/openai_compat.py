@@ -796,16 +796,26 @@ class OpenAICompatProvider(BaseProvider):
                 f"internally to satisfy provider stream-required contract; "
                 f"caller still receives a single LLMResponse."
             )
-            final = None
+            final, thinking = None, None
             for event in self.chat_completion_stream(messages, tools=tools,
                                                      generation_params=generation_params):
                 if event.get("type") == "done":
-                    final = event.get("response")
+                    final, thinking = event.get("response"), event.get("thinking")
             if final is None:
                 raise ValueError(
                     "Internal stream-accumulate produced no 'done' event — "
                     "provider may have closed the stream without finishing."
                 )
+            # The same response _parse_response makes: the reasoning rides as
+            # `thinking` (DeepSeek official 400s round 2 of a tool loop
+            # without it) and wrapped ahead of real content (GLM-style tool
+            # calls in the reasoning stay findable). Dropped since the 8192
+            # default sent every background lane here (hunt 19).
+            if thinking:
+                final.thinking = thinking
+                if final.content and not final.content_is_reasoning:
+                    from core import think as _think
+                    final.content = _think.wrap(thinking, final.content)
             return final
 
         # Sanitize messages - only keep fields the OpenAI API understands

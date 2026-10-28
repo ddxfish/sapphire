@@ -145,11 +145,19 @@ async def create_backup(request: Request, _=Depends(require_login)):
             "Corruption sentinel active — backup creation halted to preserve "
             "last-known-good tarballs. See user/health/CORRUPT_*.flag."
         ))
-    with backup_manager._backup_op_lock:
-        filename = backup_manager.create_backup(backup_type)
-        if filename:
-            backup_manager.rotate_backups()
-            return {"status": "success", "filename": filename}
+    def _make():
+        with backup_manager._backup_op_lock:
+            fn = backup_manager.create_backup(backup_type)
+            if fn:
+                backup_manager.rotate_backups(hold=bool(backup_manager.last_backup_omitted))
+            return fn
+    # A thread, never the event loop: a backup takes minutes on a big user/
+    # (longer under Windows AV), and waiting on the lock behind the 3am run
+    # froze the UI, voice and satellites for all of it (hunt 19).
+    filename = await asyncio.to_thread(_make)
+    if filename:
+        return {"status": "success", "filename": filename,
+                "omitted": backup_manager.last_backup_omitted}
     # A refusal with a reason (encryption on, no password) beats a bare 500.
     reason = backup_manager.last_backup_error
     if reason:
@@ -302,7 +310,7 @@ async def restore_backup(request: Request, _=Depends(require_login)):
     path = backup_manager.get_backup_path(filename)
     if not path:
         raise HTTPException(status_code=404, detail="Backup not found")
-    roots = _stage_restore_from(path, password, f"backup:{filename}", trusted=True)
+    roots = await asyncio.to_thread(_stage_restore_from, path, password, f"backup:{filename}", True)
     _schedule_restart()
     return {"status": "restoring", "roots": roots}
 
@@ -326,7 +334,7 @@ async def restore_backup_upload(request: Request, file: UploadFile = File(...),
             tmp.chmod(0o600)
         except OSError:
             pass
-        roots = _stage_restore_from(tmp, password, f"upload:{file.filename}")
+        roots = await asyncio.to_thread(_stage_restore_from, tmp, password, f"upload:{file.filename}")
     finally:
         tmp.unlink(missing_ok=True)
     _schedule_restart()

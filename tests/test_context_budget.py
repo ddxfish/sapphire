@@ -255,6 +255,9 @@ def test_the_ratio_learns_from_the_providers_count():
     assert budget._ratio[('k', 'm')] == pytest.approx(0.7 * 2.0 + 0.3 * 1.0)
     budget.tighten('k', 'm')
     assert budget._ratio[('k', 'm')] == pytest.approx((0.7 * 2.0 + 0.3) * 1.25)
+    before = budget._ratio[('k', 'm')]
+    budget.learn_usage(f, {'prompt_tokens': int(f.raw * 0.1)})        # hunt 19: a KV-reuse report (only new tokens)
+    assert budget._ratio[('k', 'm')] == before                          # teaches nothing
 
 
 def test_pictures_cost_what_the_model_charges():
@@ -730,3 +733,16 @@ def test_runtime_plugin_tasks_survive_the_boot_purge():
     assert '"runtime": True' in clock and '}, trusted=True)' in clock
     js = (ROOT / 'interfaces' / 'web' / 'static' / 'shared' / 'trigger-common.js').read_text()
     assert 'EXPORT_STRIP_KEYS.forEach(k => delete task[k])' in js and "task[key] = 'none'" in js
+
+
+def test_a_rewritten_chat_drops_its_cut_point():
+    """Hunt 19: trim/compress/import kept the old turn count, which hid the
+    compress summary from her while the cache stayed warm."""
+    import inspect
+    from core.chat import budget, history
+    budget._watermark['c'] = (15, 8000)
+    budget._watermark['task:c'] = (4, 8000)
+    history._forget_fit('c')
+    assert 'c' not in budget._watermark and 'task:c' not in budget._watermark
+    src = inspect.getsource(history.ChatSessionManager.replace_messages)
+    assert src.count('_forget_fit(chat_name)') == 2          # both write paths

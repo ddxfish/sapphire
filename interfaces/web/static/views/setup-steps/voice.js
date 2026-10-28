@@ -39,7 +39,7 @@ export default w => ({
         }));
     },
 
-    leave: () => w.save(),
+    leave: (body, dir) => w.leaveSave(dir),
 
     unmount(body) {
         for (const [key, tab] of PARTS) {

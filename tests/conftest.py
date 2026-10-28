@@ -75,6 +75,19 @@ def _no_real_metrics_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_idle_clock(tmp_path, monkeypatch):
+    """core.idle keeps the person's app-wide clock in user/idle.json; every
+    history test that lands a user row would move the dev box's real one."""
+    try:
+        import core.idle as _i
+        monkeypatch.setattr(_i, "HW_FILE", tmp_path / "idle.json")
+        monkeypatch.setattr(_i, "_hw", None)
+        monkeypatch.setattr(_i, "_hw_loaded", False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_stale_sealed_rows_probe():
     """Vault hunt G3 (2026-08-15): ChatSessionManager registers a global
     sealed-rows probe with prompt_vault at construction. Hermetic managers

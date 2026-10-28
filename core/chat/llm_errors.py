@@ -199,6 +199,14 @@ def _explain(e, provider_key):
     if ollama and 'try pulling' in err:
         return out("Ollama doesn't have that model downloaded. Download it in Ollama, or pick a model "
                    "you have in Settings › LLM.")
+    # A quota with a clock on it is a rate, not an empty account: Gemini's
+    # per-minute 429 says "quota" and read as out of credits (hunt 19).
+    if status == 429 and any(k in err for k in ('perday', 'per day', 'per_day')):
+        return out(f"{Who} has used up today's request limit for this key. It resets tomorrow; "
+                   f"or pick another provider in the chat sidebar.")
+    if status == 429 and any(k in err for k in ('perminute', 'per minute', 'per_minute', 'retry in',
+                                                  'retrydelay', 'rate limit', 'rate_limit')):
+        return out(f"{Who} is getting too many requests right now. Wait a minute, then send again.")
     if 'credit balance' in err or 'insufficient_quota' in err or (
             status in (402, 429) and any(k in err for k in ('billing', 'quota', 'credit', 'insufficient',
                                                               'budget', 'balance'))):

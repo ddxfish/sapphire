@@ -23,6 +23,18 @@ class BackupRefused(Exception):
     corruption sentinel, over the cap, nothing to back up)."""
 
 
+def _unlink_with_retry(path, attempts=20, delay=0.25):
+    """Delete, waiting out a scanner: Defender unpacks a fresh archive to scan
+    it, which can hold it for seconds on Windows. The last try raises."""
+    for _ in range(attempts - 1):
+        try:
+            Path(path).unlink()
+            return
+        except PermissionError:
+            time.sleep(delay)
+    Path(path).unlink()
+
+
 def tier_of(name: str):
     """Tier encoded in a backup filename (`sapphire_<date>_<time>_<tier>.*`),
     or None. `pre_update` parses to `update`, matching list_backups."""
@@ -137,6 +149,7 @@ def _backup_filter(tarinfo):
 
 class Backup:
     """Backup manager for the user/ directory."""
+    last_backup_omitted = []    # set per create_backup: DBs it could not snapshot
 
     def __init__(self):
         self._stop_event = None
@@ -180,8 +193,12 @@ class Backup:
             else:
                 try:
                     p.mkdir(parents=True, exist_ok=True)
-                    if not os.access(p, os.W_OK):
-                        raise PermissionError("not writable")
+                    # A real write, not os.access: on Windows that only reads
+                    # the read-only bit, so a drive root, Program Files or a
+                    # Controlled Folder Access folder passed and the backup
+                    # then died with Errno 13 (hunt 19).
+                    with tempfile.TemporaryFile(dir=p):
+                        pass
                     chosen = p
                 except OSError as e:
                     err = f"BACKUPS_DIR {raw!r} unusable ({e}) — using the default folder"
@@ -242,11 +259,15 @@ class Backup:
             now = datetime.now()
             ok_tiers, failed_tiers, made = [], [], []
 
+            incomplete = []
+
             def _tier(name):
                 fn = self.create_backup(name)
                 (ok_tiers if fn else failed_tiers).append(name)
                 if fn:
                     made.append(fn)
+                    if self.last_backup_omitted:
+                        incomplete.append(name)
 
             if getattr(config, 'BACKUPS_KEEP_DAILY', 7) > 0:
                 _tier("daily")
@@ -259,7 +280,7 @@ class Backup:
 
             # Rotate INSIDE the lock — otherwise a manual trigger between
             # create and rotate can race.
-            self.rotate_backups()
+            self.rotate_backups(hold=bool(incomplete))
             # What this run produced — the scheduler ships the newest tier of
             # it to the backup targets (devices, paths) after the lock drops.
             self.last_scheduled_files = made
@@ -270,6 +291,12 @@ class Backup:
             msg = f"Scheduled backup FAILED for: {', '.join(failed_tiers)}"
             if ok_tiers:
                 msg += f" (succeeded: {', '.join(ok_tiers)})"
+            logger.error(msg)
+            self.last_scheduled_result = msg
+            return msg
+        if incomplete:
+            msg = (f"Scheduled backup INCOMPLETE for: {', '.join(incomplete)} "
+                   f"(database(s) left out, rotation held)")
             logger.error(msg)
             self.last_scheduled_result = msg
             return msg
@@ -308,6 +335,7 @@ class Backup:
             self.last_backup_error for the caller's message.
         """
         self.last_backup_error = None
+        self.last_backup_omitted = []      # DBs this backup could not snapshot
         if not self.user_dir.exists():
             logger.error(f"User directory not found: {self.user_dir}")
             return None
@@ -366,6 +394,7 @@ class Backup:
                 logger.error(f"Backup refused (require_complete): {self.last_backup_error}")
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 return None
+            self.last_backup_omitted = sorted(p.name for p in failed_checkpoints)
             # Exclusions = page patterns + any caller extras (offsite-only excludes).
             merged_patterns = _exclude_patterns_setting() + (extra_patterns or [])
             def _patterns_filter(tarinfo):
@@ -405,8 +434,8 @@ class Backup:
                     if ti.name.startswith("user/"):
                         src = self.user_dir / ti.name[len("user/"):]
                         try:
-                            with open(src, 'rb'):
-                                pass
+                            with open(src, 'rb') as fh:
+                                fh.read(1)      # a byte-range lock opens fine, then refuses the read
                         except OSError as pe:
                             skipped_files[0] += 1
                             logger.warning(f"Backup skipping unreadable file {ti.name}: {pe}")
@@ -448,20 +477,20 @@ class Backup:
                 except OSError:
                     pass
                 return None
-            # chmod 0600 BEFORE rename — backups contain credentials.json (0600);
+            # chmod 0600 BEFORE rename — backups hold her private data;
             # without this the archive is world-readable by default umask.
             # Day-ruiner scout 2026-05-07 #L.
             try:
                 os.chmod(partial, 0o600)
             except OSError as _e:
                 logger.warning(f"Could not chmod backup: {_e}")
-            replace_with_retry(partial, filepath)   # atomic; list_backups skips .partial
+            replace_with_retry(partial, filepath, attempts=20, delay=0.25)   # atomic; AV may scan it first
             plain_done = filepath
 
             if encrypt:
                 sealed = out_dir / (filename.removesuffix(".tar.gz") + ".sapphirebak")
                 backup_crypto.seal(filepath, sealed, password)   # GATE 1: verify or raise
-                filepath.unlink()                                 # plaintext never outlives the verify
+                _unlink_with_retry(filepath)                      # plaintext never outlives the verify
                 plain_done = None
                 try:
                     os.chmod(sealed, 0o600)
@@ -471,7 +500,19 @@ class Backup:
 
             size_mb = filepath.stat().st_size / (1024 * 1024)
             logger.info(f"Created backup: {filename} ({size_mb:.2f} MB)")
-            _notify.finish(nid, title=f"Backup created: {filename} ({size_mb:.0f} MB)", origin=_origin)
+            gaps = []
+            if self.last_backup_omitted:
+                gaps.append(f"left out database(s) it could not copy: {', '.join(self.last_backup_omitted)}")
+            if skipped_files[0]:
+                gaps.append(f"skipped {skipped_files[0]} file(s) another program held open")
+            if gaps:
+                # Loud, and to every tab (the clicking one too): a backup with
+                # holes must never read as a clean one (hunt 19).
+                logger.error(f"Backup {filename} is INCOMPLETE: {'; '.join(gaps)}")
+                _notify.finish(nid, failed=True, title=f"Backup incomplete: {filename}",
+                               body=f"It {'; '.join(gaps)}. See the log for why.")
+            else:
+                _notify.finish(nid, title=f"Backup created: {filename} ({size_mb:.0f} MB)", origin=_origin)
             if dest_dir is None:
                 self.ensure_openers()
             return filename
@@ -481,16 +522,22 @@ class Backup:
             _notify.finish(nid, failed=True, title='Backup failed', body=str(e), origin=_origin)
             if staging_dir is not None:
                 shutil.rmtree(staging_dir, ignore_errors=True)
+            # Cleanup never raises out of here (AV can hold either file): a
+            # second error used to escape create_backup as a raw 500 and skip
+            # the scheduled run's rotation and result (hunt 19).
+            doomed = [partial]
             if encrypt and plain_done is not None:
                 # Sealing failed after the tar landed: a plaintext backup must
                 # not stand in for the encrypted one that was asked for.
-                plain_done.unlink(missing_ok=True)
-            try:
-                partial.unlink()
-            except FileNotFoundError:
-                pass
-            except Exception as cleanup_err:
-                logger.warning(f"Backup partial cleanup failed: {cleanup_err}")
+                doomed.append(plain_done)
+            for f in doomed:
+                try:
+                    _unlink_with_retry(f)
+                except FileNotFoundError:
+                    pass
+                except Exception as cleanup_err:
+                    logger.warning(f"Backup cleanup could not remove {f.name}: {cleanup_err} "
+                                   f"(the next rotation sweeps it)")
             return None
 
     def _checkpoint_databases(self):
@@ -807,10 +854,16 @@ class Backup:
             logger.error(f"Failed to delete backup {filename}: {e}")
             return False
 
-    def rotate_backups(self):
+    def rotate_backups(self, hold=False):
         """Rotate backups based on retention settings (keep<=0 = pause that
         tier: retain existing, never purge). The selection is the pure
-        `select_doomed`, shared with every remote target."""
+        `select_doomed`, shared with every remote target. hold=True (the run
+        just made an incomplete backup) keeps every archive: a DB that fails
+        to copy each night must never age out the last ones that hold it."""
+        if hold:
+            logger.error("Rotation held: the new backup is incomplete, so no older backup is deleted")
+            self._sweep_stale_tmp()
+            return 0
         limits = {
             "daily": getattr(config, 'BACKUPS_KEEP_DAILY', 7),
             "weekly": getattr(config, 'BACKUPS_KEEP_WEEKLY', 4),
@@ -826,16 +879,23 @@ class Backup:
         return deleted
 
     def _sweep_stale_tmp(self, max_age_s=86400):
-        """Drop `ship_*` / `export_*` / `remembrance_*` temp dirs older than a
-        day (a shipper that died mid-flight leaves one; its blob is ciphertext,
-        but it's still disk)."""
+        """Drop leftovers older than a day: `ship_*` / `export_*` /
+        `remembrance_*` temp dirs (a shipper that died mid-flight), and a
+        backup killed mid-run: `.dbsnap-*` (plaintext copies of every DB) and
+        `*.partial` (a plaintext tar), which must not sit beside sealed
+        backups (hunt 19)."""
+        from core.fs_utils import rmtree_robust
         now = time.time()
-        for pat in ("ship_*", "export_*", "remembrance_*"):
+        for pat in ("ship_*", "export_*", "remembrance_*", ".dbsnap-*", "sapphire_*.partial"):
             for d in self.backup_dir.glob(pat):
                 try:
-                    if d.is_dir() and now - d.stat().st_mtime > max_age_s:
-                        shutil.rmtree(d, ignore_errors=True)
-                        logger.info(f"Removed stale backup temp dir {d.name}")
+                    if now - d.stat().st_mtime <= max_age_s:
+                        continue
+                    if d.is_dir():
+                        rmtree_robust(d)
+                    else:
+                        d.unlink()
+                    logger.info(f"Removed stale backup leftover {d.name}")
                 except OSError:
                     pass
 

@@ -117,7 +117,8 @@ def run_sapphire():
         log(f"Pending-update apply raised: {e}", RED)
 
     # Apply a pending RESTORE (swap user/) in this same safe window — nothing
-    # holds user/ open before sapphire.py spawns. Preserves the old user/ as
+    # holds user/ open before sapphire.py spawns (the instance lock lives in
+    # the config dir for exactly this reason). Preserves the old user/ as
     # user.old for rollback; a broken restore never loops.
     try:
         from core.restore import apply_pending_restore

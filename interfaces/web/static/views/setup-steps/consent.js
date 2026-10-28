@@ -35,6 +35,9 @@ export default w => ({
             showToast('Tick "I understand" to continue', 'warning');
             return false;
         }
-        if (!w.state?.consent) await w.putState({ consent: true });
+        if (!w.state?.consent) {
+            try { await w.putState({ consent: true }); }
+            catch (e) { showToast(`Couldn't save that: ${e.message}`, 'error'); return false; }
+        }
     },
 });

@@ -75,7 +75,7 @@ export async function openTriggerEditor(task, type, callbacks = {}) {
             <div class="sched-editor-header">
                 ${config.hasEmoji ? `
                 <div class="sched-hb-emoji-wrap" id="sched-hb-emoji-wrap">
-                    <span class="sched-hb-emoji-btn" id="sched-hb-emoji-btn" title="Pick emoji">${t.emoji || '\u2764\uFE0F'}</span>
+                    <span class="sched-hb-emoji-btn" id="sched-hb-emoji-btn" title="Pick emoji">${_esc(t.emoji) || '\u2764\uFE0F'}</span>
                 </div>` : ''}
                 <h3>${isEdit ? 'Edit' : 'New'} ${config.label}</h3>
                 <div style="flex:1"></div>

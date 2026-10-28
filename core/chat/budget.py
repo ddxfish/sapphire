@@ -517,6 +517,12 @@ def learn(f: Optional[Fit], tokens: Optional[dict]):
     real = sum(int(tokens.get(k) or 0) for k in ('prompt', 'cache_read_tokens', 'cache_write_tokens'))
     if real <= 0:
         return
+    if real < 0.5 * f.raw:
+        # No tokenizer is half another's: this is a server counting only the
+        # tokens it evaluated, its reused KV prefix left out (Ollama's
+        # prompt_eval_count). Learning it would sink the ratio and let fit()
+        # overfill the very servers it guards (hunt 19).
+        return
     r = max(0.6, min(2.5, real / f.raw))
     with _lock:
         old = _ratio.get(f.key)

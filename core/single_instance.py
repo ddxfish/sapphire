@@ -4,11 +4,15 @@ A second `python main.py` into the same user/ used to boot completely: run
 the update window, kill the first instance's Kokoro, open the mic, arm the
 schedulers, then idle forever as a headless twin, because uvicorn's bind
 failure died inside a daemon thread with a swallowed SystemExit
-(2026-10-16, tmp/single-instance-plan.md). Two guards, stdlib only so the
-runner can take them before any core import touches settings:
+(2026-10-16, tmp/single-instance-plan.md). Two guards, stdlib only (plus
+core.setup's config-dir path) so the runner can take them before any core
+import touches settings:
 
-  InstanceLock   a kernel lock on user/.instance.lock. It dies with the
-                 process, so a stale file never blocks a boot.
+  InstanceLock   a kernel lock on a file in the config dir, one per user/
+                 folder. It dies with the process, so a stale file never
+                 blocks a boot. Never inside user/: on Windows the locked
+                 byte refuses reads, which failed every backup (Errno 13),
+                 and an open file there refuses the restore's folder swap.
   bind_listener  the web socket, bound in the main thread before the banner
                  and handed to uvicorn. Exclusive on Windows.
 
@@ -26,13 +30,25 @@ EXIT_CONFIG = 44
 ENV_HELD = 'SAPPHIRE_INSTANCE_LOCK'   # the runner sets it for its child: "I hold the lock"
 
 
+def lock_path(root):
+    """The lock file for the user/ folder under `root`: in the config dir,
+    named by that folder's real path, so two installs never share a lock and
+    two names for one folder always do."""
+    import hashlib
+    from core.setup import get_config_dir
+    user = os.path.normcase(os.path.realpath(os.path.join(str(root), 'user')))
+    key = hashlib.sha256(user.encode('utf-8')).hexdigest()[:16]
+    return os.path.join(str(get_config_dir()), 'locks', f'instance-{key}.lock')
+
+
 class InstanceLock:
     """Byte 0 of the file carries the lock; the holder's note follows it, so
     a loser can read who holds it even on Windows, where a locked byte
     refuses reads from other processes."""
 
     def __init__(self, root):
-        self.path = os.path.join(str(root), 'user', '.instance.lock')
+        self._root = root
+        self.path = lock_path(root)
         self._fh = None
 
     def acquire(self):
@@ -51,6 +67,10 @@ class InstanceLock:
             fh.close()
             return False
         self._fh = fh
+        try:
+            os.remove(os.path.join(str(self._root), 'user', '.instance.lock'))   # where it lived before 2026-10-27
+        except OSError:
+            pass
         try:
             fh.seek(0)
             fh.truncate()

@@ -431,8 +431,7 @@ async function resyncSettingsUI() {
     const root = _root, sess = _session;
     if (!root || !sess) return;
     try {
-        const r = await fetch(`/api/chats/${encodeURIComponent(sess)}/settings`,
-            { headers: { 'X-CSRF-Token': csrf() } });
+        const r = await fetch(`/api/chats/${encodeURIComponent(sess)}/settings`);   // a GET: no token (an undefined csrf() threw here every call)
         if (!r.ok) return;
         const body = await r.json().catch(() => null);
         if (_root !== root || _session !== sess) return;   // superseded

@@ -1,7 +1,7 @@
 // shared/import-export.js — Universal import/export dialogs for Sapphire
 // Used by personas, prompts, toolsets, spices, etc.
 import * as ui from '../ui.js';
-import { setupModalClose } from './modal.js';
+import { setupModalClose, escapeHtml } from './modal.js';
 import { saveJson } from './download.js';
 
 /**
@@ -18,12 +18,12 @@ import { saveJson } from './download.js';
 export function showExportDialog(opts) {
     const modal = _createOverlay();
     const checksHtml = (opts.checkboxes || []).map(c =>
-        `<label class="io-option"><input type="checkbox" id="io-x-${c.id}" ${c.checked ? 'checked' : ''}> ${c.label}</label>`
+        `<label class="io-option"><input type="checkbox" id="io-x-${c.id}" ${c.checked ? 'checked' : ''}> ${escapeHtml(String(c.label || ''))}</label>`
     ).join('');
 
     modal.querySelector('.io-modal').innerHTML = `
         <div class="io-header">
-            <h3>Export ${opts.type}: ${opts.name}</h3>
+            <h3>Export ${escapeHtml(String(opts.type || ''))}: ${escapeHtml(String(opts.name || ''))}</h3>
             <button class="btn-icon io-close">\u2715</button>
         </div>
         <div class="io-body">

@@ -956,6 +956,8 @@ def append_line(chat, role, text, speaker, name, persona=None, kind=None, tools=
         row['tools'] = tools
     if seen is not None:
         row['seen'] = int(seen)
+    if role == 'user' and speaker != USER:
+        row['origin'] = f"room:{speaker}"[:80]    # a notice or a door's line: never the person (core/idle.py's seed)
     ok = _sm().append_messages_to_chat(chat, [row])
     if not ok:
         logger.error(f"[ROOM] a line was not written to '{chat}' (sealed, degraded, or still busy)")
@@ -1026,11 +1028,7 @@ def _mention(chat, rt, room, ids):
     if not room['bots_enabled']:
         return
     try:
-        if rt.running:
-            if rt.waiting:
-                rt.user_turn.set()
-        else:
-            start(chat)
+        _wake_or_start(chat, rt)
     except RoomError as e:
         logger.info(f"[ROOM] '{chat}': a mention landed but the seats did not run: {e}")
 
@@ -1069,13 +1067,22 @@ def _kick(chat, rt, room, human):
     if not human and room['human_every'] and rt.since_human >= room['human_every']:
         return
     try:
+        _wake_or_start(chat, rt)
+    except RoomError as e:
+        logger.info(f"[ROOM] '{chat}': a line landed but the seats did not run: {e}")
+
+
+def _wake_or_start(chat, rt):
+    """Wake a run waiting on the person, or start one. Under _lock, against
+    the run's own exit (_loop's finally) and its wait (_person_turn): a line
+    landing as the run ends is either seen by the exit or starts the next
+    run, and a wake never lands after the wait it was for (hunt 19)."""
+    with _lock:
         if rt.running:
             if rt.waiting:
                 rt.user_turn.set()
-        else:
-            start(chat)
-    except RoomError as e:
-        logger.info(f"[ROOM] '{chat}': a line landed but the seats did not run: {e}")
+            return
+        start(chat)
 
 
 def say(chat, text, source='web', who=USER, images=None):
@@ -1108,6 +1115,7 @@ class _Runtime:
         self.since_human = 0      # rounds since the person's last line (the human_every count)
         self.said = 0             # the person's lines landed this runtime ...
         self.read = 0             # ... and how many of them the latest cue had read: said > read = one nobody has answered
+        self.stopped_at = 0       # `said` when Stop was pressed: a line from before it is not a reason to run on
         self.rounds_run = 0       # rounds this run (the max_rounds count)
         self.mentions = []        # seat ids named `@Name` and not yet answered, in order (the mention lane)
         self.mention_turns = 0    # mentioned turns since the person's last line (the mention_max count)
@@ -1174,6 +1182,7 @@ def stop(chat):
     rt = _rooms.get(chat)
     if rt is None:
         return state(chat)
+    rt.stopped_at = rt.said
     rt.stop_flag.set()
     rt.skip = 0
     rt.mentions.clear()
@@ -1236,18 +1245,19 @@ def _person_turn(rt):
     """The floor is the person's: wait for their line, unless one already
     landed that no cue has read (typed during a blind round, or as the round
     ended): that line IS their turn, so the next round answers it now. Checked
-    on both sides of `waiting` going up, so a line landing at any moment
-    either wakes the wait (_kick) or is seen here, never lost between."""
-    if rt.said > rt.read:
-        return
-    rt.waiting = True
-    if rt.said > rt.read:
-        rt.waiting = False
-        rt.user_turn.clear()                          # _kick may have woken a wait that never began
-        return
+    under _lock with `waiting` going up, so a line landing at any moment
+    either wakes the wait (_wake_or_start) or is seen here, never lost
+    between, and a wake never outlives its wait into the next one."""
+    with _lock:
+        if rt.said > rt.read:
+            return
+        rt.waiting = True
+        rt.user_turn.clear()
     _publish_state(rt)
     rt.user_turn.wait()
-    rt.user_turn.clear()
+    with _lock:
+        rt.waiting = False
+        rt.user_turn.clear()
 
 
 def _loop(rt):
@@ -1316,13 +1326,24 @@ def _loop(rt):
                 _person_turn(rt)
                 fresh = True
     finally:
-        rt.running, rt.turn, rt.waiting = False, None, False
+        with _lock:
+            rt.running, rt.turn, rt.waiting = False, None, False
+            # A line the person typed as the run ended (its last turn, a
+            # round where every seat passed, after Stop) found it still
+            # running and woke nothing: it is their turn, so it runs again
+            # (Krem, hunt 19: a line after Stop gets an answer).
+            again = rt.said > max(rt.read, rt.stopped_at) and _rooms.get(rt.chat) is rt
         rt.streams.clear()
         _publish_state(rt)
         try:
             sweep()                   # a seat removed mid-turn whose chat could not go then: now it can
         except Exception as e:
             logger.warning(f"[ROOM] sweep after the run failed: {e}")
+        if again:
+            try:
+                _wake_or_start(rt.chat, rt)
+            except RoomError as e:
+                logger.info(f"[ROOM] '{rt.chat}': a line landed as the run ended, the seats did not run: {e}")
 
 
 def _item(rt, fn, who):

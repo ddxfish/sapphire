@@ -465,10 +465,13 @@ export default {
                 const filename = btn.dataset.filename;
                 if (!confirm(`Delete ${filename}?`)) return;
                 try {
-                    const res = await fetch(`/api/backup/delete/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+                    const res = await fetch(`/api/backup/delete/${encodeURIComponent(filename)}`,
+                        { method: 'DELETE', headers: { 'X-CSRF-Token': csrf() } });
                     if (res.ok) {
                         ui.showToast('Deleted', 'success');
                         await this.loadBackups(el);
+                    } else {
+                        ui.showToast(`Couldn't delete ${filename}. Another program may have it open.`, 'error');
                     }
                 } catch { ui.showToast('Delete failed', 'error'); }
             });

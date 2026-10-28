@@ -110,3 +110,27 @@ def test_keep_components_skips_unchecked(pm, monkeypatch):
     assert r["status"] == "success"
     assert "keepme" not in fake.components.get("character", {})   # kept local
     assert fake.components.get("character", {}).get("other") == "NEW2"  # overwritten
+
+
+def test_import_values_are_checked_not_just_keys(pm, monkeypatch):
+    """Hunt 19: a shared persona's trim_color `"><img onerror=…>` drew script."""
+    persona_manager, calls = pm
+    seen = {}
+    monkeypatch.setattr(persona_manager, "exists", lambda n: False)
+    monkeypatch.setattr(persona_manager, "create", lambda name, data: (seen.update(data), True)[1])
+    _run({"sapphire_export": True, "type": "persona", "name": "x",
+          "trim_color": '"><img src=x onerror=alert(1)>',
+          "voice": {"voice": '"><b>'}})
+    assert "trim_color" not in seen["settings"] and "voice" not in seen["settings"]
+    _run({"sapphire_export": True, "type": "persona", "name": "y", "trim_color": "#a1B2c3",
+          "voice": "not a dict"})
+    assert seen["settings"]["trim_color"] == "#a1B2c3"
+
+
+def test_a_prompt_name_with_markup_is_refused(pm, monkeypatch):
+    persona_manager, calls = pm
+    monkeypatch.setattr(persona_manager, "exists", lambda n: False)
+    with pytest.raises(HTTPException) as ei:
+        _run({"sapphire_export": True, "type": "persona", "name": "z",
+              "prompt": {"name": '<img src=x onerror=1>', "data": {}}})
+    assert ei.value.status_code == 400 and not calls["created"]
