@@ -34,6 +34,9 @@ has no Move tab.
 
 ## Good to know
 
+- A picture the wrong way up: use the camera's own flip setting if it has one.
+  If not, tick **Flip picture** on the Status tab. Moves follow the picture, so
+  `move up` still goes up on screen.
 - The numbers in `move` and `zoom` are time, not degrees: 100 is about eight
   seconds of turning. Cheap cameras do not report where they point.
 - When a move changes nothing, she is told the camera may be at the end of

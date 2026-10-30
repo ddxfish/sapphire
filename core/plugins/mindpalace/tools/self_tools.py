@@ -346,10 +346,10 @@ def _event_rows(cursor, scope):
     read for every persona — keyed-private rows must never preview here
     (scout find, 2026-07-19; the same gate class as _private_key_clause)."""
     return cursor.execute(
-        "SELECT id, content, json_extract(meta, '$.event_dates'), "
+        "SELECT id, content, json_extract(meta, '$.when'), "
         "json_extract(meta, '$.recurring_dates'), created FROM chunks "
         "WHERE scope = ? AND layer = 'events' "
-        "AND (json_extract(meta, '$.event_dates') IS NOT NULL "
+        "AND (json_extract(meta, '$.when') IS NOT NULL "
         "OR json_extract(meta, '$.recurring_dates') IS NOT NULL) "
         "AND private_key IS NULL "
         "AND json_extract(meta, '$.pruned_at') IS NULL "
@@ -391,26 +391,23 @@ def _fold_recurring(hits, limit, reverse=False):
 
 
 def _upcoming(cursor, scope, limit=10):
-    """Nearest future event dates in scope — the temporal floor's visible
-    face (meta.event_dates, regex- or librarian-resolved alike). Timed
-    entries whose clock has passed move to Just-happened instead of
-    lingering here until midnight. A date-only stamp on (or before) the
-    memory's own save day is the day it was WRITTEN, not something ahead:
-    "tonight", "today" and her habit of dating an entry put every fresh
-    memory at the top of the list and pushed real plans off the ten slots
-    (read_self 2026-10-30). Timed stamps keep the clock rule — "at 3pm"
-    saved at 9am is still ahead. recurring_dates ('--MM-DD') fold in as
-    their next computed occurrence — same date from both forms is one entry."""
+    """Plans ahead, in scope: meta.when — the one date a memory is a plan
+    for, set by her (`when` on save), confirmed by the librarian (a verdict
+    date after the save day) or, from the regex floor, only the sure-future
+    forms (temporal.plans). The full event_dates list is search metadata
+    and never drives this list: it cannot read tense, and under it Upcoming
+    had one real row in ten (read_self 2026-10-30). Timed entries whose
+    clock has passed move to Just-happened instead of lingering here until
+    midnight. recurring_dates ('--MM-DD') fold in as their next computed
+    occurrence — same date from both forms is one entry."""
     from plugins.mindpalace.tools import temporal
     now = datetime.now()
     today = now.strftime('%Y-%m-%d')
     now_min = now.strftime('%Y-%m-%dT%H:%M')
     hits = []
-    for cid, content, raw, rec_raw, created in _event_rows(cursor, scope):
-        saved = temporal._parse_anchor(created).strftime('%Y-%m-%d')
-        future = {d for d in _json_dates(raw)
-                  if len(d) >= 10 and _is_future(d, today, now_min)
-                  and (len(d) > 10 or d > saved)}
+    for cid, content, when, rec_raw, _created in _event_rows(cursor, scope):
+        future = ({when} if isinstance(when, str) and len(when) >= 10
+                  and _is_future(when, today, now_min) else set())
         rec = set()
         for mmdd in _json_dates(rec_raw):
             pair = temporal.occurrences(mmdd, now.date())
@@ -427,19 +424,19 @@ def _upcoming(cursor, scope, limit=10):
 
 
 def _just_happened(cursor, scope, limit=10, days=PAST_EVENT_DAYS):
-    """The rear-view mirror to Upcoming: event dates that passed within the
-    last `days`, newest first. Same log-style contract — informational text,
-    never spider seeds; search_memory([id]) is the path to depth."""
+    """The rear-view mirror to Upcoming: plans (meta.when) that passed within
+    the last `days`, newest first. Same log-style contract — informational
+    text, never spider seeds; search_memory([id]) is the path to depth."""
     from plugins.mindpalace.tools import temporal
     now = datetime.now()
     today = now.strftime('%Y-%m-%d')
     now_min = now.strftime('%Y-%m-%dT%H:%M')
     floor = (now - timedelta(days=days)).strftime('%Y-%m-%d')
     hits = []
-    for cid, content, raw, rec_raw, _created in _event_rows(cursor, scope):
-        past = {d for d in _json_dates(raw)
-                if len(d) >= 10 and d[:10] >= floor
-                and not _is_future(d, today, now_min)}
+    for cid, content, when, rec_raw, _created in _event_rows(cursor, scope):
+        past = ({when} if isinstance(when, str) and len(when) >= 10
+                and when[:10] >= floor and not _is_future(when, today, now_min)
+                else set())
         rec = set()
         for mmdd in _json_dates(rec_raw):
             pair = temporal.occurrences(mmdd, now.date())
@@ -457,6 +454,21 @@ def _just_happened(cursor, scope, limit=10, days=PAST_EVENT_DAYS):
                 hit['recurring'] = True
             hits.append(hit)
     return _fold_recurring(hits, limit, reverse=True)
+
+
+def _when_label(d, now=None):
+    """'2026-11-04' → 'Wed 2026-11-04 (in 5d)'; timed keeps its HH:MM. The
+    weekday and the distance spare the model the calendar arithmetic
+    (scout 2026-10-30: a bare ISO string, no 'today' or 'in 5d')."""
+    now = now or datetime.now()
+    try:
+        dt = (datetime.strptime(d[:16], '%Y-%m-%dT%H:%M') if len(d) > 10
+              else datetime.strptime(d[:10], '%Y-%m-%d'))
+    except (TypeError, ValueError):
+        return d
+    days = (dt.date() - now.date()).days
+    rel = 'today' if days == 0 else (f'in {days}d' if days > 0 else f'{-days}d ago')
+    return f"{dt.strftime('%a')} {d} ({rel})"
 
 
 def _render_dashboard(d):
@@ -478,12 +490,12 @@ def _render_dashboard(d):
         lines.append("Upcoming:")
         for u in d['upcoming']:
             r = ' ↻' if u.get('recurring') else ''
-            lines.append(f"  [{u['id']}] {u['date']}{r} · {u['preview'][:80]}")
+            lines.append(f"  [{u['id']}] {_when_label(u['date'])}{r} · {u['preview'][:80]}")
     if d.get('just_happened'):
         lines.append("Just happened:")
         for u in d['just_happened']:
             r = ' ↻' if u.get('recurring') else ''
-            lines.append(f"  [{u['id']}] {u['date']}{r} · {u['preview'][:80]}")
+            lines.append(f"  [{u['id']}] {_when_label(u['date'])}{r} · {u['preview'][:80]}")
     return "\n".join(lines)
 
 
@@ -1210,6 +1222,18 @@ def _struct_spec(sec, current_meta, fields_spec=None):
     return None, None
 
 
+def _section_exists(sec, scope):
+    try:
+        with _pt()._get_connection() as conn:
+            return conn.execute(
+                "SELECT 1 FROM chunks WHERE scope = ? AND layer = 'self' "
+                "AND json_extract(meta, '$.section') = ? "
+                "AND json_extract(meta, '$.superseded_at') IS NULL LIMIT 1",
+                (scope, sec)).fetchone() is not None
+    except Exception:
+        return False
+
+
 def write_section(scope, section, content, fields_spec=None):
     """The one write path — tool and app routes both land here.
     Returns (message, ok). Empty content clears (versioned → archive).
@@ -1228,6 +1252,22 @@ def write_section(scope, section, content, fields_spec=None):
             return ("Wake tools are configured by the user on the Self page — "
                     "they can't be written as a sheet section."), False
         content = (content or '').strip()
+        # The librarian's self pass tends what exists: it never clears a
+        # section and never opens a new box (a bad night blanked identity
+        # and the next night's "first tending" rewrote it from nothing —
+        # scout audit 2026-10-30). Humans do both from the Self page.
+        try:
+            from plugins.mindpalace.tools import librarian_tools as _lt
+            tending = _lt.current_pass_kind() == 'self'
+        except Exception:
+            tending = False
+        if tending:
+            if not content:
+                return (f"The librarian never clears a section — shorten "
+                        f"'{sec}' or leave it; a human clears from the Self page."), False
+            if sec not in SECTIONS and not _section_exists(sec, scope):
+                return (f"New sections are made by hand on the Self page — "
+                        f"'{sec}' isn't one of yours; tend the ones you have."), False
         if len(content) > SELF_MAX_CHARS:
             return (f"Section too long ({len(content)} chars). "
                     f"Max is {SELF_MAX_CHARS}."), False

@@ -143,6 +143,13 @@ TOOLS = [
                     "private_key": {
                         "type": "string",
                         "description": "Only if the user asks"
+                    },
+                    "when": {
+                        "type": "string",
+                        "description": ("The date this is a PLAN for — an appointment, deadline, "
+                                        "trip, release: YYYY-MM-DD or YYYY-MM-DDTHH:MM, or 'tomorrow "
+                                        "at 3pm' / 'in 2 weeks'. It lands under Upcoming on your "
+                                        "sheet. Leave out for things that already happened.")
                     }
                 },
                 "required": ["content"]
@@ -279,6 +286,12 @@ TOOLS = [
                     "private_key": {
                         "type": "string",
                         "description": "Required for a private row"
+                    },
+                    "when": {
+                        "type": "string",
+                        "description": ("Set or move the date this is a plan for (YYYY-MM-DD, "
+                                        "YYYY-MM-DDTHH:MM, 'tomorrow at 3pm'); 'none' takes it "
+                                        "off Upcoming. Omit to keep")
                     }
                 },
                 "required": ["memory_id"]
@@ -1616,13 +1629,22 @@ SELECT_CHUNK = ('SELECT c.id, c.content, c.created, c.label, c.layer, e.name '
 def _save_memory(content: str, scope: str, layer: str = None, entity: str = None,
                  label: str = None, favorite: bool = False, private_key: str = None,
                  chunk_index: int = None, added_by: str = None, meta_extra: dict = None,
-                 source: str = None) -> tuple:
+                 source: str = None, when: str = None) -> tuple:
     # added_by/meta_extra/source are the layer_api seam (plugin-authored
     # writes): provenance marker, custom meta fields, and the sync
     # reconciliation key (chunks.source = e.g. a vault note path).
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
+        # `when` (2026-10-30): the one date this memory is a PLAN for — her
+        # explicit intent, which the regex floor cannot read from words.
+        # Validated before any write so a refusal leaves nothing behind.
+        when_iso = None
+        if when is not None and str(when).strip():
+            from plugins.mindpalace.tools import temporal
+            when_iso, err = temporal.parse_when(when, _now())
+            if err:
+                return f"Not saved — when {err}.", False
         # Over-cap content is trimmed at a word boundary and saved anyway;
         # the receipt says what was cut. Knowledge is exempt — the Library
         # chunks for itself.
@@ -1745,6 +1767,11 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
             except Exception as e:
                 logger.warning(f"[MINDPALACE] Metadata stamping failed (save continues): {e}")
             meta['added_by'] = added_by or _added_by()   # always lands, even on meta failure
+            if when_iso:
+                meta['when'], meta['when_src'] = when_iso, 'ai'
+                if when_iso not in (meta.get('event_dates') or []):
+                    meta['event_dates'] = (meta.get('event_dates') or []) + [when_iso]
+                    meta.setdefault('event_date_src', 'ai')
             if meta_extra:
                 try:
                     meta['fields'] = {**meta.get('fields', {}), **meta_extra}
@@ -1794,6 +1821,8 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
             bits.append(f"linked: {', '.join(matched)}")
         if label:
             bits.append(f"label: {label}")
+        if when_iso:
+            bits.append(f"when: {when_iso}")
         if favorite:
             bits.append("favorite")
         if private_key:
@@ -2216,6 +2245,21 @@ def _doc_id_hint(memory_id, scope):
     return ""
 
 
+def _tombstone_row(cursor, meta_raw, scope):
+    """A deleted palace row that came from the classic system never comes
+    back through the Import tab (2026-10-30): its key is kept, never its
+    content. The classic row itself is untouched — the old database stays
+    the migrating user's assurance; a scrub is a separate, explicit ask."""
+    try:
+        m = json.loads(meta_raw) if meta_raw else {}
+        key = m.get('import_key') if isinstance(m, dict) else None
+        if key:
+            from plugins.mindpalace.tools import import_tools
+            import_tools.tombstone_keys(cursor, [key], scope)
+    except Exception as e:
+        logger.debug(f"[MINDPALACE] tombstone skipped: {e}")
+
+
 def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple:
     try:
         if not isinstance(memory_id, int) or memory_id < 1:
@@ -2224,7 +2268,7 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
         with _get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'SELECT id, content, private_key, layer FROM chunks WHERE id = ? AND scope = ?',
+                'SELECT id, content, private_key, layer, meta FROM chunks WHERE id = ? AND scope = ?',
                 (memory_id, scope),
             )
             row = cursor.fetchone()
@@ -2243,6 +2287,7 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
             cursor.execute(
                 "DELETE FROM edges WHERE (src_type='chunk' AND src_id=?) OR (dst_type='chunk' AND dst_id=?)",
                 (memory_id, memory_id))
+            _tombstone_row(cursor, row[4], scope)
             _ledger(scope, _added_by(), 'deleted', layer=row[3],
                     target=memory_id, cursor=cursor,
                     summary=(f"deleted [{memory_id}] from {row[3]}: "
@@ -2258,7 +2303,8 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
 
 
 def _update_memory(memory_id: int, scope: str, content: str = None,
-                   label: str = None, private_key: str = None) -> tuple:
+                   label: str = None, private_key: str = None,
+                   when: str = None) -> tuple:
     """In-place edit — the biggest standing AIX gap (before this, fixing a
     typo meant delete + re-save, losing id, age, and recall history). The
     row keeps its identity: id, layer, created, recall stats, favorite and
@@ -2271,7 +2317,17 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         new_content = content.strip() if (content and content.strip()) else None
         new_label = label.strip().lower() if (label and label.strip()) else None
         if new_content is None and new_label is None:
-            return "Nothing to update — pass content and/or label.", False
+            if when is None:
+                return "Nothing to update — pass content, label and/or when.", False
+        when_iso = when_clear = None
+        if when is not None:
+            if str(when).strip().lower() in ('', 'none', 'clear', 'null'):
+                when_clear = True
+            else:
+                from plugins.mindpalace.tools import temporal
+                when_iso, err = temporal.parse_when(when, _now())
+                if err:
+                    return f"Not updated — when {err}.", False
         dropped = ''
         private_key = private_key.strip() if (private_key and private_key.strip()) else None
         with _get_connection() as conn:
@@ -2364,6 +2420,22 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                     except Exception as e:
                         logger.warning(f"[MINDPALACE] Edge re-seed failed "
                                        f"(update continues): {e}")
+            if when_clear or when_iso:
+                raw = cursor.execute('SELECT meta FROM chunks WHERE id = ?',
+                                     (memory_id,)).fetchone()[0]
+                try:
+                    wmeta = json.loads(raw or '{}')
+                except Exception:
+                    wmeta = {}
+                if not isinstance(wmeta, dict):
+                    wmeta = {}
+                if when_clear:
+                    wmeta.pop('when', None)
+                    wmeta.pop('when_src', None)
+                else:
+                    wmeta['when'], wmeta['when_src'] = when_iso, 'ai'
+                cursor.execute('UPDATE chunks SET meta = ?, updated = ? WHERE id = ?',
+                               (json.dumps(wmeta, ensure_ascii=False), now, memory_id))
             _ledger(scope, _added_by(), 'update', layer=layer,
                     target=memory_id, cursor=cursor,
                     summary=(f"edited [{memory_id}] in {layer}"
@@ -2381,6 +2453,10 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         bits = [f"ID: {memory_id}", f"layer: {layer}"]
         if new_label:
             bits.append(f"label: {new_label}")
+        if when_iso:
+            bits.append(f"when: {when_iso}")
+        elif when_clear:
+            bits.append("when: cleared")
         logger.info(f"[MINDPALACE] Updated chunk {memory_id} in scope '{scope}'")
         if dropped:
             logger.info(f"[MINDPALACE] update trimmed {len(dropped)} chars over cap (chunk {memory_id})")
@@ -2419,7 +2495,8 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
                                 layer=arguments.get("layer"),
                                 entity=arguments.get("entity"),
                                 label=arguments.get("label"),
-                                private_key=arguments.get("private_key"))
+                                private_key=arguments.get("private_key"),
+                                when=arguments.get("when"))
         elif function_name == "search_memory":
             return _search_memory(arguments.get("query", ""), scope,
                                   limit=arguments.get("limit", 10),
@@ -2440,7 +2517,8 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             return _update_memory(memory_id, scope,
                                   content=arguments.get("content"),
                                   label=arguments.get("label"),
-                                  private_key=arguments.get("private_key"))
+                                  private_key=arguments.get("private_key"),
+                                  when=arguments.get("when"))
         elif function_name == "delete_memory":
             memory_id, err = _parse_memory_id(arguments.get("memory_id"))
             if err:

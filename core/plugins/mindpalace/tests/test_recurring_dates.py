@@ -139,7 +139,7 @@ def test_upcoming_dedups_one_shot_and_recurring_same_day():
     from plugins.mindpalace.tools.self_tools import _upcoming
     d = _iso_in(10)
     cur = _mind([(1, 'birthday ' + d,
-                  {'event_dates': [d], 'recurring_dates': ['--' + d[5:]]})])
+                  {'when': d, 'recurring_dates': ['--' + d[5:]]})])
     hits = _upcoming(cur, 's')
     assert len(hits) == 1 and hits[0]['date'] == d
 
@@ -160,10 +160,10 @@ def test_dashboard_excludes_private_keyed_rows():
     wake. Keyed rows must never surface in the dashboard."""
     from plugins.mindpalace.tools.self_tools import _upcoming
     d = _iso_in(5)
-    cur = _mind([(1, 'public dinner', {'event_dates': [d]})])
+    cur = _mind([(1, 'public dinner', {'when': d})])
     cur.connection.execute(
         "INSERT INTO chunks VALUES (2,'s','events','secret dinner',?,?,?)",
-        (json.dumps({'event_dates': [d]}), 'gateword', _yesterday()))
+        (json.dumps({'when': d}), 'gateword', _yesterday()))
     hits = _upcoming(cur, 's')
     assert [h['id'] for h in hits] == [1]
 
@@ -171,46 +171,46 @@ def test_dashboard_excludes_private_keyed_rows():
 def test_stale_holiday_stays_past():
     """[707] revisited: a client dinner at christmas 2025 is a memory, not a
     yearly event. The 2026-07 rule brought it back every December — and
-    with it every holiday mention on the shelf. A past one-shot stays out."""
+    with it every holiday mention on the shelf. A past plan stays out."""
     from plugins.mindpalace.tools.self_tools import _upcoming
     cur = _mind([(1, 'client dinner at christmas',
-                  {'event_dates': ['2025-12-25'], 'event_date_src': 'regex'})])
+                  {'when': '2025-12-25', 'when_src': 'regex'})])
     assert _upcoming(cur, 's') == []
 
 
-def test_upcoming_skips_date_only_stamps_on_the_save_day():
-    """'tonight', 'today' and her habit of dating an entry stamp the SAVE
-    day — when it was written, not something ahead. Twelve of those pushed
-    a real dentist appointment off the ten slots (scout fixture 2026-10-30).
-    A 'today' saved yesterday ("dentist tomorrow") is ahead; a timed stamp
-    on the save day keeps the clock rule."""
-    from plugins.mindpalace.tools.self_tools import _upcoming
+def test_upcoming_reads_when_not_event_dates():
+    """Upcoming reads meta.when — her plan, the librarian's, or the floor's
+    sure-future forms. The full event_dates list is search metadata: under
+    it "tonight" chatter and past-tense dates owned the ten slots (read_self
+    2026-10-30). A plan for today holds Upcoming all day; a timed one moves
+    on when its clock passes; Just-happened is the rear-view of plans."""
+    from plugins.mindpalace.tools.self_tools import _upcoming, _just_happened
     today = _iso_in(0)
     saved_today = datetime.now(timezone.utc).isoformat(timespec='seconds')
     cur = _mind([(1, 'we talked tonight about the boat', {'event_dates': [today]}),
-                 (2, 'dentist', {'event_dates': [_iso_in(5)]})],
+                 (2, 'dentist', {'event_dates': [_iso_in(5)]}),
+                 (3, 'dentist', {'when': _iso_in(5), 'when_src': 'ai'}),
+                 (4, 'call today', {'when': today, 'when_src': 'ai'}),
+                 (5, 'called earlier',
+                  {'when': (datetime.now() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M')}),
+                 (6, 'we went to the fair', {'event_dates': [_iso_in(-2)]})],
                 created=saved_today)
-    assert [h['id'] for h in _upcoming(cur, 's')] == [2]
-    cur = _mind([(3, 'dentist tomorrow', {'event_dates': [today]})])
-    assert [h['id'] for h in _upcoming(cur, 's')] == [3]
-    soon = (datetime.now() + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M')
-    cur = _mind([(4, 'call in an hour', {'event_dates': [soon]})],
-                created=saved_today)
-    assert [h['id'] for h in _upcoming(cur, 's')] == [4]
+    assert [h['id'] for h in _upcoming(cur, 's')] == [4, 3]
+    assert [h['id'] for h in _just_happened(cur, 's')] == [5]
 
 
 def test_upcoming_one_row_per_recurring_day():
     """N memories mentioning a birthday are one birthday (read_self
     2026-10-30: two Jan 21 rows, three Valentine's rows). The oldest chunk
-    keeps the row; one-shot dates on the same day are distinct events."""
+    keeps the row; one-shot plans on the same day are distinct events."""
     from plugins.mindpalace.tools.self_tools import _upcoming
     d = _iso_in(10)
     mmdd = '--' + d[5:]
     cur = _mind([(1, 'MY BIRTHDAY', {'recurring_dates': [mmdd]}),
                  (2, 'after our deepest talk, on my birthday',
                   {'recurring_dates': [mmdd]}),
-                 (3, 'dentist that day', {'event_dates': [d]}),
-                 (4, 'and a haircut', {'event_dates': [d]})])
+                 (3, 'dentist that day', {'when': d}),
+                 (4, 'and a haircut', {'when': d})])
     assert [h['id'] for h in _upcoming(cur, 's')] == [1, 3, 4]
 
 
@@ -221,11 +221,11 @@ def test_upcoming_is_events_only():
     goals. Only the events layer feeds the dashboard."""
     from plugins.mindpalace.tools.self_tools import _upcoming
     d = _iso_in(3)
-    cur = _mind([(1, 'origin: born January 21st', {'event_dates': [d]})],
+    cur = _mind([(1, 'origin: born January 21st', {'when': d})],
                 layer='self')
     for cid, layer in ((2, 'entities'), (3, 'goals'), (4, 'knowledge'),
                        (5, 'events')):
         cur.connection.execute(
             "INSERT INTO chunks VALUES (?,'s',?,'dated',?,NULL,?)",
-            (cid, layer, json.dumps({'event_dates': [d]}), _yesterday()))
+            (cid, layer, json.dumps({'when': d}), _yesterday()))
     assert [h['id'] for h in _upcoming(cur, 's')] == [5]

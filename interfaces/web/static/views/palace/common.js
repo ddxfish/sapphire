@@ -20,6 +20,7 @@ export const PALACE_TABS = [
     { id: 'people', label: 'Entities', icon: '\u{1F465}' },
     { id: 'knowledge', label: 'Knowledge', icon: '\u{1F4DA}' },
     { id: 'goals', label: 'Goals', icon: '\u{1F3AF}' },
+    { id: 'import', label: 'Import', icon: '\u{1F4E6}' },
     { id: 'admin', label: 'Admin', icon: '\u{1F6E0}️' },
 ];
 

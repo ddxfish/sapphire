@@ -1,7 +1,7 @@
 {
   "name": "ipcam",
   "short_display_name": "IP Cameras",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Network cameras that speak ONVIF: Sapphire sees through them, and turns and zooms the ones that can move. Adds the device type for Settings > Devices.",
   "author": "sapphire",
   "icon": "📹",
@@ -58,6 +58,22 @@
             "max": 65535,
             "tab": "Status",
             "help": "0 = found for you when you save. Enter it only if the camera is not found."
+          },
+          {
+            "key": "flip_h",
+            "type": "boolean",
+            "default": false,
+            "label": "Flip picture left to right",
+            "help": "For a camera with no flip setting of its own. Moves follow the picture.",
+            "tab": "Status"
+          },
+          {
+            "key": "flip_v",
+            "type": "boolean",
+            "default": false,
+            "label": "Flip picture top to bottom",
+            "help": "For a camera mounted upside down with no flip setting of its own. Moves follow the picture.",
+            "tab": "Status"
           },
           {
             "key": "places",

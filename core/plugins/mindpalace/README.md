@@ -136,7 +136,10 @@ decay rides Importance, review passes ride Librarian.
 
 **Maintenance** (Mind → Self → Dashboard → 🛠) — self-serve tester loop:
 import, inspect, reset, repeat.
-- *Import from Memory v1 (all scopes)* — one-click `import_v2('all')`:
+- *Mind → Import* (its own tab since 2026-10-30) — counts per store × scope
+  against what the palace holds, then one button runs `import_v2('all')` in
+  the background with a progress row; a boot notification nags while
+  classic rows are pending. The import itself:
   memories/people/knowledge/goals, additive and idempotent (re-runs copy
   zero duplicates), metadata backfill included. **The v1 databases are
   opened read-only (SQLite `mode=ro`) and are never modified** — v1 stays

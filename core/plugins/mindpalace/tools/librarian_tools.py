@@ -79,8 +79,10 @@ TOOLS = [
             "name": "merge_memories",
             "description": (
                 "Librarian verb: fold entries that record the SAME thing into one memory; it keeps the earliest date, "
-                "the highest rating and every connection, and the originals are retired (recoverable). Refused "
-                "unless they measure as near-duplicates. Current-pass memories only."
+                "the highest rating and every connection, and the originals are retired (recoverable). The newest "
+                "entry's words survive unless keep= names another. Refused unless they measure as near-duplicates, "
+                "or when the others carry details the survivor lacks (then keep_separate, or pass keep=). "
+                "Current-pass memories only."
             ),
             "parameters": {
                 "type": "object",
@@ -88,6 +90,10 @@ TOOLS = [
                     "memory_ids": {
                         "type": "array", "items": {"type": "integer"},
                         "description": "2-10 [id]s"
+                    },
+                    "keep": {
+                        "type": "integer",
+                        "description": "The [id] whose words survive — the most complete and correct one. Default: the newest."
                     },
                     "content": {
                         "type": "string",
@@ -168,9 +174,9 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "integer"},
-                    "reason": {"type": "string", "description": "One short line"}
+                    "reason": {"type": "string", "description": "One short line — a human reads it next to the retirement"}
                 },
-                "required": ["memory_id"]
+                "required": ["memory_id", "reason"]
             }
         }
     },
@@ -357,7 +363,8 @@ def open_pass(scope: str, chunk_ids, kind: str = 'sort') -> None:
     global _open_pass
     with _pass_lock:
         _open_pass = {'scope': scope, 'ids': set(int(i) for i in chunk_ids),
-                      'done': set(), 'ledger': [], 'kind': kind, 'attempts': 0}
+                      'done': set(), 'ledger': [], 'kind': kind, 'attempts': 0,
+                      'retired': 0}
     logger.info(f"[LIBRARIAN] Pass opened ({kind}): scope '{scope}', "
                 f"{len(_open_pass['ids'])} items")
 
@@ -524,6 +531,257 @@ def _merge_threshold():
         return 0.90
 
 
+def _setting(key, default, lo, hi):
+    try:
+        from core.plugin_loader import plugin_loader
+        v = float(plugin_loader.get_plugin_settings('mindpalace').get(key, default))
+        return min(hi, max(lo, v))
+    except Exception:
+        return default
+
+
+def _retire_ratio():
+    """Share of a pass's presented memories the librarian may retire
+    (prune, split, merge losers) — the mass-prune fence (2026-10-30)."""
+    return _setting('librarian_retire_ratio', 0.25, 0.05, 1.0)
+
+
+def _retire_per_night():
+    """Retirements per scope per UTC day across every pass and drain."""
+    return int(_setting('librarian_retire_per_night', 30, 1, 100000))
+
+
+def current_pass_kind():
+    """'sort' | 'dates' | 'link' | 'dedup' | 'self' while a pass is open,
+    else None — the self sheet's write path asks (its librarian guards)."""
+    with _pass_lock:
+        return _open_pass.get('kind') if _open_pass else None
+
+
+def _retire_check(cursor, scope, n=1):
+    """(ok, why): may the open pass retire `n` more memories? Two fences,
+    both code (scout audit 2026-10-30 — nothing limited pruning but the
+    charter's prose): a share of what this pass was shown, and a count per
+    scope per night across passes and drains (the ledger is the counter).
+    The caps are settings a human raises in Admin; the model is told to
+    mark_processed the rest."""
+    import math
+    with _pass_lock:
+        p = _open_pass
+        if not p:
+            return True, None
+        presented, so_far = max(1, len(p['ids'])), p.get('retired', 0)
+    cap = max(2, math.ceil(_retire_ratio() * presented))
+    if so_far + n > cap:
+        return False, (f"Retirement cap for this pass reached ({so_far} of {presented} "
+                       f"presented, cap {cap}) — mark_processed the rest. A human "
+                       f"raises librarian_retire_ratio in Admin.")
+    night = _retire_per_night()
+    try:
+        from datetime import timezone as _tz
+        today = datetime.now(_tz.utc).strftime('%Y-%m-%dT00:00:00')
+        n_today = cursor.execute(
+            "SELECT COUNT(*) FROM ledger WHERE scope = ? AND actor = 'librarian' "
+            "AND action IN ('retired', 'split', 'merged') AND ts >= ?",
+            (scope, today)).fetchone()[0]
+    except Exception:
+        n_today = 0
+    if n_today + so_far + n > night:
+        return False, (f"Tonight's retirement cap for '{scope}' is reached "
+                       f"({n_today + so_far} of {night}) — mark_processed the rest. "
+                       f"A human raises librarian_retire_per_night in Admin.")
+    return True, None
+
+
+def _count_retired(n=1):
+    with _pass_lock:
+        if _open_pass is not None:
+            _open_pass['retired'] = _open_pass.get('retired', 0) + n
+
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _grounding_gap(original, parts):
+    """Why a split is NOT grounded in the original, or None: a part that
+    adds words the original never said beyond a small budget, or parts
+    that together run far longer than the original (an atomize that
+    invents is a retirement plus a fabrication — scout audit 2026-10-30)."""
+    have = set(_WORD_RE.findall((original or '').lower()))
+    if sum(len(p) for p in parts) > 1.3 * len(original or '') + 40:
+        return "the parts together run far longer than the original — split it, don't expand it"
+    for i, p in enumerate(parts, 1):
+        words = _WORD_RE.findall(p.lower())
+        novel = [w for w in words if w not in have and len(w) > 3]
+        if len(novel) > max(2, int(0.2 * len(words))):
+            return (f"part {i} adds words the original never said "
+                    f"({', '.join(novel[:3])}) — quote the original")
+    return None
+
+
+_FACT_RE = re.compile(r"\b(?:\d[\d:/.\-]*\d|\d|[A-Z][a-z]{2,})\b")
+_FACT_STOP = {'the', 'this', 'that', 'these', 'those', 'and', 'but', 'with',
+              'when', 'then', 'she', 'they', 'him', 'her', 'his', 'our', 'its',
+              'was', 'were', 'had', 'has', 'have', 'not', 'for', 'from', 'into'}
+
+
+def _fact_gap(survivor, losers):
+    """Facts (numbers, dates, names) the losers carry that the survivor's
+    words lack — three or more and the group is a correction or a richer
+    note, not the same thing twice. Empty = merge freely."""
+    have = {t.lower() for t in _FACT_RE.findall(survivor or '')}
+    missing = []
+    for text in losers:
+        for t in _FACT_RE.findall(text or ''):
+            k = t.lower()
+            if k not in have and k not in _FACT_STOP and k not in missing:
+                missing.append(k)
+    return missing if len(missing) >= 3 else []
+
+
+def revert_run(scope, run_id):
+    """Undo everything one librarian run (a night, a drain, a lone pass)
+    did, from its ledger rows: retirements come back, merges and splits
+    unwind, promoted copies retire, ratings, dates and links go back to
+    their before-values. Soft throughout; the run stays in the ledger with
+    a 'reverted' line. Returns (counts, None) or (None, why)."""
+    pt = _pt()
+    from plugins.mindpalace.tools import ledger as lg
+    counts = {'restored': 0, 'retired': 0, 'ratings': 0, 'dates': 0,
+              'links': 0, 'skipped': 0}
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        root = cur.execute('SELECT id, actor, scope FROM ledger WHERE id = ?',
+                           (int(run_id),)).fetchone()
+        if not root or root[2] != scope or root[1] != 'librarian':
+            return None, "not a librarian run in this scope"
+        rows, frontier = [], [int(run_id)]
+        for _depth in range(3):
+            if not frontier:
+                break
+            ph = ','.join('?' * len(frontier))
+            kids = cur.execute(
+                f"SELECT id, action, target, detail FROM ledger WHERE parent_id IN ({ph}) "
+                f"AND actor = 'librarian'", frontier).fetchall()
+            rows += kids
+            frontier = [k[0] for k in kids]
+        now = pt._now()
+
+        def meta_of(cid):
+            raw = cur.execute('SELECT meta FROM chunks WHERE id = ?', (cid,)).fetchone()
+            if not raw:
+                return None
+            try:
+                m = json.loads(raw[0]) if raw[0] else {}
+            except Exception:
+                m = {}
+            return m if isinstance(m, dict) else {}
+
+        def put(cid, m):
+            cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
+                        (json.dumps(m, ensure_ascii=False), cid))
+
+        def restore(cid, *keys):
+            m = meta_of(cid)
+            if m is None or not m.get('pruned_at'):
+                return False
+            for k in ('pruned_at', 'pruned_reason', 'librarian_at') + keys:
+                m.pop(k, None)
+            put(cid, m)
+            counts['restored'] += 1
+            return True
+
+        def retire(cid, why):
+            m = meta_of(cid)
+            if m is None or m.get('pruned_at'):
+                return
+            m.update(pruned_at=now, pruned_reason=why)
+            put(cid, m)
+            counts['retired'] += 1
+
+        for _lid, act, target, detail in rows:
+            try:
+                d = json.loads(detail) if detail else {}
+            except Exception:
+                d = {}
+            try:
+                tid = int(target)
+            except (TypeError, ValueError):
+                continue
+            if act == 'retired':
+                m = meta_of(tid) or {}
+                if m.get('merged_into') or m.get('atomized_into'):
+                    counts['skipped'] += 1
+                else:
+                    restore(tid)
+            elif act == 'split':
+                m = meta_of(tid) or {}
+                parts = d.get('parts') or m.get('atomized_into') or []
+                if restore(tid, 'atomized_into'):
+                    for p in parts:
+                        retire(int(p), 'reverted split')
+            elif act == 'merged':
+                m = meta_of(tid) or {}
+                members = d.get('members') or m.get('derived_from') or []
+                if isinstance(members, int):
+                    members = [members]
+                retire(tid, 'reverted merge')
+                for mid in members:
+                    restore(int(mid), 'merged_into')
+            elif act == 'promoted':
+                retire(tid, 'reverted promotion')
+                src = d.get('source')
+                if src is not None:
+                    m = meta_of(int(src))
+                    if m and tid in (m.get('promoted_to') or []):
+                        m['promoted_to'] = [p for p in m['promoted_to'] if p != tid]
+                        if not m['promoted_to']:
+                            m.pop('promoted_to')
+                        put(int(src), m)
+            elif act == 'marked':
+                if 'before' in d:
+                    cur.execute('UPDATE chunks SET importance = ?, favorite = ? WHERE id = ?',
+                                (d['before'], int(d.get('favorite_before') or 0), tid))
+                    counts['ratings'] += 1
+            elif act in ('dated', 'dateless'):
+                before = d.get('before')
+                m = meta_of(tid)
+                if m is not None and isinstance(before, dict):
+                    for k, v in before.items():
+                        if v is None:
+                            m.pop(k, None)
+                        else:
+                            m[k] = v
+                    put(tid, m)
+                    counts['dates'] += 1
+            elif act == 'linked':
+                eids, at = d.get('entity_ids') or [], d.get('at')
+                if eids and at:
+                    ph = ','.join('?' * len(eids))
+                    cur.execute(
+                        f"DELETE FROM edges WHERE src_type = 'chunk' AND src_id = ? "
+                        f"AND dst_type = 'entity' AND dst_id IN ({ph}) "
+                        f"AND kind = 'mentions' AND created = ?", [tid, *eids, at])
+                    counts['links'] += cur.rowcount
+                    m = meta_of(tid)
+                    if m is not None:
+                        m.pop('link_at', None)
+                        put(tid, m)
+            else:
+                counts['skipped'] += 1
+        lg.record(scope, 'user', 'reverted', target=run_id, cursor=cur,
+                  summary=(f"reverted run [{run_id}]: {counts['restored']} restored, "
+                           f"{counts['retired']} retired, {counts['ratings']} ratings, "
+                           f"{counts['dates']} dates, {counts['links']} links put back"),
+                  detail=counts)
+        conn.commit()
+    try:
+        pt._publish_mind('events', scope, 'update')
+    except Exception:
+        pass
+    return counts, None
+
+
 def _merge_rewrite_enabled():
     """librarian_merge_rewrite (default OFF): whether merge_memories may
     write a distilled replacement text. The similarity gate proves the
@@ -570,7 +828,8 @@ def _similarity_gate(cursor, ids, threshold):
     if lo < threshold:
         return False, (f"[{pair[0]}] and [{pair[1]}] measure {lo:.2f} similar — "
                        f"below the {threshold:.2f} duplicate threshold. Not "
-                       f"duplicates; merge refused. (prune or keep them instead.)")
+                       f"duplicates; merge refused. (keep_separate, or merge the "
+                       f"tightest pair.)")
     return True, None
 
 
@@ -597,6 +856,12 @@ def _atomize(memory_id, parts):
             return err, False
         if row[7] or (row[8] is not None and row[8] >= NEVER_FADES):
             return f"Memory [{memory_id}] is protected (favorite/core) — atomize refused.", False
+        gap = _grounding_gap(row[3], parts)
+        if gap:
+            return f"atomize_memory keeps your words: {gap}. Refused.", False
+        ok, why = _retire_check(cursor, row[2], 1)
+        if not ok:
+            return why, False
         meta = _meta_of(row)
         new_ids = [_insert_derived(cursor, pt, md, row, p, row[1], row[2],
                                    entity_id=row[4], tier=row[5],
@@ -606,10 +871,11 @@ def _atomize(memory_id, parts):
                atomized_into=new_ids)
         conn.commit()
     pt.reset_backfill_latch()
+    _count_retired(1)
     _mark_done(memory_id)
-    _log_pass('atomized', row[1], memory_id,
+    _log_pass('split', row[1], memory_id,
               f"split [{memory_id}] into {len(new_ids)} parts {new_ids}",
-              {'preview': row[3][:80]})
+              {'preview': row[3][:80], 'parts': new_ids})
     try:
         pt._publish_mind(row[1], row[2], 'update')
     except Exception:
@@ -617,7 +883,7 @@ def _atomize(memory_id, parts):
     return f"Split [{memory_id}] into {len(new_ids)} parts: {new_ids}. Original retired to the archive.", True
 
 
-def _merge(memory_ids, content=None):
+def _merge(memory_ids, content=None, keep=None):
     pt, md = _pt(), _md()
     try:
         ids = sorted({int(i) for i in (memory_ids or [])})
@@ -653,7 +919,29 @@ def _merge(memory_ids, content=None):
         ok, why = _similarity_gate(cursor, ids, _merge_threshold())
         if not ok:
             return why, False
-        base = max(rows, key=lambda r: len(r[3] or ''))
+        # The survivor's words (2026-10-30, was: the longest): keep=<id> when
+        # she chose, else the NEWEST member — a later correction beats the
+        # note it corrects. Without an explicit keep, losers that carry
+        # facts the survivor lacks (a date, a name, a number) refuse: that
+        # is a correction or a richer note, not the same thing twice.
+        if keep is not None:
+            try:
+                keep = int(keep)
+            except (TypeError, ValueError):
+                return "merge_memories: keep must be one of the group's ids.", False
+            if keep not in ids:
+                return f"merge_memories: keep=[{keep}] is not in the group.", False
+            base = next(r for r in rows if r[0] == keep)
+        else:
+            base = max(rows, key=lambda r: (r[11] or '', r[0]))
+            gap = _fact_gap(base[3], [r[3] for r in rows if r[0] != base[0]])
+            if gap:
+                return (f"The others carry details [{base[0]}] lacks "
+                        f"({', '.join(gap[:4])}) — keep_separate, or merge with "
+                        f"keep=<id> of the one that has everything."), False
+        ok, why = _retire_check(cursor, base[2], len(ids) - 1)
+        if not ok:
+            return why, False
         earliest = min(r[11] for r in rows)
         src = list(base)
         src[11] = earliest   # the merged memory remembers the FIRST occurrence
@@ -696,11 +984,13 @@ def _merge(memory_ids, content=None):
                     (new_id, r[0], now))
         conn.commit()
     pt.reset_backfill_latch()
+    _count_retired(len(ids) - 1)
     for mid in ids:
         _mark_done(mid)
     _log_pass('merged', base[1], new_id,
               f"merged {len(ids)} duplicates {ids} → [{new_id}]",
-              {'preview': (content or base[3])[:80]})
+              {'preview': (content or base[3])[:80], 'members': ids,
+               'kept': base[0]})
     try:
         pt._publish_mind(base[1], base[2], 'update')
     except Exception:
@@ -801,7 +1091,7 @@ def _promote(memory_id, layer, entity=None, content=None, kind=None):
     where = f"entity '{entity}'" if entity else "the self layer"
     _log_pass('promoted', layer, new_id,
               f"promoted [{memory_id}] → [{new_id}] on {where}",
-              {'preview': text[:80]})
+              {'preview': text[:80], 'source': int(memory_id)})
     try:
         pt._publish_mind(layer, row[2], 'save')
     except Exception:
@@ -821,11 +1111,19 @@ def _prune(memory_id, reason=None):
         if row[7] or (row[8] is not None and row[8] >= NEVER_FADES):
             return (f"Memory [{memory_id}] is protected (favorite/core) — "
                     f"it stays. The hare stays.", False)
+        if not (reason and str(reason).strip()):
+            return (f"prune_memory needs a reason for [{memory_id}] — one short "
+                    f"line on why it's noise (a human reads it next to the "
+                    f"retirement)."), False
+        ok, why = _retire_check(cursor, row[2], 1)
+        if not ok:
+            return why, False
         meta = _meta_of(row)
         _stamp(cursor, pt, memory_id, meta,
                pruned_at=pt._now(),
-               pruned_reason=(str(reason).strip()[:200] if reason else None))
+               pruned_reason=str(reason).strip()[:200])
         conn.commit()
+    _count_retired(1)
     _mark_done(memory_id)
     why = (str(reason).strip()[:120] if reason else '')
     _log_pass('retired', row[1], memory_id,
@@ -893,7 +1191,8 @@ def _set_links(entries):
             if hits:
                 md.seed_edges(cursor, mid, [h[0] for h in hits], now)
                 linked += 1
-                log_rows.append((row[0], mid, ", ".join(h[1] for h in hits)))
+                log_rows.append((row[0], mid, ", ".join(h[1] for h in hits),
+                                 [h[0] for h in hits]))
             else:
                 clear += 1
             try:
@@ -905,8 +1204,9 @@ def _set_links(entries):
                            (json.dumps(meta, ensure_ascii=False), mid))
             _mark_done(mid)
         conn.commit()
-    for layer, mid, joined in log_rows:
-        _log_pass('linked', layer, mid, f"connected [{mid}] ↔ {joined}")
+    for layer, mid, joined, eids in log_rows:
+        _log_pass('linked', layer, mid, f"connected [{mid}] ↔ {joined}",
+                  {'entity_ids': eids, 'at': now})
     msg = f"Filed: {linked} connected, {clear} ruled connection-free."
     if refused:
         msg += " Notes: " + "; ".join(refused[:5])
@@ -973,7 +1273,7 @@ def _set_event_dates(entries):
                 refused.append(f"[{mid}] invalid {', '.join(bad[:2])} — use "
                                f"YYYY, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
                 continue
-            row = cursor.execute('SELECT scope, meta FROM chunks WHERE id = ?',
+            row = cursor.execute('SELECT scope, meta, created FROM chunks WHERE id = ?',
                                  (mid,)).fetchone()
             if not row or row[0] != scope:
                 refused.append(f"[{mid}] not found in scope")
@@ -982,12 +1282,26 @@ def _set_event_dates(entries):
                 meta = json.loads(row[1]) if row[1] else {}
             except Exception:
                 meta = {}
+            before = {k: meta.get(k) for k in ('event_dates', 'event_date_src',
+                                                'when', 'when_src', 'temporal_at')}
+            # The plan (meta.when) follows the verdict: the earliest date
+            # after the save day is what Upcoming shows; a verdict with
+            # nothing ahead clears a regex plan — this is where "On Monday
+            # we fixed the bug" gets corrected. Her own `when` outranks.
+            if meta.get('when_src') != 'ai':
+                from plugins.mindpalace.tools import temporal
+                w = temporal.when_from(dates, row[2]) if dates else None
+                if w:
+                    meta['when'], meta['when_src'] = w, 'librarian'
+                else:
+                    meta.pop('when', None)
+                    meta.pop('when_src', None)
             if dates:
                 meta['event_dates'] = dates
                 meta['event_date_src'] = 'librarian'
                 dated += 1
                 _log_pass('dated', None, mid,
-                          f"dated [{mid}] → {', '.join(dates)}")
+                          f"dated [{mid}] → {', '.join(dates)}", {'before': before})
             else:
                 # A "no date" verdict files the entry but PRESERVES any
                 # already-resolved dates (regex floor or a prior install's
@@ -999,7 +1313,8 @@ def _set_event_dates(entries):
                           f"[{mid}] ruled dateless"
                           + (" (kept existing "
                              + ', '.join(meta.get('event_dates') or []) + ")"
-                             if meta.get('event_dates') else ""))
+                             if meta.get('event_dates') else ""),
+                          {'before': before})
             meta['temporal_at'] = now
             cursor.execute('UPDATE chunks SET meta = ? WHERE id = ?',
                            (json.dumps(meta, ensure_ascii=False), mid))
@@ -1087,9 +1402,12 @@ def _mark(memory_id, importance=None, favorite=None):
         bits.append("rating ignored — this memory carries a core pin")
     extra = f" ({', '.join(bits)})" if bits else ""
     # Ratings and favorites are DATA WRITES — they get a ledger child like
-    # every other verb (was invisible before; audit scout 2026-07-19).
+    # every other verb (was invisible before; audit scout 2026-07-19), and
+    # the before-values ride along so a run can be reverted (2026-10-30).
+    changed = (rated is not None and rated != row[8]) or (favorite and not row[7])
     _log_pass('marked', row[1], memory_id,
-              f"filed [{memory_id}] as reviewed{extra}")
+              f"filed [{memory_id}] as reviewed{extra}",
+              {'before': row[8], 'favorite_before': int(row[7] or 0)} if changed else None)
     return f"Filed [{memory_id}] as reviewed{extra}.", True
 
 
@@ -1101,7 +1419,8 @@ def execute(function_name, arguments, config):
             return _atomize(arguments.get('memory_id'), arguments.get('parts'))
         if function_name == 'merge_memories':
             return _merge(arguments.get('memory_ids'),
-                          content=arguments.get('content'))
+                          content=arguments.get('content'),
+                          keep=arguments.get('keep'))
         if function_name == 'keep_separate':
             return _keep_separate(arguments.get('memory_ids'))
         if function_name == 'promote_memory':

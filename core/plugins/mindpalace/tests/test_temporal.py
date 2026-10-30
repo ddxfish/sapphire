@@ -15,6 +15,42 @@ def r(text):
     return temporal.resolve(text, A)
 
 
+# ─── plans — the sure-FUTURE subset that feeds meta.when (2026-10-30) ───────
+
+def test_plans_are_only_sure_future():
+    p = lambda t: temporal.plans(t, A)
+    assert p('dentist on 2026-11-04 at 10am') == ['2026-11-04T10:00']
+    assert p('their wedding is June 20, 2027') == ['2027-06-20']
+    assert p('we fly out in 2 weeks') == ['2026-07-29']
+    assert p('lunch tomorrow at 3pm') == ['2026-07-16T15:00']
+    assert p('July 10th next year we sail') == ['2027-07-10']
+    # a regex cannot read tense or intent — none of these are plans
+    assert p('On Monday we fixed the bug') == []
+    assert p('we talked tonight about the boat') == []
+    assert p('John 3:16 was his favorite verse') == []
+    assert p('Remember when we met on Feb 14th?') == []
+    assert p('we watched Halloween (the movie)') == []
+    assert p('he got the job on June 5, 2024') == []
+    assert p('2026-07-15 we shipped it') == []            # the save day itself
+    assert p('see you at christmas') == []
+
+
+def test_when_from_and_parse_when():
+    assert temporal.when_from(['2026-07-10', '2026-07-20', '2026-08-01'], A) == '2026-07-20'
+    assert temporal.when_from(['2026-07-15'], A) is None            # the save day, date-only
+    assert temporal.when_from(['2026-07-15T20:00'], A) == '2026-07-15T20:00'
+    assert temporal.when_from([], A) is None
+    assert temporal.parse_when('2026-11-04') == ('2026-11-04', None)
+    assert temporal.parse_when('2026-11-04T10:00') == ('2026-11-04T10:00', None)
+    assert temporal.parse_when('2026-11-04 10:00') == ('2026-11-04T10:00', None)
+    assert temporal.parse_when('2026-02-30')[0] is None
+    assert temporal.parse_when('2026-11-04T25:00')[0] is None
+    assert temporal.parse_when('tomorrow at 3pm', A) == ('2026-07-16T15:00', None)
+    assert temporal.parse_when('in 2 weeks', A) == ('2026-07-29', None)
+    assert temporal.parse_when('next friday', A)[0] is None
+    assert temporal.parse_when('', A)[0] is None
+
+
 # ─── sure forms — stamped ────────────────────────────────────────────────────
 
 def test_iso_in_text():

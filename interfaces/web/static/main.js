@@ -56,6 +56,7 @@ const VIEW_MODULES = {
     // users can switch back; v1 retires no earlier than ~2 months out.
     'ai-knowledge': `./views/ai-knowledge.js${_v}`,
     goals:    `./views/mind-dispatch.js?view=goals${_v ? '&v=' + window.__v : ''}`,
+    import:   `./views/mind-dispatch.js?view=import${_v ? '&v=' + window.__v : ''}`,
     admin:    `./views/mind-dispatch.js?view=admin${_v ? '&v=' + window.__v : ''}`,
     settings: `./views/settings.js${_v}`,
     help:     `./views/help.js${_v}`,

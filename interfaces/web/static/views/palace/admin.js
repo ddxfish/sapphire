@@ -108,10 +108,9 @@ const PASSES = [
 // content is never touched; only the Danger box deletes, behind a typed
 // confirm that the server re-checks.
 const OPS = [
-    { key: 'migration', icon: '\u{1F4E6}', title: 'Import & Migration',
-      blurb: 'Copy from Memory v1 (opened read-only, never modified) and rebuild derived metadata.',
+    { key: 'migration', icon: '\u{1F4E6}', title: 'Migration',
+      blurb: 'Rebuild derived metadata, and copy knowledge into the Library. The classic Memory (legacy) import lives on the Import tab, with its counts.',
       actions: [
-          { label: 'Import from Memory v1 (all scopes)', maint: 'import_v1' },
           { label: 'Copy knowledge into the Library (v1 + v2)', library: 'migrate' },
           { label: 'Generate missing metadata', maint: 'generate_metadata' },
       ] },
@@ -308,6 +307,9 @@ function capsLine(key) {
     if (key === 'dedup') {
         bits.push(`≥${s.librarian_merge_threshold ?? 0.9}`);
         bits.push(`rewrite ${s.librarian_merge_rewrite ? 'on' : 'off'}`);
+    }
+    if (key === 'sort' || key === 'dedup') {
+        bits.push(`retire ≤${Math.round((s.librarian_retire_ratio ?? 0.25) * 100)}%/pass · ≤${s.librarian_retire_per_night ?? 30}/night`);
     }
     return bits.join(' · ');
 }

@@ -19,9 +19,9 @@ Sapphire ships two memory engines. **Mind Palace** (the `mindpalace` plugin, "Mi
 
 ### Importing your classic memories
 
-Per scope, from **Mind → Admin** (viewing the target scope):
+From **Mind → Import** (all scopes at once):
 
-1. **Import & Migration → Import from Memory v1.** The import is additive, idempotent (re-runs skip what's already there), and strictly read-only toward the old databases. Watch for the summary line.
+1. **The Import tab shows what will come across before anything runs**: each classic store (memories, people, knowledge, goals) per scope, what the palace already holds, and the pending difference. One button imports it all in the background with a progress row in the notification center. The import is additive, idempotent (re-runs skip what's already there), and strictly read-only toward the old databases. A chat's attached documents stay with the chat — core keeps those under either engine. While classic rows are pending, a notification reminds you at every boot.
 2. **Wait for embeddings** before anything else — the log reports when the backfill completes. No embedder configured means search degrades to keyword-only and dedup can't see duplicates; fix the embedder first.
 3. Knowledge and documents ride a separate one-time Library migration (Admin → "Copy knowledge...") plus per-scope export/import zips on the Knowledge tab. Watch-folder definitions come across as entries you re-add by hand — a zip never auto-scans your disk.
 

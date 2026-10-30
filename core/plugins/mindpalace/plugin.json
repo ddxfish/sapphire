@@ -3,7 +3,7 @@
   "tool_expires": "never",
   "short_display_name": "Mind",
   "short_name": "Mind Palace",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "description": "Layered memory supersystem (v3) — self/events/entities/knowledge layers behind one tool surface. Mutually exclusive with the Memory plugin: enable one, not both. Import copies from the classic system; old data is never touched.",
   "author": "sapphire",
   "icon": "🏛️",
@@ -12,7 +12,8 @@
   "privacy_aware": true,
   "capabilities": {
     "hooks": {
-      "chat_vaulted": "hooks/chat_vaulted.py"
+      "chat_vaulted": "hooks/chat_vaulted.py",
+      "plugins_ready": "hooks/ready.py"
     },
     "tools": [
       "tools/palace_tools.py",
@@ -118,6 +119,22 @@
         "label": "Duplicate threshold",
         "default": 0.9,
         "help": "Similarity (0.5-0.99) two memories must measure before merge_memories will fold them — enforced in code, not prompt. Higher = only near-identical entries merge.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_retire_ratio",
+        "type": "number",
+        "label": "Retire at most (share of a pass)",
+        "default": 0.25,
+        "help": "The share of the memories one pass was shown that it may retire — prunes, splits and the losers of merges together (0.05-1). Enforced in code; past it the librarian is told to mark the rest. 0.25 = a quarter.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_retire_per_night",
+        "type": "number",
+        "label": "Retire at most (per night, per scope)",
+        "default": 30,
+        "help": "Retirements per scope per day across every pass and Run ALL, counted from the ledger. Enforced in code. Raise it for a deliberate clean-up, then put it back.",
         "hidden": true
       },
       {
@@ -482,6 +499,31 @@
         "method": "DELETE",
         "path": "goals/{gid}",
         "handler": "routes/goals_routes.py:delete_goal"
+      },
+      {
+        "method": "GET",
+        "path": "import/preview",
+        "handler": "routes/import_routes.py:preview"
+      },
+      {
+        "method": "POST",
+        "path": "import/run",
+        "handler": "routes/import_routes.py:run"
+      },
+      {
+        "method": "GET",
+        "path": "import/status",
+        "handler": "routes/import_routes.py:status"
+      },
+      {
+        "method": "GET",
+        "path": "import/removed",
+        "handler": "routes/import_routes.py:removed"
+      },
+      {
+        "method": "POST",
+        "path": "import/scrub",
+        "handler": "routes/import_routes.py:scrub"
       },
       {
         "method": "GET",

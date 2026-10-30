@@ -404,6 +404,161 @@ def test_merge_carries_rating_edges_and_date_verdict(palace):
     assert nm['temporal_at'] == 't'                    # not back in the dates queue
 
 
+def test_set_event_dates_sets_the_plan(palace):
+    """The plan (meta.when) follows the verdict: the earliest date after the
+    save day; a verdict with nothing ahead clears the floor's plan (the
+    "On Monday we fixed the bug" correction); her own `when` outranks."""
+    a = _save("the party is coming up")
+    b = _save("we fly out in 2 weeks")                 # floor plan: regex
+    c = _save("dentist", when="2026-12-01")           # hers
+    assert _meta(b)['when_src'] == 'regex'
+    lt.open_pass('default', [a, b, c], kind='dates')
+    msg, ok = _run('set_event_dates', {'entries': [
+        {'memory_id': a, 'dates': ['2020-01-01', '2099-03-03', '2099-02-02']},
+        {'memory_id': b, 'dates': []},
+        {'memory_id': c, 'dates': ['2099-05-05']}]})
+    assert ok, msg
+    assert (_meta(a)['when'], _meta(a)['when_src']) == ('2099-02-02', 'librarian')
+    assert 'when' not in _meta(b)                       # cleared, not preserved
+    assert _meta(b)['event_dates']                      # search metadata stands
+    assert (_meta(c)['when'], _meta(c)['when_src']) == ('2026-12-01', 'ai')
+
+
+# ─── Guardrails (2026-10-30): caps, grounding, survivor, revert ─────────────
+
+def test_retirement_cap_per_pass(palace):
+    """Nothing but prose limited pruning (scout audit). Code now caps what
+    one pass may retire to a share of what it was shown (min 2), and a
+    prune needs its reason."""
+    ids = [_save(f"noise {i}") for i in range(8)]
+    lt.open_pass('default', ids)
+    assert _run('prune_memory', {'memory_id': ids[0], 'reason': 'ping'})[1]
+    assert _run('prune_memory', {'memory_id': ids[1], 'reason': 'ping'})[1]
+    msg, ok = _run('prune_memory', {'memory_id': ids[2], 'reason': 'ping'})
+    assert not ok and 'cap' in msg.lower()
+    assert 'pruned_at' not in _meta(ids[2])
+    msg, ok = _run('prune_memory', {'memory_id': ids[3]})
+    assert not ok and 'reason' in msg
+
+
+def test_retirement_cap_per_night_counts_the_ledger(palace, monkeypatch):
+    from plugins.mindpalace.tools import ledger as lg
+    monkeypatch.setattr(lt, '_retire_per_night', lambda: 1)
+    lg.record('default', 'librarian', 'retired', target=1, summary='earlier tonight')
+    ids = [_save(f"noise {i}") for i in range(4)]
+    lt.open_pass('default', ids)
+    msg, ok = _run('prune_memory', {'memory_id': ids[0], 'reason': 'ping'})
+    assert not ok and 'tonight' in msg.lower()
+
+
+def test_atomize_must_quote_the_original(palace):
+    cid = _save("the stars were out AND we watched the meteors")
+    lt.open_pass('default', [cid])
+    msg, ok = _run('atomize_memory', {'memory_id': cid, 'parts': [
+        "the stars were out", "we discussed cosmology and his father's telescope"]})
+    assert not ok and 'never said' in msg
+    assert 'pruned_at' not in _meta(cid)
+    msg, ok = _run('atomize_memory', {'memory_id': cid, 'parts': [
+        "the stars were out", "we watched the meteors"]})
+    assert ok, msg
+
+
+def test_merge_survivor_is_newest_or_keep_and_facts_refuse(palace):
+    """The survivor's words: newest by default (a correction beats the note
+    it corrects), keep=<id> when she chooses; losers carrying facts the
+    survivor lacks refuse without keep (a richer note is not a duplicate)."""
+    a = _save("Krem's birthday is March 3; Skye and Anita came, cake at 7:30")
+    b = _save("Krem's birthday is March 3")
+    _set_vec(a, [1, 0, 0]); _set_vec(b, [1, 0, 0])
+    _set_created(a, '2025-02-01T00:00:00+00:00')
+    _set_created(b, '2025-03-01T00:00:00+00:00')
+    lt.open_pass('default', [a, b], kind='dedup')
+    msg, ok = _run('merge_memories', {'memory_ids': [a, b]})
+    assert not ok and 'details' in msg and 'keep' in msg
+    msg, ok = _run('merge_memories', {'memory_ids': [a, b], 'keep': a})
+    assert ok, msg
+    new_id = int(re.search(r'→ \[(\d+)\]', msg).group(1))
+    with pt._get_connection() as conn:
+        assert conn.execute('SELECT content FROM chunks WHERE id = ?',
+                            (new_id,)).fetchone()[0].startswith("Krem's birthday is March 3;")
+    lt.close_pass()
+    c = _save("Zebra visited the house for a long while")
+    d = _save("Zebra visited the house")
+    _set_vec(c, [0, 1, 0]); _set_vec(d, [0, 1, 0])
+    _set_created(c, '2025-02-01T00:00:00+00:00')
+    _set_created(d, '2025-03-01T00:00:00+00:00')
+    lt.open_pass('default', [c, d], kind='dedup')
+    msg, ok = _run('merge_memories', {'memory_ids': [c, d]})
+    assert ok, msg
+    new_id = int(re.search(r'→ \[(\d+)\]', msg).group(1))
+    with pt._get_connection() as conn:
+        assert conn.execute('SELECT content FROM chunks WHERE id = ?',
+                            (new_id,)).fetchone()[0] == "Zebra visited the house"   # newest, not longest
+
+
+def test_revert_run_unwinds_everything(palace):
+    """The night-after-a-bad-model button: one run's ledger rows undone —
+    prune and split originals back, parts and the merge survivor retired,
+    merge members back, the rating's before-value restored."""
+    from plugins.mindpalace.tools import librarian as eng
+    a = _save("ping test")
+    b = _save("stars were out AND we watched the meteors")
+    c = _save("Zebra visited the house")
+    d = _save("Zebra visited the house today")
+    e = _save("rate me")
+    _set_vec(c, [1, 0, 0]); _set_vec(d, [1, 0, 0])
+    _set_created(c, '2025-02-01T00:00:00+00:00')
+    _set_created(d, '2025-03-01T00:00:00+00:00')
+    eng.run_begin('default', 'test run')
+    lt.open_pass('default', [a, b, e, c, d])
+    assert _run('prune_memory', {'memory_id': a, 'reason': 'ping'})[1]
+    msg, ok = _run('atomize_memory', {'memory_id': b, 'parts': [
+        'stars were out', 'we watched the meteors']})
+    assert ok, msg
+    parts = [int(x) for x in re.findall(r'\d+', msg.split(':')[1])][:2]
+    assert _run('mark_processed', {'memory_id': e, 'importance': 0.8})[1]
+    stats = lt.close_pass()
+    with pt._get_connection() as conn:
+        eng._write_ledger(conn.cursor(), 'default', stats, 'sort batch', 'sort')
+        conn.commit()
+    lt.open_pass('default', [c, d], kind='dedup')
+    msg, ok = _run('merge_memories', {'memory_ids': [c, d]})
+    assert ok, msg
+    survivor = int(re.search(r'→ \[(\d+)\]', msg).group(1))
+    stats = lt.close_pass()
+    with pt._get_connection() as conn:
+        eng._write_ledger(conn.cursor(), 'default', stats, 'dedup batch', 'dedup')
+        conn.commit()
+    eng.run_end('default')
+    with pt._get_connection() as conn:
+        run_id = conn.execute("SELECT id FROM ledger WHERE target = 'run' "
+                              "ORDER BY id DESC LIMIT 1").fetchone()[0]
+    counts, err = lt.revert_run('default', run_id)
+    assert err is None, err
+    for cid in (a, b, c, d):
+        assert 'pruned_at' not in _meta(cid), cid
+    assert 'atomized_into' not in _meta(b) and 'merged_into' not in _meta(c)
+    for p in parts:
+        assert _meta(p).get('pruned_reason') == 'reverted split'
+    assert _meta(survivor).get('pruned_reason') == 'reverted merge'
+    assert _importance(e) is None
+    assert counts['restored'] == 4 and counts['retired'] == 3 and counts['ratings'] == 1
+    assert lt.revert_run('default', 999999)[1]
+
+
+def test_charter_and_schema_pins(palace):
+    from plugins.mindpalace.tools import librarian as eng
+    assert 'soft and reversible' not in eng._CHARTER_DEFAULTS['sort']
+    assert 'Worked examples' in eng._CHARTER_DEFAULTS['sort']
+    assert 'keep=' in eng._CHARTER_DEFAULTS['dedup'] and 'CORRECTION' in eng._CHARTER_DEFAULTS['dedup']
+    assert 'cut short' in eng._CHARTER_DEFAULTS['link']
+    assert 'Never invent a year' in eng._CHARTER_DEFAULTS['dates']
+    prune = next(t for t in lt.TOOLS if t['function']['name'] == 'prune_memory')
+    assert 'reason' in prune['function']['parameters']['required']
+    text = eng._present_link([], 'default', [f"Name{i}" for i in range(150)], 1, 1)
+    assert 'Name149' in text
+
+
 def test_atomize_parts_inherit_the_rating(palace):
     cid = _save("stars were out AND we watched the meteors")
     with pt._get_connection() as conn:
@@ -557,7 +712,7 @@ def test_batch_selection_excludes_processed_pruned_and_sheet(palace):
     lt.close_pass()
     d = _save("pure noise")
     lt.open_pass('default', [d])
-    assert _run('prune_memory', {'memory_id': d})[1]
+    assert _run('prune_memory', {'memory_id': d, 'reason': 'noise'})[1]
     lt.close_pass()
     with pt._get_connection() as conn:
         cur = conn.cursor()
@@ -794,7 +949,8 @@ def test_upcoming_lists_future_dates_only(palace):
                                   (past, ['2020-01-01'], {}),
                                   (pruned, ['2030-03-03'], {'pruned_at': 'x'})):
             m = json.loads(cur.execute('SELECT meta FROM chunks WHERE id=?', (cid,)).fetchone()[0])
-            m.update({'event_dates': dates, 'event_date_src': 'librarian', **extra})
+            m.update({'event_dates': dates, 'event_date_src': 'librarian',
+                      'when': dates[0], 'when_src': 'librarian', **extra})
             cur.execute('UPDATE chunks SET meta=? WHERE id=?', (json.dumps(m), cid))
         conn.commit()
     from plugins.mindpalace.tools import self_tools as st2
@@ -806,10 +962,10 @@ def test_upcoming_lists_future_dates_only(palace):
 
 
 def test_just_happened_and_timed_upcoming_split(palace):
-    """Timed events graduate from Upcoming to Just-happened as their clock
-    passes (the same-day-lingering fix); a date-only today stamped on a
-    memory SAVED today is the day it was written — neither list (2026-10-30:
-    "tonight" chatter owned the ten slots); the window is PAST_EVENT_DAYS."""
+    """Timed plans graduate from Upcoming to Just-happened as their clock
+    passes (the same-day-lingering fix); a date-only plan for today holds
+    Upcoming all day; the window is PAST_EVENT_DAYS. Plans live in
+    meta.when (2026-10-30) — event_dates alone never reach either list."""
     from datetime import datetime, timedelta
     from plugins.mindpalace.tools import self_tools as st2
     now = datetime.now()
@@ -827,7 +983,8 @@ def test_just_happened_and_timed_upcoming_split(palace):
         for name, date in cases.items():
             m = json.loads(cur.execute('SELECT meta FROM chunks WHERE id=?',
                                        (ids[name],)).fetchone()[0])
-            m.update({'event_dates': [date], 'event_date_src': 'librarian'})
+            m.update({'event_dates': [date], 'event_date_src': 'librarian',
+                      'when': date, 'when_src': 'librarian'})
             cur.execute('UPDATE chunks SET meta=? WHERE id=?',
                         (json.dumps(m), ids[name]))
         conn.commit()
@@ -835,7 +992,7 @@ def test_just_happened_and_timed_upcoming_split(palace):
         jh = {u['id'] for u in st2._just_happened(cur, 'default')}
     assert ids['timed_past'] not in up and ids['timed_past'] in jh
     assert ids['timed_fut'] in up and ids['timed_fut'] not in jh
-    assert ids['dateonly_today'] not in up and ids['dateonly_today'] not in jh
+    assert ids['dateonly_today'] in up
     assert ids['yesterday'] in jh
     assert ids['ancient'] not in jh                     # outside the 7-day window
 

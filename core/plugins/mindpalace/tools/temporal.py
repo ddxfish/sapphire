@@ -135,12 +135,68 @@ def resolve(content, anchor):
         return []
 
 
-def _resolve(text, anchor):
-    found = []          # (position, datetime, has_time)
+def plans(content, anchor):
+    """The subset of resolve() that carries INTENT: dates the text itself
+    puts ahead of the save day without a guess about tense — an ISO or
+    month+day WITH a year after the anchor, "in N days/weeks", "tomorrow".
+    Bare weekdays, today/tonight, clock-only times, holidays and no-year
+    month+days are left out: "On Monday we fixed the bug" and "On Monday we
+    fly out" look identical to a regex (2026-10-30 — Upcoming had one real
+    row in ten). Feeds meta.when (src 'regex'); never raises."""
+    try:
+        return _resolve(content, _parse_anchor(anchor), plans_only=True)
+    except Exception:
+        return []
 
-    def add(pos, dt, has_time=False):
+
+def when_from(dates, anchor):
+    """A verdict's list → the one date that makes it a plan: the earliest
+    strictly after the anchor's LOCAL day (a timed one on the day itself
+    counts — "tonight at 8"). None when nothing lies ahead."""
+    day = _parse_anchor(anchor).strftime('%Y-%m-%d')
+    ahead = sorted(d for d in (dates or []) if isinstance(d, str)
+                   and len(d) >= 10 and (d[:10] > day or (len(d) > 10 and d[:10] == day)))
+    return ahead[0] if ahead else None
+
+
+RX_WHEN_ISO = re.compile(r'^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?$')
+
+
+def parse_when(text, anchor=None):
+    """Her explicit `when`: ISO (YYYY-MM-DD or YYYY-MM-DDTHH:MM) or a phrase
+    the floor resolves to exactly ONE date, anchored to now. Returns
+    (iso, None) or (None, why)."""
+    s = str(text or '').strip()
+    if not s:
+        return None, 'is empty'
+    m = RX_WHEN_ISO.match(s)
+    if m:
+        y, mo, d = int(m[1]), int(m[2]), int(m[3])
+        if not _valid(y, mo, d):
+            return None, f"'{s}' is not a real calendar date"
+        if m[4] is None:
+            return f'{y:04d}-{mo:02d}-{d:02d}', None
+        h, mi = int(m[4]), int(m[5])
+        if not (0 <= h < 24 and 0 <= mi < 60):
+            return None, f"'{s}' has an impossible time"
+        return f'{y:04d}-{mo:02d}-{d:02d}T{h:02d}:{mi:02d}', None
+    got = resolve(s, anchor or datetime.now())
+    if len(got) == 1 and len(got[0]) >= 10:
+        return got[0], None
+    return None, (f"'{s}' doesn't resolve to one date — give YYYY-MM-DD or "
+                  f"YYYY-MM-DDTHH:MM, or a phrase like 'tomorrow at 3pm' or "
+                  f"'in 2 weeks'")
+
+
+def _resolve(text, anchor, plans_only=False):
+    found = []          # (position, datetime, has_time, plan)
+
+    def add(pos, dt, has_time=False, plan=False):
         if dt and 1900 <= dt.year <= 2100:
-            found.append((pos, dt, has_time))
+            found.append((pos, dt, has_time, plan))
+
+    def ahead(dt):
+        return dt.date() > anchor.date()
 
     covered = []        # spans already claimed by a stronger rule
 
@@ -156,9 +212,11 @@ def _resolve(text, anchor):
         if _valid(y, mo, d):
             claim(m)
             if m[4] is not None and int(m[4]) < 24 and int(m[5]) < 60:
-                add(m.start(), datetime(y, mo, d, int(m[4]), int(m[5])), True)
+                dt = datetime(y, mo, d, int(m[4]), int(m[5]))
+                add(m.start(), dt, True, ahead(dt))
             else:
-                add(m.start(), datetime(y, mo, d))
+                dt = datetime(y, mo, d)
+                add(m.start(), dt, False, ahead(dt))
 
     for rx, mi, di, yi in ((RX_MONTH_DAY, 1, 2, 3), (RX_DAY_MONTH, 2, 1, 3)):
         for m in rx.finditer(text):
@@ -179,7 +237,8 @@ def _resolve(text, anchor):
                 y = int(m[yi])
                 if _valid(y, mo, d):
                     claim(m)
-                    add(m.start(), datetime(y, mo, d))
+                    dt = datetime(y, mo, d)
+                    add(m.start(), dt, False, ahead(dt))
             else:
                 # Explicit "next/last year" modifier right after the date is a
                 # SURE year ("July 10th next year" — live find, 2026-07-16).
@@ -189,7 +248,8 @@ def _resolve(text, anchor):
                     y = anchor.year + (1 if mod[1].lower() == 'next' else -1)
                     if _valid(y, mo, d):
                         claim(m)
-                        add(m.start(), datetime(y, mo, d))
+                        dt = datetime(y, mo, d)
+                        add(m.start(), dt, False, ahead(dt))
                     continue
                 dt = _nearest_occurrence(anchor, mo, d)
                 if dt:
@@ -200,7 +260,7 @@ def _resolve(text, anchor):
         word = m[1].lower()
         delta = {'today': 0, 'tonight': 0, 'tomorrow': 1, 'yesterday': -1}[word]
         add(m.start(), (anchor + timedelta(days=delta)).replace(
-            hour=0, minute=0, second=0, microsecond=0))
+            hour=0, minute=0, second=0, microsecond=0), plan=(word == 'tomorrow'))
 
     for rx, sign in ((RX_AGO, -1), (RX_IN, 1)):
         for m in rx.finditer(text):
@@ -215,7 +275,8 @@ def _resolve(text, anchor):
                 dt = _shift_months(anchor, sign * n)
             else:
                 dt = _shift_months(anchor, sign * n * 12)
-            add(m.start(), dt.replace(hour=0, minute=0, second=0, microsecond=0))
+            add(m.start(), dt.replace(hour=0, minute=0, second=0, microsecond=0),
+                plan=(sign > 0))
 
     # Weekdays: bare/'this' → next occurrence (or today); 'last' → previous.
     # 'next <weekday>' is deliberately NOT resolved — genuinely ambiguous.
@@ -276,15 +337,17 @@ def _resolve(text, anchor):
     if clock:
         dated = [(i, f) for i, f in enumerate(found) if not f[2]]
         if len(dated) == 1:
-            i, (pos, dt, _t) = dated[0]
-            found[i] = (pos, dt.replace(hour=clock[0], minute=clock[1]), True)
+            i, (pos, dt, _t, plan) = dated[0]
+            found[i] = (pos, dt.replace(hour=clock[0], minute=clock[1]), True, plan)
         elif not found:
             found.append((0, anchor.replace(hour=clock[0], minute=clock[1],
-                                            second=0, microsecond=0), True))
+                                            second=0, microsecond=0), True, False))
 
     found.sort(key=lambda f: f[0])
     out, seen = [], set()
-    for _pos, dt, has_time in found:
+    for _pos, dt, has_time, plan in found:
+        if plans_only and not plan:
+            continue
         s = dt.strftime('%Y-%m-%dT%H:%M') if has_time else dt.strftime('%Y-%m-%d')
         if s not in seen:
             seen.add(s)

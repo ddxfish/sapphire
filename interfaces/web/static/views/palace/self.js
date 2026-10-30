@@ -399,19 +399,22 @@ function fmtEventDate(d) {
 
 function upcomingCard(dash) {
     const items = dash?.upcoming || [];
-    const rows = items.map(u => `
+    const past = dash?.just_happened || [];
+    const line = u => `
         <div class="palace-ledger-row" title="${escAttr(`[${u.id}] ${u.preview}`)}">
             <span class="palace-ledger-ts">${u.recurring ? '↻ ' : ''}${escHtml(fmtEventDate(u.date))}</span>
             <span class="palace-ledger-sum">${escHtml(u.preview)}</span>
-        </div>`).join('');
+        </div>`;
+    const rows = items.map(line).join('');
     return `
         <div class="mind-mem-card palace-ledger">
             <div class="palace-self-card-head">
                 <span class="palace-self-title">\u{1F5D3} Upcoming Events</span>
                 <span class="palace-self-hint">${items.length ? `next ${items.length}` : ''}</span>
             </div>
-            <div class="palace-self-hint">Dates her memories point to — stamped the moment a memory is saved.</div>
-            ${rows || '<div class="mind-empty">Nothing on the calendar — mention a date in chat and it lands here.</div>'}
+            <div class="palace-self-hint">Plans she set with <code>when</code> on a memory, dates the librarian confirmed, and the sure ones from her own words (tomorrow, in 2 weeks, a full date ahead).</div>
+            ${rows || '<div class="mind-empty">Nothing planned — a memory saved with a <code>when</code> lands here.</div>'}
+            ${past.length ? `<div class="palace-self-hint" style="margin-top:8px">Just happened</div>${past.map(line).join('')}` : ''}
         </div>`;
 }
 
@@ -433,6 +436,7 @@ function ledgerLine(r) {
         <span class="palace-ledger-sum">${escHtml(r.summary)}</span>
         ${r.children ? `<button class="mind-btn-sm palace-ledger-kids" data-id="${r.id}" data-n="${r.children}">▸ ${r.children}</button>` : ''}
         ${r.actor !== 'ai' ? `<button class="mind-btn-sm palace-ledger-why" data-id="${r.id}" data-reason="${escAttr((r.detail || {}).reason || '')}" title="Add or edit the why — it lands next to this change in her ledger">✏</button>` : ''}
+        ${r.actor === 'librarian' && r.action === 'pass' ? `<button class="mind-btn-sm palace-ledger-revert" data-id="${r.id}" title="Undo everything this run did — retirements come back, merges and splits unwind, ratings, dates and links go back to what they were">↶</button>` : ''}
     </div>`;
 }
 
@@ -483,6 +487,16 @@ async function renderLedger(el) {
                 await palaceSend(`ledger/${btn.dataset.id}/reason`, 'PUT', { scope, reason });
                 renderLedger(el);
             } catch (e) { ui.showToast(`Reason save failed: ${e.message}`, 'error'); }
+        });
+    });
+    box.querySelectorAll('.palace-ledger-revert').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm('Undo everything this librarian run did?\n\nRetired memories come back, merges and splits unwind, ratings, dates and links go back to what they were. The run stays in the ledger with a "reverted" line.')) return;
+            try {
+                const r = await palaceSend('maintenance', 'POST', { action: 'revert_run', scope, run_id: Number(btn.dataset.id) });
+                ui.showToast(`Reverted: ${r.restored} restored · ${r.retired} retired · ${r.ratings} ratings · ${r.dates} dates · ${r.links} links put back`, 'success');
+                renderLedger(el);
+            } catch (e) { ui.showToast(e.message, 'error'); }
         });
     });
     box.querySelectorAll('.palace-ledger-kids').forEach(btn => {

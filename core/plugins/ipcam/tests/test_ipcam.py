@@ -179,7 +179,45 @@ def test_sharp_and_a_camera_without_a_snapshot_use_the_stream(cam, monkeypatch):
         "look: leave the value empty, or say 'sharp' for the full-size picture.", False)
 
 
+@pytest.mark.parametrize('flags, bright', [
+    ({}, 0), ({'flip_h': True}, 1), ({'flip_v': True}, 2), ({'flip_h': True, 'flip_v': True}, 3)])
+def test_flip_turns_the_picture(cam, monkeypatch, flags, bright):
+    # one bright corner, top-left in the source: where it lands names the flip
+    source = Image.new('L', (64, 48), 0)
+    source.paste(255, (0, 0, 32, 24))
+    raw = io.BytesIO()
+    source.save(raw, 'JPEG', quality=95)
+    monkeypatch.setattr(drv, '_ask', lambda c, peek=False: None if peek else raw.getvalue())
+    told, ok = run('camera', 'look', config=cfg(**flags))
+    assert ok
+    seen = Image.open(io.BytesIO(base64.b64decode(told['images'][0]['data'])))
+    got = [seen.convert('L').getpixel(p) > 128 for p in ((5, 5), (58, 5), (5, 42), (58, 42))]
+    assert got == [i == bright for i in range(4)]
+
+
+def test_an_unflipped_picture_is_the_cameras_own_bytes(cam):
+    told, _ = run('camera', 'look')
+    assert base64.b64decode(told['images'][0]['data']) == jpeg(cam.view)
+
+
+def test_switching_a_flip_off_takes_effect_on_a_held_camera(cam):
+    run('camera', 'look', config=cfg(flip_h=True))
+    assert drv._cams['dome'][1].flips
+    run('camera', 'look')
+    assert not drv._cams['dome'][1].flips
+
+
 # --- moving ------------------------------------------------------------------
+
+@pytest.mark.parametrize('flags, value, velocity', [
+    ({'flip_h': True}, 'left', 'x="0.5" y="0.0"'), ({'flip_h': True}, 'up', 'x="0.0" y="0.5"'),
+    ({'flip_v': True}, 'up', 'x="0.0" y="-0.5"'), ({'flip_v': True}, 'right', 'x="0.5" y="0.0"')])
+def test_a_flipped_picture_moves_the_way_it_looks(cam, flags, value, velocity):
+    told, ok = run('ptz', 'move', value, config=cfg(**flags))
+    assert ok and told['text'].startswith(f"Turned {value}")
+    body = next(b for b, n in zip(cam.bodies, cam.sent) if n == 'ContinuousMove')
+    assert f'<tt:PanTilt {velocity}/>' in body
+
 
 @pytest.mark.parametrize('value, velocity', [
     ('left', 'x="-0.5" y="0.0"'), ('right 60', 'x="0.5" y="0.0"'),

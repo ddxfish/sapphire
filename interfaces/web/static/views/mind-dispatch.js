@@ -26,12 +26,14 @@ const PALACE = {
     people: `./palace/entities.js${_v}`,
     knowledge: `./palace/knowledge.js${_v}`,
     goals: `./palace/goals.js${_v}`,
+    import: `./palace/import.js${_v}`,
     admin: `./palace/admin.js${_v}`,
 };
 
 // Palace-only views: friendly pointer instead of a missing classic module.
 const PALACE_ONLY = {
     self: ['\u{1F4A0} Self', 'The self layer lives in the Mind Palace memory system. Enable the Mind Palace plugin to give Sapphire a self-sheet.'],
+    import: ['\u{1F4E6} Import', 'The Import tab brings Memory (legacy) data into the Mind Palace. Enable the Mind Palace plugin (and disable Memory (legacy) — they take turns) to see what would come across and bring it in. The old databases are never changed.'],
     admin: ['\u{1F6E0}️ Admin', 'The Admin console belongs to the Mind Palace memory system. Enable the Mind Palace plugin to manage the librarian, migration, and rescue tools.'],
 };
 

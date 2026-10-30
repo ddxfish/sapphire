@@ -199,6 +199,60 @@ def test_dedup_scan_error_stamps_nothing(palace, monkeypatch):
     assert _passes_today('dedup') == 0
 
 
+def test_a_run_owns_one_notification_row(palace, monkeypatch):
+    """Krem's ruling 2026-10-30: a round or a drain is ONE row per scope in
+    the notification center — the passes inside it move the row's text,
+    run_end closes it with the after-action line; a lone ▶ Run now keeps a
+    row of its own. The per-verb notes stay in the ledger."""
+    import core.notify as notify
+    calls = []
+    monkeypatch.setattr(notify, 'begin',
+                        lambda title, *a, **k: calls.append(('begin', title, k)) or f"n{len(calls)}")
+    monkeypatch.setattr(notify, 'tick', lambda rid, **k: calls.append(('tick', rid, k)))
+    monkeypatch.setattr(notify, 'finish', lambda rid, **k: calls.append(('finish', rid, k)))
+    monkeypatch.setattr(librarian, "_run_messages", lambda *a, **kw: [False])
+    _dedup_setup()
+    librarian.run_begin('default', 'nightly tending')
+    librarian.run_blocking('default', kind='dedup', chat='librarian-t')
+    librarian.run_end('default')
+    assert [c[0] for c in calls] == ['begin', 'tick', 'finish']
+    assert calls[0][2]['key'] == 'librarian-run:default'
+    assert calls[0][2]['go'] == {'view': 'self'}
+    assert calls[1][1] == 'n1' and 'Dedup pass' in calls[1][2]['text']
+    assert calls[2][1] == 'n1' and 'nightly tending' in calls[2][2]['body']
+    calls.clear()
+    librarian.run_blocking('default', kind='dedup', chat='librarian-t')     # no run open
+    assert [c[0] for c in calls] == ['begin', 'finish']
+    assert calls[0][2]['key'] == 'librarian:default:dedup'
+
+
+def test_self_pass_never_clears_or_opens_sections(palace):
+    """A bad night blanked identity and the next night's 'first tending'
+    rewrote it from nothing (scout audit 2026-10-30). During a self pass
+    the write path refuses an empty section and a new box; a human from
+    the Self page may do both."""
+    assert st.write_section('default', 'identity', 'I am Sapphire.')[1]
+    lt.open_pass('default', [], kind='self')
+    try:
+        msg, ok = st.write_section('default', 'identity', '')
+        assert not ok and 'never clears' in msg
+        msg, ok = st.write_section('default', 'brand-new-box', 'something')
+        assert not ok and 'by hand' in msg
+        assert st.write_section('default', 'identity', 'I am Sapphire, still.')[1]
+    finally:
+        lt.close_pass()
+    assert st.write_section('default', 'brand-new-box', 'a human may')[1]
+
+
+def test_self_pass_aborts_when_the_sheet_is_unreadable(palace, monkeypatch):
+    monkeypatch.setattr(st, '_read_self', lambda *a, **k: ('boom', False))
+    monkeypatch.setattr(librarian, '_run_messages',
+                        lambda scope, groups, cfg, toolset, name, present, **kw:
+                        [bool(present(g, 1, 1)) for g in groups])
+    msg, _ok = librarian.run_blocking('default', kind='self', chat='librarian-t')
+    assert 'failed' in msg.lower() and 'unreadable' in msg.lower()
+
+
 def test_dedup_preview_reports_a_failed_scan(palace, monkeypatch):
     from plugins.mindpalace.routes import browse
     _dedup_setup()

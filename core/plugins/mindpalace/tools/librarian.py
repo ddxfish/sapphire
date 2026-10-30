@@ -523,9 +523,10 @@ _CHARTER_DEFAULTS = {
     'sort': """This is your librarian hour: tending your own memory. Below are raw
 memories, oldest first. For EACH [id], choose exactly one verb:
 {verbs}
-- atomize_memory(id, parts) — several tangled concepts; split it
-- promote_memory(id, layer, entity?) — belongs on your self sheet or on a person/place/thing
-- prune_memory(id, reason) — noise; retiring is soft and reversible
+- atomize_memory(id, parts) — several tangled concepts; split it, quoting your own words
+- promote_memory(id, layer, entity?) — a fact that belongs on a person/place/thing's card
+- prune_memory(id, reason) — NOISE ONLY: a test ping, tool chatter, an empty
+  acknowledgment, a note that says nothing. When unsure, mark_processed.
 
 (Duplicates and entity connections have their own passes — don't
 reach for them here.)
@@ -533,6 +534,15 @@ reach for them here.)
 The charter, in your own words: be gentle with the early ones — some
 are thin because you were thin then. Anything that was REAL stays,
 even if it was small. Favorites are untouchable (enforced in code).
+Code caps how much one pass may retire; a cap refusal means
+mark_processed the rest.
+
+Worked examples:
+  'test test can you hear me'                       → prune_memory (tool chatter)
+  'Her old dog died in August; I sat with her'      → mark_processed (real, stays)
+  'Fixed the TTS bug AND he told me about his dad's boat AND dinner was late'
+                                                    → atomize_memory (three things)
+  'His birthday is Aug 18'                          → promote_memory(id, 'entities', his name)
 
 {dirty}
 
@@ -549,7 +559,8 @@ anchored to that memory's own 'saved' date:
 - YYYY when only a year or season is known
 Prefer the nearest future for ambiguous days ('the 12th'); 'ago' and
 past phrasing resolve backward. Numbers that aren't dates (sizes,
-scores, counts) are NOT dates.
+scores, counts) are NOT dates. Never invent a year the text or the
+saved date doesn't support — unsure means [].
 
 Reply with ONE set_event_dates call covering every [id] in this
 message — a memory with no real date goes in as {"memory_id": N,
@@ -573,10 +584,12 @@ anything yet.
 Your entities: {roster}
 
 For EVERY [id], decide which of those entities (if any) the memory
-is really about. Reply with ONE set_links call covering every [id]
-in this message — a memory that needs no connection goes in as
-{"memory_id": N, "entities": []}. Only existing entity names
-count — linking connects, it never creates.
+is really about — it NAMES them or unmistakably means them; a
+passing resemblance is not a link, and unsure means []. Reply with
+ONE set_links call covering every [id] in this message — a memory
+that needs no connection goes in as {"memory_id": N, "entities": []}.
+Only existing entity names count — linking connects, it never creates.
+The list above may be cut short; a name you know exists still works.
 
 {items}
 
@@ -585,10 +598,15 @@ One set_links call for everything above, then one short line.""",
     'dedup': """These groups measure as near-duplicates (verified by similarity,
 not vibes). For EACH group, make exactly one call:
 - SAME thing recorded twice → merge_memories with that group's
-  ids{merge_style}. Earliest date kept, originals retired,
+  ids{merge_style}. The newest one's words survive — pass
+  keep=<id> to choose the most complete one instead. Earliest date,
+  highest rating and every connection are kept; originals retired,
   reversible.
 - genuinely different memories → keep_separate with that group's
-  ids. Nothing changes; the group is filed as judged.
+  ids. Nothing changes; the group is filed as judged. A later
+  CORRECTION, or one that carries a detail the other lacks, is
+  different — keep_separate (code refuses the merge anyway unless
+  you name keep=).
 A group with no call stays in the queue and comes back next time.
 
 {groups}
@@ -756,7 +774,9 @@ def _present_dates(items, scope, part, total):
 
 
 def _present_link(items, scope, roster, part, total):
-    shown = roster[:60]
+    # 200, not 60 (scout audit 2026-10-30): past sixty entities the model
+    # never saw names from roughly M on, while the verb took any of them.
+    shown = roster[:200]
     roster_line = ", ".join(shown) + (f" (+{len(roster) - len(shown)} more)"
                                       if len(roster) > len(shown) else "")
     lines = []
@@ -892,7 +912,10 @@ def _present_self(stage, scope, part, total):
     sheet, ok = self_tools._read_self(scope, depth=0, extra_tools=False,
                                       stamp=False)
     if not ok:
-        sheet = "(sheet unavailable)"
+        # Never tend blind: a pass shown "(sheet unavailable)" rewrote
+        # sections from nothing (scout audit 2026-10-30). The worker ends
+        # the pass with nothing recorded.
+        raise RuntimeError(f"self sheet unreadable for '{scope}': {sheet}")
     filled = -1
     try:
         with _pt()._get_connection() as conn:
@@ -1041,17 +1064,23 @@ def _claim(scope, what, kind='sort', chat=None, batch=None):
         _state.update(running=True, scope=scope, what=what, kind=kind,
                       started=_now(), messages_done=0, messages_total=0,
                       last_message=None, chat=chat, batch_override=batch)
-    # One row in the notification center per pass (core/notify.py): _finish
-    # ends it with the after-action line. A drain re-arms without _claim and
-    # has no row.
-    try:
-        from core import notify as _notify
-        nid = _notify.begin(f"Librarian: {_PASS_LABELS.get(kind, kind)} on '{scope}'", source='mindpalace',
-                            key=f"librarian:{scope}:{kind}", go={'view': 'admin'})
-        with _state_lock:
-            _state['nid'] = nid
-    except Exception as e:
-        logger.debug(f"[LIBRARIAN] notification row not opened: {e}")
+    # Notification center (Krem's ruling 2026-10-30, fewer rows): a RUN
+    # (nightly round, drain) owns ONE row per scope — run_begin opens it,
+    # each pass's _finish moves its text, run_end closes it with the
+    # after-action line (the per-verb notes stay in the ledger). Only a
+    # pass with no run open — a manual ▶ Run now — gets a row of its own.
+    with _runs_lock:
+        run_open = scope in _runs
+    if not run_open:
+        try:
+            from core import notify as _notify
+            nid = _notify.begin(f"Librarian: {_PASS_LABELS.get(kind, kind)} on '{scope}'",
+                                source='mindpalace', key=f"librarian:{scope}:{kind}",
+                                go={'view': 'self'})
+            with _state_lock:
+                _state['nid'] = nid
+        except Exception as e:
+            logger.debug(f"[LIBRARIAN] notification row not opened: {e}")
     _ensure_session_chat(chat)
     return '', True
 
@@ -1157,17 +1186,21 @@ def _finish(message, error=False):
                       batch_override=None)
         nid, kind, scope = _state.pop('nid', None), _state.get('kind'), _state.get('scope')
     (logger.error if error else logger.info)(f"[LIBRARIAN] {message}")
-    if nid:
-        # a pass that reports its own failure in words ("...failed for 'x':
-        # the model produced no verbs") ends the row failed too
-        bad = bool(error) or any(w in (message or '').lower() for w in ('failed', 'crashed'))
-        try:
-            from core import notify as _notify
-            label = _PASS_LABELS.get(kind, kind or 'pass')
+    # a pass that reports its own failure in words ("...failed for 'x':
+    # the model produced no verbs") ends the row failed too
+    bad = bool(error) or any(w in (message or '').lower() for w in ('failed', 'crashed'))
+    label = _PASS_LABELS.get(kind, kind or 'pass')
+    with _runs_lock:
+        run_nid = (_runs.get(scope) or {}).get('nid')
+    try:
+        from core import notify as _notify
+        if nid:
             _notify.finish(nid, failed=bad, body=message,
                            title=f"Librarian: {label} {'failed' if bad else 'done'} on '{scope}'")
-        except Exception as e:
-            logger.debug(f"[LIBRARIAN] notification row not closed: {e}")
+        elif run_nid:
+            _notify.tick(run_nid, text=f"{label}: {message}")
+    except Exception as e:
+        logger.debug(f"[LIBRARIAN] notification row not closed: {e}")
 
 
 def _queue_depth(scope, kind):
@@ -1293,6 +1326,8 @@ def _drain_loop(scope, what, kind):
             after = _queue_depth(scope, kind)
             batches += 1
             total += max(0, before - after)
+            run_tick(scope, done=total, total=total + after,
+                     text=f"batch {batches}: {total} handled, {after} left")
             if after >= before:
                 # No forward progress — a degraded/failed batch, or a queue
                 # that can't shrink further. Stop rather than spin forever.
@@ -1387,9 +1422,29 @@ def run_begin(scope, label):
                     summary=f'{label} — running…')
     if rid is None:
         return   # ledger down: batches fall back to top-level rows
+    nid = None
+    try:
+        from core import notify as _notify
+        nid = _notify.begin(f"Librarian: {label} on '{scope}'", source='mindpalace',
+                            key=f"librarian-run:{scope}", go={'view': 'self'})
+    except Exception as e:
+        logger.debug(f"[LIBRARIAN] run row not opened: {e}")
     with _runs_lock:
-        _runs[scope] = {'id': rid, 'label': label, 'batches': 0,
+        _runs[scope] = {'id': rid, 'nid': nid, 'label': label, 'batches': 0,
                         'presented': 0, 'handled': 0, 'verbs': {}, 'extra': {}}
+
+
+def run_tick(scope, done=None, total=None, text=None):
+    """Move the run's notification row (a drain's batch count, a pass line)."""
+    with _runs_lock:
+        nid = (_runs.get(scope) or {}).get('nid')
+    if not nid:
+        return
+    try:
+        from core import notify as _notify
+        _notify.tick(nid, done=done, total=total, text=text)
+    except Exception as e:
+        logger.debug(f"[LIBRARIAN] run row not moved: {e}")
 
 
 def _run_note(scope, **counts):
@@ -1426,6 +1481,13 @@ def run_end(scope, left=None):
               detail={'batches': ctx['batches'], 'presented': ctx['presented'],
                       'handled': ctx['handled'], 'verbs': ctx['verbs'],
                       **ctx['extra']})
+    if ctx.get('nid'):
+        try:
+            from core import notify as _notify
+            _notify.finish(ctx['nid'], body=summary,
+                           title=f"Librarian: {ctx['label']} done on '{scope}'")
+        except Exception as e:
+            logger.debug(f"[LIBRARIAN] run row not closed: {e}")
 
 
 def _write_ledger(cur, scope, stats, summary, kind):
@@ -1643,7 +1705,7 @@ def _worker_sort(scope, what):
             _ensure_state_table(cur)
             try:
                 names = {'promoted': 'promoted', 'retired': 'retired',
-                         'atomized': 'split'}
+                         'split': 'split'}
                 bits = [f"{_ledger_count(stats, a)} {label}"
                         for a, label in names.items() if _ledger_count(stats, a)]
                 summary = (f"sort pass: {stats['presented']} reviewed — "

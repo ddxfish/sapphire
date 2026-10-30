@@ -271,13 +271,14 @@ def delete_chunk(cid=None, query=None, **_):
         return {'error': 'Invalid chunk id'}, 400
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute('SELECT layer, scope, content FROM chunks WHERE id = ?',
+        row = cur.execute('SELECT layer, scope, content, meta FROM chunks WHERE id = ?',
                           (cid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
         cur.execute("DELETE FROM edges WHERE (src_type = 'chunk' AND src_id = ?) "
                     "OR (dst_type = 'chunk' AND dst_id = ?)", (cid, cid))
         cur.execute('DELETE FROM chunks WHERE id = ?', (cid,))
+        pt._tombstone_row(cur, row[3], row[1])
         pt._ledger(row[1], 'user', 'deleted', layer=row[0], target=cid, cursor=cur,
                    summary=(f"deleted [{cid}] from {row[0]}: "
                             f"\"{row[2][:60]}{'…' if len(row[2]) > 60 else ''}\""))
@@ -522,8 +523,11 @@ def delete_entity(eid=None, **_):
                           (eid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
-        chunk_ids = [r[0] for r in cur.execute(
-            'SELECT id FROM chunks WHERE entity_id = ?', (eid,)).fetchall()]
+        own = cur.execute('SELECT id, meta FROM chunks WHERE entity_id = ?',
+                          (eid,)).fetchall()
+        chunk_ids = [r[0] for r in own]
+        for _cid, meta_raw in own:
+            pt._tombstone_row(cur, meta_raw, row[1])
         if chunk_ids:
             marks = ','.join('?' * len(chunk_ids))
             cur.execute(f"DELETE FROM edges WHERE (src_type = 'chunk' AND src_id IN ({marks})) "
@@ -1400,7 +1404,7 @@ def maintenance(body=None, **_):
         # backfill, so improved rules need this to reach old rows). Librarian
         # verdicts (temporal_at / src='librarian') are terminal and kept.
         from plugins.mindpalace.tools import temporal
-        stamped = cleared = kept = recurred = 0
+        stamped = cleared = kept = recurred = planned = 0
         with pt._get_connection() as conn:
             cur = conn.cursor()
             rows = cur.execute(
@@ -1409,6 +1413,8 @@ def maintenance(body=None, **_):
             for cid, content, created, raw in rows:
                 meta = _parse_meta(raw) or {}
                 dirty = False
+                verdict = bool(meta.get('temporal_at')
+                               or meta.get('event_date_src') == 'librarian')
                 # recurring_dates is regex-OWNED (librarian never writes it),
                 # so it refreshes even on verdict-protected chunks.
                 rec = temporal.recurring(content)
@@ -1419,7 +1425,7 @@ def maintenance(body=None, **_):
                         meta.pop('recurring_dates', None)
                     recurred += 1
                     dirty = True
-                if meta.get('temporal_at') or meta.get('event_date_src') == 'librarian':
+                if verdict:
                     kept += 1
                 else:
                     dates = temporal.resolve(content, created)
@@ -1434,18 +1440,35 @@ def maintenance(body=None, **_):
                         meta.pop('event_date_src', None)
                         cleared += 1
                         dirty = True
+                # The plan (meta.when): hers stands; a verdict's derives
+                # from its dates; otherwise the floor's sure-future forms.
+                if meta.get('when_src') != 'ai':
+                    if verdict:
+                        w, src = temporal.when_from(meta.get('event_dates'), created), 'librarian'
+                    else:
+                        p = temporal.plans(content, created)
+                        w, src = (p[0] if p else None), 'regex'
+                    if w != meta.get('when'):
+                        if w:
+                            meta['when'], meta['when_src'] = w, src
+                        else:
+                            meta.pop('when', None)
+                            meta.pop('when_src', None)
+                        planned += 1
+                        dirty = True
                 if dirty:
                     cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
                                 (json.dumps(meta, ensure_ascii=False), cid))
-            if stamped or cleared or recurred:
+            if stamped or cleared or recurred or planned:
                 pt._ledger(scope, 'user', 'maintenance', cursor=cur,
                            summary=(f"redated with regex floor: {stamped} stamped, "
                                     f"{cleared} cleared, {recurred} recurring, "
+                                    f"{planned} plans changed, "
                                     f"{kept} librarian verdicts kept"))
             conn.commit()
         _publish('events', scope, 'update')
         return {'success': True, 'stamped': stamped, 'cleared': cleared,
-                'recurring': recurred, 'kept': kept}
+                'recurring': recurred, 'planned': planned, 'kept': kept}
 
     if action == 'reopen_dedup':
         # Reopen every dedup verdict in the scope (dedup_at cleared) so the
@@ -1528,6 +1551,7 @@ def maintenance(body=None, **_):
                 "AND (json_extract(meta, '$.event_dates') IS NOT NULL "
                 "     OR json_extract(meta, '$.event_date_src') IS NOT NULL "
                 "     OR json_extract(meta, '$.temporal_at') IS NOT NULL "
+                "     OR json_extract(meta, '$.when') IS NOT NULL "
                 "     OR json_extract(meta, '$.recurring_dates') IS NOT NULL)",
                 (scope,)).fetchall()
             for cid, raw in rows:
@@ -1535,6 +1559,9 @@ def maintenance(body=None, **_):
                 for key in ('event_dates', 'event_date_src', 'temporal_at',
                             'recurring_dates'):
                     meta.pop(key, None)
+                if meta.get('when_src') != 'ai':     # her own plans are hers
+                    meta.pop('when', None)
+                    meta.pop('when_src', None)
                 cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
                             (json.dumps(meta, ensure_ascii=False), cid))
                 wiped += 1
@@ -1545,6 +1572,21 @@ def maintenance(body=None, **_):
             conn.commit()
         _publish('events', scope, 'update')
         return {'success': True, 'wiped': wiped}
+
+    if action == 'revert_run':
+        # Undo one librarian run from its ledger rows (2026-10-30): the
+        # night-after-a-bad-model button. Soft throughout, recorded.
+        try:
+            run_id = int(b.get('run_id'))
+        except (TypeError, ValueError):
+            return {'error': 'run_id required'}, 400
+        from plugins.mindpalace.tools import librarian_tools as lt
+        counts, err = lt.revert_run(scope, run_id)
+        if err:
+            return {'error': err}, 400
+        _publish('events', scope, 'update')
+        _publish('entities', scope, 'update')
+        return {'success': True, **counts}
 
     return {'error': f'Unknown maintenance action: {action}'}, 400
 

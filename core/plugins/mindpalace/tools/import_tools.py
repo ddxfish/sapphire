@@ -23,6 +23,7 @@
 import json
 import sqlite3
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -171,7 +172,7 @@ def _insert_chunk(cursor, *, layer, scope, content, created, updated,
 
 # ─── Per-store importers ──────────────────────────────────────────────────────
 
-def _import_memories(config, dest_cursor, existing_keys, scopes_seen):
+def _import_memories(config, dest_cursor, existing_keys, scopes_seen, skip_keys=frozenset()):
     """memories → chunks(layer='events'). Returns (copied, skipped, failed)."""
     path = _source_path(config, "memory.db")
     if not path.exists():
@@ -196,6 +197,8 @@ def _import_memories(config, dest_cursor, existing_keys, scopes_seen):
             row = {k: r[k] for k in r.keys()}
             old_id = row.get('id')
             key = f"v2:memories:{old_id}"
+            if key in skip_keys:
+                continue
             if key in existing_keys:
                 skipped += 1
                 continue
@@ -239,7 +242,7 @@ def _import_memories(config, dest_cursor, existing_keys, scopes_seen):
     return (copied, skipped, failed)
 
 
-def _import_people(config, dest_cursor, existing_keys, scopes_seen):
+def _import_people(config, dest_cursor, existing_keys, scopes_seen, skip_keys=frozenset()):
     """people → entities row + one tier-1 entities-layer chunk each.
     Returns (copied, skipped, failed)."""
     from plugins.mindpalace.tools import palace_tools
@@ -262,6 +265,8 @@ def _import_people(config, dest_cursor, existing_keys, scopes_seen):
             row = {k: r[k] for k in r.keys()}
             old_id = row.get('id')
             key = f"v2:people:{old_id}"
+            if key in skip_keys:
+                continue
             if key in existing_keys:
                 skipped += 1
                 continue
@@ -354,7 +359,7 @@ def _import_people(config, dest_cursor, existing_keys, scopes_seen):
     return (copied, skipped, failed)
 
 
-def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen):
+def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen, skip_keys=frozenset()):
     """knowledge_entries → chunks(layer='knowledge'). Preserves the sub-chunk
     group identity (label, source, chunk_index) for future neighbor-stitching.
     Returns (copied, skipped, failed)."""
@@ -404,6 +409,8 @@ def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen):
             row = {k: r[k] for k in r.keys()}
             old_id = row.get('id')
             key = f"v2:knowledge:{old_id}"
+            if key in skip_keys:
+                continue
             if key in existing_keys:
                 skipped += 1
                 continue
@@ -463,7 +470,7 @@ def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen):
     return (copied, skipped, failed)
 
 
-def _import_goals(config, dest_cursor, existing_keys, scopes_seen):
+def _import_goals(config, dest_cursor, existing_keys, scopes_seen, skip_keys=frozenset()):
     """goals.db → chunks(layer='goals') + subtask_of / progress_of edges.
     Two-pass so subtasks map to their parents' NEW ids. Permanent goals land
     in the never-fades band (importance 0.95). Returns (copied, skipped,
@@ -491,6 +498,8 @@ def _import_goals(config, dest_cursor, existing_keys, scopes_seen):
         nonlocal copied, failed
         old_id = row.get('id')
         key = f"v2:goal:{old_id}"
+        if key in skip_keys:
+            return 'left'
         if key in existing_keys:
             return 'skipped'
         title = (row.get('title') or '').strip()
@@ -545,11 +554,13 @@ def _import_goals(config, dest_cursor, existing_keys, scopes_seen):
             copied += 1
         elif result == 'skipped':
             skipped += 1
-        else:
+        elif result != 'left':
             failed += 1
 
     for n in notes:
         key = f"v2:goalnote:{n.get('id')}"
+        if key in skip_keys:
+            continue
         if key in existing_keys:
             skipped += 1
             continue
@@ -586,17 +597,385 @@ def _import_goals(config, dest_cursor, existing_keys, scopes_seen):
     return (copied, skipped, failed)
 
 
+# ─── Preview (read-only, both sides) ─────────────────────────────────────────
+# The Import tab's numbers: per store × scope, what the classic databases
+# hold, what the palace already carries (import_key), and the difference.
+# classic_memory_rows (core/plugin_loader.py) answers the boot question with
+# one number; this is the same count, unfolded.
+
+STORES = ('memories', 'people', 'knowledge', 'goals')
+_SOURCE_FILES = ('memory.db', 'knowledge.db', 'goals.db')
+NUDGE_KEY = 'mindpalace-import-pending'
+
+
+# ─── Tombstones (2026-10-30) ─────────────────────────────────────────────────
+# A deleted palace row that came from the classic system never comes back
+# through the Import tab: its key is kept (never its content). Before this
+# the idempotency set was the palace's own keys, so every memory the user
+# trimmed after the first import read as "pending" again — Prime showed
+# 444 of them. Tester resets (wipe scope, clear a tab, delete scope) do NOT
+# tombstone: their whole point is re-import.
+
+_TOMB_SCHEMA = ('CREATE TABLE IF NOT EXISTS import_tombstones '
+                '(key TEXT PRIMARY KEY, scope TEXT, created TEXT)')
+
+
+def tombstone_keys(cursor, keys, scope):
+    cursor.execute(_TOMB_SCHEMA)
+    from plugins.mindpalace.tools import palace_tools
+    now = palace_tools._now()
+    for k in keys:
+        if k:
+            cursor.execute('INSERT OR IGNORE INTO import_tombstones (key, scope, created) '
+                           'VALUES (?, ?, ?)', (str(k), scope, now))
+
+
+def _tombstones(cursor):
+    cursor.execute(_TOMB_SCHEMA)
+    return {r[0] for r in cursor.execute('SELECT key FROM import_tombstones')}
+
+
+# ─── Classification: every classic row, against the palace ──────────────────
+
+def _classic_rows(config):
+    """Every classic row as (key, store, scope, created_iso, preview, old_id,
+    valid), read-only. Per-chat attachment tabs are left aside (rag count)."""
+    out, rag = [], 0
+
+    def row(key, store, scope, created_raw, content, old_id):
+        created, _orig = _normalize_ts(created_raw)
+        text = ' '.join(str(content or '').split())
+        out.append({'key': key, 'store': store, 'scope': scope or 'default',
+                    'created': created, 'preview': text[:80], 'id': old_id,
+                    'valid': bool(text)})
+
+    mem = _source_path(config, 'memory.db')
+    if mem.exists():
+        try:
+            with _connect_ro(mem) as src:
+                src.row_factory = sqlite3.Row
+                cur = src.cursor()
+                if _columns(cur, 'memories'):
+                    for r in cur.execute('SELECT * FROM memories'):
+                        d = {k: r[k] for k in r.keys()}
+                        row(f"v2:memories:{d.get('id')}", 'memories', d.get('scope'),
+                            d.get('timestamp'), d.get('content'), d.get('id'))
+        except sqlite3.Error as e:
+            logger.warning(f"[MINDPALACE] import preview: memory.db unreadable: {e}")
+
+    know = _source_path(config, 'knowledge.db')
+    if know.exists():
+        try:
+            with _connect_ro(know) as src:
+                src.row_factory = sqlite3.Row
+                cur = src.cursor()
+                if _columns(cur, 'people'):
+                    for r in cur.execute('SELECT * FROM people'):
+                        d = {k: r[k] for k in r.keys()}
+                        row(f"v2:people:{d.get('id')}", 'people', d.get('scope'),
+                            _get(d, 'created_at', 'updated_at'), d.get('name'), d.get('id'))
+                if _columns(cur, 'knowledge_entries'):
+                    tabs = {}
+                    if _columns(cur, 'knowledge_tabs'):
+                        for r in cur.execute('SELECT * FROM knowledge_tabs'):
+                            t = {k: r[k] for k in r.keys()}
+                            tabs[t.get('id')] = t
+                    for r in cur.execute('SELECT * FROM knowledge_entries'):
+                        d = {k: r[k] for k in r.keys()}
+                        tab = tabs.get(d.get('tab_id'), {})
+                        scope = _get(d, 'scope') or tab.get('scope') or 'default'
+                        if str(scope).startswith('__rag__:'):
+                            rag += 1
+                            continue
+                        row(f"v2:knowledge:{d.get('id')}", 'knowledge', scope,
+                            _get(d, 'created_at', 'updated_at'), d.get('content'), d.get('id'))
+        except sqlite3.Error as e:
+            logger.warning(f"[MINDPALACE] import preview: knowledge.db unreadable: {e}")
+
+    goals = _source_path(config, 'goals.db')
+    if goals.exists():
+        try:
+            with _connect_ro(goals) as src:
+                src.row_factory = sqlite3.Row
+                cur = src.cursor()
+                if _columns(cur, 'goals'):
+                    for r in cur.execute('SELECT * FROM goals'):
+                        d = {k: r[k] for k in r.keys()}
+                        row(f"v2:goal:{d.get('id')}", 'goals', d.get('scope'),
+                            _get(d, 'created_at', 'updated_at'), d.get('title'), d.get('id'))
+                    if _columns(cur, 'goal_progress'):
+                        for r in cur.execute('SELECT p.*, g.scope AS gscope FROM goal_progress p '
+                                             'JOIN goals g ON g.id = p.goal_id'):
+                            d = {k: r[k] for k in r.keys()}
+                            row(f"v2:goalnote:{d.get('id')}", 'goals', d.get('gscope'),
+                                d.get('created_at'), d.get('note'), d.get('id'))
+        except sqlite3.Error as e:
+            logger.warning(f"[MINDPALACE] import preview: goals.db unreadable: {e}")
+    return out, rag
+
+
+def _classify(config):
+    """Every classic row with its class: imported (its key is in the palace),
+    tombstoned (deleted here, never again), removed (not in the palace AND
+    saved before this scope's first import — it came through once and was
+    deleted or merged away since), new (never seen), invalid (empty).
+    Returns (rows, rag_count)."""
+    from plugins.mindpalace.tools import palace_tools
+    rows, rag = _classic_rows(config)
+    with palace_tools._get_connection() as conn:
+        cur = conn.cursor()
+        have = {r[0] for r in cur.execute(
+            "SELECT json_extract(meta, '$.import_key') FROM chunks "
+            "WHERE json_extract(meta, '$.import_key') LIKE 'v2:%'")}
+        tomb = _tombstones(cur)
+        # First import per (scope, STORE): an import row says which stores
+        # that run copied (detail.stores). A run that copied only memories
+        # is no evidence about that scope's people — on the restored dev
+        # box 23 never-imported rows read as "removed before" under a
+        # per-scope-only rule (2026-10-30). Imports have always been every
+        # scope per store, so a store copied in a run was copied for every
+        # scope that held it then.
+        first = {}
+        try:
+            for scope, ts, detail in cur.execute(
+                    "SELECT scope, ts, detail FROM ledger WHERE actor = 'import' ORDER BY ts"):
+                try:
+                    stores = (json.loads(detail or '{}').get('stores') or {})
+                except Exception:
+                    stores = {}
+                for store, n in stores.items():
+                    if n:
+                        first.setdefault((scope, store), ts)
+        except sqlite3.Error:
+            pass
+    for r in rows:
+        if not r['valid']:
+            r['cls'] = 'invalid'
+        elif r['key'] in have:
+            r['cls'] = 'imported'
+        elif r['key'] in tomb:
+            r['cls'] = 'tombstoned'
+        elif (first.get((r['scope'], r['store']))
+              and r['created'] < first[(r['scope'], r['store'])]):
+            r['cls'] = 'removed'
+        else:
+            r['cls'] = 'new'
+    return rows, rag
+
+
+def preview(config) -> dict:
+    """What an import would do, without doing it. Read-only on both sides.
+    'pending' = new rows only; removed-before rows are listed apart and
+    come back only on an explicit ask (Krem 2026-10-30, C)."""
+    rows, rag = _classify(config)
+    stores = {}
+    for s in STORES:
+        scopes = {}
+        for r in rows:
+            if r['store'] != s or r['cls'] == 'invalid':
+                continue
+            v = scopes.setdefault(r['scope'], {'total': 0, 'imported': 0, 'pending': 0,
+                                               'removed': 0, 'tombstoned': 0})
+            v['total'] += 1
+            v[{'imported': 'imported', 'new': 'pending', 'removed': 'removed',
+               'tombstoned': 'tombstoned'}[r['cls']]] += 1
+        stores[s] = {'absent': not _source_path(config, {'memories': 'memory.db',
+                                                         'people': 'knowledge.db',
+                                                         'knowledge': 'knowledge.db',
+                                                         'goals': 'goals.db'}[s]).exists(),
+                     'scopes': dict(sorted(scopes.items()))}
+        for k in ('total', 'imported', 'pending', 'removed', 'tombstoned'):
+            stores[s][k] = sum(v[k] for v in scopes.values())
+    files = {}
+    for name in _SOURCE_FILES:
+        p = _source_path(config, name)
+        files[name] = ({'present': True, 'bytes': p.stat().st_size}
+                       if p.exists() else {'present': False})
+    with _state_lock:
+        st = dict(_run_state)
+    return {'stores': stores, 'files': files, 'rag_rows': rag,
+            'pending': sum(stores[s]['pending'] for s in STORES),
+            'removed': sum(stores[s]['removed'] for s in STORES),
+            'tombstoned': sum(stores[s]['tombstoned'] for s in STORES),
+            'running': st['running'],
+            'last': st.get('result'), 'finished': st.get('finished')}
+
+
+def removed_list(config, scope=None, store=None):
+    """The removed-before rows, previews included — the user's own data,
+    shown on request so the decision (bring back / scrub) is an informed one."""
+    rows, _rag = _classify(config)
+    out = [{k: r[k] for k in ('store', 'scope', 'key', 'id', 'created', 'preview')}
+           for r in rows if r['cls'] == 'removed'
+           and (scope is None or r['scope'] == scope)
+           and (store is None or r['store'] == store)]
+    out.sort(key=lambda r: (r['scope'], r['store'], r['created']))
+    return out
+
+
+_SCRUB_SQL = {
+    'memories': ('memory.db', ['DELETE FROM memories WHERE id = ?']),
+    'people': ('knowledge.db', ['DELETE FROM people WHERE id = ?']),
+    'knowledge': ('knowledge.db', ['DELETE FROM knowledge_entries WHERE id = ?']),
+    'goal': ('goals.db', ['DELETE FROM goal_progress WHERE goal_id = ?',
+                          'DELETE FROM goals WHERE id = ?']),
+    'goalnote': ('goals.db', ['DELETE FROM goal_progress WHERE id = ?']),
+}
+
+
+def scrub_removed(config, scope=None):
+    """THE ONE WRITE TO A CLASSIC DATABASE IN THE PALACE (Krem's ruling
+    2026-10-30): rows the user already removed from the palace, deleted from
+    the old database on an explicit, typed-confirm ask — personal data from
+    the old days must not linger. Never automatic, never the AI's, never
+    the importer's. The classic memories FTS rides on triggers; the other
+    stores are bare rows. Keys are tombstoned; a ledger line per scope
+    carries counts, never content. Returns counts."""
+    from plugins.mindpalace.tools import palace_tools
+    rows = [r for r in removed_list(config, scope=scope)]
+    counts = {s: 0 for s in STORES}
+    # Sanity fence: "removed before" presumes an earlier import brought
+    # the row in. More removed rows than this palace EVER imported means
+    # the old database and this palace are not a pair (a different palace,
+    # a swapped directory, a test against the wrong config — the 28-row
+    # incident, 2026-10-30). Refuse rather than delete.
+    ever = 0
+    with palace_tools._get_connection() as conn:
+        for (detail,) in conn.execute("SELECT detail FROM ledger WHERE actor = 'import'"):
+            try:
+                ever += sum(int(n) for n in (json.loads(detail or '{}').get('stores') or {}).values())
+            except Exception:
+                pass
+    if rows and len(rows) > ever:
+        raise RuntimeError(f"{len(rows)} removed-before rows exceed the {ever} this palace "
+                           f"ever imported — the old database and this palace don't match; "
+                           f"nothing scrubbed")
+    by_file = {}
+    for r in rows:
+        kind = r['key'].split(':')[1]
+        fname, sqls = _SCRUB_SQL[kind]
+        by_file.setdefault(fname, []).append((sqls, r['id'], r['store']))
+    for fname, items in by_file.items():
+        path = _source_path(config, fname)
+        if not path.exists():
+            continue
+        conn = sqlite3.connect(str(path))
+        try:
+            for sqls, old_id, store in items:
+                for sql in sqls:
+                    conn.execute(sql, (old_id,))
+                counts[store] += 1
+            conn.commit()
+        finally:
+            conn.close()
+    scrubbed = [r for r in rows]
+    if scrubbed:
+        with palace_tools._get_connection() as conn:
+            cur = conn.cursor()
+            per_scope = {}
+            for r in scrubbed:
+                per_scope.setdefault(r['scope'], []).append(r['key'])
+            for sc, keys in per_scope.items():
+                tombstone_keys(cur, keys, sc)
+                palace_tools._ledger(sc, 'user', 'scrubbed', cursor=cur,
+                                     summary=(f"scrubbed {len(keys)} removed-before row(s) "
+                                              f"from the classic database for good"))
+            conn.commit()
+    return {'scrubbed': len(scrubbed), **counts}
+
+
+def nudge_if_pending(config):
+    """Boot (plugins_ready): classic rows not yet in the palace → a row in
+    the notification center, re-fired every boot while any remain (Krem's
+    ruling 2026-10-30: fire on each boot if they need to migrate). Nothing
+    pending → the row goes away."""
+    try:
+        from core import notify
+    except Exception:
+        return None
+    try:
+        p = preview(config)
+    except Exception as e:
+        logger.debug(f"[MINDPALACE] import nudge skipped: {e}")
+        return None
+    if p['pending'] <= 0:
+        _dismiss_nudge(notify)
+        return None
+    bits = [f"{p['stores'][s]['pending']} {s}" for s in STORES
+            if p['stores'][s]['pending']]
+    return notify.notify(
+        "Classic memories are waiting to be imported", 'warning',
+        f"{', '.join(bits)} from Memory (legacy) are not in the Mind Palace "
+        f"yet. Mind › Import shows what will come across and brings it in; "
+        f"the old databases are never changed.",
+        source='mindpalace', key=NUDGE_KEY, go={'view': 'import'})
+
+
+def _dismiss_nudge(notify):
+    try:
+        for r in notify.rows(source='mindpalace'):
+            if r.get('key') == NUDGE_KEY:
+                notify.dismiss(r['id'])
+    except Exception as e:
+        logger.debug(f"[MINDPALACE] import nudge not dismissed: {e}")
+
+
 # ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 _import_lock = None   # module-level: one import at a time, ever
+_state_lock = threading.Lock()
+_run_state = {'running': False, 'started': None, 'stage': None, 'done': 0,
+              'total': 0, 'result': None, 'finished': None, 'error': None}
 
 
-def _run_import(what: str, config) -> str:
+def status() -> dict:
+    with _state_lock:
+        return dict(_run_state)
+
+
+def start(config, what='all', sync=False, scope=None, include_removed=False):
+    """The Import tab's buttons: run in a background thread (the whole copy
+    plus the metadata backfill used to block the request), progress on
+    the bus via the notification row. `scope` imports one scope's rows;
+    `include_removed` brings back rows the user removed before (never the
+    default). Returns (message, ok). sync=True runs inline (tests)."""
+    with _state_lock:
+        if _run_state['running']:
+            return "An import is already running.", False
+        _run_state.update(running=True, started=palace_now(), stage='starting',
+                          done=0, total=0, result=None, error=None)
+    args = (what, config, scope, include_removed)
+    if sync:
+        _run_and_record(*args)
+    else:
+        threading.Thread(target=_run_and_record, args=args,
+                         name='mindpalace-import', daemon=True).start()
+    return (f"Import started for '{scope}'." if scope else "Import started."), True
+
+
+def palace_now():
     from plugins.mindpalace.tools import palace_tools
-    import threading as _threading
+    return palace_tools._now()
+
+
+def _run_and_record(what, config, scope=None, include_removed=False):
+    try:
+        text = _run_import(what, config, scope=scope, include_removed=include_removed)
+        with _state_lock:
+            _run_state.update(result=text)
+    except Exception as e:
+        logger.error(f"[MINDPALACE] import thread failed: {e}", exc_info=True)
+        with _state_lock:
+            _run_state.update(error=str(e), result=f"Import failed: {e}")
+    finally:
+        with _state_lock:
+            _run_state.update(running=False, stage=None, finished=palace_now())
+
+
+def _run_import(what: str, config, scope=None, include_removed=False) -> str:
     global _import_lock
     if _import_lock is None:
-        _import_lock = _threading.Lock()
+        _import_lock = threading.Lock()
     # The idempotency set is a read-once snapshot — two CONCURRENT imports
     # (Admin button + AI tool run in parallel threads) each see an empty set
     # and duplicate every row (Lane-1 scout, reproduced 2026-07-27). One
@@ -606,20 +985,65 @@ def _run_import(what: str, config) -> str:
         return ("An import is already running — wait for it to finish, "
                 "then re-run if needed (re-runs copy zero duplicates).")
     try:
-        return _run_import_locked(what, config)
+        # One row in the notification center for the whole run (the tool
+        # path and the tab share it); ticks ride the bus, the file sees
+        # start and end. A refusal above makes no row.
+        try:
+            from core import notify as _notify
+            with _notify.progress("Importing classic memories", source='mindpalace',
+                                  go={'view': 'import'},
+                                  done_title="Classic memories imported",
+                                  failed_title="Import of classic memories failed") as h:
+                text = _run_import_locked(what, config, progress=h, scope=scope,
+                                          include_removed=include_removed)
+                h.text(text.split('\n', 1)[-1][:300] if text else '')
+            return text
+        except ImportError:
+            return _run_import_locked(what, config, scope=scope,
+                                      include_removed=include_removed)
     finally:
         _import_lock.release()
 
 
-def _run_import_locked(what: str, config) -> str:
+def _run_import_locked(what: str, config, progress=None, scope=None,
+                       include_removed=False) -> str:
     from plugins.mindpalace.tools import palace_tools
 
-    order = ['memories', 'people', 'knowledge', 'goals']
+    order = list(STORES)
     targets = order if what == 'all' else [what]
 
     results = {}
     scopes_seen = set()
     any_copied = False
+
+    # What stays out (2026-10-30): tombstoned keys always; rows the user
+    # removed before unless asked; other scopes when one scope was asked.
+    cls, _rag = _classify(config)
+    left = {'removed': 0, 'tombstoned': 0, 'other scopes': 0}
+    skip_keys = set()
+    for r in cls:
+        if r['cls'] == 'tombstoned':
+            skip_keys.add(r['key']); left['tombstoned'] += 1
+        elif r['cls'] == 'removed' and not include_removed:
+            skip_keys.add(r['key']); left['removed'] += 1
+        elif scope and r['scope'] != scope:
+            skip_keys.add(r['key']); left['other scopes'] += 1
+    skip_keys = frozenset(skip_keys)
+
+    # Totals first so the bar has a denominator.
+    source = {s: {} for s in STORES}
+    for r in cls:
+        if r['cls'] != 'invalid' and r['key'] not in skip_keys:
+            source[r['store']][r['scope']] = source[r['store']].get(r['scope'], 0) + 1
+    total = sum(sum(source[s].values()) for s in targets)
+    done_before = 0
+
+    def tick(stage, n):
+        d = done_before + n
+        with _state_lock:
+            _run_state.update(stage=stage, done=d, total=total)
+        if progress is not None:
+            progress.update(d, total or None, text=f"{stage}: {d}/{total}")
 
     with palace_tools._get_connection() as conn:
         cursor = conn.cursor()
@@ -638,10 +1062,14 @@ def _run_import_locked(what: str, config) -> str:
             'goals': _import_goals,
         }
         for store in targets:
-            res = importers[store](config, cursor, existing_keys, scopes_seen)
+            tick(store, 0)
+            res = importers[store](config, cursor, existing_keys, scopes_seen,
+                                   skip_keys=skip_keys)
             results[store] = res
             if res is not None and res[0] > 0:
                 any_copied = True
+            done_before += sum(source[store].values())
+            tick(store, 0)
 
         # Register every distinct scope so the UI dropdown lists it. create_scope
         # opens its own connection; call after our writes are in the cursor but
@@ -687,10 +1115,22 @@ def _run_import_locked(what: str, config) -> str:
     # marker); runs AFTER people-import so events link to person entities.
     md_result = None
     try:
+        with _state_lock:
+            _run_state.update(stage='metadata')
+        if progress is not None:
+            progress.text('stamping metadata and linking people…')
         from plugins.mindpalace.tools import metadata
         md_result = metadata.backfill()
     except Exception as e:
         md_result = {'error': str(e)}
+
+    # Nothing left in the old stores → the boot nudge has done its job.
+    try:
+        if preview(config)['pending'] <= 0:
+            from core import notify as _notify
+            _dismiss_nudge(_notify)
+    except Exception as e:
+        logger.debug(f"[MINDPALACE] post-import nudge check skipped: {e}")
 
     # ── Human-readable summary ──
     lines = ["Import from the classic memory system (v2 → mind palace):"]
@@ -711,6 +1151,11 @@ def _run_import_locked(what: str, config) -> str:
         else:
             lines.append(f"  • metadata: {md_result.get('stamped', 0)} chunks stamped, "
                          f"{md_result.get('edges', 0)} entity links seeded.")
+    out = [f"{n} {k}" for k, n in left.items() if n]
+    if out:
+        lines.append("  • left out: " + ", ".join(out)
+                     + (" — removed-before rows come back only from the Import tab"
+                        if left['removed'] else "") + ".")
     lines.append("The old databases were opened read-only and were NOT modified — "
                  "they remain your switch-back path.")
     return "\n".join(lines)

@@ -13,9 +13,11 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-MD_VERSION = 2  # bump to selectively re-backfill rows stamped by older passes
+MD_VERSION = 3  # bump to selectively re-backfill rows stamped by older passes
                 # v2 (2026-07-16): derivable set gained event_dates (temporal
                 # floor) — v1 rows re-backfill so old memories get dated too
+                # v3 (2026-10-30): meta.when — the ONE date a memory is a plan
+                # for (src ai | librarian | regex); Upcoming reads it alone
 
 # Boot-window id for librarian batch grouping. Module import ≈ plugin load ≈
 # boot; a plugin reload starts a new window, which is fine — the semantic is
@@ -246,6 +248,10 @@ def derivable_meta(content: str, exclude_names=(), anchor=None,
         if dates:
             meta['event_dates'] = dates
             meta['event_date_src'] = 'regex'
+        plan = temporal.plans(content, anchor)
+        if plan:
+            meta['when'] = plan[0]
+            meta['when_src'] = 'regex'
         rec = temporal.recurring(content)
         if rec:
             meta['recurring_dates'] = rec
@@ -301,18 +307,23 @@ def seed_edges(cursor, chunk_id: int, entity_ids, now: str) -> int:
 # provenance, queue stamps, retirement marks, import keys, plugin fields —
 # survives. One rule for backfill and update_memory alike.
 DERIVED_KEYS = ('md_v', 'stats', 'refers_to_time', 'event_dates',
-                'event_date_src', 'recurring_dates', 'noun_candidates')
+                'event_date_src', 'recurring_dates', 'noun_candidates',
+                'when', 'when_src')
 
 
-def merge_derived(old, fresh: dict) -> dict:
+def merge_derived(old, fresh: dict, anchor=None) -> dict:
     """old meta bag + a fresh derivable/save stamp → the merged bag. A
     librarian temporal verdict (dates or ruled-dateless) is terminal: the
-    regex floor never overwrites the refiner."""
+    regex floor never overwrites the refiner. `when` set by her or by the
+    librarian outranks the regex plan; a pre-v3 librarian verdict without
+    a `when` derives one from its dates (needs the chunk's `anchor`)."""
     old = dict(old) if isinstance(old, dict) else {}
     verdict = (old.get('temporal_at')
                or old.get('event_date_src') == 'librarian')
     keep = {k: old[k] for k in ('event_dates', 'event_date_src')
             if k in old} if verdict else {}
+    when = ({k: old[k] for k in ('when', 'when_src') if k in old}
+            if old.get('when_src') in ('ai', 'librarian') else {})
     for k in DERIVED_KEYS:
         old.pop(k, None)
     old.update(fresh)
@@ -320,6 +331,18 @@ def merge_derived(old, fresh: dict) -> dict:
         old.pop('event_dates', None)
         old.pop('event_date_src', None)
         old.update(keep)
+        if not when and old.get('when_src') != 'ai':
+            old.pop('when', None)
+            old.pop('when_src', None)
+            if anchor is not None:
+                from plugins.mindpalace.tools import temporal
+                w = temporal.when_from(keep.get('event_dates'), anchor)
+                if w:
+                    when = {'when': w, 'when_src': 'librarian'}
+    if when:
+        old.pop('when', None)
+        old.pop('when_src', None)
+        old.update(when)
     return old
 
 
@@ -362,7 +385,7 @@ def backfill() -> dict:
                         ent_ids.append(pair[0])
                 meta = merge_derived(meta, derivable_meta(
                     content, exclude_names=[m.lower() for m in matched],
-                    anchor=created, link_text=lt))
+                    anchor=created, link_text=lt), anchor=created)
 
                 now = pt._now()
                 cursor.execute("UPDATE chunks SET meta = ? WHERE id = ?",

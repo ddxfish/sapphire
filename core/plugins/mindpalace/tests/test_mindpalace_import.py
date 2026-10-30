@@ -184,6 +184,11 @@ def _sha256(path: Path) -> str:
 
 # ─── Fixture: isolated palace + redirected source paths ──────────────────────
 
+def _fake_config_for(tmp_path):
+    # The importer computes Path(config.__file__).parent / "user" / X.
+    return types.SimpleNamespace(__file__=str(tmp_path / "config.py"))
+
+
 @pytest.fixture
 def palace_env(tmp_path, monkeypatch):
     """Redirect palace mind.db to tmp_path, build synthetic source DBs there,
@@ -210,13 +215,42 @@ def palace_env(tmp_path, monkeypatch):
             return None
     monkeypatch.setattr(palace_tools, "_get_embedder", lambda: _NoEmb(),
                         raising=False)
+    # The import also kicks a doc-edge walk over the Library in a daemon
+    # thread; left live it races the NEXT test's fresh library path ("no
+    # such table: documents", order-dependent). No Library here — no walk.
+    from plugins.mindpalace.tools import library as _lib
+    monkeypatch.setattr(_lib, "backfill_doc_edges", lambda: None)
+    # The run posts a progress row and the nudge reads/dismisses rows in the
+    # notification center — never the real user/notifications.json from a
+    # test. Tests that care re-patch these to capture.
+    import core.notify as _notify
+    from contextlib import contextmanager
+
+    class _H:
+        def update(self, *a, **k): pass
+        def set(self, *a, **k): pass
+        def text(self, *a, **k): pass
+
+    @contextmanager
+    def _noprog(*a, **k):
+        yield _H()
+    monkeypatch.setattr(_notify, "progress", _noprog)
+    monkeypatch.setattr(_notify, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(_notify, "rows", lambda **k: [])
+    monkeypatch.setattr(_notify, "dismiss", lambda rid, **k: True)
+    import_tools._run_state.update(running=False, result=None, finished=None,
+                                   error=None, stage=None, done=0, total=0)
+    # The routes resolve `config` themselves — pin them to THIS fixture's
+    # fake. A route test that reached the real config scrubbed 28 rows from
+    # the dev box's classic database (2026-10-30). Never again.
+    from plugins.mindpalace.routes import import_routes
+    monkeypatch.setattr(import_routes, "_config", lambda: fake_config)
 
     # Build synthetic source DBs.
     _build_memory_db(user_dir / "memory.db")
     _build_knowledge_db(user_dir / "knowledge.db")
 
-    # Fake config: importer computes Path(config.__file__).parent / "user" / X.
-    fake_config = types.SimpleNamespace(__file__=str(tmp_path / "config.py"))
+    fake_config = _fake_config_for(tmp_path)
 
     # Activate the shared memory scope for the executor gate.
     fm.register_plugin_scope("memory", plugin_name="pytest-mindpalace")
@@ -400,6 +434,189 @@ def test_scopes_registered(palace_env):
     # default (seeded) + work + global encountered in the memory fixture
     assert {"default", "work", "global"}.issubset(names)
     assert not any(n.startswith("__rag__") for n in names)
+
+
+def test_preview_counts_source_against_palace(palace_env):
+    """The Import tab's numbers: per store × scope, what the classic DBs
+    hold, what the palace already carries, the difference — read-only on
+    both sides, attachment tabs counted aside, absent stores flagged."""
+    env = palace_env
+    p = env.import_tools.preview(env.config)
+    assert p['stores']['memories']['total'] == 6
+    assert p['stores']['memories']['pending'] == 6
+    assert p['stores']['people']['total'] == 2
+    assert p['stores']['knowledge']['total'] == 3 and p['rag_rows'] == 1
+    assert p['stores']['goals']['absent'] is True
+    assert p['pending'] == 11 and p['running'] is False
+    assert p['files']['memory.db']['present'] and not p['files']['goals.db']['present']
+    assert set(p['stores']['memories']['scopes']) >= {'default', 'work', 'global'}
+    env.import_tools.execute("import_v2", {"what": "all"}, env.config)
+    p = env.import_tools.preview(env.config)
+    assert p['pending'] == 0
+    assert p['stores']['memories']['imported'] == 6
+    assert all(v['pending'] == 0 for v in p['stores']['knowledge']['scopes'].values())
+
+
+def test_start_runs_and_reports(palace_env):
+    env = palace_env
+    from plugins.mindpalace.routes import import_routes
+    msg, ok = env.import_tools.start(env.config, sync=True)
+    assert ok, msg
+    st = env.import_tools.status()
+    assert st['running'] is False and st['finished'] and st['error'] is None
+    assert '6 copied' in st['result']
+    assert env.import_tools.preview(env.config)['pending'] == 0
+    assert import_routes.status()['result'] == st['result']
+    env.import_tools._run_state['running'] = True
+    try:
+        out, code = import_routes.run(body={'what': 'all'})
+        assert code == 409 and 'already' in out['error']
+    finally:
+        env.import_tools._run_state['running'] = False
+    assert import_routes.run(body={'what': 'bogus'})[1] == 400
+
+
+def test_nudge_fires_while_pending_and_dismisses_after(palace_env, monkeypatch):
+    """Boot nudge (Krem 2026-10-30, B): a row every boot while classic rows
+    are pending, keyed so it re-fires rather than piles up, pointing at
+    the Import tab; the import itself takes it down."""
+    env = palace_env
+    import core.notify as notify
+    calls, dismissed = [], []
+    monkeypatch.setattr(notify, 'notify', lambda *a, **k: calls.append((a, k)) or 'rid')
+    monkeypatch.setattr(notify, 'rows',
+                        lambda **k: [{'id': 'old', 'key': env.import_tools.NUDGE_KEY}])
+    monkeypatch.setattr(notify, 'dismiss', lambda rid, **k: dismissed.append(rid))
+    assert env.import_tools.nudge_if_pending(env.config) == 'rid'
+    (title, level, body), kw = calls[-1]
+    assert level == 'warning' and kw['key'] == env.import_tools.NUDGE_KEY
+    assert kw['go'] == {'view': 'import'} and kw['source'] == 'mindpalace'
+    assert '6 memories' in body and '3 knowledge' in body
+    env.import_tools.start(env.config, sync=True)
+    assert 'old' in dismissed                       # the import clears it
+    assert env.import_tools.nudge_if_pending(env.config) is None
+    assert len(calls) == 1
+
+
+def _classes(env):
+    rows, _rag = env.import_tools._classify(env.config)
+    return {r['key']: r['cls'] for r in rows}
+
+
+def test_removed_before_is_told_apart_and_stays_out(palace_env):
+    """Krem's terror (2026-10-30): 444 'pending' on Prime were the rows he
+    trimmed after the first import — the idempotency set was the palace's
+    own keys. A row not in the palace and saved BEFORE its scope's first
+    import came through once and was removed since: listed apart, never
+    imported by default, back only on an explicit ask."""
+    env = palace_env
+    assert set(_classes(env).values()) == {'new'}
+    env.import_tools.start(env.config, sync=True)
+    assert set(_classes(env).values()) == {'imported'}
+    conn = _mind_conn(env)
+    cid = conn.execute("SELECT id FROM chunks WHERE content = 'space-format memory'"
+                       ).fetchone()[0]
+    conn.execute('DELETE FROM chunks WHERE id = ?', (cid,))       # trimmed by hand, no tombstone
+    conn.commit()
+    conn.close()
+    assert _classes(env)['v2:memories:1'] == 'removed'
+    p = env.import_tools.preview(env.config)
+    assert p['pending'] == 0 and p['removed'] == 1
+    assert p['stores']['memories']['scopes']['default']['removed'] == 1
+    lst = env.import_tools.removed_list(env.config)
+    assert [(r['key'], r['preview']) for r in lst] == [('v2:memories:1', 'space-format memory')]
+    assert env.import_tools.removed_list(env.config, scope='work') == []
+    env.import_tools.start(env.config, sync=True)
+    assert _classes(env)['v2:memories:1'] == 'removed'               # stays out
+    assert 'left out: 1 removed' in env.import_tools.status()['result']
+    env.import_tools.start(env.config, sync=True, include_removed=True)
+    assert _classes(env)['v2:memories:1'] == 'imported'              # explicit ask
+
+
+def test_removed_before_is_per_store_not_per_scope(palace_env):
+    """A run that copied only memories says nothing about that scope's
+    people: they are new, not removed (the restored dev box showed 23
+    never-imported rows as 'removed before' under a per-scope rule)."""
+    env = palace_env
+    env.import_tools.start(env.config, sync=True, what='memories')
+    cls = _classes(env)
+    assert cls['v2:memories:1'] == 'imported'
+    assert cls['v2:people:1'] == 'new' and cls['v2:knowledge:1'] == 'new'
+    p = env.import_tools.preview(env.config)
+    assert p['removed'] == 0 and p['pending'] == 5
+
+
+def test_deletes_tombstone_and_the_importer_skips_them(palace_env):
+    """A deleted palace row that came from classic never comes back: the UI
+    delete, her delete_memory, and an entity delete all keep the key."""
+    env = palace_env
+    from plugins.mindpalace.routes import browse
+    env.import_tools.start(env.config, sync=True)
+    conn = _mind_conn(env)
+    a = conn.execute("SELECT id FROM chunks WHERE content = 't-format memory'").fetchone()[0]
+    b = conn.execute("SELECT id FROM chunks WHERE content = 'global memory'").fetchone()[0]
+    eid = conn.execute("SELECT id FROM entities WHERE name = 'Krem'").fetchone()[0]
+    conn.close()
+    assert browse.delete_chunk(cid=a) == {'success': True}
+    assert env.palace_tools._delete_memory(b, 'global')[1]
+    assert browse.delete_entity(eid=eid)['success']
+    cls = _classes(env)
+    assert cls['v2:memories:2'] == 'tombstoned' and cls['v2:memories:6'] == 'tombstoned'
+    assert cls['v2:people:1'] == 'tombstoned' and cls['v2:people:2'] == 'tombstoned'
+    p = env.import_tools.preview(env.config)
+    assert p['pending'] == 0 and p['removed'] == 0 and p['tombstoned'] == 4
+    env.import_tools.start(env.config, sync=True, include_removed=True)
+    assert _classes(env)['v2:memories:2'] == 'tombstoned'             # never again
+    conn = _mind_conn(env)
+    assert conn.execute("SELECT COUNT(*) FROM chunks WHERE content = 't-format memory'"
+                        ).fetchone()[0] == 0
+    conn.close()
+
+
+def test_scope_import_takes_one_scope(palace_env):
+    env = palace_env
+    msg, ok = env.import_tools.start(env.config, sync=True, scope='work')
+    assert ok and 'work' in msg
+    conn = _mind_conn(env)
+    scopes = {r[0] for r in conn.execute("SELECT DISTINCT scope FROM chunks WHERE layer = 'events'")}
+    conn.close()
+    assert scopes == {'work'}
+    p = env.import_tools.preview(env.config)
+    assert p['stores']['memories']['scopes']['work']['pending'] == 0
+    assert p['stores']['memories']['scopes']['default']['pending'] == 4
+    assert 'other scopes' in env.import_tools.status()['result']
+
+
+def test_scrub_deletes_removed_rows_from_the_old_database_only(palace_env):
+    """THE one classic write: rows the user already removed, on an explicit
+    typed ask. Everything else in the old database is byte-identical
+    afterwards in spirit — the other rows survive untouched; the keys are
+    tombstoned; the ledger carries counts, never content."""
+    env = palace_env
+    from plugins.mindpalace.routes import import_routes
+    env.import_tools.start(env.config, sync=True)
+    conn = _mind_conn(env)
+    cid = conn.execute("SELECT id FROM chunks WHERE content = 'space-format memory'"
+                       ).fetchone()[0]
+    conn.execute('DELETE FROM chunks WHERE id = ?', (cid,))
+    conn.commit()
+    conn.close()
+    assert import_routes.scrub(body={'scope': 'default', 'confirm': 'wrong'})[1] == 400
+    out = import_routes.scrub(body={'scope': 'default', 'confirm': 'default'})
+    assert out['success'] and out['scrubbed'] == 1 and out['memories'] == 1
+    src = sqlite3.connect(env.user_dir / 'memory.db')
+    rows = {r[0] for r in src.execute('SELECT content FROM memories')}
+    src.close()
+    assert 'space-format memory' not in rows and len(rows) == 5
+    cls = _classes(env)
+    assert 'v2:memories:1' not in cls                                 # gone from the source
+    conn = _mind_conn(env)
+    assert conn.execute("SELECT COUNT(*) FROM import_tombstones WHERE key = 'v2:memories:1'"
+                        ).fetchone()[0] == 1
+    led = conn.execute("SELECT summary FROM ledger WHERE action = 'scrubbed'").fetchone()[0]
+    conn.close()
+    assert 'scrubbed 1' in led and 'space-format' not in led
+    assert env.import_tools.preview(env.config)['removed'] == 0
 
 
 def test_rag_attachment_tabs_stay_with_the_chat(palace_env):

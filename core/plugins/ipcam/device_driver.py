@@ -42,6 +42,7 @@ FULL_ZOOM = 2.0           # seconds of zooming that 100 means
 SPEED = 0.5
 SLOTS = 255
 TURNS = {'left': (-1, 0), 'right': (1, 0), 'up': (0, 1), 'down': (0, -1)}
+FLIPS = {'flip_h': Image.Transpose.FLIP_LEFT_RIGHT, 'flip_v': Image.Transpose.FLIP_TOP_BOTTOM}
 _HOST = re.compile(r'^[A-Za-z0-9]([A-Za-z0-9._-]{0,250}[A-Za-z0-9])?$')
 _NAME = re.compile(r'^[a-z0-9][a-z0-9_-]{0,30}$')
 
@@ -148,13 +149,23 @@ def _from_stream(cam, sharp):
         raise Problem("The camera's stream gave no picture.")
     if image.width > SHARP_WIDTH:
         image = image.resize((SHARP_WIDTH, round(image.height * SHARP_WIDTH / image.width)))
+    return _jpeg(image)
+
+
+def _jpeg(image):
     out = io.BytesIO()
     image.convert('RGB').save(out, 'JPEG', quality=85)
     return out.getvalue()
 
 
 def _picture(cam, sharp=False):
-    return (None if sharp else _ask(cam)) or _from_stream(cam, sharp)
+    data = (None if sharp else _ask(cam)) or _from_stream(cam, sharp)
+    if cam.flips:
+        image = Image.open(io.BytesIO(data))
+        for way in cam.flips:
+            image = image.transpose(way)
+        return _jpeg(image)
+    return data
 
 
 def _small(data):
@@ -299,6 +310,7 @@ def status(device, config, secrets):
 def run(device, capability, action, value, config, secrets, call_tool):
     try:
         cam = _camera(device, config, secrets)
+        cam.flips = [way for key, way in FLIPS.items() if config.get(key)]
         words = str(value or '').split()
         if capability == 'camera' and action == 'look':
             if words and words != ['sharp']:
@@ -321,6 +333,8 @@ def run(device, capability, action, value, config, secrets, call_tool):
                             "Directions: left, right, up, down. Example: left 30"), not words
                 far = _amount(words[1] if len(words) > 1 else '', 'move')
                 x, y = TURNS[words[0].lower()]
+                # the directions she is told are the picture's: a flipped picture moves the other way
+                x, y = -x if config.get('flip_h') else x, -y if config.get('flip_v') else y
                 return _turned(cam, device, far * FULL_TURN, f"Turned {words[0].lower()}",
                                x=x * SPEED, y=y * SPEED)
             if action == 'zoom':

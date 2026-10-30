@@ -689,6 +689,45 @@ def test_update_memory_in_schema():
     assert any(t['function']['name'] == 'update_memory' for t in mod.TOOLS)
 
 
+def test_save_memory_when_is_her_plan(palace):
+    """`when` (2026-10-30): the one date a memory is a plan for — her
+    intent, which no regex can read from words. Validated before any write;
+    outranks the floor's plan through an edit; moved or cleared by
+    update_memory(when=). The floor still plans on its own sure forms."""
+    import json
+    import re
+
+    def _mid(msg):
+        return int(re.search(r'ID: (\d+)', msg).group(1))
+
+    def _get(mid):
+        conn = _connect(palace)
+        m = json.loads(conn.execute('SELECT meta FROM chunks WHERE id = ?',
+                                    (mid,)).fetchone()[0])
+        conn.close()
+        return m
+
+    msg, ok = palace._save_memory("dentist", scope="default", when="2026-11-04T10:00")
+    assert ok and "when: 2026-11-04T10:00" in msg
+    a = _mid(msg)
+    m = _get(a)
+    assert (m['when'], m['when_src']) == ('2026-11-04T10:00', 'ai')
+    assert '2026-11-04T10:00' in m['event_dates']
+    msg, ok = palace._save_memory("junk", scope="default", when="someday")
+    assert not ok and 'when' in msg
+    _, ok = palace._update_memory(a, "default", content="dentist moved, in 3 days")
+    assert ok and _get(a)['when'] == '2026-11-04T10:00'       # hers outranks the words
+    _, ok = palace._update_memory(a, "default", when="2026-11-06")
+    assert ok and _get(a)['when'] == '2026-11-06'
+    msg, ok = palace._update_memory(a, "default", when="none")
+    assert ok and 'when: cleared' in msg and 'when' not in _get(a)
+    assert not palace._update_memory(a, "default", when="whenever")[1]
+    msg, _ = palace._save_memory("we fly out in 2 weeks", scope="default")
+    assert _get(_mid(msg))['when_src'] == 'regex'
+    msg, _ = palace._save_memory("On Monday we fixed the bug", scope="default")
+    assert 'when' not in _get(_mid(msg))
+
+
 def test_update_memory_keeps_the_bag_and_anchors_to_created(palace):
     """Scout find 2026-10-30: the edit path rebuilt meta from scratch —
     editing a retired memory resurrected it, an imported one lost its
