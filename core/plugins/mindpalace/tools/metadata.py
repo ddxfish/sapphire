@@ -296,11 +296,39 @@ def seed_edges(cursor, chunk_id: int, entity_ids, now: str) -> int:
     return created
 
 
+# The keys derivable_meta() owns. A restamp replaces them wholesale (a date
+# the text no longer carries must not linger); everything ELSE in the bag —
+# provenance, queue stamps, retirement marks, import keys, plugin fields —
+# survives. One rule for backfill and update_memory alike.
+DERIVED_KEYS = ('md_v', 'stats', 'refers_to_time', 'event_dates',
+                'event_date_src', 'recurring_dates', 'noun_candidates')
+
+
+def merge_derived(old, fresh: dict) -> dict:
+    """old meta bag + a fresh derivable/save stamp → the merged bag. A
+    librarian temporal verdict (dates or ruled-dateless) is terminal: the
+    regex floor never overwrites the refiner."""
+    old = dict(old) if isinstance(old, dict) else {}
+    verdict = (old.get('temporal_at')
+               or old.get('event_date_src') == 'librarian')
+    keep = {k: old[k] for k in ('event_dates', 'event_date_src')
+            if k in old} if verdict else {}
+    for k in DERIVED_KEYS:
+        old.pop(k, None)
+    old.update(fresh)
+    if verdict:
+        old.pop('event_dates', None)
+        old.pop('event_date_src', None)
+        old.update(keep)
+    return old
+
+
 def backfill() -> dict:
-    """One-shot idempotent pass: stamp rows missing md_v with the derivable
-    subset and seed entity edges. Runs after import_v2; safe to re-run any
-    time (md_v marks done). Does NOT touch chunks.updated — content is
-    unchanged, only mechanical annotation. Returns counts."""
+    """One-shot idempotent pass: stamp rows missing md_v — or stamped by an
+    OLDER md_v (the v1→v2 promise above: old memories get dated too) — with
+    the derivable subset and seed entity edges. Runs after import_v2; safe
+    to re-run any time (md_v marks done). Does NOT touch chunks.updated —
+    content is unchanged, only mechanical annotation. Returns counts."""
     from plugins.mindpalace.tools import palace_tools as pt
     if not pt._ensure_db():
         return {'error': 'mind database unavailable'}
@@ -310,8 +338,9 @@ def backfill() -> dict:
             cursor = conn.cursor()
             rows = cursor.execute(
                 "SELECT id, scope, content, entity_id, meta, created FROM chunks "
-                "WHERE meta IS NULL OR json_extract(meta, '$.md_v') IS NULL"
-            ).fetchall()
+                "WHERE meta IS NULL "
+                "OR COALESCE(json_extract(meta, '$.md_v'), 0) < ?",
+                (MD_VERSION,)).fetchall()
             ent_cache = {}
             for cid, scope, content, entity_id, meta_raw, created in rows:
                 if scope not in ent_cache:
@@ -331,19 +360,9 @@ def backfill() -> dict:
                     pair = amap.get(m.lower())
                     if pair and pair[0] != entity_id and pair[0] not in ent_ids:
                         ent_ids.append(pair[0])
-                # A librarian temporal verdict (dates or ruled-dateless) is
-                # terminal — the regex floor never overwrites the refiner.
-                verdict = (meta.get('temporal_at')
-                           or meta.get('event_date_src') == 'librarian')
-                keep = {k: meta[k] for k in ('event_dates', 'event_date_src')
-                        if k in meta} if verdict else None
-                meta.update(derivable_meta(
+                meta = merge_derived(meta, derivable_meta(
                     content, exclude_names=[m.lower() for m in matched],
                     anchor=created, link_text=lt))
-                if verdict:
-                    meta.pop('event_dates', None)
-                    meta.pop('event_date_src', None)
-                    meta.update(keep)
 
                 now = pt._now()
                 cursor.execute("UPDATE chunks SET meta = ? WHERE id = ?",

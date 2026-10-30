@@ -17,6 +17,7 @@ import { vaultStatus } from '../shared/vault-api.js';
 import { snapScroll } from '../shared/dom-guard.js';
 import { responseError, errWords } from '../shared/fetch.js';
 import { saveBlob, saveJson } from '../shared/download.js';
+import { listPersonas } from '../shared/persona-api.js';
 
 let container = null;
 let chats = [];
@@ -593,13 +594,23 @@ let _llmCache = null;   // {providers, metadata} from /api/llm/providers
 async function openCompressModal(name) {
     const chat = chats.find(c => c.name === name);
     let chatLLM = { primary: '', model: '' };
+    let chatPersona = '';
     try {
         if (!_llmCache) {
             _llmCache = await fetch('/api/llm/providers').then(r => r.ok ? r.json() : null);
         }
         const s = await api.getChatSettings(name);
         chatLLM = { primary: s?.settings?.llm_primary || '', model: s?.settings?.llm_model || '' };
+        chatPersona = s?.settings?.persona || '';
     } catch (e) { /* pickers fall back to first enabled provider */ }
+    // A room has no one voice: the server writes its summaries in third person
+    // from fixed instructions, so neither control applies. Either fetch failing
+    // only hides its control; the server falls back to the chat's persona and
+    // the saved instructions.
+    const isRoom = (chat?.mode ?? chat?.settings?.mode) === 'room';
+    const personas = isRoom ? null : (await listPersonas().catch(() => null))?.personas || null;
+    const instr = isRoom ? null : await api.getCompressInstructions().catch(() => null);
+    const defaultPersona = personas?.some(p => p.name === chatPersona) ? chatPersona : '';
     // Private chats only compress through local providers (backend enforces too)
     const provs = (_llmCache?.providers || []).filter(p => p.enabled && (!chat?.private_chat || p.is_local));
     if (!provs.length) {
@@ -625,6 +636,12 @@ async function openCompressModal(name) {
             </select>
             <select id="cm-c-model"></select>
         </div>
+        ${personas ? `<div class="cm-form-row">
+            Speaks as: <select id="cm-c-persona">
+                <option value="">No persona</option>
+                ${personas.map(p => `<option value="${esc(p.name)}"${p.name === defaultPersona ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
+            </select>
+        </div>` : ''}
         <div class="cm-form-row">
             Target size: <select id="cm-c-target">
                 <option value="2000">~2k tokens</option>
@@ -636,6 +653,14 @@ async function openCompressModal(name) {
         <div class="cm-form-row">
             <label><input type="checkbox" id="cm-c-backup" checked> Back up full JSON to user/history/exports/ first (skipped for private chats)</label>
         </div>
+        ${instr ? `<details class="cm-advanced">
+            <summary>Advanced</summary>
+            <p class="cm-hint">What the summary keeps and how it's written. Saved for every
+            compress when you press Compress; Cancel discards your edit. The size limit and
+            the chat text are added automatically.</p>
+            <textarea id="cm-c-instructions" rows="8" maxlength="8000">${esc(instr.instructions)}</textarea>
+            <button class="cm-btn" id="cm-c-reset" type="button">Reset to default</button>
+        </details>` : ''}
         <div class="cm-modal-btns">
             <button class="cm-btn" id="cm-c-cancel">Cancel</button>
             <button class="cm-btn cm-danger" id="cm-c-go">Compress</button>
@@ -646,9 +671,13 @@ async function openCompressModal(name) {
     // model_options is a DICT {id: label}; the old list-shaped .map() threw
     // in fillModels and killed the cancel/go bindings queued after it).
     const modelSel = overlay.querySelector('#cm-c-model');
+    const instrBox = overlay.querySelector('#cm-c-instructions');
+    overlay.querySelector('#cm-c-reset')?.addEventListener('click', () => { instrBox.value = instr.default; });
     overlay.querySelector('#cm-c-cancel').addEventListener('click', closeModal);
     overlay.querySelector('#cm-c-go').addEventListener('click', async () => {
+        const personaSel = overlay.querySelector('#cm-c-persona');
         const opts = {
+            ...(personaSel ? { persona: personaSel.value } : {}),
             mode: overlay.querySelector('input[name="cm-cmode"]:checked').value,
             provider: overlay.querySelector('#cm-c-prov').value,
             model: modelSel.value,
@@ -659,6 +688,9 @@ async function openCompressModal(name) {
         // Second gate (P4) — shared helper, see ensureVaultOpenFor.
         if (!await ensureVaultOpenFor(chat, 'compress')) return;
         try {
+            if (instrBox && instrBox.value.trim() !== instr.instructions) {
+                await api.saveCompressInstructions(instrBox.value);
+            }
             await api.compressChat(name, opts);
             ui.showToast(`Compress started on ${name} — running in background`, 'success');
             closeModal();
@@ -791,6 +823,11 @@ export default {
                 background: var(--bg-secondary, #26262e); color: var(--text-primary, #ddd);
                 border: 1px solid var(--border-color, #444); border-radius: 5px; padding: 3px 6px; }
             .cm-modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+            .cm-advanced { margin: 10px 0; }
+            .cm-advanced summary { cursor: pointer; }
+            .cm-advanced textarea { width: 100%; box-sizing: border-box; margin-bottom: 8px; resize: vertical;
+                background: var(--bg-secondary, #26262e); color: var(--text-primary, #ddd);
+                border: 1px solid var(--border-color, #444); border-radius: 5px; padding: 6px; }
         </style>
         <div id="cm-wrap">
             <div id="cm-tabs">

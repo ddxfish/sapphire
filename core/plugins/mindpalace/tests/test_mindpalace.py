@@ -689,6 +689,61 @@ def test_update_memory_in_schema():
     assert any(t['function']['name'] == 'update_memory' for t in mod.TOOLS)
 
 
+def test_update_memory_keeps_the_bag_and_anchors_to_created(palace):
+    """Scout find 2026-10-30: the edit path rebuilt meta from scratch —
+    editing a retired memory resurrected it, an imported one lost its
+    import_key (the next import copied the original again), and 'tomorrow'
+    re-resolved against edit day. The bag survives; only the derivable
+    annotations restamp, anchored to the memory's own save date; a
+    librarian temporal verdict is terminal through an edit, like backfill."""
+    import json
+    import re
+
+    def _mid(msg):
+        return int(re.search(r'ID: (\d+)', msg).group(1))
+
+    def _set(mid, created, **extra):
+        conn = _connect(palace)
+        meta = json.loads(conn.execute('SELECT meta FROM chunks WHERE id = ?',
+                                       (mid,)).fetchone()[0] or '{}')
+        meta.update(extra)
+        conn.execute('UPDATE chunks SET meta = ?, created = ? WHERE id = ?',
+                     (json.dumps(meta), created, mid))
+        conn.commit()
+        conn.close()
+        return meta
+
+    def _get(mid):
+        conn = _connect(palace)
+        m = json.loads(conn.execute('SELECT meta FROM chunks WHERE id = ?',
+                                    (mid,)).fetchone()[0])
+        conn.close()
+        return m
+
+    msg, _ = palace._save_memory("we test the satellite tomorrow", scope="default")
+    a = _mid(msg)
+    kept = dict(pruned_at='t', pruned_reason='noise', import_key='v2:memories:7',
+                librarian_at='t', derived_from=3)
+    _set(a, '2026-03-01T12:00:00+00:00', **kept)
+    _, ok = palace._update_memory(a, "default",
+                                  content="we test the satellite tomorrow, for real")
+    assert ok
+    m = _get(a)
+    for k, v in kept.items():
+        assert m[k] == v, k
+    assert m['event_dates'] == ['2026-03-02']       # anchored to created, not today
+
+    msg, _ = palace._save_memory("concert next week", scope="default")
+    b = _mid(msg)
+    _set(b, '2026-03-01T12:00:00+00:00', temporal_at='t',
+         event_dates=['2026-04-04'], event_date_src='librarian')
+    _, ok = palace._update_memory(b, "default", content="concert tomorrow")
+    assert ok
+    m = _get(b)
+    assert m['event_dates'] == ['2026-04-04'] and m['event_date_src'] == 'librarian'
+    assert m['temporal_at'] == 't'
+
+
 # ─── entity resolution + roster (2026-09-08) ────────────────────────────────
 # '<nickname> username' got minted beside the person's own card (whose
 # nicknames already held that handle). Now an exact nickname resolves to the

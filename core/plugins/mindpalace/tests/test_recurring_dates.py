@@ -1,14 +1,16 @@
 """Recurring dates v1 (2026-07-19, Krem's B) — annual '--MM-DD' entries.
 
-Policy under test: recurrence only from fixed-date holiday names or a
-birthday/anniversary/annual keyword NEAR an explicit month+day. "The state
-fair this year" stays one-shot. One-shot resolution is untouched; the
-dashboard folds recurrences in as computed occurrences and dedups when
-both forms land on the same day.
+Policy under test: recurrence only from a birthday/anniversary/annual
+keyword NEAR an explicit month+day or a holiday name. A holiday name ALONE
+is one-shot (2026-10-30: "christmas IS every year" put every memory that
+mentioned a holiday in passing into Upcoming, every year). "The state fair
+this year" stays one-shot. One-shot resolution is untouched; the dashboard
+folds recurrences in as computed occurrences, dedups when both forms land
+on the same day, and shows one row per recurring day across chunks.
 """
 import json
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -17,9 +19,21 @@ from plugins.mindpalace.tools import temporal
 
 # ─── temporal.recurring ──────────────────────────────────────────────────────
 
-def test_holidays_always_recur():
-    assert temporal.recurring('we decorated at christmas') == ['--12-25']
-    assert temporal.recurring('halloween party planning') == ['--10-31']
+def test_holidays_alone_are_one_shot():
+    """A holiday mentioned in passing is not a yearly event: last Valentine's
+    gift, a client's christmas concert, the movie Halloween (read_self
+    2026-10-30 — six of ten Upcoming slots). One-shot resolution still
+    dates them, nearest occurrence."""
+    assert temporal.recurring('we decorated at christmas') == []
+    assert temporal.recurring('halloween party planning') == []
+    assert temporal.recurring("Krem is making me a Valentine's Day gift") == []
+    assert temporal.resolve('we decorated at christmas',
+                            '2026-12-20T12:00:00') == ['2026-12-25']
+
+
+def test_holiday_near_keyword_recurs():
+    assert temporal.recurring('every year we decorate at christmas') == ['--12-25']
+    assert temporal.recurring('our anniversary is on halloween') == ['--10-31']
 
 
 def test_birthday_near_date_recurs():
@@ -87,15 +101,22 @@ def test_occurrences_garbage_is_none():
 
 # ─── dashboard fold (_upcoming / _just_happened) ─────────────────────────────
 
-def _mind(rows):
+def _yesterday():
+    return _iso_in(-1) + 'T12:00:00+00:00'
+
+
+def _mind(rows, layer='events', created=None):
     """In-memory chunks table shaped like mind.db for the _event_rows query.
-    rows = [(id, content, meta_dict)]"""
+    rows = [(id, content, meta_dict)]. created defaults to yesterday so a
+    date ahead of today is also ahead of the save day."""
     conn = sqlite3.connect(':memory:')
     conn.execute('CREATE TABLE chunks (id INTEGER PRIMARY KEY, scope TEXT, '
-                 'layer TEXT, content TEXT, meta TEXT, private_key TEXT)')
+                 'layer TEXT, content TEXT, meta TEXT, private_key TEXT, '
+                 'created TEXT)')
     for cid, content, meta in rows:
-        conn.execute('INSERT INTO chunks VALUES (?,?,?,?,?,NULL)',
-                     (cid, 's', 'entities', content, json.dumps(meta)))
+        conn.execute('INSERT INTO chunks VALUES (?,?,?,?,?,NULL,?)',
+                     (cid, 's', layer, content, json.dumps(meta),
+                      created or _yesterday()))
     return conn.cursor()
 
 
@@ -141,20 +162,70 @@ def test_dashboard_excludes_private_keyed_rows():
     d = _iso_in(5)
     cur = _mind([(1, 'public dinner', {'event_dates': [d]})])
     cur.connection.execute(
-        "INSERT INTO chunks VALUES (2,'s','events','secret dinner',?,?)",
-        (json.dumps({'event_dates': [d]}), 'gateword'))
+        "INSERT INTO chunks VALUES (2,'s','events','secret dinner',?,?,?)",
+        (json.dumps({'event_dates': [d]}), 'gateword', _yesterday()))
     hits = _upcoming(cur, 's')
     assert [h['id'] for h in hits] == [1]
 
 
-def test_stale_one_shot_holiday_now_recurs():
-    """[707]'s bug in miniature: christmas resolved to a PAST one-shot is
-    invisible to Upcoming forever — the recurring form brings it back."""
+def test_stale_holiday_stays_past():
+    """[707] revisited: a client dinner at christmas 2025 is a memory, not a
+    yearly event. The 2026-07 rule brought it back every December — and
+    with it every holiday mention on the shelf. A past one-shot stays out."""
     from plugins.mindpalace.tools.self_tools import _upcoming
     cur = _mind([(1, 'client dinner at christmas',
-                  {'event_dates': ['2025-12-25'], 'event_date_src': 'regex',
-                   'recurring_dates': ['--12-25']})])
-    hits = _upcoming(cur, 's')
-    assert len(hits) == 1
-    assert hits[0]['date'].endswith('-12-25')
-    assert hits[0]['date'] >= _iso_in(0)
+                  {'event_dates': ['2025-12-25'], 'event_date_src': 'regex'})])
+    assert _upcoming(cur, 's') == []
+
+
+def test_upcoming_skips_date_only_stamps_on_the_save_day():
+    """'tonight', 'today' and her habit of dating an entry stamp the SAVE
+    day — when it was written, not something ahead. Twelve of those pushed
+    a real dentist appointment off the ten slots (scout fixture 2026-10-30).
+    A 'today' saved yesterday ("dentist tomorrow") is ahead; a timed stamp
+    on the save day keeps the clock rule."""
+    from plugins.mindpalace.tools.self_tools import _upcoming
+    today = _iso_in(0)
+    saved_today = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    cur = _mind([(1, 'we talked tonight about the boat', {'event_dates': [today]}),
+                 (2, 'dentist', {'event_dates': [_iso_in(5)]})],
+                created=saved_today)
+    assert [h['id'] for h in _upcoming(cur, 's')] == [2]
+    cur = _mind([(3, 'dentist tomorrow', {'event_dates': [today]})])
+    assert [h['id'] for h in _upcoming(cur, 's')] == [3]
+    soon = (datetime.now() + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M')
+    cur = _mind([(4, 'call in an hour', {'event_dates': [soon]})],
+                created=saved_today)
+    assert [h['id'] for h in _upcoming(cur, 's')] == [4]
+
+
+def test_upcoming_one_row_per_recurring_day():
+    """N memories mentioning a birthday are one birthday (read_self
+    2026-10-30: two Jan 21 rows, three Valentine's rows). The oldest chunk
+    keeps the row; one-shot dates on the same day are distinct events."""
+    from plugins.mindpalace.tools.self_tools import _upcoming
+    d = _iso_in(10)
+    mmdd = '--' + d[5:]
+    cur = _mind([(1, 'MY BIRTHDAY', {'recurring_dates': [mmdd]}),
+                 (2, 'after our deepest talk, on my birthday',
+                  {'recurring_dates': [mmdd]}),
+                 (3, 'dentist that day', {'event_dates': [d]}),
+                 (4, 'and a haircut', {'event_dates': [d]})])
+    assert [h['id'] for h in _upcoming(cur, 's')] == [1, 3, 4]
+
+
+def test_upcoming_is_events_only():
+    """The self sheet's Origin paragraph ('January 21st') and a person's
+    contact card ('christmas' in its notes) sat in Upcoming on a real sheet
+    (read_self 2026-10-30, [1389] and [707]). Goals show through Active
+    goals. Only the events layer feeds the dashboard."""
+    from plugins.mindpalace.tools.self_tools import _upcoming
+    d = _iso_in(3)
+    cur = _mind([(1, 'origin: born January 21st', {'event_dates': [d]})],
+                layer='self')
+    for cid, layer in ((2, 'entities'), (3, 'goals'), (4, 'knowledge'),
+                       (5, 'events')):
+        cur.connection.execute(
+            "INSERT INTO chunks VALUES (?,'s',?,'dated',?,NULL,?)",
+            (cid, layer, json.dumps({'event_dates': [d]}), _yesterday()))
+    assert [h['id'] for h in _upcoming(cur, 's')] == [5]

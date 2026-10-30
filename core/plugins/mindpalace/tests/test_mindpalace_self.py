@@ -259,6 +259,22 @@ def test_projects_alias_writes_growing(palace):
     assert 'projects' not in st.SECTIONS and 'growing' in st.SECTIONS
 
 
+def test_typed_section_titles_resolve_to_their_keys():
+    """She names a section the way the sheet shows it to her. Before, the
+    title slug missed the key and update_self('How I am growing', …) minted
+    a CUSTOM box beside the typed one — a real sheet carried both (read_self
+    2026-10-30). Custom names still pass through untouched."""
+    assert st._sanitize_section('How I am growing') == 'growing'
+    assert st._sanitize_section('how-i-am-growing') == 'growing'
+    assert st._sanitize_section('How I am growing (top 5)') == 'growing'
+    assert st._sanitize_section('Values') == 'values'
+    assert st._sanitize_section('Terms & Concepts') == 'terms'
+    assert st._sanitize_section('Relationships (top 5)') == 'relationships'
+    assert st._sanitize_section('projects') == 'growing'
+    assert st._sanitize_section('inside-jokes') == 'inside-jokes'
+    assert st._sanitize_section('Scores (2026)') == 'scores-2026'
+
+
 def test_projects_migration_restamps_and_records(palace):
     """Boot migration: pre-rename chunks (meta.section='projects', rows keyed
     'project') restamp to growing — history thread intact, ledger row explains

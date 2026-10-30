@@ -78,9 +78,9 @@ TOOLS = [
         "function": {
             "name": "merge_memories",
             "description": (
-                "Librarian verb: fold entries that record the SAME thing into one memory; it keeps the earliest date "
-                "and the connections, and the originals are retired (recoverable). Refused unless they measure as "
-                "near-duplicates. Current-pass memories only."
+                "Librarian verb: fold entries that record the SAME thing into one memory; it keeps the earliest date, "
+                "the highest rating and every connection, and the originals are retired (recoverable). Refused "
+                "unless they measure as near-duplicates. Current-pass memories only."
             ),
             "parameters": {
                 "type": "object",
@@ -466,10 +466,15 @@ def _stamp(cursor, pt, memory_id, meta, **updates):
 
 
 def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
-                    entity_id=None, tier=None):
+                    entity_id=None, tier=None, importance=None, anchor=None):
     """Insert a derived chunk: inherits created/label/private_key from the
     source, carries meta.derived_from + a chunk→chunk 'derived_from' edge,
-    gets mechanical meta + mention edges. Embedding rides the backfill latch."""
+    gets mechanical meta + mention edges. Embedding rides the backfill latch.
+    `importance`: what the source(s) earned — a split of a 0.7 memory is
+    0.7 twice, a merge keeps the cluster's highest; born unrated was a
+    silent loss (scout find 2026-10-30). `anchor`: the day the CONTENT was
+    written when it differs from the row's created (a merge keeps the
+    cluster's earliest date but the longest member's words)."""
     (src_id, _l, _s, _c, _e, _t, label, _f, _imp, private_key, _m, created) = src_row
     now = pt._now()
     arows = md.entity_aliases(cursor, scope)
@@ -483,7 +488,7 @@ def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
     # anchor=created: the content was LIVED at the source's timestamp — a
     # "tonight" in a February memory must not resolve against drain day.
     meta = md.save_meta(content, exclude_names=[h.lower() for h in hits],
-                        anchor=created)
+                        anchor=anchor or created)
     meta['derived_from'] = src_id
     meta['librarian_v'] = 1
     # Born reviewed: she just made this chunk during a pass — it must not
@@ -493,8 +498,8 @@ def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
     cursor.execute(
         'INSERT INTO chunks (layer, scope, content, entity_id, tier, label, '
         'favorite, importance, private_key, meta, created, updated) '
-        'VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)',
-        (layer, scope, content, entity_id, tier, label, private_key,
+        'VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
+        (layer, scope, content, entity_id, tier, label, importance, private_key,
          json.dumps(meta, ensure_ascii=False), created, now))
     new_id = cursor.lastrowid
     md.seed_edges(cursor, new_id, mention_ids, now)
@@ -594,7 +599,8 @@ def _atomize(memory_id, parts):
             return f"Memory [{memory_id}] is protected (favorite/core) — atomize refused.", False
         meta = _meta_of(row)
         new_ids = [_insert_derived(cursor, pt, md, row, p, row[1], row[2],
-                                   entity_id=row[4], tier=row[5]) for p in parts]
+                                   entity_id=row[4], tier=row[5],
+                                   importance=row[8]) for p in parts]
         _stamp(cursor, pt, memory_id, meta,
                pruned_at=pt._now(), pruned_reason='atomized',
                atomized_into=new_ids)
@@ -651,14 +657,35 @@ def _merge(memory_ids, content=None):
         earliest = min(r[11] for r in rows)
         src = list(base)
         src[11] = earliest   # the merged memory remembers the FIRST occurrence
+        # What the cluster earned travels onto the survivor (scout find
+        # 2026-10-30 — it was born unrated, with name-matched edges only,
+        # and re-entered the dates queue): the highest rating, every
+        # member's mention edges (the link pass made some by hand), and a
+        # librarian date verdict — the survivor's own first, else any
+        # member's. Its words are base's, so they anchor to base's day.
+        rated = [r[8] for r in rows if r[8] is not None]
         new_id = _insert_derived(cursor, pt, md, tuple(src), content or base[3],
-                                 base[1], base[2], entity_id=base[4], tier=base[5])
+                                 base[1], base[2], entity_id=base[4], tier=base[5],
+                                 importance=max(rated) if rated else None,
+                                 anchor=base[11])
         raw = cursor.execute('SELECT meta FROM chunks WHERE id = ?', (new_id,)).fetchone()[0]
         nmeta = json.loads(raw) if raw else {}
         nmeta['derived_from'] = ids   # provenance widens to the whole cluster
+        for m in [_meta_of(base)] + [_meta_of(r) for r in rows]:
+            if m.get('temporal_at') or m.get('event_date_src') == 'librarian':
+                for k in ('event_dates', 'event_date_src', 'temporal_at'):
+                    nmeta.pop(k, None)
+                    if k in m:
+                        nmeta[k] = m[k]
+                break
         cursor.execute('UPDATE chunks SET meta = ? WHERE id = ?',
                        (json.dumps(nmeta, ensure_ascii=False), new_id))
         now = pt._now()
+        ph = ','.join('?' * len(ids))
+        mentioned = [r[0] for r in cursor.execute(
+            f"SELECT DISTINCT dst_id FROM edges WHERE src_type = 'chunk' "
+            f"AND kind = 'mentions' AND src_id IN ({ph})", ids).fetchall()]
+        md.seed_edges(cursor, new_id, [e for e in mentioned if e != base[4]], now)
         for r in rows:
             _stamp(cursor, pt, r[0], _meta_of(r), pruned_at=now,
                    pruned_reason='merged', merged_into=new_id)

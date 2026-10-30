@@ -182,6 +182,58 @@ def test_dedup_failed_message_leaves_clusters_unstamped(palace, monkeypatch):
     assert _passes_today('dedup') == 0     # failed pass spends nothing
 
 
+def test_dedup_scan_error_stamps_nothing(palace, monkeypatch):
+    """An error is not an empty shelf (scout find 2026-10-30): the scan
+    returned {} on any exception, the worker read 'scanned clean' and
+    stamped the whole batch dedup_at — one bad blob in a drain filed the
+    entire queue as checked. Now the pass fails with nothing stamped."""
+    a, b, c = _dedup_setup()
+
+    def boom(*args, **kw):
+        raise RuntimeError('odd blob')
+    monkeypatch.setattr(librarian, 'find_duplicates', boom)
+    msg, _ok = librarian.run_blocking('default', kind='dedup', chat='librarian-t')
+    assert 'failed' in msg.lower() and 'odd blob' in msg
+    for cid in (a, b, c):
+        assert 'dedup_at' not in _meta(cid)
+    assert _passes_today('dedup') == 0
+
+
+def test_dedup_preview_reports_a_failed_scan(palace, monkeypatch):
+    from plugins.mindpalace.routes import browse
+    _dedup_setup()
+
+    def boom(*args, **kw):
+        raise RuntimeError('odd blob')
+    monkeypatch.setattr(librarian, 'find_duplicates', boom)
+    out, code = browse.librarian_dedup_preview(query={'scope': 'default'})
+    assert code == 500 and 'scan failed' in out['error']
+
+
+def test_dates_presenter_shows_local_day_and_weekday(palace):
+    """`created` is UTC: a 10:30pm EDT save presented as the NEXT day, and
+    the model's 'tonight' verdict landed a day late — terminally (scout
+    find 2026-10-30). The pass sees the local day plus its weekday name."""
+    import os
+    import time
+    if not hasattr(time, 'tzset'):
+        pytest.skip('tzset is POSIX-only')
+    old = os.environ.get('TZ')
+    os.environ['TZ'] = 'America/New_York'
+    time.tzset()
+    try:
+        text = librarian._present_dates(
+            [(7, 'events', 'we fly out on Friday', None, 0,
+              '2026-07-16T02:30:00+00:00', None)], 'default', 1, 1)
+    finally:
+        if old is None:
+            os.environ.pop('TZ', None)
+        else:
+            os.environ['TZ'] = old
+        time.tzset()
+    assert '[7] saved 2026-07-15 (Wednesday)' in text
+
+
 def test_dedup_verbless_message_leaves_the_cluster_queued(palace, monkeypatch):
     """A message that 'completed' but fired no verb is NOT a judgment (the
     2026-10-07 find: a tool-incapable model's prose read as 'ruled distinct'

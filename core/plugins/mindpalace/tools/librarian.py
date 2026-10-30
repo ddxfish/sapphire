@@ -452,8 +452,13 @@ def find_duplicates(cursor, scope, batch, threshold):
                     out[cid] = hits[:MAX_DUPS_PER_ITEM]
         return out
     except Exception as e:
-        logger.warning(f"[LIBRARIAN] Duplicate scan failed (pass continues): {e}")
-        return {}
+        # An error is NOT an empty shelf (the human scan's rule, browse.py):
+        # returning {} read as "scanned clean" and the worker stamped the
+        # whole batch dedup_at — one bad embedding blob in a drain filed the
+        # entire queue as checked with nothing checked (scout find
+        # 2026-10-30). Raise; the worker ends the pass with nothing stamped.
+        logger.error(f"[LIBRARIAN] Duplicate scan failed: {e}")
+        raise
 
 
 def _build_clusters(batch, dups, partners):
@@ -550,8 +555,9 @@ Reply with ONE set_event_dates call covering every [id] in this
 message — a memory with no real date goes in as {"memory_id": N,
 "dates": []}.
 
-Worked examples, for a memory saved 2026-07-15:
+Worked examples, for a memory saved 2026-07-15 (Wednesday):
   'lunch at noon tomorrow'    → ["2026-07-16T12:00"]
+  'we fly out on Friday'      → ["2026-07-17"]
   'she gets back on the 20th' → ["2026-07-20"]
   'we sailed last summer'     → ["2025"]
   'downloaded 3 gigabytes'    → []
@@ -731,9 +737,16 @@ def _present_sort(items, scope, dirty, part, total):
 
 
 def _present_dates(items, scope, part, total):
+    # LOCAL day + weekday name: `created` is UTC, so an evening save read as
+    # the next day and "tonight" resolved a day late — terminally, the
+    # verdict overwriting the floor's correct date (scout find 2026-10-30).
+    # The weekday spares a small model the calendar arithmetic for "on
+    # Friday" — the one thing the 9B battery kept getting wrong.
+    from plugins.mindpalace.tools import temporal
     lines = []
     for cid, layer, content, _label, _favorite, created, _meta in items:
-        lines.append(f"[{cid}] saved {created[:10]} · {layer}")
+        saved = temporal._parse_anchor(created).strftime('%Y-%m-%d (%A)')
+        lines.append(f"[{cid}] saved {saved} · {layer}")
         lines.append(f"    {content}")
         lines.append("")
     header = (f"\U0001F5D3 Dates pass — scope '{scope}'"

@@ -350,6 +350,13 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
         }
     }
 
+    // The seam of a compress (core/chat/compress.py): this reply is a summary
+    // written later by a model, not words said at the time.
+    if (msg.compressed && role === 'assistant') {
+        wrapper.insertBefore(createElem('div', { class: 'msg-compressed' },
+            '\u{1F5DC}️ Compressed summary'), contentDiv);
+    }
+
     if (idx !== null) {
         const toolbar = createToolbar(idx, total, role,
             !!(role === 'assistant' && msg.metadata?.error) || msgEl.classList.contains('seat-line'));

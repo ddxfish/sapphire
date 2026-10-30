@@ -810,7 +810,10 @@ def librarian_dedup_preview(query=None, **_):
         cur = conn.cursor()
         cfg = librarian._settings()
         batch = librarian.build_dedup_batch(cur, scope, cfg['batch'])
-        dups = librarian.find_duplicates(cur, scope, batch, thr)
+        try:
+            dups = librarian.find_duplicates(cur, scope, batch, thr)
+        except Exception as e:
+            return {'error': f'scan failed: {e}'}, 500
         partner_ids = sorted({d for hits in dups.values() for d, _ in hits}
                              - {b[0] for b in batch})
         partners = {}

@@ -233,16 +233,32 @@ def _pt():
     return palace_tools
 
 
-def _sanitize_section(section):
-    """Lowercase slug, whitespace→'-', [a-z0-9_-] only, max 32. None if empty.
-    'projects' aliases to 'growing' (renamed 2026-07-24, Sapph Prime's ask) —
-    old habits and old exports keep resolving."""
-    if not section:
-        return None
+def _slug(section):
     s = str(section).strip().lower()
     s = '-'.join(s.split())
-    s = ''.join(ch for ch in s if ch.isalnum() or ch in '_-')[:32]
-    return {'projects': 'growing'}.get(s, s) or None
+    return ''.join(ch for ch in s if ch.isalnum() or ch in '_-')[:32]
+
+
+# Section names she may use for a typed section: its key, its TITLE as the
+# sheet shows it to her (minus the "(top 5…)" tail), and the old 'projects'
+# name (renamed to 'growing' 2026-07-24, Sapph Prime's ask). Before, the
+# title slug missed the key and update_self('How I am growing', …) minted a
+# CUSTOM box beside the typed one — a real sheet carried both (read_self
+# 2026-10-30: "◆ How I am growing" and "◆ [how-i-am-growing]").
+_SECTION_ALIASES = {'projects': 'growing'}
+for _key, _spec in SECTIONS.items():
+    _SECTION_ALIASES[_slug(re.sub(r'\s*\(.*?\)', '', _spec['title']))] = _key
+
+
+def _sanitize_section(section):
+    """Lowercase slug, whitespace→'-', [a-z0-9_-] only, max 32. None if empty.
+    A typed section's title (with or without its "(top 5)" tail) or old
+    name resolves to its key; anything else is a custom section's slug."""
+    if not section:
+        return None
+    s = _slug(section)
+    bare = _slug(re.sub(r'\s*\(.*?\)', '', str(section)))
+    return _SECTION_ALIASES.get(bare, s) or None
 
 
 # ─── Read side ───────────────────────────────────────────────────────────────
@@ -319,16 +335,21 @@ PAST_EVENT_DAYS = 7   # "Just happened" window
 
 
 def _event_rows(cursor, scope):
-    """Chunks carrying event_dates or recurring_dates — shared by Upcoming
-    and Just-happened. Python-side date filtering: the candidate set is
-    small and json_each on an absent key is fussier than it's worth.
-    private_key IS NULL: the dashboard renders on EVERY wake read for every
-    persona — keyed-private rows must never preview here (scout find,
-    2026-07-19; this is the same gate class as _private_key_clause)."""
+    """EVENT chunks carrying event_dates or recurring_dates — shared by
+    Upcoming and Just-happened. Events only: the self sheet's Origin
+    paragraph ("January 21st") and a person's contact card ("christmas" in
+    its notes) are not things about to happen, and both sat in Upcoming on a
+    real sheet (read_self 2026-10-30, [1389] and [707]); goals show through
+    Active goals with their own due dates. Python-side date filtering: the
+    candidate set is small and json_each on an absent key is fussier than
+    it's worth. private_key IS NULL: the dashboard renders on EVERY wake
+    read for every persona — keyed-private rows must never preview here
+    (scout find, 2026-07-19; the same gate class as _private_key_clause)."""
     return cursor.execute(
         "SELECT id, content, json_extract(meta, '$.event_dates'), "
-        "json_extract(meta, '$.recurring_dates') FROM chunks "
-        "WHERE scope = ? AND (json_extract(meta, '$.event_dates') IS NOT NULL "
+        "json_extract(meta, '$.recurring_dates'), created FROM chunks "
+        "WHERE scope = ? AND layer = 'events' "
+        "AND (json_extract(meta, '$.event_dates') IS NOT NULL "
         "OR json_extract(meta, '$.recurring_dates') IS NOT NULL) "
         "AND private_key IS NULL "
         "AND json_extract(meta, '$.pruned_at') IS NULL "
@@ -352,20 +373,44 @@ def _is_future(d, today, now_min):
     return d >= today
 
 
+def _fold_recurring(hits, limit, reverse=False):
+    """Sort, then one row per recurring DAY across chunks: N memories that
+    mention a birthday are one birthday, not N rows (read_self 2026-10-30:
+    three Valentine's rows and two Jan 21 rows in ten slots). The first in
+    sort order keeps the row (Upcoming: the oldest chunk); one-shot dates on
+    the same day are distinct events and all stay."""
+    hits.sort(key=lambda h: (h['date'], h['id']), reverse=reverse)
+    seen, out = set(), []
+    for h in hits:
+        if h.get('recurring'):
+            if h['date'] in seen:
+                continue
+            seen.add(h['date'])
+        out.append(h)
+    return out[:limit]
+
+
 def _upcoming(cursor, scope, limit=10):
     """Nearest future event dates in scope — the temporal floor's visible
     face (meta.event_dates, regex- or librarian-resolved alike). Timed
     entries whose clock has passed move to Just-happened instead of
-    lingering here until midnight. recurring_dates ('--MM-DD') fold in as
+    lingering here until midnight. A date-only stamp on (or before) the
+    memory's own save day is the day it was WRITTEN, not something ahead:
+    "tonight", "today" and her habit of dating an entry put every fresh
+    memory at the top of the list and pushed real plans off the ten slots
+    (read_self 2026-10-30). Timed stamps keep the clock rule — "at 3pm"
+    saved at 9am is still ahead. recurring_dates ('--MM-DD') fold in as
     their next computed occurrence — same date from both forms is one entry."""
     from plugins.mindpalace.tools import temporal
     now = datetime.now()
     today = now.strftime('%Y-%m-%d')
     now_min = now.strftime('%Y-%m-%dT%H:%M')
     hits = []
-    for cid, content, raw, rec_raw in _event_rows(cursor, scope):
+    for cid, content, raw, rec_raw, created in _event_rows(cursor, scope):
+        saved = temporal._parse_anchor(created).strftime('%Y-%m-%d')
         future = {d for d in _json_dates(raw)
-                  if len(d) >= 10 and _is_future(d, today, now_min)}
+                  if len(d) >= 10 and _is_future(d, today, now_min)
+                  and (len(d) > 10 or d > saved)}
         rec = set()
         for mmdd in _json_dates(rec_raw):
             pair = temporal.occurrences(mmdd, now.date())
@@ -378,8 +423,7 @@ def _upcoming(cursor, scope, limit=10):
             if both[0] in rec:
                 hit['recurring'] = True
             hits.append(hit)
-    hits.sort(key=lambda h: h['date'])
-    return hits[:limit]
+    return _fold_recurring(hits, limit)
 
 
 def _just_happened(cursor, scope, limit=10, days=PAST_EVENT_DAYS):
@@ -392,7 +436,7 @@ def _just_happened(cursor, scope, limit=10, days=PAST_EVENT_DAYS):
     now_min = now.strftime('%Y-%m-%dT%H:%M')
     floor = (now - timedelta(days=days)).strftime('%Y-%m-%d')
     hits = []
-    for cid, content, raw, rec_raw in _event_rows(cursor, scope):
+    for cid, content, raw, rec_raw, _created in _event_rows(cursor, scope):
         past = {d for d in _json_dates(raw)
                 if len(d) >= 10 and d[:10] >= floor
                 and not _is_future(d, today, now_min)}
@@ -412,8 +456,7 @@ def _just_happened(cursor, scope, limit=10, days=PAST_EVENT_DAYS):
             if both[0] in rec:
                 hit['recurring'] = True
             hits.append(hit)
-    hits.sort(key=lambda h: h['date'], reverse=True)
-    return hits[:limit]
+    return _fold_recurring(hits, limit, reverse=True)
 
 
 def _render_dashboard(d):

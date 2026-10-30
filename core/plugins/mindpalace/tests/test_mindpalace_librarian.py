@@ -364,6 +364,62 @@ def test_merge_folds_duplicates_earliest_date_provenance(palace):
     assert lt.close_pass()['handled'] == 2
 
 
+def test_merge_carries_rating_edges_and_date_verdict(palace):
+    """Scout find 2026-10-30: the survivor was born unrated, with
+    name-matched edges only (link-pass edges lost), and re-entered the
+    dates queue. The cluster's highest rating, every member's mention
+    edges, and a librarian date verdict travel onto it."""
+    a = _save("Zebra visited the house today")
+    b = _save("Zebra came by the house for a visit")
+    _set_vec(a, [1, 0, 0]); _set_vec(b, [1, 0, 0])
+    _set_created(a, '2025-02-01T00:00:00+00:00')
+    _set_created(b, '2025-03-01T00:00:00+00:00')
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        eid = pt.upsert_entity(cur, "Krem", "default")    # named in NEITHER text
+        cur.execute("INSERT INTO edges (src_type, src_id, dst_type, dst_id, kind, "
+                    "weight, created) VALUES ('chunk', ?, 'entity', ?, 'mentions', "
+                    "0.3, 'x')", (a, eid))
+        cur.execute("UPDATE chunks SET importance = 0.6 WHERE id = ?", (a,))
+        m = json.loads(cur.execute('SELECT meta FROM chunks WHERE id = ?',
+                                   (b,)).fetchone()[0] or '{}')
+        m.update({'event_dates': ['2025-02-14'], 'event_date_src': 'librarian',
+                  'temporal_at': 't'})
+        cur.execute('UPDATE chunks SET meta = ? WHERE id = ?', (json.dumps(m), b))
+        conn.commit()
+    lt.open_pass('default', [a, b], kind='dedup')
+    msg, ok = _run('merge_memories', {'memory_ids': [a, b]})
+    assert ok, msg
+    new_id = int(re.search(r'→ \[(\d+)\]', msg).group(1))
+    with pt._get_connection() as conn:
+        imp = conn.execute('SELECT importance FROM chunks WHERE id = ?',
+                           (new_id,)).fetchone()[0]
+        edges = {r[0] for r in conn.execute(
+            "SELECT dst_id FROM edges WHERE src_type = 'chunk' AND src_id = ? "
+            "AND kind = 'mentions'", (new_id,))}
+    assert imp == pytest.approx(0.6)
+    assert eid in edges
+    nm = _meta(new_id)
+    assert nm['event_dates'] == ['2025-02-14'] and nm['event_date_src'] == 'librarian'
+    assert nm['temporal_at'] == 't'                    # not back in the dates queue
+
+
+def test_atomize_parts_inherit_the_rating(palace):
+    cid = _save("stars were out AND we watched the meteors")
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET importance = 0.7 WHERE id = ?", (cid,))
+        conn.commit()
+    lt.open_pass('default', [cid])
+    msg, ok = _run('atomize_memory', {'memory_id': cid, 'parts': [
+        "the stars were out", "we watched the meteors"]})
+    assert ok, msg
+    new_ids = [int(x) for x in re.findall(r'\d+', msg.split(':')[1])][:2]
+    with pt._get_connection() as conn:
+        for n in new_ids:
+            assert conn.execute('SELECT importance FROM chunks WHERE id = ?',
+                                (n,)).fetchone()[0] == pytest.approx(0.7)
+
+
 def test_merge_refuses_below_threshold(palace):
     a = _save("Zebra visited the house")
     b = _save("bought a new soldering iron")
@@ -751,8 +807,9 @@ def test_upcoming_lists_future_dates_only(palace):
 
 def test_just_happened_and_timed_upcoming_split(palace):
     """Timed events graduate from Upcoming to Just-happened as their clock
-    passes (the same-day-lingering fix); date-only today holds Upcoming all
-    day; the window is PAST_EVENT_DAYS."""
+    passes (the same-day-lingering fix); a date-only today stamped on a
+    memory SAVED today is the day it was written — neither list (2026-10-30:
+    "tonight" chatter owned the ten slots); the window is PAST_EVENT_DAYS."""
     from datetime import datetime, timedelta
     from plugins.mindpalace.tools import self_tools as st2
     now = datetime.now()
@@ -778,7 +835,7 @@ def test_just_happened_and_timed_upcoming_split(palace):
         jh = {u['id'] for u in st2._just_happened(cur, 'default')}
     assert ids['timed_past'] not in up and ids['timed_past'] in jh
     assert ids['timed_fut'] in up and ids['timed_fut'] not in jh
-    assert ids['dateonly_today'] in up
+    assert ids['dateonly_today'] not in up and ids['dateonly_today'] not in jh
     assert ids['yesterday'] in jh
     assert ids['ancient'] not in jh                     # outside the 7-day window
 

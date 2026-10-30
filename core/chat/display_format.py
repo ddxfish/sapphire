@@ -55,6 +55,8 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
         if block.get("speaker"):
             result["speaker"] = block["speaker"]
             result["name"] = block.get("name")
+        if block.get("compressed"):
+            result["compressed"] = True
         return result
 
     for msg in messages:
@@ -205,6 +207,9 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
 
             if msg.get("persona") and "persona" not in current_block:
                 current_block["persona"] = msg["persona"]
+
+            if msg.get("compressed"):
+                current_block["compressed"] = True
 
             if msg.get("tool_calls"):
                 for tc in msg.get("tool_calls", []):

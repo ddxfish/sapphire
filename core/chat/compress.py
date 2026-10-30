@@ -14,6 +14,7 @@
 
 import json
 import logging
+import os
 import re
 import threading
 from datetime import datetime
@@ -58,7 +59,19 @@ def _text_of(content) -> str:
     return str(content or "")
 
 
-def render_transcript(msgs: List[Dict[str, Any]]) -> str:
+def _speaker_label(m: Dict[str, Any], persona: str, room: bool) -> str:
+    """Who a transcript line belongs to. A room's rows name their speaker. In
+    a plain chat, ASSISTANT is the persona writing the summary ("I"), and a
+    reply stamped with another persona keeps that persona's name."""
+    role = m.get("role", "?")
+    if room and role in ("user", "assistant") and m.get("name"):
+        return str(m["name"])
+    if role == "assistant" and persona and m.get("persona") not in (None, "", persona):
+        return str(m["persona"])
+    return role.upper()
+
+
+def render_transcript(msgs: List[Dict[str, Any]], persona: str = "", room: bool = False) -> str:
     """Render messages as a plain transcript for the summarizer."""
     from core.chat.llm_errors import is_error_row
     lines = []
@@ -73,7 +86,7 @@ def render_transcript(msgs: List[Dict[str, Any]]) -> str:
             text = f"{text}\n[called tools: {names}]".strip()
         elif role == "tool":
             text = f"({m.get('name', 'tool')} result) {text}"
-        lines.append(f"{role.upper()}: {text}")
+        lines.append(f"{_speaker_label(m, persona, room)}: {text}")
     return "\n\n".join(lines)
 
 
@@ -96,10 +109,12 @@ def chunk_by_turns(msgs: List[Dict[str, Any]],
     return chunks
 
 
-def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]],
+                  persona: str = "") -> List[Dict[str, Any]]:
     """Build the synthetic user/assistant pair that replaces source_msgs.
     Timestamp inherits from the newest compressed message so the visual
-    chronology holds; `compressed` flags let the UI badge the seam."""
+    chronology holds; `compressed` flags let the UI badge the seam; `persona`
+    gives the summary the face of whoever it speaks as."""
     ts = next((m.get("timestamp") for m in reversed(source_msgs)
                if m.get("timestamp")), None) or datetime.now().isoformat()
     stamp = {"timestamp": ts, "compressed": True,
@@ -108,8 +123,10 @@ def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]]) -> List[Dict[
                      if m.get("timestamp")), "?")
     marker = (f"[Compressed history: {len(source_msgs)} messages "
               f"({str(first_ts)[:10]} to {str(ts)[:10]}) summarized below]")
-    return [{"role": "user", "content": marker, **stamp},
-            {"role": "assistant", "content": summary, **stamp}]
+    reply = {"role": "assistant", "content": summary, **stamp}
+    if persona:
+        reply["persona"] = persona
+    return [{"role": "user", "content": marker, **stamp}, reply]
 
 
 # ── LLM plumbing ───────────────────────────────────────────────────────────
@@ -127,23 +144,78 @@ def make_provider(provider_key: str, model: str = "", conversation: str = None):
         raise ValueError(str(e)) from e
 
 
-_CHUNK_PROMPT = (
+# What to keep and whose voice: the only part a person edits. The frames below
+# stay in code, so an edit can never lose the transcript (a summary of nothing
+# would pass every guard and replace real history). Instructions go in as a
+# .format() VALUE, so a brace typed in them is just a brace.
+DEFAULT_INSTRUCTIONS = (
+    "Preserve concrete facts, names, decisions made, emotional beats, running "
+    "jokes, open threads, and anything either participant would need to "
+    "remember later; drop repetition. Write chronologically in the past tense, "
+    "in the first person as the ASSISTANT, as the ASSISTANT's own memory of "
+    "the conversation: \"I\" always means the ASSISTANT and \"you\" always "
+    "means the USER. Anyone else keeps their name."
+)
+
+# A room has no one "I". Fixed, not editable: the box is for one-voice chats.
+ROOM_INSTRUCTIONS = (
+    "Preserve concrete facts, names, decisions made, emotional beats, running "
+    "jokes, open threads, and anything a participant would need to remember "
+    "later; drop repetition. Write chronologically in the third person past "
+    "tense, attributing what was said and done to each speaker by the name "
+    "the transcript gives them."
+)
+
+_CHUNK_FRAME = (
     "You are compressing a saved chat history. Summarize the conversation "
-    "excerpt below into a dense summary of at most about {budget} tokens. "
-    "Preserve: concrete facts, names, decisions made, emotional beats, "
-    "running jokes, open threads, and anything either participant would "
-    "need to remember later. Write chronologically in the third person "
-    "past tense. Output ONLY the summary — no preamble, no headers.\n\n"
+    "excerpt below into a dense summary of at most about {budget} tokens."
+    "{voice}\n\n{instructions}\n\n"
+    "Output ONLY the summary — no preamble, no headers.\n\n"
     "EXCERPT:\n{text}"
 )
 
-_MERGE_PROMPT = (
+_MERGE_FRAME = (
     "Below are sequential partial summaries of ONE long conversation. Merge "
     "them into a single chronological summary of at most about {budget} "
-    "tokens. Keep concrete facts, names, decisions, emotional beats, and "
-    "open threads; drop repetition. Output ONLY the summary.\n\n"
+    "tokens, keeping the perspective they are written in.{voice}\n\n"
+    "{instructions}\n\n"
+    "Output ONLY the summary — no preamble, no headers.\n\n"
     "PARTIAL SUMMARIES:\n{text}"
 )
+
+INSTRUCTIONS_PATH = Path(__file__).parent.parent.parent / "user" / "prompts" / "compress_instructions.txt"
+MAX_INSTRUCTIONS_CHARS = 8000
+
+
+def load_instructions() -> str:
+    """The person's override, else the default. An unreadable override raises
+    (the job fails loud) rather than quietly summarizing in the wrong voice."""
+    try:
+        text = INSTRUCTIONS_PATH.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return DEFAULT_INSTRUCTIONS
+    return text or DEFAULT_INSTRUCTIONS
+
+
+def save_instructions(text: str) -> None:
+    """Keep the override only while it differs from the default, so a later
+    fix to the default still reaches everyone who never edited it."""
+    text = (text or "").strip()
+    if len(text) > MAX_INSTRUCTIONS_CHARS:
+        raise ValueError(f"Instructions must be under {MAX_INSTRUCTIONS_CHARS} characters")
+    if not text or text == DEFAULT_INSTRUCTIONS:
+        INSTRUCTIONS_PATH.unlink(missing_ok=True)
+        return
+    INSTRUCTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = INSTRUCTIONS_PATH.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, INSTRUCTIONS_PATH)
+
+
+def _guide(instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "") -> Dict[str, str]:
+    """The frame fields every summarize call shares."""
+    return {"instructions": instructions,
+            "voice": f" The ASSISTANT is {persona}." if persona else ""}
 
 
 def cap_text(text: str, ceiling: int = INPUT_CEILING_TOKENS) -> str:
@@ -161,8 +233,8 @@ def cap_text(text: str, ceiling: int = INPUT_CEILING_TOKENS) -> str:
     return f"{head}\n[... ~{omitted} tokens omitted for length ...]\n{tail}"
 
 
-def _summarize(provider, prompt_template: str, text: str, budget: int) -> str:
-    prompt = prompt_template.format(budget=budget, text=cap_text(text))
+def _summarize(provider, frame: str, text: str, budget: int, guide: Dict[str, str]) -> str:
+    prompt = frame.format(budget=budget, text=cap_text(text), **guide)
     resp = provider.chat_completion(
         [{"role": "user", "content": prompt}],
         generation_params={"max_tokens": int(budget * 1.3) + 200,
@@ -177,11 +249,12 @@ def _summarize(provider, prompt_template: str, text: str, budget: int) -> str:
 
 
 def _merge_partials(provider, partials: List[str], target_tokens: int,
-                    on_progress=None) -> str:
+                    on_progress=None, guide: Optional[Dict[str, str]] = None) -> str:
     """Reduce partial summaries to ONE, in rounds. A single merge call's
     input never exceeds INPUT_CEILING_TOKENS — on a very long chat the
     partials themselves outgrow one call, so group → merge → repeat until
     one remains. Each round strictly shrinks the list, so this terminates."""
+    guide = guide or _guide()
     rnd = 0
     while len(partials) > 1:
         rnd += 1
@@ -202,52 +275,55 @@ def _merge_partials(provider, partials: List[str], target_tokens: int,
                 continue
             if on_progress:
                 on_progress(f"merging (round {rnd}, {gi + 1}/{len(groups)})")
-            merged.append(_summarize(provider, _MERGE_PROMPT,
-                                     "\n\n---\n\n".join(g), target_tokens))
+            merged.append(_summarize(provider, _MERGE_FRAME,
+                                     "\n\n---\n\n".join(g), target_tokens, guide))
         if len(merged) >= len(partials):
             # Every group was a singleton — can't shrink (pathological
             # ceiling). Force-merge the lot; cap_text guards the input.
             if on_progress:
                 on_progress(f"merging (final round {rnd})")
-            return _summarize(provider, _MERGE_PROMPT,
-                              "\n\n---\n\n".join(partials), target_tokens)
+            return _summarize(provider, _MERGE_FRAME,
+                              "\n\n---\n\n".join(partials), target_tokens, guide)
         partials = merged
     return partials[0]
 
 
 def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
-                      target_tokens: int, on_progress=None) -> List[Dict[str, Any]]:
+                      target_tokens: int, on_progress=None,
+                      instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
+                      room: bool = False) -> List[Dict[str, Any]]:
     """Compress `head` into synthetic summary pairs. Pure of storage —
     testable with a mock provider. on_progress(str) narrates for job status."""
     chunks = chunk_by_turns(head, CHUNK_INPUT_TOKENS)  # module global: patchable
     if not chunks:
         return []
+    guide = _guide(instructions, persona)
     if mode == "chunked":
         per = max(MIN_PAIR_TOKENS, target_tokens // len(chunks))
         pairs = []
         for i, chunk in enumerate(chunks):
             if on_progress:
                 on_progress(f"chunk {i + 1}/{len(chunks)}")
-            summary = _summarize(provider, _CHUNK_PROMPT,
-                                 render_transcript(chunk), per)
-            pairs.extend(_summary_pair(summary, chunk))
+            summary = _summarize(provider, _CHUNK_FRAME,
+                                 render_transcript(chunk, persona, room), per, guide)
+            pairs.extend(_summary_pair(summary, chunk, persona))
         return pairs
     # whole: map-reduce → one pair
     if len(chunks) == 1:
         if on_progress:
             on_progress("summarizing")
-        summary = _summarize(provider, _CHUNK_PROMPT,
-                             render_transcript(chunks[0]), target_tokens)
+        summary = _summarize(provider, _CHUNK_FRAME,
+                             render_transcript(chunks[0], persona, room), target_tokens, guide)
     else:
         partials = []
         for i, c in enumerate(chunks):
             if on_progress:
                 on_progress(f"chunk {i + 1}/{len(chunks)}")
-            partials.append(_summarize(provider, _CHUNK_PROMPT,
-                                       render_transcript(c),
-                                       min(PARTIAL_SUMMARY_TOKENS, target_tokens)))
-        summary = _merge_partials(provider, partials, target_tokens, on_progress)
-    return _summary_pair(summary, head)
+            partials.append(_summarize(provider, _CHUNK_FRAME,
+                                       render_transcript(c, persona, room),
+                                       min(PARTIAL_SUMMARY_TOKENS, target_tokens), guide))
+        summary = _merge_partials(provider, partials, target_tokens, on_progress, guide)
+    return _summary_pair(summary, head, persona)
 
 
 # ── the job ────────────────────────────────────────────────────────────────
@@ -264,7 +340,7 @@ def _write_backup(session_manager, chat_name: str, exported: Dict[str, Any]) -> 
 def _compress_chat(session_manager, chat_name: str, mode: str,
                    provider_key: str, model: str, target_tokens: int,
                    keep_last_turns: int, backup: bool,
-                   on_progress=None) -> Dict[str, Any]:
+                   on_progress=None, persona: str = "") -> Dict[str, Any]:
     exported = session_manager.export_chat(chat_name)
     if exported is None:
         raise ValueError(f"Chat '{chat_name}' not found")
@@ -282,15 +358,19 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     # next lock (the vault scrub only cleans at lock time). Unreadable
     # settings fail closed.
     try:
-        _private = bool((session_manager.read_chat_settings(chat_name) or {}).get("private_chat"))
+        chat_settings = session_manager.read_chat_settings(chat_name) or {}
+        _private = bool(chat_settings.get("private_chat"))
     except Exception:
-        _private = True
+        chat_settings, _private = {}, True
+    room = chat_settings.get("mode") == "room"
+    instructions = ROOM_INSTRUCTIONS if room else load_instructions()
     if backup and _private:
         logger.info(f"[COMPRESS] Skipping plaintext backup for private chat '{chat_name}'")
     backup_path = _write_backup(session_manager, chat_name, exported) if (backup and not _private) else None
     provider = make_provider(provider_key, model, conversation=chat_name)  # fail BEFORE any LLM spend
     pairs = compress_messages(head, mode, provider, int(target_tokens),
-                              on_progress=on_progress)
+                              on_progress=on_progress, instructions=instructions,
+                              persona="" if room else persona, room=room)
 
     # Fork 4A (2026-07-16): "compression" that grows the chat is refused —
     # chatty local models can summarize a small head into MORE tokens than
@@ -333,7 +413,7 @@ def get_job_status() -> Dict[str, Any]:
 
 def start_compress_job(session_manager, chat_name: str, *, mode: str,
                        provider_key: str, model: str, target_tokens: int,
-                       keep_last_turns: int, backup: bool):
+                       keep_last_turns: int, backup: bool, persona: str = ""):
     """Start the one-at-a-time background compress. Returns (ok, error)."""
     global _job
     with _job_lock:
@@ -362,7 +442,7 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
             report = _compress_chat(session_manager, chat_name, mode,
                                     provider_key, model, target_tokens,
                                     keep_last_turns, backup,
-                                    on_progress=on_progress)
+                                    on_progress=on_progress, persona=persona)
             with _job_lock:
                 _job.update({"running": False, "done": True, "ok": True,
                              "result": report,

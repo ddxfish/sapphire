@@ -297,13 +297,17 @@ def _resolve(text, anchor):
 # ── Recurring dates (2026-07-19, Krem's B) ──────────────────────────────────
 # Annual dates in ISO 8601 recurring form '--MM-DD', stamped as
 # meta.recurring_dates. Regex-OWNED: the librarian never writes this key, so
-# redate may always refresh it — no verdict interplay. Triggers: fixed-date
-# holiday names (christmas IS every year), and birthday/anniversary/annual
-# keywords within a small window of an explicit month+day. "The state fair
-# this year" stays one-shot — no keyword, no recurrence. Floating holidays
-# (thanksgiving) stay one-shot: '--MM-DD' can't express "4th Thursday".
-# One-shot resolution is untouched — a chunk may carry both forms; the
-# dashboard dedups at read time (same computed day = one entry).
+# redate may always refresh it — no verdict interplay. ONE trigger: a
+# birthday/anniversary/annual keyword within a small window of an explicit
+# month+day or a holiday name. A holiday name ALONE is one-shot (nearest
+# occurrence, like any month+day): "christmas IS every year" was the 2026-07
+# rule, and on a real sheet it meant every memory that mentioned a holiday
+# in passing — last Valentine's gift, a client's christmas concert — sat in
+# Upcoming every year forever (read_self 2026-10-30: 6 of 10 slots). "The
+# state fair this year" stays one-shot — no keyword, no recurrence. Floating
+# holidays (thanksgiving) stay one-shot: '--MM-DD' can't express "4th
+# Thursday". A chunk may carry both forms; the dashboard dedups at read time
+# (same computed day = one entry).
 
 RX_RECUR_KEY = re.compile(
     r"\b(birthday|b-?day|anniversary|born|every\s+year|each\s+year|"
@@ -332,9 +336,6 @@ def _recurring(text):
                 seen.add(s)
                 out.append(s)
 
-    for m in RX_HOLIDAY.finditer(text):
-        add(*_HOLIDAYS[m[1].lower()])
-
     key_spans = [m.span() for m in RX_RECUR_KEY.finditer(text)]
     if key_spans:
         def near(m):
@@ -342,6 +343,9 @@ def _recurring(text):
             return any(ks - _RECUR_WINDOW < e and s < ke + _RECUR_WINDOW
                        for ks, ke in key_spans)
 
+        for m in RX_HOLIDAY.finditer(text):
+            if near(m):
+                add(*_HOLIDAYS[m[1].lower()])
         for m in RX_ISO.finditer(text):
             if near(m):
                 add(int(m[2]), int(m[3]))

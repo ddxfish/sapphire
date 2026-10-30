@@ -2277,7 +2277,7 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         with _get_connection() as conn:
             cursor = conn.cursor()
             row = cursor.execute(
-                'SELECT id, content, private_key, layer, meta FROM chunks '
+                'SELECT id, content, private_key, layer, meta, created FROM chunks '
                 'WHERE id = ? AND scope = ?', (memory_id, scope)).fetchone()
             if not row:
                 return (f"Memory [{memory_id}] not found in current memory "
@@ -2313,13 +2313,23 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                         blob, provider, dim = stamp_embedding(embs[0], embedder)
                     else:
                         embed_failed = True
-                # Restamp Tier-A meta; provenance and plugin fields survive.
+                # Restamp the derivable annotations INTO the existing bag,
+                # anchored to the memory's own save date — the words were
+                # lived then, not at edit time ("tomorrow" in a March memory
+                # must not land in Upcoming today). Everything else survives:
+                # provenance, queue stamps, retirement marks, import keys,
+                # plugin fields. Before (scout find 2026-10-30) the bag was
+                # rebuilt from scratch: editing a retired memory silently
+                # resurrected it, and editing an imported one dropped its
+                # import_key so the next import copied the original again.
                 old_meta = {}
                 try:
                     old_meta = json.loads(row[4] or '{}')
                 except Exception:
                     pass
-                meta, mention_ids = {}, []
+                if not isinstance(old_meta, dict):
+                    old_meta = {}
+                meta, mention_ids = dict(old_meta), []
                 try:
                     from plugins.mindpalace.tools import metadata as md
                     arows = md.entity_aliases(cursor, scope)
@@ -2331,14 +2341,12 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                         if pair and pair[0] not in seen:
                             seen.add(pair[0])
                             mention_ids.append(pair[0])
-                    meta = md.save_meta(new_content,
-                                        exclude_names={h.lower() for h in hits})
+                    meta = md.merge_derived(old_meta, md.save_meta(
+                        new_content, exclude_names={h.lower() for h in hits},
+                        anchor=row[5]))
                 except Exception as e:
                     logger.warning(f"[MINDPALACE] Meta restamp failed "
                                    f"(update continues): {e}")
-                for keep_key in ('added_by', 'fields'):
-                    if keep_key in old_meta:
-                        meta[keep_key] = old_meta[keep_key]
                 cursor.execute(
                     'UPDATE chunks SET content = ?, meta = ?, updated = ?, '
                     'embedding = ?, embedding_provider = ?, embedding_dim = ? '

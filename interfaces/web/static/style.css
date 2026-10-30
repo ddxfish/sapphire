@@ -9505,6 +9505,7 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
 /* bubbles with a speaker: the name over the bubble; a guest's line on the
    left; the room's own notice as one muted line */
 .msg-name { font-size: var(--font-xs); color: var(--text-muted); margin: 0 0 2px 10px; }
+.msg-compressed { font-size: var(--font-xs); color: var(--text-muted); margin: 0 0 2px 10px; }
 .message.user.guest { margin-left: 0; margin-right: auto; flex-direction: row; }
 .message.user.guest .msg-name { margin-left: 10px; }
 .message.notice { margin: 0 auto; max-width: 80%; }

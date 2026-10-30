@@ -91,6 +91,7 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | POST | `/api/chats/{name}/repair` | Diagnose/repair a chat's unreadable message rows |
 | POST | `/api/chats/{name}/compress` | Start the background compress job (summarize history) |
 | GET | `/api/chats/compress/status` | Status of the one-at-a-time compress job (UI polls this) |
+| GET/PUT | `/api/chats/compress/instructions` | Read or save the compress instructions override |
 | GET | `/api/chats/{name}/prompt-preview` | The exact system prompt + ghost envelope the next turn would send |
 
 ### Message History

@@ -1915,6 +1915,8 @@ def _migrate_v1_knowledge(keys, report):
             continue
         tab = tabs.get(e.get('tab_id'), {})
         scope = it._get(e, 'scope') or tab.get('scope') or 'default'
+        if str(scope).startswith('__rag__:'):
+            continue        # a chat's attachments: core's, under either engine
         src_file = it._get(e, 'source_filename')
         gkey = (scope, e.get('tab_id'), src_file or f"entry:{e.get('id')}")
         groups.setdefault(gkey, {'tab': tab, 'members': []})

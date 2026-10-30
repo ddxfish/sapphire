@@ -558,3 +558,151 @@ class TestCompressPrivacyGate:
         result, captured = self._call(monkeypatch, {}, 'claude', {'backup': True})
         assert result['status'] == 'started'
         assert captured['backup'] is True
+
+
+class TestCompressVoice:
+    """Whose voice a summary speaks in, and the editable instructions."""
+
+    def test_default_is_first_person_on_both_frames(self, monkeypatch):
+        from core.chat import compress
+        monkeypatch.setattr(compress, "CHUNK_INPUT_TOKENS", 10)
+        prov = MockProvider()
+        compress.compress_messages(turn(1) + turn(2), "whole", prov, 2000)
+        assert len(prov.calls) == 3  # two chunks + one merge
+        for prompt in prov.calls:
+            assert "first person as the ASSISTANT" in prompt
+            assert "third person" not in prompt
+
+    def test_persona_names_voice_and_stamps_only_the_reply(self):
+        from core.chat import compress
+        prov = MockProvider()
+        pairs = compress.compress_messages(turn(1), "whole", prov, 2000, persona="sapphire")
+        assert "The ASSISTANT is sapphire." in prov.calls[0]
+        assert pairs[1]["persona"] == "sapphire" and "persona" not in pairs[0]
+
+    def test_no_persona_means_no_voice_line_and_no_stamp(self):
+        from core.chat import compress
+        prov = MockProvider()
+        pairs = compress.compress_messages(turn(1), "whole", prov, 2000)
+        assert "The ASSISTANT is" not in prov.calls[0]
+        assert "persona" not in pairs[1]
+
+    def test_other_personas_keep_their_names_in_the_transcript(self):
+        from core.chat import compress
+        msgs = [{"role": "assistant", "content": "mine", "persona": "sapphire"},
+                {"role": "assistant", "content": "theirs", "persona": "cobalt"},
+                {"role": "assistant", "content": "unstamped"}]
+        out = compress.render_transcript(msgs, persona="sapphire")
+        assert out.split("\n\n") == ["ASSISTANT: mine", "cobalt: theirs", "ASSISTANT: unstamped"]
+
+    def test_edited_instructions_cannot_lose_the_transcript(self):
+        """Braces are literal and the excerpt is the frame's, whatever is typed."""
+        from core.chat import compress
+        prov = MockProvider()
+        compress.compress_messages(turn(1), "whole", prov, 2000,
+                                   instructions="Be {terse} and } odd {0}")
+        assert "Be {terse} and } odd {0}" in prov.calls[0]
+        assert "question 1" in prov.calls[0]
+
+    def test_override_round_trip_and_reset(self, tmp_path, monkeypatch):
+        from core.chat import compress
+        path = tmp_path / "prompts" / "compress_instructions.txt"
+        monkeypatch.setattr(compress, "INSTRUCTIONS_PATH", path)
+        assert compress.load_instructions() == compress.DEFAULT_INSTRUCTIONS
+        compress.save_instructions("  Keep the jokes.  ")
+        assert path.read_text(encoding="utf-8") == "Keep the jokes."
+        assert compress.load_instructions() == "Keep the jokes."
+        compress.save_instructions(compress.DEFAULT_INSTRUCTIONS)
+        assert not path.exists()
+        compress.save_instructions("again")
+        compress.save_instructions("   ")
+        assert not path.exists()
+
+    def test_override_too_long_refused_and_old_one_kept(self, tmp_path, monkeypatch):
+        from core.chat import compress
+        path = tmp_path / "compress_instructions.txt"
+        monkeypatch.setattr(compress, "INSTRUCTIONS_PATH", path)
+        compress.save_instructions("keep me")
+        with pytest.raises(ValueError):
+            compress.save_instructions("x" * (compress.MAX_INSTRUCTIONS_CHARS + 1))
+        assert compress.load_instructions() == "keep me"
+
+    def _run(self, chat_env, tmp_path, monkeypatch, settings, rows, **kw):
+        from core.chat import compress
+        monkeypatch.setattr(compress, "INSTRUCTIONS_PATH", tmp_path / "none.txt")
+        prov = MockProvider()
+        monkeypatch.setattr(compress, "make_provider", lambda k, m, **_: prov)
+        mgr = chat_env()
+        mgr.create_chat("voice")
+        mgr.set_named_chat_settings("voice", settings)
+        mgr.append_messages_to_chat("voice", rows)
+        compress._compress_chat(mgr, "voice", "whole", "mock", "", 500, 1, backup=False, **kw)
+        return prov, mgr.export_chat("voice")["messages"]
+
+    def test_room_is_third_person_by_speaker_and_ignores_persona(self, chat_env, tmp_path, monkeypatch):
+        rows = [{"role": "user", "content": "hi all " * 200, "speaker": "user", "name": "Alex", "timestamp": "t1"},
+                {"role": "assistant", "content": "hello " * 200, "speaker": "s1", "name": "Sam", "timestamp": "t2"},
+                {"role": "user", "content": "last", "speaker": "user", "name": "Alex", "timestamp": "t3"},
+                {"role": "assistant", "content": "tail", "speaker": "s1", "name": "Sam", "timestamp": "t4"}]
+        prov, out = self._run(chat_env, tmp_path, monkeypatch, {"mode": "room"}, rows, persona="sapphire")
+        prompt = prov.calls[0]
+        assert "third person" in prompt and "first person" not in prompt
+        assert "Alex: hi all" in prompt and "Sam: hello" in prompt
+        assert "The ASSISTANT is" not in prompt
+        assert "persona" not in out[1]
+
+    def test_plain_chat_uses_the_saved_override_end_to_end(self, chat_env, tmp_path, monkeypatch):
+        from core.chat import compress
+        rows = turn(1) + turn(2)
+        rows[0]["content"] += " lorem ipsum" * 100
+        monkeypatch.setattr(compress, "INSTRUCTIONS_PATH", tmp_path / "o.txt")
+        compress.save_instructions("Only the jokes.")
+        prov = MockProvider()
+        monkeypatch.setattr(compress, "make_provider", lambda k, m, **_: prov)
+        mgr = chat_env()
+        mgr.create_chat("voice")
+        mgr.append_messages_to_chat("voice", rows)
+        compress._compress_chat(mgr, "voice", "whole", "mock", "", 500, 1, backup=False, persona="sapphire")
+        assert "Only the jokes." in prov.calls[0]
+        assert mgr.export_chat("voice")["messages"][1]["persona"] == "sapphire"
+
+
+    def test_summary_reaches_the_ui_with_badge_flag_and_face(self):
+        """display_format whitelists fields: a flag it drops is a badge that
+        never paints. Chunked pairs stay separate bubbles, tail stays unbadged."""
+        from core.chat import compress
+        from core.chat.display_format import format_messages_for_display
+        pairs = (compress._summary_pair("one", turn(1), "sapphire")
+                 + compress._summary_pair("two", turn(2), "sapphire"))
+        shown = format_messages_for_display(pairs + turn(3))
+        summaries = [m for m in shown if m.get("compressed")]
+        assert [s["persona"] for s in summaries] == ["sapphire", "sapphire"]
+        assert [s["parts"][0]["text"] for s in summaries] == ["one", "two"]
+        assert all(s["role"] == "assistant" for s in summaries)
+        assert shown[-1]["role"] == "assistant" and "compressed" not in shown[-1]
+
+
+class TestCompressPersonaRoute:
+    def _call(self, monkeypatch, chat_settings, body):
+        import core.personas
+        monkeypatch.setattr(core.personas.persona_manager, "exists", lambda n: n == "sapphire")
+        return TestCompressPrivacyGate()._call(monkeypatch, chat_settings, "claude", body)
+
+    def test_omitted_uses_chats_persona(self, monkeypatch):
+        _, cap = self._call(monkeypatch, {"persona": "sapphire"}, {})
+        assert cap["persona"] == "sapphire"
+
+    def test_chats_deleted_persona_is_dropped(self, monkeypatch):
+        _, cap = self._call(monkeypatch, {"persona": "gone"}, {})
+        assert cap["persona"] == ""
+
+    def test_explicit_none_beats_chats_persona(self, monkeypatch):
+        _, cap = self._call(monkeypatch, {"persona": "sapphire"}, {"persona": ""})
+        assert cap["persona"] == ""
+
+    @pytest.mark.parametrize("bad", ["ghost", ["sapphire"], {"a": 1}, 5])
+    def test_explicit_unknown_refused(self, monkeypatch, bad):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as ei:
+            self._call(monkeypatch, {}, {"persona": bad})
+        assert ei.value.status_code == 400

@@ -672,11 +672,13 @@ def test_migrate_v1_knowledge_readonly(palace_lib, library, tmp_path,
             content TEXT, chunk_index INTEGER, source_filename TEXT,
             created_at TEXT, scope TEXT);
         INSERT INTO knowledge_tabs VALUES
-            (1, 'Boats', 'human', 'default'), (2, 'Research', 'ai', 'default');
+            (1, 'Boats', 'human', 'default'), (2, 'Research', 'ai', 'default'),
+            (3, 'Documents', 'human', '__rag__:secret chat');
         INSERT INTO knowledge_entries VALUES
             (1, 1, 'hull care part one', 0, 'hull.txt', '2025-01-01', NULL),
             (2, 1, 'hull care part two', 1, 'hull.txt', '2025-01-01', NULL),
-            (3, 2, 'she researched tides herself', NULL, NULL, '2025-01-02', NULL);
+            (3, 2, 'she researched tides herself', NULL, NULL, '2025-01-02', NULL),
+            (4, 3, 'attached pdf text', 0, 'a.pdf', '2025-01-03', NULL);
     """)
     conn.commit()
     conn.close()
@@ -694,6 +696,8 @@ def test_migrate_v1_knowledge_readonly(palace_lib, library, tmp_path,
         docs = {r[0]: (r[1], r[2]) for r in conn.execute(
             'SELECT title, added_by, collection_id FROM documents')}
     assert {'Boats', 'Research'} <= cats          # tabs became drawers
+    assert 'Documents' not in cats                # a chat's attachments stay core's
+    assert 'a' not in docs and 'attached pdf text' not in docs
     assert docs['hull'][0] == 'user'              # human tab → user
     assert docs['she researched tides herself'][0] == 'ai'
     with library.get_connection() as conn:

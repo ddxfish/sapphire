@@ -1603,6 +1603,29 @@ async def compress_status(_=Depends(require_login)):
     return compress.get_job_status()
 
 
+@router.get("/api/chats/compress/instructions")
+async def get_compress_instructions(_=Depends(require_login)):
+    """The compress instructions in force, and the default a reset returns to."""
+    from core.chat import compress
+    return {"instructions": compress.load_instructions(),
+            "default": compress.DEFAULT_INSTRUCTIONS}
+
+
+@router.put("/api/chats/compress/instructions")
+async def put_compress_instructions(request: Request, _=Depends(require_login)):
+    """Save the override (user/prompts/compress_instructions.txt). Blank or
+    the default removes it."""
+    from core.chat import compress
+    text = ((await request.json()) or {}).get('instructions', '')
+    if not isinstance(text, str):
+        raise HTTPException(status_code=400, detail="instructions must be text")
+    try:
+        compress.save_instructions(text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "instructions": compress.load_instructions()}
+
+
 @router.post("/api/chats/{chat_name}/trim")
 async def trim_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Turn-snapped middle trim: keep the first A and last B turns, delete
@@ -1709,10 +1732,20 @@ async def compress_chat(chat_name: str, request: Request, _=Depends(require_logi
         if not _local:
             raise HTTPException(status_code=400,
                                 detail=f"'{chat_name}' is a private chat — compression needs a provider marked local/private-safe.")
+    # Whose voice the summary speaks in. Only the NAME reaches the summarizer:
+    # a persona's prompt can be private and this provider can be a cloud one.
+    # No choice sent = the chat's own persona, dropped if it no longer exists.
+    from core.personas import persona_manager
+    chosen = 'persona' in data
+    persona = (data['persona'] if chosen else chat_settings.get('persona')) or ''
+    if persona and not (isinstance(persona, str) and persona_manager.exists(persona)):
+        if chosen:
+            raise HTTPException(status_code=400, detail="Unknown persona")
+        persona = ''
     ok, err = compress.start_compress_job(
         sm, chat_name, mode=mode, provider_key=provider_key,
         model=(data.get('model') or '').strip(), target_tokens=target_tokens,
-        keep_last_turns=keep_last,
+        keep_last_turns=keep_last, persona=persona,
         # Fork 2A (2026-07-16): private chats never write the plaintext
         # backup export — the whole point of the flag is nothing readable
         # leaves the DB.

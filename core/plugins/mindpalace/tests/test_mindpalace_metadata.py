@@ -429,6 +429,50 @@ def test_backfill_honors_link_fields(palace):
         conn.close()
 
 
+def test_merge_derived_keeps_the_bag_and_the_verdict():
+    old = {'pruned_at': 't', 'import_key': 'k', 'md_v': 1,
+           'event_dates': ['2026-01-01'], 'event_date_src': 'regex',
+           'noun_candidates': ['x']}
+    fresh = {'md_v': md.MD_VERSION, 'stats': {},
+             'event_dates': ['2026-02-02'], 'event_date_src': 'regex'}
+    m = md.merge_derived(old, fresh)
+    assert m['pruned_at'] == 't' and m['import_key'] == 'k'
+    assert m['event_dates'] == ['2026-02-02'] and 'noun_candidates' not in m
+    old['event_date_src'] = 'librarian'
+    m = md.merge_derived(old, fresh)
+    assert m['event_dates'] == ['2026-01-01'] and m['event_date_src'] == 'librarian'
+    assert md.merge_derived(None, fresh) == fresh
+
+
+def test_backfill_restamps_rows_below_the_current_version(palace):
+    """MD_VERSION's own promise (v2: old rows get dated too) — but the query
+    only took rows with NO md_v, so every v1-stamped memory stayed undated
+    (scout find 2026-10-30). Rows below the current version restamp; the
+    rest of the bag survives; a second run is a no-op."""
+    palace._ensure_db()
+    conn = sqlite3.connect(palace._get_db_path())
+    try:
+        conn.execute(
+            "INSERT INTO chunks (layer, scope, content, meta, created, updated) "
+            "VALUES ('events', 'default', 'dinner on 2026-05-05', ?, ?, ?)",
+            (json.dumps({'md_v': 1, 'stats': {}, 'import_key': 'v2:memories:9'}),
+             '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00'))
+        conn.commit()
+    finally:
+        conn.close()
+    assert md.backfill().get('stamped') == 1
+    conn = sqlite3.connect(palace._get_db_path())
+    try:
+        m = json.loads(conn.execute(
+            "SELECT meta FROM chunks WHERE content = 'dinner on 2026-05-05'"
+        ).fetchone()[0])
+    finally:
+        conn.close()
+    assert m['md_v'] == md.MD_VERSION
+    assert m['event_dates'] == ['2026-05-05'] and m['import_key'] == 'v2:memories:9'
+    assert md.backfill().get('stamped') == 0
+
+
 def test_backfill_stamps_preserves_import_key_seeds_and_is_idempotent(palace):
     orig_ts = _seed_backfill_rows(palace)
 

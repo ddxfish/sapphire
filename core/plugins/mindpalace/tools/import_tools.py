@@ -399,7 +399,7 @@ def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen):
                 }
 
         scur.execute("SELECT * FROM knowledge_entries")
-        pending = 0
+        pending = rag = 0
         for r in scur.fetchall():
             row = {k: r[k] for k in r.keys()}
             old_id = row.get('id')
@@ -418,6 +418,14 @@ def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen):
             tab_type = tab.get('type')
             # scope: entry's own (if the column exists) → tab's → 'default'.
             scope = _get(row, 'scope') or tab.get('scope') or 'default'
+            if str(scope).startswith('__rag__:'):
+                # A chat's attached documents, scoped by CHAT NAME — core's
+                # per-chat RAG under either engine, never memory. Importing
+                # them minted a palace scope per chat (a private chat's name
+                # in the scope list) and made attachments permanent knowledge
+                # (scout find 2026-10-30; classic_memory_rows excludes them).
+                rag += 1
+                continue
             scopes_seen.add(scope)
             label = tab_name.lower() if tab_name else None
             chunk_index = _get(row, 'chunk_index')
@@ -450,6 +458,8 @@ def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen):
                 dest_cursor.connection.commit()
                 pending = 0
 
+    if rag:
+        logger.info(f"[MINDPALACE] import: {rag} per-chat attachment rows left in place")
     return (copied, skipped, failed)
 
 

@@ -140,6 +140,10 @@ def _build_knowledge_db(path: Path):
     ''')
     c.execute("INSERT INTO knowledge_tabs (name, type, scope) VALUES (?, ?, ?)",
               ("Recipes", "user", "default"))
+    # A chat's attached document: core's per-chat RAG, scoped by CHAT NAME.
+    # Never memory — the importer must leave it in place.
+    c.execute("INSERT INTO knowledge_tabs (name, type, scope) VALUES (?, ?, ?)",
+              ("Documents", "user", "__rag__:secret chat"))
 
     c.execute('''
         CREATE TABLE knowledge_entries (
@@ -163,6 +167,8 @@ def _build_knowledge_db(path: Path):
          "2026-01-03 10:00:00", None, None),
         (1, "chunk two", 2, "cookbook.pdf", None, "2026-01-03 10:00:00",
          "2026-01-03 10:00:00", None, None),
+        (2, "attached pdf text", 0, "a.pdf", None, "2026-01-04 10:00:00",
+         "2026-01-04 10:00:00", None, None),
     ]
     c.executemany(
         'INSERT INTO knowledge_entries (tab_id, content, chunk_index, '
@@ -393,6 +399,28 @@ def test_scopes_registered(palace_env):
     conn.close()
     # default (seeded) + work + global encountered in the memory fixture
     assert {"default", "work", "global"}.issubset(names)
+    assert not any(n.startswith("__rag__") for n in names)
+
+
+def test_rag_attachment_tabs_stay_with_the_chat(palace_env):
+    """Scout find 2026-10-30: per-chat attachments (knowledge_tabs scoped
+    '__rag__:<chat>') imported as knowledge AND minted a palace scope per
+    chat — a private chat's name in the scope list. Core keeps attachments
+    under either engine; the importer leaves them alone and never counts
+    them."""
+    env = palace_env
+    out, ok = env.import_tools.execute("import_v2", {"what": "knowledge"}, env.config)
+    assert ok, out
+    assert "3 copied" in out
+    conn = _mind_conn(env)
+    c = conn.cursor()
+    assert c.execute("SELECT COUNT(*) FROM chunks WHERE scope LIKE '__rag__:%'"
+                     ).fetchone()[0] == 0
+    assert c.execute("SELECT COUNT(*) FROM chunks WHERE content = 'attached pdf text'"
+                     ).fetchone()[0] == 0
+    assert c.execute("SELECT COUNT(*) FROM mind_scopes WHERE name LIKE '__rag__:%'"
+                     ).fetchone()[0] == 0
+    conn.close()
 
 
 def test_missing_source_is_skipped_not_error(palace_env):
