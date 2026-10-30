@@ -93,7 +93,11 @@ async def require_login(request: Request):
         if candidate:
             try:
                 from core.api_tokens import api_tokens
-                if api_tokens.verify(candidate) is not None:
+                record = api_tokens.verify(candidate)
+                # A persona key is walled to its persona at the MCP door only;
+                # anywhere else it would be a full admin key (auth scout, HDF).
+                if record is not None and (not record.get('persona')
+                                           or request.url.path == '/mcp'):
                     return True
             except Exception as e:
                 # Don't let an api_tokens fault block auth-by-other-means

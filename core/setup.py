@@ -164,8 +164,15 @@ def verify_password(password: str, hash_str: str) -> bool:
 
 
 def is_setup_complete() -> bool:
-    """Check if initial setup has been completed."""
-    return get_password_hash() is not None
+    """Setup is done once secret_key exists. A present-but-unreadable or garbled
+    file is NOT "no setup": that served the unauthenticated /setup form and let
+    any LAN host set a new password. It locks login instead (error=config);
+    deleting secret_key is still the reset."""
+    try:
+        return SECRET_KEY_FILE.exists()
+    except OSError as e:
+        logger.error(f"Could not check secret_key ({e}): treating setup as done")
+        return True
 
 
 def delete_password_hash() -> bool:

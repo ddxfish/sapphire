@@ -169,6 +169,13 @@ def is_port_taken(err):
     return err.errno in (errno.EADDRINUSE, 10048) or getattr(err, 'winerror', None) == 10048
 
 
+def is_addr_not_ready(err):
+    """Whether a bind OSError means the host address is not up yet (a VPN or a
+    DHCP lease still coming up at boot): transient, never a config error."""
+    import errno
+    return err.errno in (errno.EADDRNOTAVAIL, 10049) or getattr(err, 'winerror', None) == 10049
+
+
 def tie_children_to_me(log=print):
     """Windows: put this process in a Job Object that kills every member when
     its last handle closes. Children (sapphire.py, Kokoro, plugin services)
@@ -232,7 +239,15 @@ def bind_when_free(host, port, wait=90, log=print):
         try:
             return bind_listener(host, port)
         except OSError as e:
-            if not is_port_taken(e) or port_holder(port) or time.monotonic() > deadline:
+            if time.monotonic() > deadline:
+                raise
+            if is_addr_not_ready(e):
+                if not told:
+                    log(f"Address {host} is not up yet; waiting up to {wait} s for it.")
+                    told = True
+                time.sleep(2)
+                continue
+            if not is_port_taken(e) or port_holder(port):
                 raise
             if not told:
                 log(f"Port {port} is still held by the last run's connections; waiting up to {wait} s for it.")

@@ -253,6 +253,16 @@ class TestIsSetupComplete:
             
             assert result is False
 
+    def test_garbled_hash_stays_locked(self, tmp_path):
+        """A present but invalid secret_key must not reopen /setup."""
+        from core.setup import is_setup_complete, get_password_hash
+
+        secret_file = tmp_path / 'secret_key'
+        secret_file.write_text('garbage')
+        with patch('core.setup.SECRET_KEY_FILE', secret_file):
+            assert get_password_hash() is None
+            assert is_setup_complete() is True
+
 
 class TestDeletePasswordHash:
     """Test password hash deletion."""

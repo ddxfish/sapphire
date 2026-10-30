@@ -19,7 +19,7 @@ import psutil
 # Her words never reach a log. Ours goes to stderr; stdout belongs to the
 # libraries, and misaki prints a word it can't read (en.py 'TODO:NUM'), so
 # stdout goes nowhere. kokoro's own loguru logger is off (kokoro/__init__).
-sys.stdout = open(os.devnull, 'w')
+sys.stdout = open(os.devnull, 'w', encoding='utf-8')  # cp1252 on Windows raised mid-G2P
 os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')  # pure phone-home UA
 from huggingface_hub import hf_hub_download, try_to_load_from_cache
 from kokoro import KModel, KPipeline

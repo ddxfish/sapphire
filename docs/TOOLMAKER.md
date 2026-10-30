@@ -387,6 +387,7 @@ RULES:
 - is_local: True=fully local; False/"endpoint"=leaves the machine; UNSET=treated non-local (private chats refuse, fail-closed). network flag = UI badge only, never routing
 - network: True = network badge in the UI only (routing is the net facade's job, not this flag's)
 - Lazy imports for heavy deps (import inside execute, not at top)
+- TOOLS, AVAILABLE_FUNCTIONS, SETTINGS, SETTINGS_HELP, EMOJI: plain literals (tool_save reads them without running the code)
 - No parameters: `"properties": {}, "required": []`
 
 SETTINGS (optional — adds fields to Settings UI):

@@ -10,6 +10,7 @@
 # Client side: shared/fonts.js registers downloaded fonts via the FontFace
 # API (no static @font-face → no 404 noise for never-downloaded fonts).
 
+import asyncio
 import hashlib
 import logging
 import tempfile
@@ -102,11 +103,15 @@ async def download_font(req: _DownloadReq, _=Depends(require_login)):
     if path.exists():
         return {"status": "ok", "family": family, "downloaded": True, "cached": True}
 
-    try:
+    def _fetch():
         from core.socks_proxy import get_session
         resp = get_session().get(meta["url"], timeout=60)
         resp.raise_for_status()
-        data = resp.content
+        return resp.content
+
+    try:
+        # Off the loop: the socks pre-flight alone can block ~20 s.
+        data = await asyncio.to_thread(_fetch)
     except Exception as e:
         logger.warning(f"[Fonts] download failed for {family}: {e}")
         raise HTTPException(status_code=502, detail=f"Download failed: {e}")

@@ -340,6 +340,10 @@ class Agent(BaseAgent):
         elif self.mode == 'plugin':
             if not self.wsname:
                 raise RuntimeError("plugin mode needs a name: the plugin's directory under user/plugins.")
+            from core.plugin_loader import core_name_collision
+            clash = core_name_collision(self.wsname)
+            if clash:
+                raise RuntimeError(f"{clash}. Pick a unique name.")
             base = Path(_ROOT) / 'user' / 'plugins'
             ws_path = (base / self.wsname).resolve()
             try:

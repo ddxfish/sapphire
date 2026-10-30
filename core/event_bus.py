@@ -209,6 +209,12 @@ class EventBus:
         try:
             keepalive_count = 0
             while True:
+                # Overflowed or reaped: events were already dropped. End the
+                # stream so the tab reconnects and resyncs; keepalives would
+                # otherwise hold its stall detector off forever.
+                if sub_id in self._async_overflow or sub_id not in self._async_subscribers:
+                    logger.warning(f"Async subscriber {sub_id} overflowed — closing stream so the tab resyncs")
+                    return
                 try:
                     event = await asyncio.wait_for(aq.get(), timeout=15)
                     yield event

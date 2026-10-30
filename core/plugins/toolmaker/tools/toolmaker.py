@@ -5,12 +5,11 @@ Custom tools are saved as proper plugins in user/plugins/ and loaded live via re
 """
 
 import ast
-import importlib.util
 import json
 import logging
 import os
 import shutil
-import sys
+import types
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -123,23 +122,32 @@ def _validate_ast(code, strictness):
     return validate_code(code, strictness)
 
 
-def _smoke_test(filepath):
-    """Import module and validate structure. Returns (ok, error_msg).
+_EXPORTS = ('TOOLS', 'AVAILABLE_FUNCTIONS', 'EMOJI', 'SETTINGS', 'SETTINGS_HELP')
 
-    Note: This executes module-level code, but only AFTER AST validation has
-    blocked all dangerous imports/calls/attrs. In managed mode the AST gate is
-    even stricter (no os.getenv, io, pathlib, filesystem ops). What remains
-    is data declarations (TOOLS, ENABLED) and safe imports (json, requests).
-    """
-    module_name = f"_toolmaker_smoke_{filepath.stem}"
+
+def _smoke_test(filepath):
+    """Validate structure WITHOUT running the code. Returns (ok, error_msg) or
+    (True, exports). The AST gate is a denylist and can be walked around, so
+    importing here ran her code in-process at save time, before the signing
+    gate. Now nothing runs until load, and load is gated (HDF 2026-10-29).
+    The exports must be literals, as docs/TOOLMAKER.md shows them."""
     try:
-        spec = importlib.util.spec_from_file_location(module_name, filepath)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    except Exception as e:
-        return False, f"Import failed: {e}"
-    finally:
-        sys.modules.pop(module_name, None)
+        tree = ast.parse(filepath.read_text(encoding='utf-8'), str(filepath))
+    except SyntaxError as e:
+        return False, f"Syntax error: {e}"
+    module = types.SimpleNamespace()
+    has_execute = False
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == 'execute':
+            has_execute = True
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id in _EXPORTS):
+            key = node.targets[0].id
+            try:
+                setattr(module, key, ast.literal_eval(node.value))
+            except ValueError:
+                return False, f"{key} must be a plain literal (no variables or calls)"
+    module.execute = (lambda *a: None) if has_execute else None
 
     # Required exports
     if not isinstance(getattr(module, 'TOOLS', None), list):
@@ -227,6 +235,16 @@ def _generate_manifest(name, module, code):
     return manifest
 
 
+def _is_ours(plugin_dir):
+    """True only for a plugin toolmaker wrote (its manifest says so). Store
+    installs and hand-built plugins share user/plugins/ and are never ours."""
+    try:
+        manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding='utf-8'))
+        return manifest.get("author") == "ai-toolmaker"
+    except Exception:
+        return False
+
+
 def _list_user_plugins():
     """List AI-created plugins in user/plugins/."""
     if not _USER_PLUGINS.exists():
@@ -236,7 +254,7 @@ def _list_user_plugins():
         if not child.is_dir():
             continue
         manifest_path = child / "plugin.json"
-        if not manifest_path.exists():
+        if not manifest_path.exists() or not _is_ours(child):
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
@@ -296,6 +314,9 @@ def execute(function_name, arguments, config):
             plugin_dir = _USER_PLUGINS / name
             tools_dir = plugin_dir / "tools"
             is_new = not plugin_dir.exists()
+            if not is_new and not _is_ours(plugin_dir):
+                return (f"FAILED: '{name}' is an installed plugin toolmaker did not make. "
+                        f"Pick another name."), False
             tools_dir.mkdir(parents=True, exist_ok=True)
             filepath = tools_dir / f"{name}.py"
             old_code = filepath.read_text(encoding='utf-8') if filepath.exists() else None
@@ -358,11 +379,12 @@ def execute(function_name, arguments, config):
                     else:
                         failed_to_load.append(name)
 
-                # Reload any already-loaded user plugins (handles tool updates)
+                # Reload already-loaded toolmaker plugins (handles tool updates);
+                # never bounce unrelated user plugins' services.
                 reloaded = []
                 if _USER_PLUGINS.exists():
                     for child in _USER_PLUGINS.iterdir():
-                        if not child.is_dir():
+                        if not child.is_dir() or not _is_ours(child):
                             continue
                         name = child.name
                         info = plugin_loader.get_plugin_info(name)

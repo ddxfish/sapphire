@@ -1610,10 +1610,16 @@ def run():
         # binding inside its daemon thread died with a swallowed SystemExit on a
         # taken port, and the rest of her kept running headless on the same
         # user/ as the instance that had the port (the twin, 2026-10-16).
-        from core.single_instance import bind_when_free, is_port_taken, port_holder, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG
+        from core.single_instance import (bind_when_free, is_port_taken, is_addr_not_ready,
+                                          port_holder, EXIT_ANOTHER_INSTANCE, EXIT_CONFIG)
         try:
             web_sock = bind_when_free(config.WEB_UI_HOST, config.WEB_UI_PORT, log=logger.warning)
         except OSError as e:
+            if is_addr_not_ready(e):
+                # Not a config error: exit 44 told systemd never to restart, so a
+                # VPN that came up a minute late kept her down for good.
+                logger.error(f"Address {config.WEB_UI_HOST} is still not up: {e}. Exiting so the runner retries.")
+                return 1
             if is_port_taken(e):
                 who = port_holder(config.WEB_UI_PORT)
                 logger.error(f"Port {config.WEB_UI_PORT} is already taken{' by ' + who if who else ''}: "

@@ -238,6 +238,22 @@ def test_require_login_accepts_valid_bearer(temp_tokens_file, mock_request_facto
     assert result is True
 
 
+def test_persona_bearer_only_opens_mcp(temp_tokens_file, mock_request_factory):
+    """A persona key is walled to /mcp; anywhere else it is no key at all."""
+    from core.api_tokens import api_tokens
+    from core.auth import require_login
+    from fastapi import HTTPException
+
+    entry = api_tokens.create("persona-test", persona="claude")
+    auth = {"Authorization": f"Bearer {entry['token']}"}
+    with patch("core.setup.is_setup_complete", return_value=True), \
+         patch("core.setup.get_password_hash", return_value=None):
+        assert asyncio.run(require_login(mock_request_factory(headers=auth, path="/mcp"))) is True
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(require_login(mock_request_factory(headers=auth, path="/api/settings")))
+    assert ei.value.status_code == 401
+
+
 def test_require_login_rejects_wrong_bearer(temp_tokens_file, mock_request_factory):
     from core.auth import require_login
     from fastapi import HTTPException

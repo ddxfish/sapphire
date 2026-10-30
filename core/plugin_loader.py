@@ -36,6 +36,10 @@ PLUGIN_PREV_DIR = PROJECT_ROOT / "user" / "plugin_prev"
 
 # Where enabled/disabled state is stored
 USER_PLUGINS_JSON = PROJECT_ROOT / "user" / "webui" / "plugins.json"
+# Every read-modify-write of plugins.json holds this: the loader's own writers,
+# the toggle route, and the install doors. Two writers on different plugins
+# otherwise both read one snapshot and the second silently drops the first.
+PLUGINS_JSON_LOCK = threading.RLock()
 # Core-ui plugin names from before the class retired (2026-10-25): an old
 # install's plugins.json may still enable them, so no user plugin may take one.
 RETIRED_PLUGIN_NAMES = frozenset({"setup-wizard"})
@@ -133,7 +137,7 @@ class PluginState:
     def _load(self) -> dict:
         if self._path.exists():
             try:
-                return json.loads(self._path.read_text(encoding="utf-8"))
+                return json.loads(self._path.read_text(encoding="utf-8-sig"))
             except Exception as e:
                 # Quarantine the corrupted file before returning empty dict —
                 # otherwise the next save() silently overwrites whatever was
@@ -617,7 +621,7 @@ class PluginLoader:
         if not path.exists():
             return []
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             return data.get(key, [])
         except Exception as e:
             from datetime import datetime
@@ -651,16 +655,17 @@ class PluginLoader:
 
     def _append_plugins_json(self, pins: dict):
         """Add names to the lists of user/webui/plugins.json (created if absent)."""
-        data = {}
-        if USER_PLUGINS_JSON.exists():
-            data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8"))
-        for key, names in pins.items():
-            cur = list(data.get(key, []))
-            data[key] = cur + [n for n in names if n not in cur]
-        USER_PLUGINS_JSON.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
-        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        replace_with_retry(tmp_path, USER_PLUGINS_JSON)
+        with PLUGINS_JSON_LOCK:
+            data = {}
+            if USER_PLUGINS_JSON.exists():
+                data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8-sig"))
+            for key, names in pins.items():
+                cur = list(data.get(key, []))
+                data[key] = cur + [n for n in names if n not in cur]
+            USER_PLUGINS_JSON.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
+            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            replace_with_retry(tmp_path, USER_PLUGINS_JSON)
 
     # Flipped to default_enabled for the new setup wizard (2026-10-24), which
     # shows them ticked so a new user chooses. An install that never saw that
@@ -674,7 +679,7 @@ class PluginLoader:
         it) gets the featured plugins it never chose pinned OFF. Names already
         in a list were chosen either way and stay. A fresh install, or one that
         walked the new wizard, keeps the defaults (hunt 20)."""
-        data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8")) if USER_PLUGINS_JSON.exists() else {}
+        data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8-sig")) if USER_PLUGINS_JSON.exists() else {}
         if "featured-2026-10" in (data.get("pinned") or []):
             return
         from core.settings_manager import settings
@@ -1661,12 +1666,13 @@ class PluginLoader:
         if not USER_PLUGINS_JSON.exists():
             return
         try:
-            data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8"))
-            enabled = data.get("enabled", [])
-            data["enabled"] = [n for n in enabled if n not in names]
-            tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
-            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            replace_with_retry(tmp_path, USER_PLUGINS_JSON)
+            with PLUGINS_JSON_LOCK:
+                data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8-sig"))
+                enabled = data.get("enabled", [])
+                data["enabled"] = [n for n in enabled if n not in names]
+                tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
+                tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                replace_with_retry(tmp_path, USER_PLUGINS_JSON)
         except Exception as e:
             logger.warning(f"[PLUGINS] Failed to update enabled list: {e}")
 

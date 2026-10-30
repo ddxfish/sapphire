@@ -32,8 +32,9 @@ _toggle_locks_guard = threading.Lock()
 # plugins — both reads see the same disk snapshot, both writes replace the
 # file, the second writer's payload was computed from pre-first-write state,
 # so the first toggle vanishes from disk silently. This guards the disk file
-# itself across plugin names. Witch-hunt 2026-04-21 finding H10.
-_user_plugins_file_mutex = threading.Lock()
+# itself across plugin names. Witch-hunt 2026-04-21 finding H10. One lock,
+# shared with the loader's own writers and the install doors.
+from core.plugin_loader import PLUGINS_JSON_LOCK as _user_plugins_file_mutex
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -219,7 +220,7 @@ def _get_merged_plugins():
     merged = {"enabled": [], "plugins": {}}
     if USER_PLUGINS_JSON.exists():
         try:
-            with open(USER_PLUGINS_JSON, encoding='utf-8') as f:
+            with open(USER_PLUGINS_JSON, encoding='utf-8-sig') as f:
                 merged["enabled"] = list(json.load(f).get("enabled", []))
         except Exception:
             pass
@@ -436,10 +437,12 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
             user_data = {}
             if USER_PLUGINS_JSON.exists():
                 try:
-                    with open(USER_PLUGINS_JSON, encoding='utf-8') as f:
+                    with open(USER_PLUGINS_JSON, encoding='utf-8-sig') as f:
                         user_data = json.load(f)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Writing back from {} would wipe every other plugin's state.
+                    logger.error(f"plugins.json unreadable, toggle refused: {e}")
+                    raise HTTPException(status_code=500, detail="plugins.json is unreadable; fix or remove it, then retry")
             enabled = list(user_data.get("enabled", []))
             disabled = list(user_data.get("disabled", []))
 

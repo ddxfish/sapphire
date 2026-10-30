@@ -72,6 +72,15 @@ def _validate_plugin(workspace):
     except Exception:
         results['manifest_valid'] = False
         return results  # can't continue without manifest
+    if not results['manifest_valid']:
+        return results
+
+    # The loader keys plugins by manifest name: a name that differs from the
+    # folder, or takes a shipped plugin's, shadows that plugin at next boot.
+    from core.plugin_loader import core_name_collision
+    name = manifest['name']
+    results['name_matches_folder'] = name == os.path.basename(os.path.normpath(workspace))
+    results['name_not_core'] = core_name_collision(str(name)) is None
 
     # Normalize tools — Claude Code sometimes writes a string instead of a list
     tools = manifest.get('capabilities', {}).get('tools', [])
@@ -589,17 +598,12 @@ def _activate_plugin(arguments):
             # Only persist to plugins.json if the reload actually loaded it
             post_reload = plugin_loader.get_plugin_info(name) or {}
             if post_reload.get('loaded'):
-                enabled_path = Path(_SAPPHIRE_ROOT) / 'user' / 'webui' / 'plugins.json'
+                # The loader's locked, atomic writer: a raw write here raced
+                # UI toggles and a crash mid-write quarantined every plugin's state.
                 try:
-                    enabled_data = json.loads(enabled_path.read_text(encoding='utf-8')) if enabled_path.exists() else {}
-                except Exception:
-                    enabled_data = {}
-                enabled_list = enabled_data.get('enabled', [])
-                if name not in enabled_list:
-                    enabled_list.append(name)
-                    enabled_data['enabled'] = enabled_list
-                    enabled_path.parent.mkdir(parents=True, exist_ok=True)
-                    enabled_path.write_text(json.dumps(enabled_data, indent=2), encoding='utf-8')
+                    plugin_loader._append_plugins_json({'enabled': [name]})
+                except Exception as e:
+                    lines.append(f"\n**Loaded, but could not save it as enabled** ({e}); it will be off after a restart.")
             else:
                 # Reload failed — roll back in-memory enabled so state matches
                 # reality, and DO NOT write plugins.json (would stick a broken
