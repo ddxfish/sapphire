@@ -300,7 +300,9 @@ def _cutoff(days):
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec='seconds')
 
 
-_LIVE = ("private_key IS NULL AND json_extract(meta, '$.pruned_at') IS NULL "
+# A memory she can read or unlock: not retired, not an archived version.
+# Keyed rows COUNT (they are hers behind the key); the count is not content.
+_LIVE = ("json_extract(meta, '$.pruned_at') IS NULL "
          "AND json_extract(meta, '$.superseded_at') IS NULL")
 
 
@@ -323,13 +325,17 @@ def dashboard_data(cursor, scope, depth=2):
                     (scope,))
     favorites = one(f"SELECT COUNT(*) FROM chunks WHERE scope=? AND favorite=1 AND {_LIVE}",
                     (scope,))
+    keyed = one(f"SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? AND {_LIVE} "
+                f"AND private_key IS NOT NULL", (scope,))
+    retired = one("SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? "
+                  "AND json_extract(meta, '$.pruned_at') IS NOT NULL", (scope,))
     edges = one("SELECT COUNT(*) FROM edges d JOIN chunks c ON d.src_type='chunk' "
                 "AND c.id=d.src_id WHERE c.scope=?", (scope,))   # the Self page's card only
     since = cursor.execute("SELECT MIN(created) FROM chunks WHERE scope=?", (scope,)).fetchone()[0]
     woven = cursor.execute(
         f"SELECT e.name, COUNT(*) n FROM edges d JOIN entities e ON d.dst_type='entity' "
         f"AND e.id=d.dst_id JOIN chunks c ON d.src_type='chunk' AND c.id=d.src_id "
-        f"WHERE e.scope=? AND c.{_LIVE.replace('json_extract(meta', 'json_extract(c.meta')} "
+        f"WHERE e.scope=? AND {_LIVE.replace('json_extract(meta', 'json_extract(c.meta')} "
         f"GROUP BY e.id ORDER BY n DESC LIMIT 5",
         (scope,)).fetchall()
     # A per-day rate on a one-day-old mind is noise: only after 30 days.
@@ -340,6 +346,7 @@ def dashboard_data(cursor, scope, depth=2):
         'per_day_30d': round(month / 30.0, 1) if old_enough else None,
         'entities': entities, 'knowledge': knowledge,
         'favorites': favorites, 'edges': edges,
+        'keyed': keyed, 'retired': retired,
         'since': (since or '')[:10] or None,
         'most_woven': [{'name': n, 'count': c} for n, c in woven],
         'upcoming': _upcoming(cursor, scope, limit=limit),
@@ -489,7 +496,9 @@ def _when_label(d, now=None):
 
 def _render_dashboard(d):
     """Zeros stay off the sheet (a new mind read 'Memories: 0 (+0 this
-    week, +0 this month — 0.0/day) · Connections: 0 edges')."""
+    week, +0 this month — 0.0/day) · Connections: 0 edges'). Keyed and
+    retired are named beside the count: a number that silently drops the
+    librarian's archive reads as loss (Prime, 2026-10-31)."""
     bits = []
     if d['events_7d']:
         bits.append(f"+{d['events_7d']} this week")
@@ -497,7 +506,13 @@ def _render_dashboard(d):
         bits.append(f"+{d['events_30d']} this month")
     if d.get('per_day_30d'):
         bits.append(f"{d['per_day_30d']}/day")
-    lines = [f"Memories: {d['events']}" + (f" ({', '.join(bits)})" if bits else '')]
+    held = []
+    if d.get('keyed'):
+        held.append(f"{d['keyed']} keyed")
+    if d.get('retired'):
+        held.append(f"{d['retired']} retired")
+    inner = "; ".join(x for x in (", ".join(bits), ", ".join(held)) if x)
+    lines = [f"Memories: {d['events']}" + (f" ({inner})" if inner else '')]
     second = []
     if d['entities']:
         second.append(f"Entities: {d['entities']} known")

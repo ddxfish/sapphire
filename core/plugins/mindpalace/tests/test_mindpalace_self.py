@@ -1377,3 +1377,31 @@ def test_recent_feed_breaks_ties_by_id_and_caps_the_global_overlay(palace):
     assert sum('global row' in l for l in lines) == 2         # a quarter of 8
     order = [int(l.split(']')[0][1:]) for l in lines if 'same second' in l]
     assert order == sorted(ids, reverse=True)
+
+
+def test_one_vocabulary_for_memory_counts(palace):
+    """Prime's three numbers (sheet 741, stream 804, pill 1189) were three
+    definitions. Now: memories = rows she can read or unlock (keyed
+    included); retired = the librarian's archive, listed only behind the
+    🗑 chip; the pill, the dashboard and the Memories header agree."""
+    import json
+    from plugins.mindpalace.routes import browse
+    live = [_save(f"memory {i}") for i in range(4)]
+    keyed = _save("secret", private_key='hunter2')
+    with pt._get_connection() as conn:
+        for cid in live[:2]:
+            m = json.loads(conn.execute('SELECT meta FROM chunks WHERE id = ?', (cid,)).fetchone()[0] or '{}')
+            m.update(pruned_at='2026-10-01T00:00:00+00:00', pruned_reason='noise')
+            conn.execute('UPDATE chunks SET meta = ? WHERE id = ?', (json.dumps(m), cid))
+        conn.commit()
+    st.write_section('default', 'identity', 'I am Sapphire.')      # a self-layer row: not a memory
+    q = {'scope': 'default', 'layer': 'events', 'exclude_sheet': 1}
+    out = browse.list_chunks(query=q)
+    assert out['counts'] == {'memories': 3, 'keyed': 1, 'retired': 2}
+    assert out['total'] == 3 and {c['id'] for c in out['chunks']} == {live[2], live[3], keyed}
+    arch = browse.list_chunks(query={**q, 'retired': 1})
+    assert arch['total'] == 2 and {c['id'] for c in arch['chunks']} == set(live[:2])
+    assert browse.list_chunks(query={**q, 'keyed': 1})['total'] == 1
+    assert next(s for s in pt.get_scopes() if s['name'] == 'default')['count'] == 3
+    text, ok = st._read_self('default')
+    assert ok and 'Memories: 3 (' in text and '1 keyed, 2 retired' in text

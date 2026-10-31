@@ -1024,7 +1024,13 @@ def get_scopes():
     try:
         with _get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT scope, COUNT(*) FROM chunks GROUP BY scope')
+            # The pill says MEMORIES (the Memories tab's first number): rows
+            # on the events layer she can read or unlock. Every row on every
+            # layer — entity headlines, archived sheet versions, retired —
+            # read as 1189 against a sheet that said 741 (2026-10-31).
+            cursor.execute("SELECT scope, COUNT(*) FROM chunks WHERE layer = 'events' "
+                           "AND json_extract(meta, '$.pruned_at') IS NULL "
+                           "AND json_extract(meta, '$.superseded_at') IS NULL GROUP BY scope")
             counts = {row[0]: row[1] for row in cursor.fetchall()}
             cursor.execute('SELECT name FROM mind_scopes ORDER BY name')
             registered = [row[0] for row in cursor.fetchall()]

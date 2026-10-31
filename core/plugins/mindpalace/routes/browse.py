@@ -155,6 +155,15 @@ def list_chunks(query=None, **_):
     if str(q.get('exclude_sheet') or '') in ('1', 'true'):
         # COALESCE: a NULL label must not NULL the whole NOT() (3-valued logic).
         where.append("NOT (c.layer = 'self' AND COALESCE(c.label, '') = 'self-sheet')")
+    # One vocabulary (Krem's fork A, 2026-10-31): "memories" are rows she
+    # can read or unlock (keyed included); "retired" is the librarian's
+    # archive — here, restorable, not hers to read. The default list is
+    # the memories; 🗑 retired=1 lists the archive; 🔒 keyed=1 narrows to
+    # keyed. `counts` carries all three so the header, the Self dashboard
+    # and the scope pill can say the same numbers.
+    base_where, base_params = list(where), list(params)
+    retired = str(q.get('retired') or '') in ('1', 'true')
+    where.append("json_extract(c.meta, '$.pruned_at') IS " + ("NOT NULL" if retired else "NULL"))
     # 🔒 Keyed filter (Krem 2026-07-19): only memories carrying a private key.
     if str(q.get('keyed') or '') in ('1', 'true'):
         where.append('c.private_key IS NOT NULL')
@@ -173,8 +182,20 @@ def list_chunks(query=None, **_):
         total = cur.execute(
             f'SELECT COUNT(*) FROM chunks c WHERE {" AND ".join(where)}',
             params).fetchone()[0]
+        bw = " AND ".join(base_where)
+        counts = {
+            'memories': cur.execute(
+                f"SELECT COUNT(*) FROM chunks c WHERE {bw} "
+                f"AND json_extract(c.meta, '$.pruned_at') IS NULL", base_params).fetchone()[0],
+            'keyed': cur.execute(
+                f"SELECT COUNT(*) FROM chunks c WHERE {bw} AND c.private_key IS NOT NULL "
+                f"AND json_extract(c.meta, '$.pruned_at') IS NULL", base_params).fetchone()[0],
+            'retired': cur.execute(
+                f"SELECT COUNT(*) FROM chunks c WHERE {bw} "
+                f"AND json_extract(c.meta, '$.pruned_at') IS NOT NULL", base_params).fetchone()[0],
+        }
     return {'chunks': [_chunk_row(r) for r in rows], 'total': total,
-            'limit': limit, 'offset': offset}
+            'counts': counts, 'limit': limit, 'offset': offset}
 
 
 def _search_rows(pt, cur, search, where, params, limit, offset):

@@ -1,3 +1,6 @@
+# 2.15.9 - Slash commands
+- /compact is the first slash command
+- self_command() tool lets the AI run them
 # 2.15.8 - Idle manager
 - Tells the AI when it's been idle more than 60 min in ghost message
 - Settable in settings

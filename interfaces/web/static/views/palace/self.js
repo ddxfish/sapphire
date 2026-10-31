@@ -534,7 +534,7 @@ function dashboardCard(d) {
                 <span class="palace-self-hint">computed live — she reads, nothing writes</span>
             </div>
             <div class="palace-dash-grid">
-                ${stat(d.events, `memories <span class="palace-dash-sub">+${d.events_7d} wk · +${d.events_30d} mo</span>`)}
+                ${stat(d.events, `memories <span class="palace-dash-sub">+${d.events_7d} wk · +${d.events_30d} mo${d.keyed ? ` · ${d.keyed} keyed` : ''}${d.retired ? ` · ${d.retired} retired` : ''}</span>`)}
                 ${stat(d.per_day_30d ?? '—', 'per day (30d)')}
                 ${stat(d.entities, 'entities')}
                 ${stat(d.knowledge, 'knowledge')}
