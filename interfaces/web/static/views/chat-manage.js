@@ -17,7 +17,7 @@ import { vaultStatus } from '../shared/vault-api.js';
 import { snapScroll } from '../shared/dom-guard.js';
 import { responseError, errWords } from '../shared/fetch.js';
 import { saveBlob, saveJson } from '../shared/download.js';
-import { listPersonas } from '../shared/persona-api.js';
+import { openCompressModal, resumeCompressPollIfRunning, watchCompress, vaultOpenFor } from '../shared/compress-modal.js';
 
 let container = null;
 let chats = [];
@@ -409,7 +409,7 @@ async function doRowAction(act, name) {
     } else if (act === 'repair') {
         openRepairModal(name);
     } else if (act === 'compress') {
-        openCompressModal(name);
+        openCompressModal(name, chats.find(c => c.name === name));
     } else if (act === 'delete') {
         if (!confirmList('Delete', [name])) return;
         try {
@@ -446,16 +446,9 @@ function closeModal() {
 // for a chat the user is looking at — re-check and say what happened.
 // Returns true when it's safe to proceed; closes the modal otherwise.
 async function ensureVaultOpenFor(chat, verb) {
-    if (!chat?.private_chat) return true;
-    try {
-        const v = await vaultStatus();   // null (unreachable) → server is the gate
-        if (v && v.exists && !v.unlocked) {
-            ui.showToast(`The vault locked while this dialog was open — unlock it to ${verb} this chat`, 'error');
-            closeModal();
-            return false;
-        }
-    } catch (e) { /* status unknown — let the server be the gate */ }
-    return true;
+    if (await vaultOpenFor(chat, verb)) return true;
+    closeModal();
+    return false;
 }
 
 function openTrimModal(name) {
@@ -589,182 +582,17 @@ function openRepairModal(name) {
     });
 }
 
-let _llmCache = null;   // {providers, metadata} from /api/llm/providers
-
-async function openCompressModal(name) {
-    const chat = chats.find(c => c.name === name);
-    let chatLLM = { primary: '', model: '' };
-    let chatPersona = '';
-    try {
-        if (!_llmCache) {
-            _llmCache = await fetch('/api/llm/providers').then(r => r.ok ? r.json() : null);
-        }
-        const s = await api.getChatSettings(name);
-        chatLLM = { primary: s?.settings?.llm_primary || '', model: s?.settings?.llm_model || '' };
-        chatPersona = s?.settings?.persona || '';
-    } catch (e) { /* pickers fall back to first enabled provider */ }
-    // A room has no one voice: the server writes its summaries in third person
-    // from fixed instructions, so neither control applies. Either fetch failing
-    // only hides its control; the server falls back to the chat's persona and
-    // the saved instructions.
-    const isRoom = (chat?.mode ?? chat?.settings?.mode) === 'room';
-    const personas = isRoom ? null : (await listPersonas().catch(() => null))?.personas || null;
-    const instr = isRoom ? null : await api.getCompressInstructions().catch(() => null);
-    const defaultPersona = personas?.some(p => p.name === chatPersona) ? chatPersona : '';
-    // Private chats only compress through local providers (backend enforces too)
-    const provs = (_llmCache?.providers || []).filter(p => p.enabled && (!chat?.private_chat || p.is_local));
-    if (!provs.length) {
-        ui.showToast(chat?.private_chat
-            ? 'This chat is private — enable a local provider to compress it'
-            : 'No enabled LLM providers — configure one in Settings first', 'error');
-        return;
-    }
-    const defaultProv = provs.some(p => p.key === chatLLM.primary) ? chatLLM.primary : provs[0].key;
-
-    const overlay = openModal(`
-        <h3>\u{1F5DC}️ Compress "${esc(chat?.display_name || name)}"</h3>
-        <p class="cm-hint">Older history becomes AI-written summaries; the recent
-        tail stays verbatim. Runs in the background — minutes on a local model.</p>
-        <div class="cm-hint" style="font-weight:600">This chat: ${chat?.message_count ?? '?'} messages · ${chat?.turn_count ?? '?'} turns</div>
-        <div class="cm-form-row">
-            <label><input type="radio" name="cm-cmode" value="whole" checked> One summary</label>
-            <label><input type="radio" name="cm-cmode" value="chunked"> Timeline chunks (one summary pair per ~6k tokens)</label>
-        </div>
-        <div class="cm-form-row">
-            Model: <select id="cm-c-prov">${provs.map(p =>
-                `<option value="${esc(p.key)}"${p.key === defaultProv ? ' selected' : ''}>${esc(p.display_name)}${p.is_local ? ' 🏠' : ' ☁️'}</option>`).join('')}
-            </select>
-            <select id="cm-c-model"></select>
-        </div>
-        ${personas ? `<div class="cm-form-row">
-            Speaks as: <select id="cm-c-persona">
-                <option value="">No persona</option>
-                ${personas.map(p => `<option value="${esc(p.name)}"${p.name === defaultPersona ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
-            </select>
-        </div>` : ''}
-        <div class="cm-form-row">
-            Target size: <select id="cm-c-target">
-                <option value="2000">~2k tokens</option>
-                <option value="5000" selected>~5k tokens</option>
-                <option value="10000">~10k tokens</option>
-            </select>
-            · keep last <input type="number" id="cm-c-keep" value="10" min="1" style="width:4.5em"> turns verbatim
-        </div>
-        <div class="cm-form-row">
-            <label><input type="checkbox" id="cm-c-backup" checked> Back up full JSON to user/history/exports/ first (skipped for private chats)</label>
-        </div>
-        ${instr ? `<details class="cm-advanced">
-            <summary>Advanced</summary>
-            <p class="cm-hint">What the summary keeps and how it's written. Saved for every
-            compress when you press Compress; Cancel discards your edit. The size limit and
-            the chat text are added automatically.</p>
-            <textarea id="cm-c-instructions" rows="8" maxlength="8000">${esc(instr.instructions)}</textarea>
-            <button class="cm-btn" id="cm-c-reset" type="button">Reset to default</button>
-        </details>` : ''}
-        <div class="cm-modal-btns">
-            <button class="cm-btn" id="cm-c-cancel">Cancel</button>
-            <button class="cm-btn cm-danger" id="cm-c-go">Compress</button>
-        </div>`);
-
-    // Buttons bind BEFORE any data-dependent population — a populate failure
-    // must never leave the modal with dead buttons (learned 2026-07-10:
-    // model_options is a DICT {id: label}; the old list-shaped .map() threw
-    // in fillModels and killed the cancel/go bindings queued after it).
-    const modelSel = overlay.querySelector('#cm-c-model');
-    const instrBox = overlay.querySelector('#cm-c-instructions');
-    overlay.querySelector('#cm-c-reset')?.addEventListener('click', () => { instrBox.value = instr.default; });
-    overlay.querySelector('#cm-c-cancel').addEventListener('click', closeModal);
-    overlay.querySelector('#cm-c-go').addEventListener('click', async () => {
-        const personaSel = overlay.querySelector('#cm-c-persona');
-        const opts = {
-            ...(personaSel ? { persona: personaSel.value } : {}),
-            mode: overlay.querySelector('input[name="cm-cmode"]:checked').value,
-            provider: overlay.querySelector('#cm-c-prov').value,
-            model: modelSel.value,
-            target_tokens: parseInt(overlay.querySelector('#cm-c-target').value, 10),
-            keep_last_turns: parseInt(overlay.querySelector('#cm-c-keep').value, 10) || 10,
-            backup: overlay.querySelector('#cm-c-backup').checked,
-        };
-        // Second gate (P4) — shared helper, see ensureVaultOpenFor.
-        if (!await ensureVaultOpenFor(chat, 'compress')) return;
-        try {
-            if (instrBox && instrBox.value.trim() !== instr.instructions) {
-                await api.saveCompressInstructions(instrBox.value);
-            }
-            await api.compressChat(name, opts);
-            ui.showToast(`Compress started on ${name} — running in background`, 'success');
-            closeModal();
-            startCompressPoll();
-        } catch (e) {
-            ui.showToast(`Compress failed to start: ${e.message}`, 'error');
-        }
-    });
-
-    const fillModels = (provKey) => {
-        // model_options is a dict {model_id: label} for core providers,
-        // null for custom ones (same consumer shape as chat.js sidebar)
-        const opts = Object.entries(_llmCache?.metadata?.[provKey]?.model_options || {});
-        const prov = provs.find(p => p.key === provKey);
-        const def = prov?.model ? ` (${prov.model.split('/').pop()})` : '';
-        modelSel.innerHTML = `<option value="">Provider default${def}</option>`
-            + opts.map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('');
-        if (provKey === chatLLM.primary && chatLLM.model
-            && opts.some(([id]) => id === chatLLM.model)) modelSel.value = chatLLM.model;
-    };
-    fillModels(defaultProv);
-    overlay.querySelector('#cm-c-prov').addEventListener('change', e => fillModels(e.target.value));
-}
-
-let _compressPoll = null;
-
-function startCompressPoll() {
-    if (_compressPoll) return;
-    _compressPoll = setInterval(async () => {
-        let s;
-        try { s = await api.compressStatus(); } catch (e) { return; }
-        const summary = container?.querySelector('#cm-summary');
-        if (s.running) {
-            if (summary) summary.textContent =
-                `\u{1F5DC}️ compressing ${s.chat}${s.progress ? ` — ${s.progress}` : ''}…`;
-            return;
-        }
-        clearInterval(_compressPoll);
-        _compressPoll = null;
-        if (!s.done) {
-            // Not running AND not done while we were watching a live job:
-            // the job state reset — almost always a server restart mid-job.
-            // Write-last means the chat is untouched; say so instead of
-            // silently never delivering the toast the user is waiting on.
-            ui.showToast('Compress job vanished — the server likely restarted mid-job. '
-                + 'The chat is untouched; re-run the compress.', 'error', 10000);
-            return;
-        }
-        if (s.ok) {
-            const r = s.result || {};
-            ui.showToast(`Compressed ${r.chat}: ${r.messages_before} → ${r.messages_after} messages `
-                + `(${r.summary_pairs} summary pair${r.summary_pairs === 1 ? '' : 's'})`, 'success', 8000);
-            // Local dispatch — refresh the open-chat transcript without
-            // depending on the SSE echo arriving
-            eventBus.dispatch('chat_compressed', { chat_name: s.chat });
-        } else {
-            ui.showToast(`Compress failed: ${s.error}`, 'error', 10000);
-        }
-        refresh();
-    }, 2500);
-}
-
-async function resumeCompressPollIfRunning() {
-    try {
-        const s = await api.compressStatus();
-        if (s.running) startCompressPoll();
-    } catch (e) { /* status is best-effort */ }
-}
-
 /* ── view module ─────────────────────────────────────────────────────── */
 
 export default {
     init(el) {
         container = el;
+        watchCompress(s => {
+            if (!s.running) { refresh(); return; }
+            const summary = container.querySelector('#cm-summary');
+            if (summary) summary.textContent =
+                `\u{1F5DC}️ compressing ${s.chat}${s.progress ? ` — ${s.progress}` : ''}…`;
+        });
         el.innerHTML = `
         <style>
             /* .view is a flex column with min-height:0 — the wrap must claim
@@ -807,27 +635,6 @@ export default {
                       opacity: 0.55; padding: 2px 4px; }
             .cm-act:hover { opacity: 1; }
             .cm-actions { white-space: nowrap; text-align: right; }
-            .cm-btn { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-color, #444);
-                      background: transparent; color: var(--text-primary, #ddd); cursor: pointer; }
-            .cm-btn:hover { border-color: var(--accent, #4a9eff); }
-            .cm-btn.cm-danger:hover { border-color: #e5534b; color: #e5534b; }
-            #cm-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-                        display: flex; align-items: center; justify-content: center; z-index: 1000; }
-            #cm-modal-box { background: var(--bg-primary, #1c1c22); border: 1px solid var(--border-color, #444);
-                            border-radius: 10px; padding: 18px 22px; max-width: 520px; width: 92%;
-                            max-height: 85vh; overflow-y: auto; }
-            #cm-modal-box h3 { margin: 0 0 8px; }
-            .cm-hint { color: var(--text-muted); font-size: var(--font-sm); margin: 6px 0; min-height: 1em; }
-            .cm-form-row { margin: 10px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-            .cm-form-row input[type="number"], .cm-form-row select {
-                background: var(--bg-secondary, #26262e); color: var(--text-primary, #ddd);
-                border: 1px solid var(--border-color, #444); border-radius: 5px; padding: 3px 6px; }
-            .cm-modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
-            .cm-advanced { margin: 10px 0; }
-            .cm-advanced summary { cursor: pointer; }
-            .cm-advanced textarea { width: 100%; box-sizing: border-box; margin-bottom: 8px; resize: vertical;
-                background: var(--bg-secondary, #26262e); color: var(--text-primary, #ddd);
-                border: 1px solid var(--border-color, #444); border-radius: 5px; padding: 6px; }
         </style>
         <div id="cm-wrap">
             <div id="cm-tabs">

@@ -7,6 +7,8 @@ import * as Images from '../ui-images.js';
 import { dispatch, on, Events } from '../core/event-bus.js';
 import { focusUnlessEditing } from '../shared/dom-guard.js';
 import { getBoundChat } from '../core/bound-chat.js';
+import { isCommand, run as runCommand } from './commands.js';
+import { onCommandInput, onCommandKey } from './command-menu.js';
 import {
     getElements,
     getIsProc,
@@ -75,8 +77,20 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         ui.showToast('A picture is still uploading. Send again in a moment.', 'info', 2500);
         return;
     }
-    const txt = fromCard ? text.trim() : input.value.trim();
+    let txt = fromCard ? text.trim() : input.value.trim();
     if (!txt && !(attach && (Images.hasPendingUploadImages() || Images.hasPendingFiles()))) return;
+
+    // Slash commands never become a turn (core/commands.py). A refused one keeps
+    // its text in the box; // sends a literal leading slash.
+    if (!fromCard && txt.startsWith('//')) {
+        txt = txt.slice(1);
+    } else if (!fromCard && isCommand(txt)) {
+        if (await runCommand(txt)) {
+            input.value = '';
+            input.dispatchEvent(new Event('input'));
+        }
+        return;
+    }
 
     // Block send if the prompt is private but this chat isn't
     // (status already computes: prompt private AND chat not private)
@@ -697,6 +711,7 @@ let _userTypingTimer = null;
 export function handleInput() {
     const { input } = getElements();
     input.parentElement.dataset.replicatedValue = input.value;
+    onCommandInput(input);
     // Debounced user_typing event for avatar (fire once, not per keystroke)
     if (!_userTypingTimer && input.value.trim()) {
         dispatch(Events.USER_TYPING);
@@ -706,6 +721,7 @@ export function handleInput() {
 }
 
 export function handleKeyDown(e) {
+    if (onCommandKey(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handleSend();

@@ -1696,6 +1696,14 @@ class StreamingChat:
                 except Exception:
                     pass
             self.main_chat.session_manager.end_streaming(_reg_chat, pinned=_reg_pinned)
+            # What her self_command asked for lands now the store allows it.
+            # Never raises into the turn's end.
+            try:
+                from core import commands
+                _sm = self.main_chat.session_manager
+                commands.finish_turn(_sm, _reg_chat or _sm.active_chat_name, cancelled=bool(self.cancel_flag))
+            except Exception as _cmd_e:
+                logger.error(f"[CLEANUP] Waiting commands failed: {_cmd_e!r}")
             # Clean exits already published this at llm_done; cancel/error
             # exits land here.
             if not self._typing_ended:

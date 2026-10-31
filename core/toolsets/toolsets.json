@@ -4,6 +4,7 @@
     "emoji": "🌐",
     "functions": [
       "ask_user",
+      "self_command",
       "web_search",
       "get_website",
       "web_view_images",
@@ -103,6 +104,7 @@
     "emoji": "\uD83C\uDFAD",
     "functions": [
       "ask_user",
+      "self_command",
       "prompt_view",
       "prompt_switch",
       "reset_chat",

@@ -2706,6 +2706,42 @@ class ChatSessionManager:
         self._prune_orphaned_tool_images(chat_name)
         return True, report
 
+    def plan_turn_cut(self, chat_name: str, count: int, keep_last: int = 0):
+        """Which rows removing the last `count` turns means, read now and written
+        by apply_turn_cut, maybe later: a turn's own tool's cut waits for that
+        turn to end. keep_last skips that many newest turns. Whole turns, so a
+        tool chain never splits (providers 400 on orphaned tool rows). Returns
+        (ok, plan), or (False, error)."""
+        exported = self.export_chat(chat_name)
+        if exported is None:
+            return False, f"Chat '{chat_name}' not found"
+        msgs = exported["messages"]
+        spans = turn_spans(msgs)
+        have = len(spans) - keep_last
+        if count < 1 or count > have:
+            return False, f"This chat has {max(have, 0)} turn(s) that can be removed, not {count}."
+        end = spans[-keep_last][0] if keep_last else len(msgs)
+        return True, {"start": spans[have - count][0], "end": end, "turns": count,
+                      "digest": self.messages_digest(msgs[:end])}
+
+    def apply_turn_cut(self, chat_name: str, plan: dict):
+        """Write a plan_turn_cut. Refuses when any row up to the cut changed since
+        the plan: the indexes would land on other words. Rows after the cut (the
+        turn that made the plan) may have grown. Returns (ok, error)."""
+        exported = self.export_chat(chat_name)
+        if exported is None:
+            return False, f"Chat '{chat_name}' not found"
+        msgs = exported["messages"]
+        if self.messages_digest(msgs[:plan["end"]]) != plan["digest"]:
+            return False, "Chat changed since the removal was planned, nothing was removed."
+        ok, err = self.replace_messages(chat_name, msgs[:plan["start"]] + msgs[plan["end"]:],
+                                        expected_count=len(msgs))
+        if not ok:
+            return False, err
+        self._prune_orphaned_tool_images(chat_name)
+        publish(Events.MESSAGE_REMOVED, {"from": "turn_cut", "chat_name": chat_name})
+        return True, None
+
     def _any_vaulted_rows(self) -> bool:
         """Vault hunt G3 probe: True when any vaulted chat exists. Raises on
         DB trouble — prompt_vault's mint guard treats a raise as refuse

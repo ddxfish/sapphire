@@ -93,6 +93,12 @@ export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
+export const listCommands = () => fetchWithTimeout('/api/commands', {}, 10000);
+export const runCommand = (line) => fetchWithTimeout('/api/commands/run' + _viewQS(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ line })
+}, 30000);
 export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}` + _viewQS(), {
     method: 'DELETE'
 }, 10000);

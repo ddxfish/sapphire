@@ -66,6 +66,8 @@ Web image view
 Notepad
 Net checks
 ask_user question card
+self_command slash commands
+Composer /remove
 schedule_task
 set_scene set_motion
 set_voice
