@@ -37,16 +37,6 @@ export default {
     hide() { if (unsub) { unsub(); unsub = null; } },
 };
 
-function ago(ts) {
-    const s = Math.max(0, Date.now() / 1000 - (ts || 0));
-    if (s < 45) return 'just now';
-    if (s < 3600) return `${Math.round(s / 60)}m ago`;
-    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-    if (s < 172800) return 'yesterday';
-    const d = new Date(ts * 1000);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
 function render() {
     if (!container) return;
     container.innerHTML = `
@@ -174,7 +164,7 @@ function rowHtml(r) {
             <div class="nc-title">${esc(r.title)}${pct}</div>
             ${r.body ? `<div class="nc-body">${esc(r.body)}</div>` : ''}
             ${bar}
-            <div class="nc-meta">${esc(r.source)} · ${ago(r.updated)}${tail}</div>
+            <div class="nc-meta">${esc(r.source)} · ${notify.ago(r.updated)}${tail}</div>
         </div>
         ${r.state !== 'active' ? `<button type="button" class="nc-x" data-x="${esc(r.id)}" title="Remove">×</button>` : ''}
     </div>`;

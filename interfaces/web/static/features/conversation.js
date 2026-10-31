@@ -26,7 +26,7 @@
 //             device, never every open tab.
 import * as audio from '../audio.js';
 import { showToast } from '../shared/toast.js';
-import { micWords } from '../shared/mic-words.js';
+import { micAudio, micWhy } from '../shared/mic-words.js';
 
 const TARGET_RATE = 16000;
 const RETRY_MS = [2000, 5000, 10000, 20000, 30000];   // then every 30 s
@@ -163,12 +163,12 @@ export const start = async ({ auto = false } = {}) => {
     }
     try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+            audio: micAudio({ channelCount: 1, echoCancellation: true, noiseSuppression: true }),
         });
     } catch (e) {
         console.error('[CONV-WS] mic access failed:', e);
         if (auto) return false;
-        showToast(micWords(e), 'error');
+        showToast(await micWhy(e), 'error');
         return false;
     }
     try {

@@ -4,7 +4,7 @@ import * as api from './api.js';
 import { dispatch, on as busOn, Events } from './core/event-bus.js';
 import { stripThink } from './shared/think.js';
 import { responseError } from './shared/fetch.js';
-import { micWords } from './shared/mic-words.js';
+import { micAudio, micWhy } from './shared/mic-words.js';
 
 let audioContext, mediaStream, sourceNode, processorNode;
 let audioChunks = [];
@@ -20,7 +20,7 @@ const TTS_CACHE_MAX = 10;
 let localTtsPlaying = false;
 
 // Recording settings - match what Whisper expects
-const SAMPLE_RATE = 16000;
+export const SAMPLE_RATE = 16000;
 const NUM_CHANNELS = 1;
 
 // Volume state
@@ -790,7 +790,7 @@ busOn('tts_stream_end', (data) => endTtsStream(data || {}));
  * @param {number} sampleRate - Sample rate in Hz
  * @returns {Blob} WAV file blob
  */
-function encodeWAV(samples, sampleRate) {
+export function encodeWAV(samples, sampleRate) {
     const buffer = new ArrayBuffer(44 + samples.length * 2);
     const view = new DataView(buffer);
     
@@ -833,7 +833,7 @@ function encodeWAV(samples, sampleRate) {
  * @param {number} targetSampleRate - Target sample rate
  * @returns {Float32Array} Downsampled buffer
  */
-function downsample(buffer, sourceSampleRate, targetSampleRate) {
+export function downsample(buffer, sourceSampleRate, targetSampleRate) {
     if (sourceSampleRate === targetSampleRate) {
         return buffer;
     }
@@ -856,12 +856,12 @@ function downsample(buffer, sourceSampleRate, targetSampleRate) {
 const startRec = async () => {
     try {
         mediaStream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
+            audio: micAudio({
                 channelCount: 1,
                 sampleRate: { ideal: SAMPLE_RATE },
                 echoCancellation: true,
                 noiseSuppression: true
-            } 
+            })
         });
         
         // Create audio context (browser may give us a different sample rate)
@@ -887,7 +887,7 @@ const startRec = async () => {
         return true;
     } catch (e) {
         console.error('Mic access error:', e);
-        ui.showToast(micWords(e), 'error');
+        ui.showToast(await micWhy(e), 'error');
         return false;
     }
 };

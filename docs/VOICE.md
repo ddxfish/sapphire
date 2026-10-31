@@ -116,7 +116,7 @@ The headline voice feature: **continuous listening with real turns and real inte
 | An STT provider | She has to understand you |
 | A streaming-capable TTS provider (Kokoro or Piper) **with Streaming TTS enabled** | Conversation audio rides the streaming pipeline — with streaming off her replies appear on screen but she stays silent |
 | For **Local mic**: wake word enabled and running | Local conversation borrows the wakeword's mic via a fail-safe handoff |
-| For **Browser mic**: a mic permission in your browser | The browser is the audio device |
+| For **Browser mic**: a mic permission in your browser | The browser is the audio device. **Settings > Audio > Browser Mic** tests it and picks which mic this browser uses (Settings > STT on hosted installs) |
 
 **Starting and stopping:** mic flyout → Conversation → **Local mic** (the server's microphone and speakers) or **Browser mic** (this browser over a WebSocket — works from your phone on the couch). **Off** ends it, as does tapping the green 🎙 mic button. The two sources are mutually exclusive; picking one hands off from the other. The mode is ephemeral — it doesn't survive a restart, and the wake word is restored the moment it ends. If the mic can't be acquired, the mode simply doesn't engage and wakeword listening stays intact — she is never left deaf.
 

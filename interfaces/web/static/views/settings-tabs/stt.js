@@ -3,6 +3,7 @@ import { renderProviderTab, renderProviderCompact, attachProviderListeners, merg
 import { editableFocused } from '../../shared/dom-guard.js';
 import { gpuNotice } from '../../shared/gpu-notice.js';
 import { escapeHtml } from '../../shared/modal.js';
+import { browserMicHtml, attachBrowserMic } from '../../shared/browser-mic.js';
 
 let _mergedConfig = null;
 
@@ -170,8 +171,10 @@ export default {
         const cfg = _mergedConfig || tabConfig;
         const gpu = '<div id="stt-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>';
         // The setup wizard (2026-10-24): the cards, one Advanced fold (VAD inside).
-        if (ctx.wizard) return renderProviderCompact(cfg, ctx, { fold: renderVADFold(ctx) }) + gpu;
-        return renderProviderTab(cfg, ctx) + renderVADSection(ctx) + gpu;
+        // Managed hides the Audio tab, and there the browser is the only mic.
+        const mic = window.__managed ? browserMicHtml() : '';
+        if (ctx.wizard) return renderProviderCompact(cfg, ctx, { fold: renderVADFold(ctx) }) + gpu + mic;
+        return renderProviderTab(cfg, ctx) + renderVADSection(ctx) + gpu + mic;
     },
 
     async attachListeners(ctx, el) {
@@ -199,6 +202,7 @@ export default {
         // button vanished until the tab was re-entered (D2#2, 2026-09-08).
         attachProviderListeners(cfg, ctx, el, this);
         gpuNotice(el, '#stt-gpu-notice');
+        attachBrowserMic(el);
 
         // VAD wiring — badge polling + test button only. The checkbox is
         // bound by the generic data-key path, no manual handlers here.

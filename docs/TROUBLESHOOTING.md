@@ -284,7 +284,8 @@ You'll need to re-run setup and reconfigure settings.
 - Try CPU mode: set faster whisper device to cpu in settings
 - Turn up your mic volume to 70% or 100%
 - Check your OS/system default mic - it tries to read from this
-- If Web UI, check browser mic permissions AND windows mic permissions
+- If Web UI, run **Settings > Audio > Browser Mic > Test** (Settings > STT on hosted installs). It checks permissions, shows a live level, lets you pick the mic, and **Say something** reads your words back
+- A site you blocked can't ask again: allow the mic from the icon left of the address. On Windows also check Settings > Privacy & security > Microphone, including access for desktop apps
 
 **Wake word not triggering**
 - Check which wakeword you are using in settings

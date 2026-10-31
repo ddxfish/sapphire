@@ -1,6 +1,7 @@
 // settings-tabs/audio.js - Audio device selection and testing
 // Delegates to shared/audio-devices.js for device management
 import { populateDeviceSelects, attachAudioDeviceListeners } from '../../shared/audio-devices.js';
+import { browserMicHtml, attachBrowserMic } from '../../shared/browser-mic.js';
 
 export default {
     id: 'audio',
@@ -33,11 +34,13 @@ export default {
                     <div class="test-result" data-result="output"></div>
                 </div>
             </div>
+            ${browserMicHtml()}
             ${ctx.renderAccordion('audio-adv', this.advancedKeys)}
         `;
     },
 
     async attachListeners(ctx, el) {
+        attachBrowserMic(el);
         try { await populateDeviceSelects(el); } catch {}
         // Don't mutate ctx.settings — that pollutes the persisted-state view
         // for other parts of the app. ctx.markChanged is the only correct way

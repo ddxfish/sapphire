@@ -235,6 +235,17 @@ export function counts() {
     return { red, yellow, active };
 }
 
+/** A row's time in words, for the page and the sidebar. */
+export function ago(ts) {
+    const s = Math.max(0, Date.now() / 1000 - (ts || 0));
+    if (s < 45) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    if (s < 172800) return 'yesterday';
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export async function refresh() {
     try {
         const res = await fetchWithTimeout('/api/notifications?limit=500', {}, 15000);
