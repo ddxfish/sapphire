@@ -509,7 +509,7 @@ def test_revert_run_unwinds_everything(palace):
     _set_vec(c, [1, 0, 0]); _set_vec(d, [1, 0, 0])
     _set_created(c, '2025-02-01T00:00:00+00:00')
     _set_created(d, '2025-03-01T00:00:00+00:00')
-    eng.run_begin('default', 'test run')
+    tok = eng.run_begin('default', 'test run')
     lt.open_pass('default', [a, b, e, c, d])
     assert _run('prune_memory', {'memory_id': a, 'reason': 'ping'})[1]
     msg, ok = _run('atomize_memory', {'memory_id': b, 'parts': [
@@ -529,7 +529,7 @@ def test_revert_run_unwinds_everything(palace):
     with pt._get_connection() as conn:
         eng._write_ledger(conn.cursor(), 'default', stats, 'dedup batch', 'dedup')
         conn.commit()
-    eng.run_end('default')
+    eng.run_end('default', token=tok)
     with pt._get_connection() as conn:
         run_id = conn.execute("SELECT id FROM ledger WHERE target = 'run' "
                               "ORDER BY id DESC LIMIT 1").fetchone()[0]

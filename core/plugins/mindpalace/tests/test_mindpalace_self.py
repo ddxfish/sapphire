@@ -1251,3 +1251,129 @@ def test_librarian_instructions_absent_from_pass_toolsets():
                 eng.SELF_TOOLSET_FUNCTIONS):
         assert 'librarian_instructions' not in fns
     assert 'librarian_instructions' in st.AVAILABLE_FUNCTIONS
+
+
+# ─── Hunt 2026-10-31: read_self data quality ────────────────────────────────
+
+def test_wake_card_keeps_contact_fields_for_a_direct_search(palace):
+    """Phone, email, address and free notes rode into every wake of every
+    persona once a person was starred. The wake card is who they are; a
+    direct name search still gets the whole card."""
+    hid = _save("Zebra is the ship engineer", layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:
+        conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (hid,))
+        conn.commit()
+    _set_fields('Zebra', {'phone': '555-0100', 'email': 'z@example.com',
+                          'address': '1 Dock St', 'notes': 'gate code 4417',
+                          'background': 'grew up dockside'})
+    st.write_section('default', 'relationships', 'Zebra — my tester (important)')
+    block = _important()
+    assert 'Background: grew up dockside' in block
+    for leak in ('555-0100', 'z@example.com', '1 Dock St', 'gate code'):
+        assert leak not in block
+    out, ok = pt._search_memory('Zebra', 'default')
+    assert ok and 'Phone: 555-0100' in out and 'Notes: gate code 4417' in out
+    text, ok = st._read_self('default', depth=1)
+    assert ok and '555-0100' not in text
+
+
+def test_wake_card_is_counted_and_short(palace, monkeypatch):
+    from core.plugin_loader import plugin_loader
+    monkeypatch.setattr(plugin_loader, 'get_plugin_settings',
+                        lambda n: {'people_card_chars': 4000})
+    _save("a note", layer='entities', entity='Verbose')
+    _set_fields('Verbose', {'background': 'wordy background line ' * 60})
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        eid = cur.execute("SELECT id FROM entities WHERE name = 'Verbose'").fetchone()[0]
+        wake = pt._entity_card(cur, eid, wake=True)
+        full = pt._entity_card(cur, eid)
+    assert sum(len(l) for l in wake) <= pt.WAKE_CARD_CHARS + 60
+    assert sum(len(l) for l in full) <= 2000 + 60          # the setting's ceiling
+
+
+def test_upcoming_rows_never_repeat_in_recent(palace):
+    a = _save("dentist", when="2099-11-04")
+    text, ok = st._read_self('default', depth=1)
+    assert ok and text.count(f"[{a}]") == 1
+
+
+def test_spider_never_prints_an_entity_headline_twice(palace):
+    hid = _save("Zebra is the ship engineer", layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:
+        conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (hid,))
+        conn.commit()
+    _save("Zebra fixed the rudder today")
+    st.write_section('default', 'relationships', 'Zebra — my tester (important)')
+    text, ok = st._read_self('default', depth=2)
+    assert ok and text.count('Zebra is the ship engineer') == 1
+
+
+def test_entity_resolves_local_before_global(palace):
+    """A global 'Sam' and a local 'Sam': the card came from one, the edges
+    landed on the other (no ORDER BY). Local first, everywhere."""
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        g = pt.upsert_entity(cur, 'Sam', 'global', kind='person')
+        loc = pt.upsert_entity(cur, 'Sam', 'default', kind='person')
+        conn.commit()
+        assert st._resolve_entity(cur, 'default', 'Sam') == loc
+        from plugins.mindpalace.tools import metadata as md
+        assert md.alias_map(md.entity_aliases(cur, 'default'))['sam'][0] == loc
+        assert g != loc
+
+
+def test_wake_budget_sheds_the_tail_legs_and_says_so(palace, monkeypatch):
+    monkeypatch.setattr(st, 'WAKE_BUDGET', {1: 1200, 2: 1600})
+    st.write_section('default', 'identity', 'I am Sapphire.')
+    for i in range(12):
+        _save(f"a long memory line number {i} " + "with plenty of words " * 8)
+    text, ok = st._read_self('default', depth=1)
+    assert ok and len(text) <= 1200 + 220
+    assert 'wake budget' in text and 'Recent memories' in text
+    assert '◆ Identity' in text                               # the sheet never sheds
+
+
+def test_custom_boxes_are_capped_per_scope(palace):
+    for i in range(st.CUSTOM_BOX_MAX):
+        assert st.write_section('default', f'box-{i}', f'body {i}')[1]
+    msg, ok = st.write_section('default', 'one-more', 'nope')
+    assert not ok and 'custom boxes' in msg
+    assert st.write_section('default', 'box-0', 'edited')[1]  # editing one is fine
+
+
+def test_dashboard_hides_zeros_and_the_rate_on_a_young_mind(palace):
+    text, ok = st._read_self('default')
+    assert ok and 'Memories: 0' in text
+    assert '+0 this week' not in text and '/day' not in text and 'edges' not in text
+    _save("one")
+    text, _ = st._read_self('default')
+    assert '+1 this week' in text and '/day' not in text
+
+
+def test_ledger_tail_folds_quiet_nights(palace):
+    from plugins.mindpalace.tools import ledger as lg
+    lg.record('default', 'user', 'edited', layer='self', summary='my own edit')
+    for _ in range(6):
+        rid = lg.record('default', 'librarian', 'pass', target='run', summary='nightly — running…')
+        lg.record('default', 'librarian', 'report', parent_id=rid, target=rid,
+                  summary='nightly tending: nothing to do')
+    text, ok = st._read_self('default', depth=1)
+    assert ok and '6 quiet nights, nothing to do' in text and 'my own edit' in text
+
+
+def test_recent_feed_breaks_ties_by_id_and_caps_the_global_overlay(palace):
+    ids = [_save(f"same second {i}") for i in range(3)]
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET created = '2026-01-01T00:00:00+00:00' WHERE id IN (?, ?, ?)", ids)
+        for i in range(6):
+            conn.execute("INSERT INTO chunks (layer, scope, content, created, updated) "
+                         "VALUES ('events', 'global', ?, '2026-02-01T00:00:00+00:00', "
+                         "'2026-02-01T00:00:00+00:00')", (f"global row {i}",))
+        conn.commit()
+    text, ok = pt._get_recent_memories('default', count=8, layer='events', trim=100)
+    assert ok
+    lines = [l for l in text.splitlines() if l.startswith('[')]
+    assert sum('global row' in l for l in lines) == 2         # a quarter of 8
+    order = [int(l.split(']')[0][1:]) for l in lines if 'same second' in l]
+    assert order == sorted(ids, reverse=True)

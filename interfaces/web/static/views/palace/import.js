@@ -36,7 +36,7 @@ function content() { return container?.querySelector('#pal-import-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'import', help: helpPills('Import', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F4E6} Mind Palace — bring Memory (legacy) across. The old databases are opened read-only and never changed; the import is additive and safe to re-run.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'import', help: helpPills('Import', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F4E6} Mind Palace — bring Memory (legacy) across. The old databases are opened read-only; the import is additive and safe to re-run. Scrub, below, is the one thing here that writes to them.' })}
         <div class="view-body view-scroll" id="pal-import-content"><div class="ui-empty">Counting…</div></div>`;
     bindSectionHeader(container);
     load();
@@ -150,7 +150,7 @@ function paint(p) {
         <div class="ui-box">
             <div class="ui-box-head">
                 <span class="ui-box-title">\u{1F5C4} Memory (legacy) databases</span>
-                <span class="ui-box-desc">opened read-only, never written</span>
+                <span class="ui-box-desc">opened read-only — only Scrub writes to them</span>
             </div>
             <div class="ui-box-body">${fileRows}</div>
         </div>

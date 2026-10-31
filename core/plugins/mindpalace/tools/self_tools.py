@@ -76,12 +76,14 @@ SECTIONS = {
     'handles':       {'mode': 'hand', 'versioned': True, 'width': 'half',
                       'title': 'Handles',
                       'hint': 'key: value — urls, socials, numbers; add (important) to spider at wake',
+                      'max': 20,
                       'sep': ': ', 'link_fields': ['value'],
                       'fields': [{'key': 'key', 'label': 'Key'},
                                  {'key': 'value', 'label': 'Value'}]},
     'terms':         {'mode': 'hand', 'versioned': True, 'width': 'wide',
                       'title': 'Terms & Concepts',
                       'hint': 'Term: what it means — your shared vocabulary; add (important) to spider at wake',
+                      'max': 15,
                       'sep': ': ', 'link_fields': ['term'],
                       'fields': [{'key': 'term', 'label': 'Term'},
                                  {'key': 'meaning', 'label': 'Meaning (no spider)'}]},
@@ -298,36 +300,50 @@ def _cutoff(days):
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec='seconds')
 
 
-def dashboard_data(cursor, scope):
+_LIVE = ("private_key IS NULL AND json_extract(meta, '$.pruned_at') IS NULL "
+         "AND json_extract(meta, '$.superseded_at') IS NULL")
+
+
+def dashboard_data(cursor, scope, depth=2):
     """The computed section — memory-native counts, live from mind.db.
-    Pure query: nothing accumulates, nothing goes stale."""
+    Pure query: nothing accumulates, nothing goes stale. Counts are what
+    she can READ (retired, superseded and keyed rows stay out); Upcoming
+    and Just-happened show 5 rows at wake depth, 10 at depth 2."""
     def one(sql, params):
         return cursor.execute(sql, params).fetchone()[0]
 
-    events = one("SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=?", (scope,))
-    week = one("SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? AND created >= ?",
-               (scope, _cutoff(7)))
-    month = one("SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? AND created >= ?",
-                (scope, _cutoff(30)))
+    events = one(f"SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? AND {_LIVE}",
+                 (scope,))
+    week = one(f"SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? AND {_LIVE} "
+               f"AND created >= ?", (scope, _cutoff(7)))
+    month = one(f"SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? AND {_LIVE} "
+                f"AND created >= ?", (scope, _cutoff(30)))
     entities = one("SELECT COUNT(*) FROM entities WHERE scope=?", (scope,))
-    knowledge = one("SELECT COUNT(*) FROM chunks WHERE layer='knowledge' AND scope=?", (scope,))
-    favorites = one("SELECT COUNT(*) FROM chunks WHERE scope=? AND favorite=1", (scope,))
+    knowledge = one(f"SELECT COUNT(*) FROM chunks WHERE layer='knowledge' AND scope=? AND {_LIVE}",
+                    (scope,))
+    favorites = one(f"SELECT COUNT(*) FROM chunks WHERE scope=? AND favorite=1 AND {_LIVE}",
+                    (scope,))
     edges = one("SELECT COUNT(*) FROM edges d JOIN chunks c ON d.src_type='chunk' "
-                "AND c.id=d.src_id WHERE c.scope=?", (scope,))
+                "AND c.id=d.src_id WHERE c.scope=?", (scope,))   # the Self page's card only
     since = cursor.execute("SELECT MIN(created) FROM chunks WHERE scope=?", (scope,)).fetchone()[0]
     woven = cursor.execute(
-        "SELECT e.name, COUNT(*) n FROM edges d JOIN entities e ON d.dst_type='entity' "
-        "AND e.id=d.dst_id WHERE e.scope=? GROUP BY e.id ORDER BY n DESC LIMIT 5",
+        f"SELECT e.name, COUNT(*) n FROM edges d JOIN entities e ON d.dst_type='entity' "
+        f"AND e.id=d.dst_id JOIN chunks c ON d.src_type='chunk' AND c.id=d.src_id "
+        f"WHERE e.scope=? AND c.{_LIVE.replace('json_extract(meta', 'json_extract(c.meta')} "
+        f"GROUP BY e.id ORDER BY n DESC LIMIT 5",
         (scope,)).fetchall()
+    # A per-day rate on a one-day-old mind is noise: only after 30 days.
+    old_enough = bool(since) and since[:10] <= _cutoff(30)[:10]
+    limit = 10 if (depth or 0) >= 2 else 5
     return {
         'events': events, 'events_7d': week, 'events_30d': month,
-        'per_day_30d': round(month / 30.0, 1),
+        'per_day_30d': round(month / 30.0, 1) if old_enough else None,
         'entities': entities, 'knowledge': knowledge,
         'favorites': favorites, 'edges': edges,
         'since': (since or '')[:10] or None,
         'most_woven': [{'name': n, 'count': c} for n, c in woven],
-        'upcoming': _upcoming(cursor, scope),
-        'just_happened': _just_happened(cursor, scope),
+        'upcoming': _upcoming(cursor, scope, limit=limit),
+        'just_happened': _just_happened(cursor, scope, limit=limit),
     }
 
 
@@ -472,17 +488,31 @@ def _when_label(d, now=None):
 
 
 def _render_dashboard(d):
-    lines = [f"Memories: {d['events']} (+{d['events_7d']} this week, "
-             f"+{d['events_30d']} this month — {d['per_day_30d']}/day)"]
-    lines.append(f"Entities: {d['entities']} known · Knowledge: {d['knowledge']} chunks "
-                 f"· Connections: {d['edges']} edges")
+    """Zeros stay off the sheet (a new mind read 'Memories: 0 (+0 this
+    week, +0 this month — 0.0/day) · Connections: 0 edges')."""
+    bits = []
+    if d['events_7d']:
+        bits.append(f"+{d['events_7d']} this week")
+    if d['events_30d']:
+        bits.append(f"+{d['events_30d']} this month")
+    if d.get('per_day_30d'):
+        bits.append(f"{d['per_day_30d']}/day")
+    lines = [f"Memories: {d['events']}" + (f" ({', '.join(bits)})" if bits else '')]
+    second = []
+    if d['entities']:
+        second.append(f"Entities: {d['entities']} known")
+    if d['knowledge']:
+        second.append(f"Knowledge: {d['knowledge']} chunks")
+    if second:
+        lines.append(" · ".join(second))
     if d['most_woven']:
         lines.append("Most woven: " + ", ".join(f"{w['name']} ({w['count']})"
                                                 for w in d['most_woven']))
-    tail = f"Favorites: {d['favorites']}"
+    tail = [f"Favorites: {d['favorites']}"] if d['favorites'] else []
     if d['since']:
-        tail += f" · Mind since {d['since']}"
-    lines.append(tail)
+        tail.append(f"Mind since {d['since']}")
+    if tail:
+        lines.append(" · ".join(tail))
     # Upcoming: a log-style view over meta.event_dates, like the ledger tail —
     # informational text, never spider seeds. search_memory([id] or topic)
     # is her path to depth on any of these.
@@ -512,7 +542,16 @@ def _render_dashboard(d):
 WAKE_TOOLS_MAX_ROWS = 8
 WAKE_TOOL_TIMEOUT = 10          # seconds, shared deadline across all rows
 WAKE_TOOL_DEFAULT_CHARS = 1024
-WAKE_TOOL_CHARS_MIN, WAKE_TOOL_CHARS_MAX = 128, 4096
+WAKE_TOOL_CHARS_MIN, WAKE_TOOL_CHARS_MAX = 128, 2048
+WAKE_TOOLS_TOTAL_CHARS = 4096       # all rows together (8 × 4096 was 33K, 2026-10-31)
+
+# The whole wake read has a budget (2026-10-31: a large mind read 79K at
+# depth 1, and the global context cut keeps the HEAD — custom boxes — and
+# drops goals and memories first). Over budget, the legs shed in this
+# order, each one named in the text so she knows what was left out.
+WAKE_BUDGET = {1: 24000, 2: 40000}
+CUSTOM_BOX_MAX = 8                  # boxes per scope (50 boxes read 100K)
+CUSTOM_BOX_RENDER_CHARS = 6000      # all boxes together on the wake sheet
 # Recursion / self-family guard — enforced at save (routes) AND at exec.
 WAKE_TOOL_BLOCKED = {'read_self', 'update_self', 'read_ledger'}
 
@@ -593,17 +632,19 @@ def _wake_tools_block(pt, scope):
             t.join(max(0.0, deadline - time.time()))
 
         lines = ["\n◆ Wake tools (your configured checks, run just now)"]
+        room = WAKE_TOOLS_TOTAL_CHARS   # one shared budget: 8 rows at 4096 each was 33K
         for row, _t in threads:
             rid, tool, _p, max_chars, _en = row
             cap = max(WAKE_TOOL_CHARS_MIN,
                       min(int(max_chars or WAKE_TOOL_DEFAULT_CHARS),
-                          WAKE_TOOL_CHARS_MAX))
+                          WAKE_TOOL_CHARS_MAX, room))
             text = results.get(rid)
             if text is None:
                 text = (f"(timed out after {WAKE_TOOL_TIMEOUT}s — "
                         f"still running in the background)")
             elif len(text) > cap:
                 text = text[:cap] + f"… (+{len(text) - cap} chars trimmed)"
+            room = max(WAKE_TOOL_CHARS_MIN, room - len(text))
             lines.append(f"— {tool}:")
             lines.append(text)
         return "\n".join(lines)
@@ -614,6 +655,10 @@ def _wake_tools_block(pt, scope):
 
 def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
     try:
+        try:
+            depth = max(0, int(depth or 0))
+        except (TypeError, ValueError):
+            depth = 0
         pt = _pt()
         try:   # close in-flight prompt-edit sessions BEFORE the read opens —
             from plugins.mindpalace.tools import prompt_audit   # the tail must
@@ -640,7 +685,10 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
                             f"update_self('{sec}', ...)."), True
                 return f"No section or box named '{sec}'.", True
 
-            # Whole sheet.
+            # Whole sheet — assembled as named parts so the wake budget can
+            # shed from the tail legs first (spider, important, recent,
+            # custom-box bodies) and never from her sheet or goals.
+            parts = {}
             out = [f"════ Self sheet — scope '{scope}' ════"]
             empty = []
             for sec, spec in SECTIONS.items():
@@ -649,11 +697,23 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
                     out.append(f"\n◆ {spec['title']}\n{row['content']}")
                 else:
                     empty.append(sec)
+            parts['sheet'] = "\n".join(out)
+            boxes, box_used, box_left = [], 0, []
             for sec, row in current.items():
-                if sec not in SECTIONS:
-                    out.append(f"\n◆ [{sec}]\n{row['content']}")
-            out.append("\n◆ Dashboard (live)\n" + _render_dashboard(
-                dashboard_data(cursor, scope)))
+                if sec in SECTIONS:
+                    continue
+                body = row['content']
+                if box_used + len(body) > CUSTOM_BOX_RENDER_CHARS:
+                    box_left.append(f"[{sec}] ({len(body)} chars)")
+                    continue
+                boxes.append(f"\n◆ [{sec}]\n{body}")
+                box_used += len(body)
+            if box_left:
+                boxes.append(f"\n(custom boxes past the {CUSTOM_BOX_RENDER_CHARS}-char wake "
+                             f"budget: {', '.join(box_left)} — read_self(section) opens one)")
+            parts['boxes'] = "".join(boxes)
+            dash = dashboard_data(cursor, scope, depth)
+            parts['dashboard'] = "\n◆ Dashboard (live)\n" + _render_dashboard(dash)
             # Ledger tail (v1): the last few changes made to her memory —
             # her own routine saves excluded, librarian passes as one line.
             # Reading the sheet stamps the watermark that powers the Self
@@ -662,8 +722,7 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
             try:
                 from plugins.mindpalace.tools import ledger
                 tail = ledger.tail_block(cursor, scope, depth=depth)
-                if tail:
-                    out.append("\n" + tail)
+                parts['ledger'] = ("\n" + tail) if tail else ''
                 if stamp:   # console peeks pass stamp=False — her "while you
                     ledger.mark_read(cursor, scope)   # were away" is untouched
                     conn.commit()
@@ -674,39 +733,38 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
             # only finds them by edge-luck, and "what am I working on / what
             # just happened / what matters to me" is the wake contract (one
             # call = whole orientation; third leg added 2026-07-16).
-            # One shared seen-set dedups the whole composite: recents claim
-            # first, important skips them, the spider skips both.
-            seen = set()
+            # One shared seen-set dedups the whole composite: Upcoming and
+            # Just-happened claim first, recents skip them, important skips
+            # those, the spider skips everything.
+            seen = {int(u['id']) for u in dash['upcoming'] + dash['just_happened']}
             seen_ents = set()   # entities already carded above — the spider
             if depth:           # must not re-headline them (Krem's 4×-phone
                 block = _wake_goals(cursor, scope, depth)   # find, 2026-07-25)
+                parts['goals'] = block
                 if block:
-                    out.append(block)
                     # Goal ids claim into the seen-set too — at depth 2 a
                     # goal chunk is spider-reachable and would re-render in
                     # Connected memories (Lane-3 scout, 2026-07-27).
                     seen.update(int(m) for m in
                                 re.findall(r'\[(\d+)\]', block))
-                block = _wake_recent(pt, scope, depth)
+                block = _wake_recent(pt, scope, depth, seen)
+                parts['recent'] = block
                 if block:
-                    out.append(block)
                     seen.update(int(m) for m in
                                 re.findall(r'^\[(\d+)\]', block, re.MULTILINE))
-                block = _wake_important(pt, cursor, scope, depth, seen,
-                                        seen_ents)
-                if block:
-                    out.append(block)
-            if empty:
-                out.append(f"\nNot yet written: {', '.join(empty)} — "
-                           f"update_self(section, content) fills them.")
-            text = "\n".join(out)
-            text += _self_spider(pt, scope, _self_seed_ids(cursor, scope), depth,
-                                 exclude_ids=seen, exclude_entity_ids=seen_ents)
+                parts['important'] = _wake_important(pt, cursor, scope, depth, seen,
+                                                     seen_ents)
+            # The nag only while the sheet is mostly unwritten — a sheet
+            # with one deliberate blank was told about it on every wake.
+            if empty and len(empty) * 2 > len(SECTIONS):
+                parts['empty'] = (f"\nNot yet written: {', '.join(empty)} — "
+                                  f"update_self(section, content) fills them.")
+            parts['spider'] = _self_spider(pt, scope, _self_seed_ids(cursor, scope), depth,
+                                           exclude_ids=seen, exclude_entity_ids=seen_ents)
             if depth and extra_tools:
                 block = _wake_tools_block(pt, scope)
-                if block:
-                    text += "\n" + block
-            return text, True
+                parts['tools'] = ("\n" + block) if block else ''
+            return _fit_wake(parts, depth), True
     except Exception as e:
         logger.error(f"[MINDPALACE] read_self failed: {e}")
         return f"Failed to read self sheet: {e}", False
@@ -745,6 +803,43 @@ def _self_spider(pt, scope, seed_ids, depth, exclude_ids=(),
     except Exception as e:
         logger.warning(f"[MINDPALACE] read_self spider failed (sheet unaffected): {e}")
         return ''
+
+
+_SHED_ORDER = (('spider', 'Connected memories'), ('important', 'Important memories'),
+               ('recent', 'Recent memories'), ('boxes', 'custom boxes'))
+_PART_ORDER = ('sheet', 'boxes', 'dashboard', 'ledger', 'goals', 'recent', 'important',
+               'empty', 'spider', 'tools')
+
+
+def _fit_wake(parts, depth):
+    """Join the named parts under the wake budget. Over it, the tail legs
+    give way first, cut at a line (or dropped whole when little would be
+    left), and the text names what was left out and how to reach it."""
+    budget = WAKE_BUDGET[2] if (depth or 0) >= 2 else (WAKE_BUDGET[1] if depth else None)
+    total = sum(len(parts.get(k) or '') for k in _PART_ORDER)
+    shed = []
+    if budget:
+        for key, label in _SHED_ORDER:
+            if total <= budget:
+                break
+            text = parts.get(key) or ''
+            if not text:
+                continue
+            room = len(text) - (total - budget)
+            if room < 400:
+                parts[key] = ''
+                total -= len(text)
+                shed.append(f"{label} left out")
+            else:
+                cut = text[:room].rsplit('\n', 1)[0]
+                total -= len(text) - len(cut)
+                parts[key] = cut
+                shed.append(f"{label} cut short")
+    text = "\n".join(parts[k] for k in _PART_ORDER if parts.get(k))
+    if shed:
+        text += (f"\n(wake budget {budget} chars: {', '.join(shed)} — search_memory, "
+                 f"get_recent_memories and read_self(section) reach the rest)")
+    return text
 
 
 def _wake_goals(cursor, scope, depth):
@@ -786,14 +881,16 @@ def _wake_goals(cursor, scope, depth):
         return ''
 
 
-def _wake_recent(pt, scope, depth):
+def _wake_recent(pt, scope, depth, seen=()):
     """The lived recency feed — events only (entity-card rows are records,
     not moments, and the ledger already tells the edit story; Krem's Dominos
     catch, 2026-07-27), per-record trimmed, counts up 50% for the chars the
-    filtering freed. Degrades to ''."""
+    filtering freed. `seen` = ids Upcoming/Just-happened already showed.
+    Degrades to ''."""
     try:
         text, ok = pt._get_recent_memories(scope, count=15 if depth >= 2 else 8,
-                                           layer='events', trim=260)
+                                           layer='events', trim=260,
+                                           exclude_ids=seen)
         if not ok or text.startswith('No memories'):
             return ''
         parts = text.split('\n', 1)   # drop the tool's own "Recent N…" header
@@ -883,7 +980,9 @@ def _resolve_entity(cursor, scope, term):
             continue
         row = cursor.execute(
             "SELECT id FROM entities WHERE name = ? COLLATE NOCASE "
-            "AND scope IN (?, 'global')", (cand, scope)).fetchone()
+            "AND scope IN (?, 'global') "
+            "ORDER BY CASE WHEN scope = ? THEN 0 ELSE 1 END, id",
+            (cand, scope, scope)).fetchone()
         if row:
             return row[0]
         pair = md.alias_map(md.entity_aliases(cursor, scope)).get(cand.lower())
@@ -961,7 +1060,7 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
                     # then the memories that matter right now.
                     eid = _resolve_entity(cursor, scope, term)
                     if eid:
-                        card = pt._entity_card(cursor, eid)
+                        card = pt._entity_card(cursor, eid, wake=True)
                     hits = _entity_memories(pt, cursor, scope, term, per, seen,
                                             eid=eid)
                     if not hits:   # a name without an entity → meaning fallback
@@ -982,7 +1081,7 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
                         h[0], _trim(h[1], _IMPORTANT_RECORD_CHARS), *h[2:6])
                         for h in hits]
                     block = "\n".join(lines)
-                    sec_used += len(block) - sum(len(c) + 1 for c in card)
+                    sec_used += len(block)       # cards count too (2026-10-31)
                     blocks.append(block)
             carry = max(0, sec_budget - sec_used)
         if not blocks:
@@ -1292,7 +1391,15 @@ def write_section(scope, section, content, fields_spec=None):
             # The write lock is held from the read, so the loser blocks and
             # then sees the winner's row.
             cursor.execute('BEGIN IMMEDIATE')
-            current = _current_sections(cursor, scope).get(sec)
+            all_current = _current_sections(cursor, scope)
+            current = all_current.get(sec)
+            if content and sec not in SECTIONS and not current:
+                boxes = [k for k in all_current if k not in SECTIONS]
+                if len(boxes) >= CUSTOM_BOX_MAX:
+                    conn.rollback()
+                    return (f"This scope already has {len(boxes)} custom boxes "
+                            f"(the cap is {CUSTOM_BOX_MAX}) — fold '{sec}' into one "
+                            f"of them or clear one first."), False
             fields, sep = _struct_spec(sec, current['meta'] if current else None,
                                        fields_spec)
 
@@ -1390,10 +1497,13 @@ def write_section(scope, section, content, fields_spec=None):
                     link_text = md.linkable_text(
                         content, {'link_fields': link_fields, 'rows': rows})
                 ent_rows = cursor.execute(
-                    "SELECT id, name FROM entities WHERE scope IN (?, 'global')",
-                    (scope,)).fetchall()
+                    "SELECT id, name FROM entities WHERE scope IN (?, 'global') "
+                    "ORDER BY CASE WHEN scope = ? THEN 0 ELSE 1 END, id",
+                    (scope, scope)).fetchall()
                 matched = md.match_entities(link_text, [n for _, n in ent_rows])
-                name_to_id = {n: i for i, n in ent_rows}
+                name_to_id = {}
+                for i, n in ent_rows:          # local first; a global twin never shadows
+                    name_to_id.setdefault(n, i)
                 mention_ids = [name_to_id[m] for m in matched if m in name_to_id]
                 meta = md.save_meta(content,
                                     exclude_names={m.lower() for m in matched},

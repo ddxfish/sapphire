@@ -364,7 +364,7 @@ def open_pass(scope: str, chunk_ids, kind: str = 'sort') -> None:
     with _pass_lock:
         _open_pass = {'scope': scope, 'ids': set(int(i) for i in chunk_ids),
                       'done': set(), 'ledger': [], 'kind': kind, 'attempts': 0,
-                      'retired': 0}
+                      'retired': 0, 'cap_refused': set(), 'capped': None}
     logger.info(f"[LIBRARIAN] Pass opened ({kind}): scope '{scope}', "
                 f"{len(_open_pass['ids'])} items")
 
@@ -378,9 +378,11 @@ def close_pass() -> dict:
     with _pass_lock:
         p, _open_pass = _open_pass, None
     if not p:
-        return {'scope': None, 'presented': 0, 'handled': 0, 'ledger': []}
+        return {'scope': None, 'presented': 0, 'handled': 0, 'ledger': [],
+                'capped': None}
     return {'scope': p['scope'], 'presented': len(p['ids']),
-            'handled': len(p['done']), 'ledger': p.get('ledger', [])}
+            'handled': len(p['done']), 'ledger': p.get('ledger', []),
+            'capped': p.get('capped')}
 
 
 def _log_pass(action, layer, target, summary, detail=None):
@@ -558,39 +560,92 @@ def current_pass_kind():
         return _open_pass.get('kind') if _open_pass else None
 
 
-def _retire_check(cursor, scope, n=1):
+_night_capped = set()   # scopes whose night cap refused during the open pass
+
+
+def _local_day_start():
+    """Tonight's counter starts at LOCAL midnight (ledger ts are UTC ISO)."""
+    from datetime import timezone as _tz
+    start = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(_tz.utc).strftime('%Y-%m-%dT%H:%M:%S')
+
+
+def _retired_tonight(cursor, scope):
+    """Retirements this scope's ledger carries since local midnight: a
+    prune or split is one, a merge of N is N-1 (its losers)."""
+    n = 0
+    for action, detail in cursor.execute(
+            "SELECT action, detail FROM ledger WHERE scope = ? AND actor = 'librarian' "
+            "AND action IN ('retired', 'split', 'merged') AND ts >= ?",
+            (scope, _local_day_start())).fetchall():
+        if action != 'merged':
+            n += 1
+            continue
+        try:
+            n += max(1, len((json.loads(detail or '{}').get('members') or [])) - 1)
+        except Exception:
+            n += 1
+    return n
+
+
+def night_capped(scope):
+    """Did the night cap refuse this scope since the last ask? A drain
+    reads it after each batch and ends the drain instead of grinding
+    on with every retirement refused (2026-10-31)."""
+    with _pass_lock:
+        if scope in _night_capped:
+            _night_capped.discard(scope)
+            return True
+        return False
+
+
+def _retire_check(cursor, scope, n=1, ids=()):
     """(ok, why): may the open pass retire `n` more memories? Two fences,
     both code (scout audit 2026-10-30 — nothing limited pruning but the
     charter's prose): a share of what this pass was shown, and a count per
     scope per night across passes and drains (the ledger is the counter).
-    The caps are settings a human raises in Admin; the model is told to
-    mark_processed the rest."""
+    The caps are settings a human raises in Admin. A refused id is
+    remembered: mark_processed refuses to file it as reviewed, so it stays
+    in the queue for a night with room. The dedup pass is exempt from the
+    share (whole clusters are presented; a 6-copy cluster retires 5 of 6)
+    and its refusal names no verb — keep_separate would file true
+    duplicates as distinct."""
     import math
     with _pass_lock:
         p = _open_pass
         if not p:
             return True, None
         presented, so_far = max(1, len(p['ids'])), p.get('retired', 0)
+        kind = p.get('kind', 'sort')
+    rest = ("leave the rest for another night" if kind == 'dedup'
+            else "mark_processed the rest")
     cap = max(2, math.ceil(_retire_ratio() * presented))
-    if so_far + n > cap:
-        return False, (f"Retirement cap for this pass reached ({so_far} of {presented} "
-                       f"presented, cap {cap}) — mark_processed the rest. A human "
-                       f"raises librarian_retire_ratio in Admin.")
-    night = _retire_per_night()
-    try:
-        from datetime import timezone as _tz
-        today = datetime.now(_tz.utc).strftime('%Y-%m-%dT00:00:00')
-        n_today = cursor.execute(
-            "SELECT COUNT(*) FROM ledger WHERE scope = ? AND actor = 'librarian' "
-            "AND action IN ('retired', 'split', 'merged') AND ts >= ?",
-            (scope, today)).fetchone()[0]
-    except Exception:
-        n_today = 0
-    if n_today + so_far + n > night:
-        return False, (f"Tonight's retirement cap for '{scope}' is reached "
-                       f"({n_today + so_far} of {night}) — mark_processed the rest. "
-                       f"A human raises librarian_retire_per_night in Admin.")
-    return True, None
+    why = None
+    if kind != 'dedup' and so_far + n > cap:
+        why = (f"Retirement cap for this pass reached ({so_far} of {presented} "
+               f"presented, cap {cap}) — {rest}. A human raises "
+               f"librarian_retire_ratio in Admin.")
+        capped = 'pass'
+    else:
+        night = _retire_per_night()
+        try:
+            n_today = _retired_tonight(cursor, scope)
+        except Exception:
+            n_today = 0
+        if n_today + so_far + n > night:
+            why = (f"Tonight's retirement cap for '{scope}' is reached "
+                   f"({n_today + so_far} of {night}) — {rest}. A human raises "
+                   f"librarian_retire_per_night in Admin.")
+            capped = 'night'
+    if why is None:
+        return True, None
+    with _pass_lock:
+        if _open_pass is not None:
+            _open_pass['cap_refused'].update(int(i) for i in ids)
+            _open_pass['capped'] = capped
+        if capped == 'night':
+            _night_capped.add(scope)
+    return False, why
 
 
 def _count_retired(n=1):
@@ -599,7 +654,7 @@ def _count_retired(n=1):
             _open_pass['retired'] = _open_pass.get('retired', 0) + n
 
 
-_WORD_RE = re.compile(r"[a-z0-9']+")
+_WORD_RE = re.compile(r"[^\W_]+(?:'[^\W_]+)?")   # Unicode: Zoë, José, Кирилл
 
 
 def _grounding_gap(original, parts):
@@ -619,21 +674,37 @@ def _grounding_gap(original, parts):
     return None
 
 
-_FACT_RE = re.compile(r"\b(?:\d[\d:/.\-]*\d|\d|[A-Z][a-z]{2,})\b")
+_FACT_RE = re.compile(r"(?<![\w'])(?:\d[\d:/.\-]*\d\s*(?:am|pm)?|\d\s*(?:am|pm)|\d"
+                      r"|[^\W\d_]{3,})(?![\w'])", re.IGNORECASE)
 _FACT_STOP = {'the', 'this', 'that', 'these', 'those', 'and', 'but', 'with',
               'when', 'then', 'she', 'they', 'him', 'her', 'his', 'our', 'its',
               'was', 'were', 'had', 'has', 'have', 'not', 'for', 'from', 'into'}
+_SENT_START = re.compile(r'(?:^|[.!?]\s+|\n\s*)$')
+
+
+def _facts(text):
+    """Numbers, times and capitalised names (Unicode) — a word that opens a
+    sentence is capitalised by grammar, not by being a name, so it only
+    counts when it is capitalised elsewhere too."""
+    out = []
+    for m in _FACT_RE.finditer(text or ''):
+        t = m.group(0)
+        if t[0].isdigit():
+            out.append(re.sub(r'\s+', '', t.lower()))
+        elif t[0].isupper() and not _SENT_START.search(text[:m.start()]):
+            out.append(t.lower())
+    return out
 
 
 def _fact_gap(survivor, losers):
     """Facts (numbers, dates, names) the losers carry that the survivor's
     words lack — three or more and the group is a correction or a richer
-    note, not the same thing twice. Empty = merge freely."""
-    have = {t.lower() for t in _FACT_RE.findall(survivor or '')}
+    note, not the same thing twice. The survivor's EVERY word counts as
+    had (a paraphrase is not a missing fact). Empty = merge freely."""
+    have = set(_WORD_RE.findall((survivor or '').lower())) | set(_facts(survivor))
     missing = []
     for text in losers:
-        for t in _FACT_RE.findall(text or ''):
-            k = t.lower()
+        for k in _facts(text):
             if k not in have and k not in _FACT_STOP and k not in missing:
                 missing.append(k)
     return missing if len(missing) >= 3 else []
@@ -644,7 +715,10 @@ def revert_run(scope, run_id):
     did, from its ledger rows: retirements come back, merges and splits
     unwind, promoted copies retire, ratings, dates and links go back to
     their before-values. Soft throughout; the run stays in the ledger with
-    a 'reverted' line. Returns (counts, None) or (None, why)."""
+    a 'reverted' line. A row the human (or a later run) changed since is
+    left alone and counted as skipped; favorites are never lowered or
+    retired; queue stamps stay so the next night does not redo the work
+    (2026-10-31). Returns (counts, None) or (None, why)."""
     pt = _pt()
     from plugins.mindpalace.tools import ledger as lg
     counts = {'restored': 0, 'retired': 0, 'ratings': 0, 'dates': 0,
@@ -655,6 +729,9 @@ def revert_run(scope, run_id):
                            (int(run_id),)).fetchone()
         if not root or root[2] != scope or root[1] != 'librarian':
             return None, "not a librarian run in this scope"
+        if cur.execute("SELECT 1 FROM ledger WHERE scope = ? AND action = 'reverted' "
+                       "AND target = ?", (scope, str(run_id))).fetchone():
+            return None, "this run was already reverted"
         rows, frontier = [], [int(run_id)]
         for _depth in range(3):
             if not frontier:
@@ -681,55 +758,80 @@ def revert_run(scope, run_id):
             cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
                         (json.dumps(m, ensure_ascii=False), cid))
 
-        def restore(cid, *keys):
+        def protected(cid):
+            r = cur.execute('SELECT favorite, importance FROM chunks WHERE id = ?',
+                            (cid,)).fetchone()
+            return bool(r) and (bool(r[0]) or (r[1] is not None and r[1] >= NEVER_FADES))
+
+        def restore(cid, at=None, *keys):
+            """Un-retire — only the retirement this run made (same stamp)."""
             m = meta_of(cid)
             if m is None or not m.get('pruned_at'):
                 return False
-            for k in ('pruned_at', 'pruned_reason', 'librarian_at') + keys:
+            if at and m.get('pruned_at') != at:
+                return False                      # retired again since, by someone else
+            for k in ('pruned_at', 'pruned_reason') + keys:
                 m.pop(k, None)
+            m['reverted_at'] = now
             put(cid, m)
             counts['restored'] += 1
             return True
 
         def retire(cid, why):
             m = meta_of(cid)
-            if m is None or m.get('pruned_at'):
-                return
+            if m is None or m.get('pruned_at') or protected(cid):
+                return False
             m.update(pruned_at=now, pruned_reason=why)
             put(cid, m)
             counts['retired'] += 1
+            return True
 
         for _lid, act, target, detail in rows:
             try:
                 d = json.loads(detail) if detail else {}
             except Exception:
                 d = {}
+            if act in ('pass', 'report', 'distinct'):
+                continue                      # structure and no-ops: nothing to undo
             try:
                 tid = int(target)
             except (TypeError, ValueError):
                 continue
             if act == 'retired':
                 m = meta_of(tid) or {}
-                if m.get('merged_into') or m.get('atomized_into'):
+                if m.get('merged_into') or m.get('atomized_into') \
+                        or not restore(tid, d.get('at')):
                     counts['skipped'] += 1
-                else:
-                    restore(tid)
             elif act == 'split':
                 m = meta_of(tid) or {}
                 parts = d.get('parts') or m.get('atomized_into') or []
-                if restore(tid, 'atomized_into'):
+                if m.get('atomized_into') == parts and restore(tid, d.get('at'), 'atomized_into'):
                     for p in parts:
                         retire(int(p), 'reverted split')
+                else:
+                    counts['skipped'] += 1
             elif act == 'merged':
                 m = meta_of(tid) or {}
                 members = d.get('members') or m.get('derived_from') or []
                 if isinstance(members, int):
                     members = [members]
+                # A survivor consumed by a later merge or split, or one the
+                # human starred, stays: its members would come back beside
+                # something newer.
+                if m.get('merged_into') or m.get('atomized_into') or protected(tid):
+                    counts['skipped'] += 1
+                    continue
                 retire(tid, 'reverted merge')
                 for mid in members:
-                    restore(int(mid), 'merged_into')
+                    mm = meta_of(int(mid)) or {}
+                    if mm.get('merged_into') == tid:
+                        restore(int(mid), None, 'merged_into')
+                    else:
+                        counts['skipped'] += 1
             elif act == 'promoted':
-                retire(tid, 'reverted promotion')
+                if not retire(tid, 'reverted promotion'):
+                    counts['skipped'] += 1
+                    continue
                 src = d.get('source')
                 if src is not None:
                     m = meta_of(int(src))
@@ -739,21 +841,33 @@ def revert_run(scope, run_id):
                             m.pop('promoted_to')
                         put(int(src), m)
             elif act == 'marked':
-                if 'before' in d:
-                    cur.execute('UPDATE chunks SET importance = ?, favorite = ? WHERE id = ?',
-                                (d['before'], int(d.get('favorite_before') or 0), tid))
-                    counts['ratings'] += 1
+                if 'before' not in d:
+                    continue
+                r = cur.execute('SELECT importance, favorite FROM chunks WHERE id = ?',
+                                (tid,)).fetchone()
+                if not r or ('after' in d and r[0] != d['after']):
+                    counts['skipped'] += 1          # rated again since
+                    continue
+                # The rating goes back; a favorite never comes off here.
+                cur.execute('UPDATE chunks SET importance = ? WHERE id = ?',
+                            (d['before'], tid))
+                counts['ratings'] += 1
             elif act in ('dated', 'dateless'):
-                before = d.get('before')
+                before, after = d.get('before'), d.get('after')
                 m = meta_of(tid)
-                if m is not None and isinstance(before, dict):
-                    for k, v in before.items():
-                        if v is None:
-                            m.pop(k, None)
-                        else:
-                            m[k] = v
-                    put(tid, m)
-                    counts['dates'] += 1
+                if m is None or not isinstance(before, dict):
+                    continue
+                keys = [k for k in before if not k.endswith('_at')]
+                if isinstance(after, dict) and any(m.get(k) != after.get(k) for k in keys):
+                    counts['skipped'] += 1          # dated again since
+                    continue
+                for k in keys:
+                    if before[k] is None:
+                        m.pop(k, None)
+                    else:
+                        m[k] = before[k]
+                put(tid, m)
+                counts['dates'] += 1
             elif act == 'linked':
                 eids, at = d.get('entity_ids') or [], d.get('at')
                 if eids and at:
@@ -763,16 +877,14 @@ def revert_run(scope, run_id):
                         f"AND dst_type = 'entity' AND dst_id IN ({ph}) "
                         f"AND kind = 'mentions' AND created = ?", [tid, *eids, at])
                     counts['links'] += cur.rowcount
-                    m = meta_of(tid)
-                    if m is not None:
-                        m.pop('link_at', None)
-                        put(tid, m)
             else:
                 counts['skipped'] += 1
         lg.record(scope, 'user', 'reverted', target=run_id, cursor=cur,
                   summary=(f"reverted run [{run_id}]: {counts['restored']} restored, "
                            f"{counts['retired']} retired, {counts['ratings']} ratings, "
-                           f"{counts['dates']} dates, {counts['links']} links put back"),
+                           f"{counts['dates']} dates, {counts['links']} links put back"
+                           + (f"; {counts['skipped']} changed since, left alone"
+                              if counts['skipped'] else '')),
                   detail=counts)
         conn.commit()
     try:
@@ -859,15 +971,16 @@ def _atomize(memory_id, parts):
         gap = _grounding_gap(row[3], parts)
         if gap:
             return f"atomize_memory keeps your words: {gap}. Refused.", False
-        ok, why = _retire_check(cursor, row[2], 1)
+        ok, why = _retire_check(cursor, row[2], 1, ids=[memory_id])
         if not ok:
             return why, False
         meta = _meta_of(row)
         new_ids = [_insert_derived(cursor, pt, md, row, p, row[1], row[2],
                                    entity_id=row[4], tier=row[5],
                                    importance=row[8]) for p in parts]
+        at = pt._now()
         _stamp(cursor, pt, memory_id, meta,
-               pruned_at=pt._now(), pruned_reason='atomized',
+               pruned_at=at, pruned_reason='atomized',
                atomized_into=new_ids)
         conn.commit()
     pt.reset_backfill_latch()
@@ -875,7 +988,7 @@ def _atomize(memory_id, parts):
     _mark_done(memory_id)
     _log_pass('split', row[1], memory_id,
               f"split [{memory_id}] into {len(new_ids)} parts {new_ids}",
-              {'preview': row[3][:80], 'parts': new_ids})
+              {'preview': row[3][:80], 'parts': new_ids, 'at': at})
     try:
         pt._publish_mind(row[1], row[2], 'update')
     except Exception:
@@ -939,7 +1052,7 @@ def _merge(memory_ids, content=None, keep=None):
                 return (f"The others carry details [{base[0]}] lacks "
                         f"({', '.join(gap[:4])}) — keep_separate, or merge with "
                         f"keep=<id> of the one that has everything."), False
-        ok, why = _retire_check(cursor, base[2], len(ids) - 1)
+        ok, why = _retire_check(cursor, base[2], len(ids) - 1, ids=ids)
         if not ok:
             return why, False
         earliest = min(r[11] for r in rows)
@@ -990,7 +1103,7 @@ def _merge(memory_ids, content=None, keep=None):
     _log_pass('merged', base[1], new_id,
               f"merged {len(ids)} duplicates {ids} → [{new_id}]",
               {'preview': (content or base[3])[:80], 'members': ids,
-               'kept': base[0]})
+               'kept': base[0], 'at': now})
     try:
         pt._publish_mind(base[1], base[2], 'update')
     except Exception:
@@ -1115,12 +1228,13 @@ def _prune(memory_id, reason=None):
             return (f"prune_memory needs a reason for [{memory_id}] — one short "
                     f"line on why it's noise (a human reads it next to the "
                     f"retirement)."), False
-        ok, why = _retire_check(cursor, row[2], 1)
+        ok, why = _retire_check(cursor, row[2], 1, ids=[memory_id])
         if not ok:
             return why, False
         meta = _meta_of(row)
+        at = pt._now()
         _stamp(cursor, pt, memory_id, meta,
-               pruned_at=pt._now(),
+               pruned_at=at,
                pruned_reason=str(reason).strip()[:200])
         conn.commit()
     _count_retired(1)
@@ -1128,7 +1242,7 @@ def _prune(memory_id, reason=None):
     why = (str(reason).strip()[:120] if reason else '')
     _log_pass('retired', row[1], memory_id,
               f"retired [{memory_id}]" + (f" — {why}" if why else ''),
-              {'preview': row[3][:80]})
+              {'preview': row[3][:80], 'at': at})
     try:
         pt._publish_mind(row[1], row[2], 'update')
     except Exception:
@@ -1183,7 +1297,9 @@ def _set_links(entries):
             for name in names:
                 erow = cursor.execute(
                     "SELECT id, name FROM entities WHERE name = ? COLLATE NOCASE "
-                    "AND scope IN (?, 'global')", (name, scope)).fetchone()
+                    "AND scope IN (?, 'global') "
+                    "ORDER BY CASE WHEN scope = ? THEN 0 ELSE 1 END, id",
+                    (name, scope, scope)).fetchone()
                 if erow:
                     hits.append(erow)
                 else:
@@ -1300,8 +1416,6 @@ def _set_event_dates(entries):
                 meta['event_dates'] = dates
                 meta['event_date_src'] = 'librarian'
                 dated += 1
-                _log_pass('dated', None, mid,
-                          f"dated [{mid}] → {', '.join(dates)}", {'before': before})
             else:
                 # A "no date" verdict files the entry but PRESERVES any
                 # already-resolved dates (regex floor or a prior install's
@@ -1309,13 +1423,19 @@ def _set_event_dates(entries):
                 # a real date off Upcoming. The verdict is about the text;
                 # the resolver's data stands.
                 dateless += 1
+            meta['temporal_at'] = now
+            after = {k: meta.get(k) for k in before}
+            if dates:
+                _log_pass('dated', None, mid,
+                          f"dated [{mid}] → {', '.join(dates)}",
+                          {'before': before, 'after': after})
+            else:
                 _log_pass('dateless', None, mid,
                           f"[{mid}] ruled dateless"
                           + (" (kept existing "
                              + ', '.join(meta.get('event_dates') or []) + ")"
                              if meta.get('event_dates') else ""),
-                          {'before': before})
-            meta['temporal_at'] = now
+                          {'before': before, 'after': after})
             cursor.execute('UPDATE chunks SET meta = ? WHERE id = ?',
                            (json.dumps(meta, ensure_ascii=False), mid))
             _mark_done(mid)
@@ -1360,6 +1480,13 @@ def _mark(memory_id, importance=None, favorite=None):
             # flag stays whatever it is and the memory still files.
             favorite, ratcheted = None, True
     pinned_note = False
+    with _pass_lock:
+        refused = bool(_open_pass) and int(memory_id) in _open_pass['cap_refused']
+    if refused:
+        # The cap said no to retiring it; filing it as reviewed would hide
+        # it from every later pass. It stays in the queue, unstamped.
+        return (f"[{memory_id}] was refused by the retirement cap this pass — "
+                f"leave it; it stays in the queue for a night with room."), False
     with pt._get_connection() as conn:
         cursor = conn.cursor()
         row, err = _gate(cursor, memory_id)
@@ -1405,9 +1532,14 @@ def _mark(memory_id, importance=None, favorite=None):
     # every other verb (was invisible before; audit scout 2026-07-19), and
     # the before-values ride along so a run can be reverted (2026-10-30).
     changed = (rated is not None and rated != row[8]) or (favorite and not row[7])
+    after = rated if rated is not None else row[8]
+    if favorite:
+        after = max(after or 0, 0.95)
     _log_pass('marked', row[1], memory_id,
               f"filed [{memory_id}] as reviewed{extra}",
-              {'before': row[8], 'favorite_before': int(row[7] or 0)} if changed else None)
+              {'before': row[8], 'favorite_before': int(row[7] or 0),
+               'after': after, 'favorite_after': int(bool(favorite or row[7]))}
+              if changed else None)
     return f"Filed [{memory_id}] as reviewed{extra}.", True
 
 

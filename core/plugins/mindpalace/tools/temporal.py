@@ -65,8 +65,16 @@ RX_THANKSGIVING = re.compile(r'\bthanksgiving\b', re.IGNORECASE)
 RX_CLOCK = re.compile(
     r'\b(?:at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b'   # at 3pm / at 7:30am
     r'|at\s+(\d{1,2}):(\d{2})\b'                       # at 15:00
-    r'|(\d{1,2}):(\d{2})\s*(am|pm)?\b)',               # 15:00 / 7:30pm
+    r'|(\d{1,2}):(\d{2})\s*(am|pm)?\b'                 # 15:00 / 7:30pm
+    r'|(?:at\s+)?(noon|midnight)\b)',                   # noon tomorrow
     re.IGNORECASE)
+
+
+# The zone "local" means. None = the system's (the product). Tests pin a
+# ZoneInfo here so the local-day arithmetic proves out on every box and OS
+# the same way (2026-10-31: the suite failed east of UTC+9:30 and had no
+# local-day proof on Windows, where tzset does not exist).
+_local_tz = None
 
 
 def _parse_anchor(anchor):
@@ -75,16 +83,19 @@ def _parse_anchor(anchor):
     the UTC wall-clock shifts every evening save forward a day for anyone
     west of Greenwich ('tomorrow' at 9:30pm EDT stamped the day AFTER
     tomorrow — jank hunt, 2026-07-16). tz-aware anchors convert to the
-    system's local zone before the date math."""
+    local zone before the date math."""
     if isinstance(anchor, datetime):
         dt = anchor
     else:
         try:
             dt = datetime.fromisoformat(str(anchor).strip())
         except (TypeError, ValueError):
-            return datetime.now()
+            return datetime.now(_local_tz).replace(tzinfo=None)
     if dt.tzinfo is not None:
-        dt = dt.astimezone()
+        try:
+            dt = dt.astimezone(_local_tz)
+        except (OSError, OverflowError, ValueError):
+            pass   # Windows refuses pre-1970 stamps: keep the UTC wall-clock
     return dt.replace(tzinfo=None)
 
 
@@ -325,6 +336,8 @@ def _resolve(text, anchor, plans_only=False):
             h, mi_, ap = int(m[1]), int(m[2] or 0), m[3].lower()
         elif m[4] is not None:
             h, mi_, ap = int(m[4]), int(m[5]), None
+        elif m[9] is not None:
+            h, mi_, ap = (12 if m[9].lower() == 'noon' else 0), 0, None
         else:
             h, mi_, ap = int(m[6]), int(m[7]), (m[8] or '').lower() or None
         if ap == 'pm' and h < 12:

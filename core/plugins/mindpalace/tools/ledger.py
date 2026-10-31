@@ -95,6 +95,21 @@ def mark_read(cursor, scope):
         logger.warning(f"[MINDPALACE] Ledger watermark skipped: {e}")
 
 
+def unread_count(cursor, scope):
+    """Sheet-visible rows newer than the watermark (all of them before the
+    first read). Never raises."""
+    try:
+        since = last_read_ts(cursor, scope)
+        sql = f'SELECT COUNT(*) FROM ledger WHERE scope = ? AND {SHEET_WHERE}'
+        params = [scope]
+        if since:
+            sql += ' AND ts > ?'
+            params.append(since)
+        return cursor.execute(sql, params).fetchone()[0]
+    except Exception:
+        return 0
+
+
 def last_read_ts(cursor, scope):
     try:
         row = cursor.execute('SELECT last_read_ts FROM ledger_reads WHERE scope = ?',
@@ -119,17 +134,36 @@ def tail_block(cursor, scope, depth=2):
             (scope,)).fetchone()[0]
         if not total:
             return ''
+        # At wake depth the Recent block already shows what was saved, so
+        # plain 'saved' rows stay out of the tail there; quiet librarian
+        # nights ("nothing to do") fold into one line instead of pushing
+        # the human's own edits off the end (2026-10-31).
+        where = SHEET_WHERE + (" AND l.action != 'saved'" if depth else '')
         rows = cursor.execute(
             f"SELECT l.ts, l.actor, l.summary, "
             f"  (SELECT r.summary FROM ledger r WHERE r.parent_id = l.id "
             f"   AND r.action = 'report' ORDER BY r.id DESC LIMIT 1) "
-            f"FROM ledger l WHERE l.scope = ? AND {SHEET_WHERE} "
-            f"ORDER BY l.id DESC LIMIT ?", (scope, n_lines)).fetchall()
+            f"FROM ledger l WHERE l.scope = ? AND {where} "
+            f"ORDER BY l.id DESC LIMIT ?", (scope, n_lines * 3)).fetchall()
         head = "◆ Ledger (newest first)"
         lines, used = [], len(head)
-        shown = 0
+        shown, quiet, quiet_day = 0, 0, None
         for ts, actor, summary, report in rows:
-            line = f"- [{(ts or '')[:10]}] {actor}: {report or summary}"
+            text = report or summary or ''
+            if actor == 'librarian' and text.endswith(': nothing to do'):
+                quiet += 1
+                quiet_day = quiet_day or (ts or '')[:10]
+                continue
+            if quiet:
+                line = f"- [{quiet_day}] librarian: {quiet} quiet night{'s' if quiet > 1 else ''}, nothing to do"
+                quiet, quiet_day = 0, None
+                if used + len(line) + 1 <= n_chars and shown < n_lines:
+                    lines.append(line)
+                    used += len(line) + 1
+                    shown += 1
+            if shown >= n_lines:
+                break
+            line = f"- [{(ts or '')[:10]}] {actor}: {text}"
             if len(line) > TAIL_LINE_CHARS:
                 line = line[:TAIL_LINE_CHARS - 1] + '…'
             if used + len(line) + 1 > n_chars:
@@ -137,10 +171,13 @@ def tail_block(cursor, scope, depth=2):
             lines.append(line)
             used += len(line) + 1
             shown += 1
+        if quiet and shown < n_lines:
+            lines.append(f"- [{quiet_day}] librarian: {quiet} quiet night{'s' if quiet > 1 else ''}, nothing to do")
         if not lines:
             return ''
-        if total > shown:
-            lines.append(f"…and {total - shown} more via read_ledger")
+        unread = unread_count(cursor, scope)
+        if unread > shown:
+            lines.append(f"…{unread} unread since your last read — read_ledger(new_only=true)")
         return "\n".join([head] + lines)
     except Exception as e:
         logger.warning(f"[MINDPALACE] Ledger tail skipped (sheet unaffected): {e}")

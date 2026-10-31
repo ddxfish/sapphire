@@ -79,7 +79,7 @@ class DiscordAccounts:
             if not path.exists():
                 continue
             try:
-                conn = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+                conn = sqlite3.connect(path.absolute().as_uri() + '?mode=ro', uri=True)
                 try:
                     has = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='accounts'").fetchone()[0]
                     rows = conn.execute('SELECT name, token, bot_name, bot_id, created_at FROM accounts').fetchall() if has else []

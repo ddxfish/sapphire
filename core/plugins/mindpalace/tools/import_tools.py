@@ -75,7 +75,10 @@ def _connect_ro(path: Path):
     """Open a source DB strictly read-only. mode=ro forbids any write; if the
     file is missing sqlite raises OperationalError, which the caller treats as
     'store absent' (skip, not error)."""
-    return sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+    # as_uri percent-encodes '#', '?' and '%' in the install path — bare
+    # f'file:{path}' truncated at the first one and opened (created!) a
+    # different file read-write.
+    return sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True)
 
 
 def _columns(cursor, table: str) -> set:
@@ -126,16 +129,21 @@ def _normalize_ts(raw):
     except ValueError:
         return palace_tools._now(), s
 
-    if dt.tzinfo is not None:
-        # Already tz-aware → normalize to UTC.
-        dt = dt.astimezone(timezone.utc)
-    elif space_sep:
-        # SQLite CURRENT_TIMESTAMP: UTC wall-clock, just missing the tzinfo.
+    try:
+        if dt.tzinfo is not None:
+            # Already tz-aware → normalize to UTC.
+            dt = dt.astimezone(timezone.utc)
+        elif space_sep:
+            # SQLite CURRENT_TIMESTAMP: UTC wall-clock, just missing the tzinfo.
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            # 'T'-separated naive: legacy local-time isoformat. Interpret in the
+            # system local zone, then convert to UTC.
+            dt = dt.astimezone(timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        # Windows' localtime() refuses pre-1970 and far-future stamps — a
+        # bad row must not take the preview or the import thread down.
         dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        # 'T'-separated naive: legacy local-time isoformat. Interpret in the
-        # system local zone, then convert to UTC.
-        dt = dt.astimezone(timezone.utc)
 
     return dt.isoformat(timespec='seconds'), None
 
@@ -279,22 +287,14 @@ def _import_people(config, dest_cursor, existing_keys, scopes_seen, skip_keys=fr
             scope = row.get('scope') or 'default'
             scopes_seen.add(scope)
 
-            # Build the person's descriptive content from whatever text columns
-            # exist, in a stable order. Whitelist flags + ids go to meta, not body.
-            content_fields = [
-                ('relationship', 'Relationship'),
-                ('phone', 'Phone'),
-                ('email', 'Email'),
-                ('address', 'Address'),
-                ('notes', 'Notes'),
-                ('description', 'Description'),
-            ]
-            parts = []
-            for col, label_txt in content_fields:
-                val = _get(row, col)
-                if val is not None and str(val).strip():
-                    parts.append(f"{label_txt}: {str(val).strip()}")
-            content = "\n".join(parts) if parts else name
+            # The headline chunk is WHO they are: the description, else the
+            # v1 free-text notes (its bio slot), else the bare name. Contact
+            # fields live in entities.meta.fields only — printing them here
+            # too put every field on the wake card twice and phone/email/
+            # address into every wake (2026-10-31).
+            content = next((str(_get(row, col)).strip() for col in ('description', 'notes')
+                            if _get(row, col) is not None and str(_get(row, col)).strip()),
+                           name)
 
             # meta bag: whitelist flags + any leftover columns we didn't map.
             meta = {"import_key": key}
@@ -635,6 +635,98 @@ def _tombstones(cursor):
     return {r[0] for r in cursor.execute('SELECT key FROM import_tombstones')}
 
 
+# ─── Seen keys (2026-10-31): the one record of what this palace imported ─────
+# "Removed before" needs positive evidence. The first cut inferred it from
+# the ledger (not in the palace + saved before the scope's first import),
+# which also caught rows that FAILED to copy, rows a tester wiped to
+# re-import, and vanished entirely when the ledger was cleared — and the
+# scrub fence over-counted by scope. Now every copied key lands here with
+# a fingerprint of the classic row's text; removed = seen AND gone AND not
+# tombstoned AND the classic row still reads the same. A palace that never
+# imported a row cannot call it removed, whatever database it is pointed
+# at (the 28-row incident, 2026-10-30). Tester resets forget a scope's
+# rows (forget_seen) so they read new again; clearing the ledger touches
+# nothing here. A legacy install seeds the table ONCE from the old rule.
+
+_SEEN_SCHEMA = ('CREATE TABLE IF NOT EXISTS import_seen '
+                '(key TEXT PRIMARY KEY, scope TEXT, store TEXT, fp TEXT, '
+                'ts TEXT, src TEXT)')
+_LAYER_STORES = {'events': ('memories',), 'entities': ('people',),
+                 'knowledge': ('knowledge',), 'goals': ('goals',)}
+
+
+def _fingerprint(text):
+    import hashlib
+    return hashlib.sha1(' '.join(str(text or '').split()).encode('utf-8')).hexdigest()[:16]
+
+
+def _seen(cursor):
+    cursor.execute(_SEEN_SCHEMA)
+    return {r[0]: r[1] for r in cursor.execute('SELECT key, fp FROM import_seen')}
+
+
+def record_seen(cursor, rows, src='run'):
+    """rows: iterable of classic-row dicts (key/scope/store/fp)."""
+    cursor.execute(_SEEN_SCHEMA)
+    now = palace_now()
+    cursor.executemany(
+        'INSERT OR IGNORE INTO import_seen (key, scope, store, fp, ts, src) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        [(r['key'], r['scope'], r['store'], r['fp'], now, src) for r in rows])
+
+
+def forget_seen(cursor, scope, layer=None):
+    """A tester reset (wipe scope, clear a tab, delete scope): the rows it
+    razed read NEW on the Import tab again, never 'removed before'.
+    `layer` limits it to that tab's store; None forgets the whole scope."""
+    cursor.execute(_SEEN_SCHEMA)
+    stores = _LAYER_STORES.get(layer) if layer else None
+    if layer and not stores:
+        return 0
+    if stores:
+        ph = ','.join('?' * len(stores))
+        cursor.execute(f'DELETE FROM import_seen WHERE scope = ? AND store IN ({ph})',
+                       (scope, *stores))
+    else:
+        cursor.execute('DELETE FROM import_seen WHERE scope = ?', (scope,))
+    return cursor.rowcount
+
+
+def _seed_seen_once(cursor, rows, have, tomb):
+    """First classification after the upgrade: the table does not exist
+    yet, so build it from what can still be known — every classic row the
+    palace holds now, plus the old rule's 'removed before' set (not in the
+    palace, saved before the first import of that scope and store per the
+    ledger). Runs once; the table's existence is the marker."""
+    if cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                      "AND name = 'import_seen'").fetchone():
+        return
+    cursor.execute(_SEEN_SCHEMA)
+    first = {}
+    try:
+        for scope, ts, detail in cursor.execute(
+                "SELECT scope, ts, detail FROM ledger WHERE actor = 'import' ORDER BY ts"):
+            try:
+                stores = (json.loads(detail or '{}').get('stores') or {})
+            except Exception:
+                stores = {}
+            for store, n in stores.items():
+                if n:
+                    first.setdefault((scope, store), ts)
+    except sqlite3.Error:
+        pass
+    present = [r for r in rows if r['key'] in have]
+    legacy = [r for r in rows if r['valid'] and r['key'] not in have
+              and r['key'] not in tomb
+              and first.get((r['scope'], r['store']))
+              and r['created'] < first[(r['scope'], r['store'])]]
+    record_seen(cursor, present, src='palace')
+    record_seen(cursor, legacy, src='legacy')
+    if present or legacy:
+        logger.info(f"[MINDPALACE] import_seen seeded: {len(present)} present, "
+                    f"{len(legacy)} removed-before by the ledger rule")
+
+
 # ─── Classification: every classic row, against the palace ──────────────────
 
 def _classic_rows(config):
@@ -642,12 +734,12 @@ def _classic_rows(config):
     valid), read-only. Per-chat attachment tabs are left aside (rag count)."""
     out, rag = [], 0
 
-    def row(key, store, scope, created_raw, content, old_id):
+    def row(key, store, scope, created_raw, content, old_id, parent=None):
         created, _orig = _normalize_ts(created_raw)
         text = ' '.join(str(content or '').split())
         out.append({'key': key, 'store': store, 'scope': scope or 'default',
                     'created': created, 'preview': text[:80], 'id': old_id,
-                    'valid': bool(text)})
+                    'valid': bool(text), 'fp': _fingerprint(text), 'parent': parent})
 
     mem = _source_path(config, 'memory.db')
     if mem.exists():
@@ -702,13 +794,15 @@ def _classic_rows(config):
                     for r in cur.execute('SELECT * FROM goals'):
                         d = {k: r[k] for k in r.keys()}
                         row(f"v2:goal:{d.get('id')}", 'goals', d.get('scope'),
-                            _get(d, 'created_at', 'updated_at'), d.get('title'), d.get('id'))
+                            _get(d, 'created_at', 'updated_at'), d.get('title'), d.get('id'),
+                            parent=(f"v2:goal:{d['parent_id']}" if d.get('parent_id') else None))
                     if _columns(cur, 'goal_progress'):
                         for r in cur.execute('SELECT p.*, g.scope AS gscope FROM goal_progress p '
                                              'JOIN goals g ON g.id = p.goal_id'):
                             d = {k: r[k] for k in r.keys()}
                             row(f"v2:goalnote:{d.get('id')}", 'goals', d.get('gscope'),
-                                d.get('created_at'), d.get('note'), d.get('id'))
+                                d.get('created_at'), d.get('note'), d.get('id'),
+                                parent=f"v2:goal:{d.get('goal_id')}")
         except sqlite3.Error as e:
             logger.warning(f"[MINDPALACE] import preview: goals.db unreadable: {e}")
     return out, rag
@@ -716,9 +810,11 @@ def _classic_rows(config):
 
 def _classify(config):
     """Every classic row with its class: imported (its key is in the palace),
-    tombstoned (deleted here, never again), removed (not in the palace AND
-    saved before this scope's first import — it came through once and was
-    deleted or merged away since), new (never seen), invalid (empty).
+    tombstoned (deleted here, never again), removed (this palace copied it
+    once — import_seen — and it is gone now: deleted or merged away, no
+    tombstone), new (never copied), invalid (empty). A goal's notes and
+    subtasks follow a tombstoned or removed parent: a note whose goal is
+    out can never import, so it must not read 'new' forever.
     Returns (rows, rag_count)."""
     from plugins.mindpalace.tools import palace_tools
     rows, rag = _classic_rows(config)
@@ -728,26 +824,16 @@ def _classify(config):
             "SELECT json_extract(meta, '$.import_key') FROM chunks "
             "WHERE json_extract(meta, '$.import_key') LIKE 'v2:%'")}
         tomb = _tombstones(cur)
-        # First import per (scope, STORE): an import row says which stores
-        # that run copied (detail.stores). A run that copied only memories
-        # is no evidence about that scope's people — on the restored dev
-        # box 23 never-imported rows read as "removed before" under a
-        # per-scope-only rule (2026-10-30). Imports have always been every
-        # scope per store, so a store copied in a run was copied for every
-        # scope that held it then.
-        first = {}
-        try:
-            for scope, ts, detail in cur.execute(
-                    "SELECT scope, ts, detail FROM ledger WHERE actor = 'import' ORDER BY ts"):
-                try:
-                    stores = (json.loads(detail or '{}').get('stores') or {})
-                except Exception:
-                    stores = {}
-                for store, n in stores.items():
-                    if n:
-                        first.setdefault((scope, store), ts)
-        except sqlite3.Error:
-            pass
+        _seed_seen_once(cur, rows, have, tomb)
+        seen = _seen(cur)
+        # Self-healing: a key the palace holds is seen by definition (a run
+        # that crashed between its copy and its record still counts).
+        catch_up = [r for r in rows if r['key'] in have and r['key'] not in seen]
+        if catch_up:
+            record_seen(cur, catch_up, src='palace')
+            seen.update((r['key'], r['fp']) for r in catch_up)
+        conn.commit()
+    by_key = {}
     for r in rows:
         if not r['valid']:
             r['cls'] = 'invalid'
@@ -755,11 +841,15 @@ def _classify(config):
             r['cls'] = 'imported'
         elif r['key'] in tomb:
             r['cls'] = 'tombstoned'
-        elif (first.get((r['scope'], r['store']))
-              and r['created'] < first[(r['scope'], r['store'])]):
+        elif r['key'] in seen and seen[r['key']] in (r['fp'], None):
             r['cls'] = 'removed'
         else:
             r['cls'] = 'new'
+        by_key[r['key']] = r
+    for r in rows:
+        p = by_key.get(r['parent']) if r['parent'] else None
+        if p and r['cls'] == 'new' and p['cls'] in ('tombstoned', 'removed'):
+            r['cls'] = p['cls']
     return rows, rag
 
 
@@ -813,13 +903,15 @@ def removed_list(config, scope=None, store=None):
     return out
 
 
+# A goal scrub takes the goal row only: its notes are rows of their own
+# and go when THEY are removed-before (they follow the parent's class in
+# _classify), never as a side effect of the parent.
 _SCRUB_SQL = {
-    'memories': ('memory.db', ['DELETE FROM memories WHERE id = ?']),
-    'people': ('knowledge.db', ['DELETE FROM people WHERE id = ?']),
-    'knowledge': ('knowledge.db', ['DELETE FROM knowledge_entries WHERE id = ?']),
-    'goal': ('goals.db', ['DELETE FROM goal_progress WHERE goal_id = ?',
-                          'DELETE FROM goals WHERE id = ?']),
-    'goalnote': ('goals.db', ['DELETE FROM goal_progress WHERE id = ?']),
+    'memories': ('memory.db', 'DELETE FROM memories WHERE id = ?'),
+    'people': ('knowledge.db', 'DELETE FROM people WHERE id = ?'),
+    'knowledge': ('knowledge.db', 'DELETE FROM knowledge_entries WHERE id = ?'),
+    'goal': ('goals.db', 'DELETE FROM goals WHERE id = ?'),
+    'goalnote': ('goals.db', 'DELETE FROM goal_progress WHERE id = ?'),
 }
 
 
@@ -832,43 +924,31 @@ def scrub_removed(config, scope=None):
     stores are bare rows. Keys are tombstoned; a ledger line per scope
     carries counts, never content. Returns counts."""
     from plugins.mindpalace.tools import palace_tools
+    # The fence is structural (2026-10-31): a row is removed-before only
+    # when import_seen says THIS palace copied it and the classic text
+    # still fingerprints the same — a different database, a swapped
+    # directory or a test against the wrong config has nothing to scrub.
     rows = [r for r in removed_list(config, scope=scope)]
     counts = {s: 0 for s in STORES}
-    # Sanity fence: "removed before" presumes an earlier import brought
-    # the row in. More removed rows than this palace EVER imported means
-    # the old database and this palace are not a pair (a different palace,
-    # a swapped directory, a test against the wrong config — the 28-row
-    # incident, 2026-10-30). Refuse rather than delete.
-    ever = 0
-    with palace_tools._get_connection() as conn:
-        for (detail,) in conn.execute("SELECT detail FROM ledger WHERE actor = 'import'"):
-            try:
-                ever += sum(int(n) for n in (json.loads(detail or '{}').get('stores') or {}).values())
-            except Exception:
-                pass
-    if rows and len(rows) > ever:
-        raise RuntimeError(f"{len(rows)} removed-before rows exceed the {ever} this palace "
-                           f"ever imported — the old database and this palace don't match; "
-                           f"nothing scrubbed")
     by_file = {}
     for r in rows:
         kind = r['key'].split(':')[1]
-        fname, sqls = _SCRUB_SQL[kind]
-        by_file.setdefault(fname, []).append((sqls, r['id'], r['store']))
+        fname, sql = _SCRUB_SQL[kind]
+        by_file.setdefault(fname, []).append((sql, r))
+    scrubbed = []
     for fname, items in by_file.items():
         path = _source_path(config, fname)
         if not path.exists():
             continue
         conn = sqlite3.connect(str(path))
         try:
-            for sqls, old_id, store in items:
-                for sql in sqls:
-                    conn.execute(sql, (old_id,))
-                counts[store] += 1
+            for sql, r in items:
+                if conn.execute(sql, (r['id'],)).rowcount > 0:
+                    counts[r['store']] += 1
+                    scrubbed.append(r)
             conn.commit()
         finally:
             conn.close()
-    scrubbed = [r for r in rows]
     if scrubbed:
         with palace_tools._get_connection() as conn:
             cur = conn.cursor()
@@ -922,7 +1002,7 @@ def _dismiss_nudge(notify):
 
 # ─── Orchestrator ─────────────────────────────────────────────────────────────
 
-_import_lock = None   # module-level: one import at a time, ever
+_import_lock = threading.Lock()   # one import at a time, ever (born with the module)
 _state_lock = threading.Lock()
 _run_state = {'running': False, 'started': None, 'stage': None, 'done': 0,
               'total': 0, 'result': None, 'finished': None, 'error': None}
@@ -938,7 +1018,12 @@ def start(config, what='all', sync=False, scope=None, include_removed=False):
     plus the metadata backfill used to block the request), progress on
     the bus via the notification row. `scope` imports one scope's rows;
     `include_removed` brings back rows the user removed before (never the
-    default). Returns (message, ok). sync=True runs inline (tests)."""
+    default). Returns (message, ok). sync=True runs inline (tests, and her
+    import_v2 — one door, so the tab's status and the scrub guard see
+    every run)."""
+    if not any(_source_path(config, f).exists() for f in _SOURCE_FILES):
+        return ("No classic databases found (memory.db, knowledge.db, goals.db) — "
+                "nothing to import."), False
     with _state_lock:
         if _run_state['running']:
             return "An import is already running.", False
@@ -973,9 +1058,6 @@ def _run_and_record(what, config, scope=None, include_removed=False):
 
 
 def _run_import(what: str, config, scope=None, include_removed=False) -> str:
-    global _import_lock
-    if _import_lock is None:
-        _import_lock = threading.Lock()
     # The idempotency set is a read-once snapshot — two CONCURRENT imports
     # (Admin button + AI tool run in parallel threads) each see an empty set
     # and duplicate every row (Lane-1 scout, reproduced 2026-07-27). One
@@ -1071,6 +1153,16 @@ def _run_import_locked(what: str, config, progress=None, scope=None,
             done_before += sum(source[store].values())
             tick(store, 0)
 
+        # What landed is now SEEN (the removed-before evidence): the
+        # candidates whose key the palace holds after the copy.
+        wanted = {'new', 'removed'} if include_removed else {'new'}
+        cand = [r for r in cls if r['cls'] in wanted and r['key'] not in skip_keys
+                and r['store'] in targets]
+        if cand:
+            now_have = {row[0] for row in cursor.execute(
+                "SELECT json_extract(meta, '$.import_key') FROM chunks "
+                "WHERE json_extract(meta, '$.import_key') LIKE 'v2:%'")}
+            record_seen(cursor, [r for r in cand if r['key'] in now_have])
         # Register every distinct scope so the UI dropdown lists it. create_scope
         # opens its own connection; call after our writes are in the cursor but
         # commit first so the scopes and chunks land together-ish.
@@ -1180,8 +1272,13 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
         if what not in ("memories", "people", "knowledge", "goals", "all"):
             what = "all"
 
-        summary = _run_import(what, config)
-        return summary, True
+        # Through the same door as the tab (2026-10-31): the tab's status
+        # poll and the scrub guard see her run; a refusal is a refusal.
+        msg, ok = start(config, what=what, sync=True)
+        if not ok:
+            return msg, False
+        st = status()
+        return st.get('result') or msg, not st.get('error')
 
     except Exception as e:
         logger.error(f"[MINDPALACE] Import error: {e}")

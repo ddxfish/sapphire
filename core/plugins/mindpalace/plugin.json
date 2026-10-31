@@ -3,7 +3,7 @@
   "tool_expires": "never",
   "short_display_name": "Mind",
   "short_name": "Mind Palace",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Layered memory supersystem (v3) — self/events/entities/knowledge layers behind one tool surface. Mutually exclusive with the Memory plugin: enable one, not both. Import copies from the classic system; old data is never touched.",
   "author": "sapphire",
   "icon": "🏛️",
@@ -238,7 +238,7 @@
         "type": "number",
         "label": "Person card size (chars)",
         "default": 1500,
-        "help": "Max characters of a person's card (description + Background/Interests/Voice/Likes/Dislikes fields) when it renders to the AI — on a direct name search, and card-first in read_self's important-people groups. Clamped 200-4000. Sparse cards arrive whole; rich ones get trimmed to fit.",
+        "help": "Max characters of a person's card (description + Background/Interests/Voice/Likes/Dislikes fields) when it renders to the AI — on a direct name search, and card-first in read_self's important-people groups. Clamped 200-2000. The wake card in read_self is shorter still (600) and carries descriptive fields only — phone, email, address and notes show on a direct name search. Sparse cards arrive whole; rich ones get trimmed to fit.",
         "tab": "Search"
       },
       {

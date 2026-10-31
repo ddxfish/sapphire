@@ -156,3 +156,29 @@ def test_next_last_year_modifier():
     assert r('party on july 10th next year') == ['2027-07-10']
     assert r('we met on July 10 last year') == ['2025-07-10']
     assert r('Dec 25 next year') == ['2027-12-25']
+
+
+# ─── the zone hook (2026-10-31): tests prove out on every box the same way ──
+
+@pytest.fixture(autouse=True)
+def _utc_local(monkeypatch):
+    from datetime import timezone
+    monkeypatch.setattr(temporal, '_local_tz', timezone.utc)
+
+
+def test_local_zone_governs_the_day(monkeypatch):
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(temporal, '_local_tz', ZoneInfo('Australia/Sydney'))   # 00:30 next day
+    assert temporal.plans('lunch tomorrow', A) == ['2026-07-17']
+    monkeypatch.setattr(temporal, '_local_tz', ZoneInfo('America/New_York'))   # 10:30 same day
+    assert temporal.plans('lunch tomorrow', A) == ['2026-07-16']
+
+
+def test_noon_and_midnight():
+    assert temporal.plans('lunch at noon tomorrow', A) == ['2026-07-16T12:00']
+    assert r('we leave at midnight') == ['2026-07-15T00:00']
+    assert temporal.parse_when('noon tomorrow', A) == ('2026-07-16T12:00', None)
+
+
+def test_pre_1970_anchor_never_raises():
+    assert temporal.resolve('tomorrow', '1960-01-01T00:00:00+00:00') == ['1960-01-02']

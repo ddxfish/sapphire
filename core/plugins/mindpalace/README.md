@@ -14,7 +14,9 @@ a rail:
 
 Mutually exclusive with the classic Memory plugin (same tool names — enable
 one, not both). `import_v2` copies the old stores in; the old DBs are opened
-read-only and never touched — switching back is always possible.
+read-only — switching back is always possible. The one write to them is the
+Import tab's Scrub button (rows you already removed from the palace, on your
+typed confirm); nothing automatic, nothing of hers, ever touches them.
 
 Tools: `save_memory`, `search_memory`, `get_recent_memories`, `update_memory`,
 `delete_memory`, `read_self`, `update_self`, `read_ledger`, `create_goal`,
@@ -142,8 +144,11 @@ import, inspect, reset, repeat.
   classic rows are pending. The import itself:
   memories/people/knowledge/goals, additive and idempotent (re-runs copy
   zero duplicates), metadata backfill included. **The v1 databases are
-  opened read-only (SQLite `mode=ro`) and are never modified** — v1 stays
-  the pristine import source and switch-back path, always.
+  opened read-only (SQLite `mode=ro`)** — v1 stays the import source and
+  switch-back path. Deletes here tombstone their classic key (never back);
+  rows removed before tombstones existed list as *removed before*: *Bring
+  back* re-imports them, *Scrub* (typed confirm) deletes them from the old
+  database — the one classic write in the palace, and only ever the human's.
 - *Generate missing metadata* — re-derives the mechanical save-time
   annotations (stats/temporal/noun stamps + entity-mention edges) on any
   chunk missing its `md_v` marker, and re-arms the embedding backfill.

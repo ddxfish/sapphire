@@ -271,8 +271,8 @@ def delete_chunk(cid=None, query=None, **_):
         return {'error': 'Invalid chunk id'}, 400
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute('SELECT layer, scope, content, meta FROM chunks WHERE id = ?',
-                          (cid,)).fetchone()
+        row = cur.execute('SELECT layer, scope, content, meta, private_key FROM chunks '
+                          'WHERE id = ?', (cid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
         cur.execute("DELETE FROM edges WHERE (src_type = 'chunk' AND src_id = ?) "
@@ -280,8 +280,7 @@ def delete_chunk(cid=None, query=None, **_):
         cur.execute('DELETE FROM chunks WHERE id = ?', (cid,))
         pt._tombstone_row(cur, row[3], row[1])
         pt._ledger(row[1], 'user', 'deleted', layer=row[0], target=cid, cursor=cur,
-                   summary=(f"deleted [{cid}] from {row[0]}: "
-                            f"\"{row[2][:60]}{'…' if len(row[2]) > 60 else ''}\""))
+                   summary=f"deleted [{cid}] from {row[0]}: {pt._ledger_preview(row[2], row[4])}")
         conn.commit()
     _publish(row[0], row[1], 'delete')
     return {'success': True}
@@ -301,8 +300,8 @@ def toggle_favorite(cid=None, body=None, **_):
     fav = bool((body or {}).get('favorite'))
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute('SELECT layer, scope, content FROM chunks WHERE id = ?',
-                          (cid,)).fetchone()
+        row = cur.execute('SELECT layer, scope, content, private_key FROM chunks '
+                          'WHERE id = ?', (cid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
         cur.execute('UPDATE chunks SET favorite = ?, importance = ?, updated = ? '
@@ -311,7 +310,7 @@ def toggle_favorite(cid=None, body=None, **_):
         pt._ledger(row[1], 'user', 'favorite' if fav else 'unfavorite',
                    layer=row[0], target=cid, cursor=cur,
                    summary=(f"{'favorited' if fav else 'unfavorited'} [{cid}]: "
-                            f"\"{row[2][:60]}{'…' if len(row[2]) > 60 else ''}\""))
+                            f"{pt._ledger_preview(row[2], row[3])}"))
         conn.commit()
     _publish(row[0], row[1], 'update')
     return {'success': True, 'favorite': fav}
@@ -1328,6 +1327,11 @@ def maintenance(body=None, **_):
                 edges += cur.rowcount
                 cur.execute("DELETE FROM entities WHERE scope = ?", (scope,))
                 ents = cur.rowcount
+            try:   # the tab's classic rows read NEW on the Import tab again
+                from plugins.mindpalace.tools import import_tools
+                import_tools.forget_seen(cur, scope, layer=layer)
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] clear: import_seen reset skipped: {e}")
             try:
                 from plugins.mindpalace.tools import ledger as lg
                 lg.record(scope, 'user', 'cleared', layer=layer,
@@ -1378,6 +1382,13 @@ def maintenance(body=None, **_):
                 cur.execute("DELETE FROM librarian_state WHERE scope = ?", (scope,))
             except Exception:
                 pass   # table is lazily created by the librarian; absent = nothing to clear
+            # The wipe's point is re-import: its classic rows read NEW on
+            # the Import tab again, not "removed before".
+            try:
+                from plugins.mindpalace.tools import import_tools
+                import_tools.forget_seen(cur, scope)
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] wipe: import_seen reset skipped: {e}")
             pt._ledger(scope, 'user', 'maintenance', cursor=cur,
                        summary=(f"wiped scope: {chunks} memories, {ents} entities, "
                                 f"{edges} connections deleted"))
@@ -1444,7 +1455,11 @@ def maintenance(body=None, **_):
                 # from its dates; otherwise the floor's sure-future forms.
                 if meta.get('when_src') != 'ai':
                     if verdict:
-                        w, src = temporal.when_from(meta.get('event_dates'), created), 'librarian'
+                        # a dateless verdict keeps regex dates as search
+                        # metadata only — never a plan (2026-10-31)
+                        w, src = ((temporal.when_from(meta.get('event_dates'), created)
+                                   if meta.get('event_date_src') == 'librarian' else None),
+                                  'librarian')
                     else:
                         p = temporal.plans(content, created)
                         w, src = (p[0] if p else None), 'regex'
@@ -1602,8 +1617,8 @@ def unprune_chunk(cid=None, **_):
         return {'error': 'Invalid chunk id'}, 400
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute('SELECT layer, scope, meta, content FROM chunks WHERE id = ?',
-                          (cid,)).fetchone()
+        row = cur.execute('SELECT layer, scope, meta, content, private_key FROM chunks '
+                          'WHERE id = ?', (cid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
         meta = _parse_meta(row[2]) or {}
@@ -1614,8 +1629,7 @@ def unprune_chunk(cid=None, **_):
         cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
                     (json.dumps(meta, ensure_ascii=False), cid))
         pt._ledger(row[1], 'user', 'restored', layer=row[0], target=cid, cursor=cur,
-                   summary=(f"restored [{cid}] to her recall: "
-                            f"\"{row[3][:60]}{'…' if len(row[3]) > 60 else ''}\""))
+                   summary=f"restored [{cid}] to her recall: {pt._ledger_preview(row[3], row[4])}")
         conn.commit()
     _publish(row[0], row[1], 'update')
     return {'success': True, 'restored': cid,

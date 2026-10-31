@@ -13,7 +13,7 @@ Sapphire ships two memory engines. **Mind Palace** (the `mindpalace` plugin, "Mi
 ### The swap
 
 1. Settings → Plugins → disable **Memory**, enable **Mind Palace**, restart Sapphire.
-2. The nav rail's **Mind** group now opens the palace views. Your classic databases are untouched on disk — the palace only ever opens them read-only.
+2. The nav rail's **Mind** group now opens the palace views. Your classic databases stay on disk — the palace opens them read-only. The one write to them is the Import tab's **Scrub** button, on your typed confirm.
 3. **Scopes keep their names across engines.** If your chats ran scope `home` before, point them at `home` after the swap (chat sidebar → Mind section). A search that suddenly returns nothing is almost always a chat pointed at the wrong scope, not lost data.
 4. **Switching back** is the same toggle in reverse — classic memory resumes exactly where it left off. ⚠ One-way caveat: memories saved while the palace was active live in its own database and are invisible to classic memory (there is no reverse export yet). Trial accordingly.
 
@@ -21,7 +21,7 @@ Sapphire ships two memory engines. **Mind Palace** (the `mindpalace` plugin, "Mi
 
 From **Mind → Import** (all scopes at once):
 
-1. **The Import tab shows what will come across before anything runs**: each classic store (memories, people, knowledge, goals) per scope, what the palace already holds, and the pending difference. One button imports it all in the background with a progress row in the notification center. The import is additive, idempotent (re-runs skip what's already there), and strictly read-only toward the old databases. A chat's attached documents stay with the chat — core keeps those under either engine. While classic rows are pending, a notification reminds you at every boot.
+1. **The Import tab shows what will come across before anything runs**: each classic store (memories, people, knowledge, goals) per scope, what the palace already holds, and the pending difference. One button imports it all in the background with a progress row in the notification center. The import is additive and idempotent (re-runs skip what's already there) and never writes to the old databases. A chat's attached documents stay with the chat — core keeps those under either engine. While classic rows are pending, a notification reminds you at every boot. Rows you delete from the palace after importing are **tombstoned** (their key is kept, never their text) and never come back; rows you removed before tombstones existed show as **removed before** — listed apart, imported only on an explicit *Bring back*, or deleted from the old database by **Scrub**, the one write to a classic database anywhere in the palace, and only ever yours (type the scope name to confirm).
 2. **Wait for embeddings** before anything else — the log reports when the backfill completes. No embedder configured means search degrades to keyword-only and dedup can't see duplicates; fix the embedder first.
 3. Knowledge and documents ride a separate one-time Library migration (Admin → "Copy knowledge...") plus per-scope export/import zips on the Knowledge tab. Watch-folder definitions come across as entries you re-add by hand — a zip never auto-scans your disk.
 

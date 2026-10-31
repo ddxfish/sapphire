@@ -376,6 +376,16 @@ def spider_from_chunks(pt, scope, private_key, seed_chunk_ids, depth,
             if exclude_entity_ids:
                 entities = {eid: d for eid, d in entities.items()
                             if eid not in set(exclude_entity_ids)}
+            # An entity's tier-1 headline chunk is what its bullet (or the
+            # card above) already prints — the same line twice per person
+            # at depth 2 (2026-10-31).
+            heads = set(entities) | set(exclude_entity_ids or ())
+            if heads and chunks:
+                ph = ','.join('?' * len(heads))
+                for (cid,) in cursor.execute(
+                        f"SELECT id FROM chunks WHERE tier = 1 AND entity_id IN ({ph})",
+                        list(heads)).fetchall():
+                    chunks.pop(cid, None)
             if not chunks and not entities and not docs:
                 return ''
             if compact and not chunks and not docs:

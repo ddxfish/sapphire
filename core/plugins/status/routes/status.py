@@ -173,7 +173,7 @@ def _get_recent_activity(user_dir: Path, active_chat: str | None) -> dict:
         # write lock. Rows-format chats (rowify 2026-07-09) keep one row per
         # message in chat_messages with the dict as JSON; blob chats return
         # no rows here and these fields stay absent (pre-rowify behavior).
-        conn = sqlite3.connect(f"file:{chats_db}?mode=ro", uri=True)
+        conn = sqlite3.connect(Path(chats_db).absolute().as_uri() + "?mode=ro", uri=True)
         c = conn.cursor()
         try:
             today = datetime.now().strftime("%Y-%m-%d")

@@ -6,7 +6,7 @@
     "OPERATIONS.md": "sha256:bb84d0e6791bb118bc0522c1178915d25e889f3b88fe4a0bf6eeafb1611aef30",
     "README.md": "sha256:bad698b6862b4aacd4f4fa36b0e0b5e2b1741879e8c81af6d4da1aef0efe99f9",
     "__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "accounts.py": "sha256:26482087fb93a26e74e4fd59844e60a3941807b769500578bc4498d4d0c0cf4e",
+    "accounts.py": "sha256:ae5562bef5fbd4766cc54928ba4089690c7e977d48fc60aa178d01f39c3993fa",
     "api/__init__.py": "sha256:01b39649711c6caba7cd872fc0e7660748dc4f065708124cd665399a744bc134",
     "api/accounts.py": "sha256:a8f8e6f7e8b563180b5bc12d1dd3d83bd754c03d95ca7ebf3a977b0e4507bf33",
     "api/channels.py": "sha256:becdba9b6885d294e4a6e9959e85244340e70f231ffc8af26f1add62f1ecf8c5",
@@ -153,5 +153,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:41c824acfb6517d4709f975a96f4176185624d4aad4793ef1179f0f3967b0682"
   },
-  "signature": "iwiINy89VsnCgYtvbVDHiIcNW0ROyXj/SQT0u0O2922/RXnlEz8DOwjYZJTHYk6gjj+NwRMNX9PR14T1CFOJBw=="
+  "signature": "51WAQvyqO0iaF5KncBawjYa6bIRRJTQ+ddVWxMd6IKvUNkqkICefzOzDH3+epugK4AlJcdSY6BspQDMmj0O7DA=="
 }

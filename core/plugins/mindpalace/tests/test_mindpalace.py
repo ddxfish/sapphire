@@ -714,7 +714,8 @@ def test_save_memory_when_is_her_plan(palace):
     assert (m['when'], m['when_src']) == ('2026-11-04T10:00', 'ai')
     assert '2026-11-04T10:00' in m['event_dates']
     msg, ok = palace._save_memory("junk", scope="default", when="someday")
-    assert not ok and 'when' in msg
+    assert ok and 'when' in msg and 'update_memory' in msg     # saved anyway, told how
+    assert 'when' not in _get(_mid(msg))
     _, ok = palace._update_memory(a, "default", content="dentist moved, in 3 days")
     assert ok and _get(a)['when'] == '2026-11-04T10:00'       # hers outranks the words
     _, ok = palace._update_memory(a, "default", when="2026-11-06")

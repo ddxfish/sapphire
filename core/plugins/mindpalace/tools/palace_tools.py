@@ -1199,6 +1199,11 @@ def delete_scope(name: str) -> dict:
             # ledger rows die; the ledger module itself stays append-only.
             cursor.execute('DELETE FROM ledger WHERE scope = ?', (name,))
             cursor.execute('DELETE FROM ledger_reads WHERE scope = ?', (name,))
+            try:   # its classic rows read NEW on the Import tab again
+                from plugins.mindpalace.tools import import_tools
+                import_tools.forget_seen(cursor, name)
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] delete_scope: import_seen reset skipped: {e}")
             # Death row lands in 'default' — the razed scope's ledger just
             # went with it, and whole-scope deletion is exactly the change
             # tamper evidence must survive. Same transaction as the raze
@@ -1639,12 +1644,17 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         # `when` (2026-10-30): the one date this memory is a PLAN for — her
         # explicit intent, which the regex floor cannot read from words.
         # Validated before any write so a refusal leaves nothing behind.
-        when_iso = None
+        when_iso, when_note = None, ''
         if when is not None and str(when).strip():
             from plugins.mindpalace.tools import temporal
             when_iso, err = temporal.parse_when(when, _now())
             if err:
-                return f"Not saved — when {err}.", False
+                # The memory is worth more than its date: save it and say
+                # what to do (a refusal lost whole saves under small
+                # models that reported "saved" anyway, 2026-10-31).
+                when_iso = None
+                when_note = (f" when {err} — the memory is saved without a plan "
+                             f"date; update_memory(id, when='YYYY-MM-DD') sets one.")
         # Over-cap content is trimmed at a word boundary and saved anyway;
         # the receipt says what was cut. Knowledge is exempt — the Library
         # chunks for itself.
@@ -1687,7 +1697,9 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
                 return lib_err, False
             _publish_mind('knowledge', scope, 'save')   # Library tab freshness
             return (f"Saved to the library: [doc {doc_id}] {title} "
-                    f"(search finds it; read_document({doc_id}) opens it)"), True
+                    f"(search finds it; read_document({doc_id}) opens it)"
+                    + (" Note: library notes carry no plan date — `when` was "
+                       "ignored; a plan belongs in memories." if when else "")), True
 
         with _get_connection() as conn:
             count = conn.execute(
@@ -1830,7 +1842,8 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         logger.info(f"[MINDPALACE] Stored chunk {chunk_id} ({layer}) in scope '{scope}'")
         if dropped:
             logger.info(f"[MINDPALACE] save trimmed {len(dropped)} chars over cap (chunk {chunk_id})")
-        note = self_note + entity_note + (_trim_note(dropped, chunk_id) if dropped else '')
+        note = (self_note + entity_note + (_trim_note(dropped, chunk_id) if dropped else '')
+                + when_note)
         msg = f"Memory saved ({', '.join(bits)})"
         return (f"{msg}.{note}" if note else msg), True
 
@@ -2155,9 +2168,10 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
 
 def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                          layer: str = None, private_key: str = None,
-                         trim: int = None) -> tuple:
-    # trim: internal callers only (the wake leg) — per-record char cut at a
-    # word boundary, [id] + search_memory reaches the full text.
+                         trim: int = None, exclude_ids=None) -> tuple:
+    # trim / exclude_ids: internal callers only (the wake leg) — per-record
+    # char cut at a word boundary ([id] + search_memory reaches the full
+    # text) and ids an earlier wake block already showed (Upcoming).
     try:
         # Clamp: SQLite LIMIT -1 = unlimited — count=-1 poured the whole
         # scope into her context (Lane-5 scout, 2026-07-27).
@@ -2186,12 +2200,34 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
             #   COALESCE keeps NULL-meta rows.
             where += (" AND COALESCE(json_extract(c.meta, '$.added_by'), '') "
                       "NOT LIKE 'plugin:%'")
+        wake = bool(trim)
         with _get_connection() as conn:
             cursor = conn.cursor()
+            # id DESC breaks same-second ties newest-first (an import's rows
+            # share one second and came out ascending, 2026-10-31).
             cursor.execute(
-                SELECT_CHUNK + f'WHERE {where} ORDER BY c.created DESC LIMIT ?',
-                params + [count])
+                'SELECT c.id, c.content, c.created, c.label, c.layer, e.name, c.scope '
+                'FROM chunks c LEFT JOIN entities e ON c.entity_id = e.id '
+                f'WHERE {where} ORDER BY c.created DESC, c.id DESC LIMIT ?',
+                params + [count * 3 if wake else count])
             rows = cursor.fetchall()
+        if wake:
+            # The feed is this scope's life; the global overlay gets at most
+            # a quarter of the slots (it took 5 of 8 on a shared install).
+            skip = set(exclude_ids or ())
+            keep, overlay, cap = [], 0, max(1, count // 4)
+            for r in rows:
+                if r[0] in skip:
+                    continue
+                if r[6] == 'global' and scope != 'global':
+                    if overlay >= cap:
+                        continue
+                    overlay += 1
+                keep.append(r)
+                if len(keep) >= count:
+                    break
+            rows = keep
+        rows = [r[:6] for r in rows]
         if not rows:
             notes = (f" in layer '{layer}'" if layer else "") + (f" with labels '{label}'" if labels else "")
             return f"No memories stored{notes}.", True
@@ -2245,6 +2281,16 @@ def _doc_id_hint(memory_id, scope):
     return ""
 
 
+def _ledger_preview(content, private_key):
+    """The content preview a ledger summary carries. Keyed rows show no
+    text: the tail rides read_self into every persona's wake (the save
+    path's rule since negspace K3; every other writer joined 2026-10-31)."""
+    if private_key:
+        return "[keyed]"
+    t = content or ''
+    return f"\"{t[:60]}{'…' if len(t) > 60 else ''}\""
+
+
 def _tombstone_row(cursor, meta_raw, scope):
     """A deleted palace row that came from the classic system never comes
     back through the Import tab (2026-10-30): its key is kept, never its
@@ -2290,8 +2336,7 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
             _tombstone_row(cursor, row[4], scope)
             _ledger(scope, _added_by(), 'deleted', layer=row[3],
                     target=memory_id, cursor=cursor,
-                    summary=(f"deleted [{memory_id}] from {row[3]}: "
-                             f"\"{row[1][:60]}{'…' if len(row[1]) > 60 else ''}\""))
+                    summary=f"deleted [{memory_id}] from {row[3]}: {_ledger_preview(row[1], row[2])}")
             conn.commit()
         _publish_mind(row[3], scope, 'delete')
         preview = row[1][:50] + ('...' if len(row[1]) > 50 else '')
@@ -2316,18 +2361,24 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
             return "Invalid memory ID. Use the number shown in brackets [N].", False
         new_content = content.strip() if (content and content.strip()) else None
         new_label = label.strip().lower() if (label and label.strip()) else None
-        if new_content is None and new_label is None:
-            if when is None:
-                return "Nothing to update — pass content, label and/or when.", False
         when_iso = when_clear = None
+        when_note = ''
         if when is not None:
-            if str(when).strip().lower() in ('', 'none', 'clear', 'null'):
+            w = str(when).strip().lower()
+            if w == '':
+                when = None          # local models fill every optional with '' — keep
+            elif w in ('none', 'clear', 'null'):
                 when_clear = True
             else:
                 from plugins.mindpalace.tools import temporal
                 when_iso, err = temporal.parse_when(when, _now())
                 if err:
-                    return f"Not updated — when {err}.", False
+                    if new_content is None and new_label is None:
+                        return f"Not updated — when {err}.", False   # nothing else to do
+                    when_note = (f" when {err} — the plan date is unchanged; "
+                                 f"pass when='YYYY-MM-DD'.")
+        if new_content is None and new_label is None and when is None:
+            return "Nothing to update — pass content, label and/or when.", False
         dropped = ''
         private_key = private_key.strip() if (private_key and private_key.strip()) else None
         with _get_connection() as conn:
@@ -2440,8 +2491,7 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                     target=memory_id, cursor=cursor,
                     summary=(f"edited [{memory_id}] in {layer}"
                              + (f" (label → {new_label})" if new_label else '')
-                             + (f": \"{new_content[:60]}"
-                                f"{'…' if len(new_content) > 60 else ''}\""
+                             + (f": {_ledger_preview(new_content, row[2])}"
                                 if new_content else '')))
             conn.commit()
         if new_content is not None:
@@ -2461,7 +2511,8 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         if dropped:
             logger.info(f"[MINDPALACE] update trimmed {len(dropped)} chars over cap (chunk {memory_id})")
         msg = f"Memory updated ({', '.join(bits)})"
-        return (f"{msg}.{_trim_note(dropped, memory_id)}" if dropped else msg), True
+        return ((f"{msg}.{_trim_note(dropped, memory_id)}" if dropped else msg)
+                + when_note), True
     except Exception as e:
         logger.error(f"[MINDPALACE] Error updating memory: {e}")
         return f"Failed to update memory: {e}", False
@@ -2548,6 +2599,13 @@ _CARD_FIELDS = (('relationship', 'Relationship'), ('birthday', 'Birthday'),
                 ('notes', 'Notes'),   # v1 people-import bios land here
                 ('background', 'Background'), ('interests', 'Interests'),
                 ('voice', 'Voice'), ('likes', 'Likes'), ('dislikes', 'Dislikes'))
+# The WAKE card is who they are, not how to reach them: phone, email,
+# address and free notes ("gate code 4417") rode into every wake of every
+# persona once a person was starred (2026-10-31). They stay on the full
+# card a direct name search returns.
+_WAKE_CARD_FIELDS = tuple(f for f in _CARD_FIELDS
+                          if f[0] not in ('phone', 'email', 'address', 'notes'))
+WAKE_CARD_CHARS = 600
 
 
 def _people_card_chars() -> int:
@@ -2557,16 +2615,18 @@ def _people_card_chars() -> int:
                 .get('people_card_chars', 1500))
     except Exception:
         v = 1500
-    return min(max(v, 200), 4000)
+    return min(max(v, 200), 2000)
 
 
-def _entity_card(cursor, eid) -> list:
+def _entity_card(cursor, eid, wake=False) -> list:
     """Card lines for an entity: newest headline chunk + non-empty descriptive
     fields, capped at people_card_chars. Private-keyed headlines stay out —
     the wake renders for every persona (same gate class as the dashboard).
+    wake=True is the read_self card: descriptive fields only, 600 chars.
     Returns [] when nothing is curated."""
     try:
-        cap = _people_card_chars()
+        cap = min(_people_card_chars(), WAKE_CARD_CHARS) if wake else _people_card_chars()
+        fields = _WAKE_CARD_FIELDS if wake else _CARD_FIELDS
         lines = []
         # Curated description first (meta.headline — the human-edited slot),
         # else the newest promoted fact. Without the preference, every
@@ -2587,7 +2647,7 @@ def _entity_card(cursor, eid) -> list:
             f = (json.loads(raw[0]) or {}).get('fields') or {}
         except Exception:
             f = {}
-        for key, label in _CARD_FIELDS:
+        for key, label in fields:
             val = ' '.join(str(f.get(key) or '').split())
             if val and val.lower() not in ('false', 'none'):
                 lines.append(f"{label}: {val}")

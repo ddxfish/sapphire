@@ -212,9 +212,9 @@ def test_a_run_owns_one_notification_row(palace, monkeypatch):
     monkeypatch.setattr(notify, 'finish', lambda rid, **k: calls.append(('finish', rid, k)))
     monkeypatch.setattr(librarian, "_run_messages", lambda *a, **kw: [False])
     _dedup_setup()
-    librarian.run_begin('default', 'nightly tending')
+    tok = librarian.run_begin('default', 'nightly tending')
     librarian.run_blocking('default', kind='dedup', chat='librarian-t')
-    librarian.run_end('default')
+    librarian.run_end('default', token=tok)
     assert [c[0] for c in calls] == ['begin', 'tick', 'finish']
     assert calls[0][2]['key'] == 'librarian-run:default'
     assert calls[0][2]['go'] == {'view': 'self'}
@@ -245,6 +245,7 @@ def test_self_pass_never_clears_or_opens_sections(palace):
 
 
 def test_self_pass_aborts_when_the_sheet_is_unreadable(palace, monkeypatch):
+    _save("one memory so the scope is not empty")
     monkeypatch.setattr(st, '_read_self', lambda *a, **k: ('boom', False))
     monkeypatch.setattr(librarian, '_run_messages',
                         lambda scope, groups, cfg, toolset, name, present, **kw:
@@ -264,27 +265,16 @@ def test_dedup_preview_reports_a_failed_scan(palace, monkeypatch):
     assert code == 500 and 'scan failed' in out['error']
 
 
-def test_dates_presenter_shows_local_day_and_weekday(palace):
+def test_dates_presenter_shows_local_day_and_weekday(palace, monkeypatch):
     """`created` is UTC: a 10:30pm EDT save presented as the NEXT day, and
     the model's 'tonight' verdict landed a day late — terminally (scout
     find 2026-10-30). The pass sees the local day plus its weekday name."""
-    import os
-    import time
-    if not hasattr(time, 'tzset'):
-        pytest.skip('tzset is POSIX-only')
-    old = os.environ.get('TZ')
-    os.environ['TZ'] = 'America/New_York'
-    time.tzset()
-    try:
-        text = librarian._present_dates(
-            [(7, 'events', 'we fly out on Friday', None, 0,
-              '2026-07-16T02:30:00+00:00', None)], 'default', 1, 1)
-    finally:
-        if old is None:
-            os.environ.pop('TZ', None)
-        else:
-            os.environ['TZ'] = old
-        time.tzset()
+    from zoneinfo import ZoneInfo
+    from plugins.mindpalace.tools import temporal
+    monkeypatch.setattr(temporal, '_local_tz', ZoneInfo('America/New_York'))
+    text = librarian._present_dates(
+        [(7, 'events', 'we fly out on Friday', None, 0,
+          '2026-07-16T02:30:00+00:00', None)], 'default', 1, 1)
     assert '[7] saved 2026-07-15 (Wednesday)' in text
 
 
@@ -520,3 +510,156 @@ def test_get_messages_for_llm_context_override():
     assert len(big) == 3
     assert len(small) < 3
     assert small[-1]['content'] == 'the tail survives'
+
+
+# ─── Hunt 2026-10-31 ─────────────────────────────────────────────────────────
+
+def _last_run_id():
+    with pt._get_connection() as conn:
+        return conn.execute("SELECT id FROM ledger WHERE target = 'run' "
+                            "ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+
+def _write_batch(stats, kind='sort'):
+    with pt._get_connection() as conn:
+        librarian._write_ledger(conn.cursor(), 'default', stats, f'{kind} batch', kind)
+        conn.commit()
+
+
+def _run(fn, args):
+    return lt.execute(fn, args, None)
+
+
+def test_run_end_closes_only_its_own_run(palace):
+    """A nightly that started during a drain popped the DRAIN's run and
+    closed its row mid-drain. run_begin hands the opener a token; a busy
+    scope hands out none; only the matching token closes."""
+    tok = librarian.run_begin('default', 'Run ALL (sort)')
+    assert tok is not None
+    assert librarian.run_begin('default', 'nightly tending') is None     # busy tonight
+    librarian.run_end('default')                                          # no token: nothing
+    librarian.run_end('default', token=tok + 1)
+    assert librarian.run_open('default')
+    librarian.run_end('default', token=tok)
+    assert not librarian.run_open('default')
+
+
+def test_revert_leaves_what_changed_since_and_keeps_the_stamps(palace, monkeypatch):
+    """Revert is 'undo what THIS run did': a memory retired again since (a
+    different stamp) or rated again since stays; a reverted retirement
+    keeps librarian_at so the next night does not redo the review; a run
+    reverts once."""
+    import json
+    monkeypatch.setattr(lt, '_importance_enabled', lambda: True)
+    a, b, c = _save("ping"), _save("rate me"), _save("clean revert")
+    tok = librarian.run_begin('default', 'test run')
+    lt.open_pass('default', [a, b, c])
+    assert _run('prune_memory', {'memory_id': a, 'reason': 'ping'})[1]
+    assert _run('prune_memory', {'memory_id': c, 'reason': 'noise'})[1]
+    assert _run('mark_processed', {'memory_id': b, 'importance': 0.8})[1]
+    _write_batch(lt.close_pass())
+    librarian.run_end('default', token=tok)
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET importance = 0.3 WHERE id = ?", (b,))   # re-rated since
+        m = _meta(a)
+        m['pruned_at'] = '2099-01-01T00:00:00+00:00'                              # retired again since
+        conn.execute("UPDATE chunks SET meta = ? WHERE id = ?", (json.dumps(m), a))
+        conn.commit()
+    run_id = _last_run_id()
+    counts, err = lt.revert_run('default', run_id)
+    assert err is None and counts['restored'] == 1 and counts['ratings'] == 0
+    assert counts['skipped'] == 2
+    assert _meta(a)['pruned_at'].startswith('2099')
+    assert 'pruned_at' not in _meta(c) and 'librarian_at' in _meta(c) and 'reverted_at' in _meta(c)
+    with pt._get_connection() as conn:
+        assert conn.execute('SELECT importance FROM chunks WHERE id = ?', (b,)).fetchone()[0] == 0.3
+        led = conn.execute("SELECT summary FROM ledger WHERE action = 'reverted'").fetchone()[0]
+    assert 'changed since' in led
+    assert lt.revert_run('default', run_id) == (None, 'this run was already reverted')
+
+
+def test_revert_never_retires_a_favorite_survivor(palace):
+    a, b = _save("Zebra visited the house"), _save("Zebra visited the house today")
+    _set_vec(a, [1, 0, 0]); _set_vec(b, [1, 0, 0])
+    tok = librarian.run_begin('default', 'test run')
+    lt.open_pass('default', [a, b], kind='dedup')
+    msg, ok = _run('merge_memories', {'memory_ids': [a, b]})
+    assert ok, msg
+    survivor = int(re.search(r'→ \[(\d+)\]', msg).group(1))
+    _write_batch(lt.close_pass(), 'dedup')
+    librarian.run_end('default', token=tok)
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET favorite = 1 WHERE id = ?", (survivor,))   # the human starred it
+        conn.commit()
+    counts, _ = lt.revert_run('default', _last_run_id())
+    assert counts['retired'] == 0 and counts['skipped'] == 1
+    assert 'pruned_at' not in _meta(survivor) and _meta(a).get('merged_into') == survivor
+
+
+def test_cap_refused_ids_cannot_be_filed_as_reviewed(palace):
+    """After the cap says no, the model's fallback was mark_processed —
+    thousands stamped reviewed forever in a drain. A refused id refuses
+    the stamp too; it stays in the queue."""
+    ids = [_save(f"noise {i}") for i in range(8)]
+    lt.open_pass('default', ids)
+    assert _run('prune_memory', {'memory_id': ids[0], 'reason': 'ping'})[1]
+    assert _run('prune_memory', {'memory_id': ids[1], 'reason': 'ping'})[1]
+    msg, ok = _run('prune_memory', {'memory_id': ids[2], 'reason': 'ping'})
+    assert not ok and 'mark_processed the rest' in msg
+    msg, ok = _run('mark_processed', {'memory_id': ids[2]})
+    assert not ok and 'refused by the retirement cap' in msg
+    assert 'librarian_at' not in _meta(ids[2])
+    assert _run('mark_processed', {'memory_id': ids[3]})[1]
+    assert lt.close_pass()['capped'] == 'pass'
+
+
+def test_dedup_is_exempt_from_the_share_and_its_refusal_names_no_verb(palace, monkeypatch):
+    ids = [_save("the same note" + " again" * i) for i in range(6)]
+    for i in ids:
+        _set_vec(i, [1, 0, 0])
+    lt.open_pass('default', ids, kind='dedup')
+    msg, ok = _run('merge_memories', {'memory_ids': ids})   # retires 5 of 6 presented
+    assert ok, msg
+    _write_batch(lt.close_pass(), 'dedup')                    # tonight's count: 5
+    monkeypatch.setattr(lt, '_retire_per_night', lambda: 5)
+    c, d = _save("Zebra visited the house"), _save("Zebra visited the house today")
+    _set_vec(c, [0, 1, 0]); _set_vec(d, [0, 1, 0])
+    assert not lt.night_capped('default')
+    lt.open_pass('default', [c, d], kind='dedup')
+    msg, ok = _run('merge_memories', {'memory_ids': [c, d]})
+    assert not ok and 'another night' in msg and 'mark_processed' not in msg
+    assert lt.close_pass()['capped'] == 'night'
+    assert lt.night_capped('default') and not lt.night_capped('default')
+
+
+def test_night_count_charges_a_merge_its_losers(palace, monkeypatch):
+    from plugins.mindpalace.tools import ledger as lg
+    monkeypatch.setattr(lt, '_retire_per_night', lambda: 2)
+    lg.record('default', 'librarian', 'merged', target=1, summary='earlier tonight',
+              detail={'members': [1, 2, 3]})                       # a 3-merge = 2 retirements
+    ids = [_save(f"noise {i}") for i in range(4)]
+    lt.open_pass('default', ids)
+    msg, ok = _run('prune_memory', {'memory_id': ids[0], 'reason': 'ping'})
+    assert not ok and 'tonight' in msg.lower()
+
+
+def test_fact_gap_is_unicode_and_forgives_paraphrase():
+    assert lt._fact_gap("Zoë and José came at 3pm on March 3",
+                        ["Zoë and José came at 3pm on March 3, with cake"]) == []
+    assert lt._fact_gap("We met the team",
+                        ["Then we met Zoë, José and Kirill at 7:30"]) == ['zoë', 'josé', 'kirill', '7:30']
+    assert lt._fact_gap("the dog ran home", ["The dog ran home. Later it slept."]) == []
+    assert lt._grounding_gap("Zoë visited José", ["Zoë visited", "José was visited"]) is None
+
+
+def test_self_pass_skips_an_empty_scope(palace, monkeypatch):
+    monkeypatch.setattr(librarian, '_run_messages', lambda *a, **k: [True, True])
+    msg, _ok = librarian.run_blocking('default', kind='self', chat='librarian-t')
+    assert 'no memories yet' in msg
+
+
+def test_preview_shows_the_error_not_an_empty_queue(palace, monkeypatch):
+    _save("one memory")
+    monkeypatch.setattr(st, '_read_self', lambda *a, **k: ('boom', False))
+    out = librarian.preview_message('default', 'self', stage='tend')
+    assert not out['live'] and 'preview failed' in out['text'] and 'unreadable' in out['text']

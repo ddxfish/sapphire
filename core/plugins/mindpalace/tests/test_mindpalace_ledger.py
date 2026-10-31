@@ -183,7 +183,7 @@ def test_tail_excludes_ai_rows_and_caps_with_more_line(palace):
     assert 'user change 08' in text          # 4 shown at depth ≤1 (2026-07-27)
     assert 'user change 07' not in text      # the rest wait in read_ledger
     assert 'user change 00' not in text
-    assert '…and 8 more via read_ledger' in text
+    assert '…12 unread since your last read' in text     # the watermark, not an all-time count
 
 
 def test_read_self_stamps_watermark_and_unread_window(palace):
@@ -349,13 +349,13 @@ def _fake_batch(i):
 
 def test_librarian_run_groups_batches_into_one_line(palace):
     from plugins.mindpalace.tools import librarian as lib
-    lib.run_begin('r1', 'Run ALL (sort)')
+    tok_r1 = lib.run_begin('r1', 'Run ALL (sort)')
     with pt._get_connection() as conn:
         cur = conn.cursor()
         for i in range(3):
             lib._write_ledger(cur, 'r1', _fake_batch(i), f'sort pass: batch {i}', 'sort')
         conn.commit()
-    lib.run_end('r1', left=5)
+    lib.run_end('r1', left=5, token=tok_r1)
     top = [r for r in _rows('r1') if r['parent_id'] is None]
     assert len(top) == 1                       # ONE line for the whole run
     with pt._get_connection() as conn:
@@ -371,12 +371,12 @@ def test_librarian_run_groups_batches_into_one_line(palace):
 
 def test_run_drilldown_keeps_batches_and_items(palace):
     from plugins.mindpalace.tools import librarian as lib
-    lib.run_begin('r2', 'nightly tending')
+    tok_r2 = lib.run_begin('r2', 'nightly tending')
     with pt._get_connection() as conn:
         cur = conn.cursor()
         lib._write_ledger(cur, 'r2', _fake_batch(0), 'sort pass: batch', 'sort')
         conn.commit()
-    lib.run_end('r2')
+    lib.run_end('r2', token=tok_r2)
     run_id = [r for r in _rows('r2') if r['parent_id'] is None][0]['id']
     kids = self_routes.get_ledger(query={'scope': 'r2', 'parent_id': str(run_id)})
     batch = [k for k in kids['rows'] if k['action'] == 'pass']
@@ -403,15 +403,15 @@ def test_run_crash_leaves_honest_running_line(palace):
 
 def test_run_notes_and_quiet_night(palace):
     from plugins.mindpalace.tools import librarian as lib
-    lib.run_begin('r4', 'Run ALL (dedup)')
+    tok_r4 = lib.run_begin('r4', 'Run ALL (dedup)')
     lib._run_note('r4', scanned=40)
     lib._run_note('r4', scanned=20)
-    lib.run_end('r4')
+    lib.run_end('r4', token=tok_r4)
     with pt._get_connection() as conn:
         block, _ = lg.read_block(conn.cursor(), 'r4')
     assert '60 scanned' in block
-    lib.run_begin('r5', 'nightly tending')
-    lib.run_end('r5')
+    tok_r5 = lib.run_begin('r5', 'nightly tending')
+    lib.run_end('r5', token=tok_r5)
     with pt._get_connection() as conn:
         block, _ = lg.read_block(conn.cursor(), 'r5')
     assert 'nightly tending: nothing to do' in block

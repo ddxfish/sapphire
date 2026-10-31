@@ -95,7 +95,7 @@ def classic_memory_rows(user_dir: Path) -> int:
         if not path.exists():
             continue
         try:
-            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            conn = sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True)
             try:
                 n += conn.execute(sql).fetchone()[0]
             finally:

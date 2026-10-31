@@ -1295,8 +1295,9 @@ def _drain_loop(scope, what, kind):
     _detach_origin()
     _drain_active = True
     total = batches = 0
-    stopped = False
-    run_begin(scope, f'Run ALL ({kind})')
+    stopped = capped = False
+    token = run_begin(scope, f'Run ALL ({kind})')
+    _lt().night_capped(scope)   # clear a stale flag
     try:
         # Rolling chats (Krem, 2026-07-19): group N batches into one chat
         # before resetting — judgment passes (sort) calibrate better with
@@ -1328,6 +1329,12 @@ def _drain_loop(scope, what, kind):
             total += max(0, before - after)
             run_tick(scope, done=total, total=total + after,
                      text=f"batch {batches}: {total} handled, {after} left")
+            if _lt().night_capped(scope):
+                # Tonight's retirement cap refused this batch: every later
+                # batch would be refused the same way and file its rows
+                # as reviewed anyway. Stop here and say so.
+                capped = True
+                break
             if after >= before:
                 # No forward progress — a degraded/failed batch, or a queue
                 # that can't shrink further. Stop rather than spin forever.
@@ -1344,10 +1351,15 @@ def _drain_loop(scope, what, kind):
         # pass that legitimately claimed during the scan window and letting
         # two workers share _open_pass.
         left = _queue_depth(scope, kind)
-        run_end(scope, left=left)
-        verb = 'stopped' if stopped else 'complete'
+        if capped:
+            run_tick(scope, text=f"night cap reached — {left} left for another night")
+        run_end(scope, left=left, token=token)
+        verb = 'stopped' if stopped else ('ended at tonight\'s retirement cap'
+                                          if capped else 'complete')
         _finish(f"Drain {verb} for '{scope}' ({kind}): {total} handled across "
-                f"{batches} batch(es), {left} left in the queue.")
+                f"{batches} batch(es), {left} left in the queue."
+                + (" A human raises librarian_retire_per_night in Admin."
+                   if capped else ""))
         with _state_lock:
             _state['drain'] = None
 
@@ -1417,11 +1429,11 @@ def run_begin(scope, label):
     from plugins.mindpalace.tools import ledger as lg
     with _runs_lock:
         if scope in _runs:
-            return
+            return None
     rid = lg.record(scope, 'librarian', 'pass', target='run',
                     summary=f'{label} — running…')
     if rid is None:
-        return   # ledger down: batches fall back to top-level rows
+        return None   # ledger down: batches fall back to top-level rows
     nid = None
     try:
         from core import notify as _notify
@@ -1432,6 +1444,12 @@ def run_begin(scope, label):
     with _runs_lock:
         _runs[scope] = {'id': rid, 'nid': nid, 'label': label, 'batches': 0,
                         'presented': 0, 'handled': 0, 'verbs': {}, 'extra': {}}
+    return rid
+
+
+def run_open(scope):
+    with _runs_lock:
+        return scope in _runs
 
 
 def run_tick(scope, done=None, total=None, text=None):
@@ -1457,14 +1475,18 @@ def _run_note(scope, **counts):
                 ctx['extra'][k] = ctx['extra'].get(k, 0) + int(n or 0)
 
 
-def run_end(scope, left=None):
+def run_end(scope, left=None, token=None):
     """Close the run: append ONE 'report' child carrying the after-action
-    summary. Readers overlay it onto the run line."""
+    summary. Readers overlay it onto the run line. `token` is what
+    run_begin returned — only the opener closes its own run (a nightly
+    that started during a drain used to close the DRAIN's row mid-drain,
+    2026-10-31); None closes nothing."""
     from plugins.mindpalace.tools import ledger as lg
     with _runs_lock:
-        ctx = _runs.pop(scope, None)
-    if not ctx:
-        return
+        ctx = _runs.get(scope)
+        if not ctx or token is None or ctx['id'] != token:
+            return
+        _runs.pop(scope, None)
     if ctx['batches'] == 0 and not ctx['extra']:
         summary = f"{ctx['label']}: nothing to do"
     else:
@@ -1609,6 +1631,17 @@ def _worker_self(scope):
                 _finish(why)
                 return
             conn.commit()
+        with pt._get_connection() as conn:
+            n_rows = conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE scope = ? AND private_key IS NULL",
+                (scope,)).fetchone()[0]
+        if n_rows == 0:
+            # Nothing to write a self from: the first-tending charter told
+            # an empty scope "your memories are already here" and the model
+            # invented an identity (2026-10-31).
+            _finish(f"Self pass skipped for '{scope}': no memories yet — "
+                    f"nothing to write a sheet from.")
+            return
         started = _now()
         lt.open_pass(scope, [], kind='self')
         try:
@@ -2096,7 +2129,9 @@ def preview_message(scope, kind, stage=None, limit=3):
                             'live': True}
     except Exception as e:
         logger.warning(f"[LIBRARIAN] preview failed for '{scope}'/{kind}: {e}")
-    # Empty queue (or preview trouble): show the charter shape itself.
+        return {'text': f"(preview failed — the pass would refuse the same way)\n{e}",
+                'live': False, 'error': str(e)}
+    # Empty queue: show the charter shape itself.
     stage_key = stage and f'self_{stage}' if kind == 'self' else kind
     if stage_key not in CHARTER_STAGES:
         stage_key = STAGES_BY_KIND.get(kind, ('sort',))[0]

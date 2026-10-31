@@ -451,6 +451,11 @@ def test_merge_derived_keeps_the_bag_and_the_verdict():
     old_verdict = {'event_dates': ['2026-01-01', '2026-09-09'], 'event_date_src': 'librarian'}
     m = md.merge_derived(old_verdict, fresh_plan, anchor='2026-05-05T12:00:00+00:00')
     assert (m['when'], m['when_src']) == ('2026-09-09', 'librarian')
+    # a "ruled dateless" verdict keeps the floor's dates as search metadata
+    # only — never minted into a plan (hunt 2026-10-31)
+    dateless = {'event_dates': ['2026-09-09'], 'event_date_src': 'regex', 'temporal_at': 't'}
+    m = md.merge_derived(dateless, fresh_plan, anchor='2026-05-05T12:00:00+00:00')
+    assert 'when' not in m and m['event_dates'] == ['2026-09-09']
 
 
 def test_backfill_restamps_rows_below_the_current_version(palace):

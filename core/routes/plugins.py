@@ -265,6 +265,28 @@ def _is_core_essential(name: str) -> bool:
         return False
 
 
+def _group_partner_on(name: str):
+    """The ENABLED plugin sharing this one's group-string `essential`
+    (memory / mindpalace are alternate engines with the same tool names),
+    or None. Turning the second one on used to write it enabled, THEN fail
+    the load on the tool collision — and the next boot's engine pin read
+    the stale 'enabled' as the user's choice and pinned the palace off
+    with a false 'holds your data' notice (fresh-install scout, 2026-10-31)."""
+    try:
+        from core.plugin_loader import plugin_loader
+        info = plugin_loader.get_plugin_info(name)
+        group = ((info or {}).get("manifest") or {}).get("essential")
+        if not isinstance(group, str) or not group:
+            return None
+        for other in plugin_loader.get_all_plugin_info():
+            if (other and other.get("name") != name and other.get("enabled")
+                    and (other.get("manifest") or {}).get("essential") == group):
+                return other["name"]
+    except Exception:
+        return None
+    return None
+
+
 def _cap_title(s: str, n: int = 40) -> str:
     s = (s or "").strip()
     return (s[:n].rstrip() + "…") if len(s) > n else s
@@ -457,6 +479,14 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
             except Exception:
                 pass
 
+            if not currently_enabled:
+                partner = _group_partner_on(plugin_name)
+                if partner:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(f"Turn off {partner} first — it and {plugin_name} are "
+                                f"alternate engines that share tool names, so only one "
+                                f"runs at a time."))
             if currently_enabled:
                 if plugin_name in enabled:
                     enabled.remove(plugin_name)

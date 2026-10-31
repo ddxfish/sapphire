@@ -285,6 +285,15 @@ def delete_goal_cascade(cursor, gid):
         "json_extract(meta, '$.parent_goal') = ? OR "
         "json_extract(meta, '$.progress_of') = ?)", (gid, gid)).fetchall()]
     ph = ','.join('?' * len(ids))
+    # Imported goals, subtasks and notes never come back through the Import
+    # tab once deleted here (tombstones, like every other delete).
+    try:
+        from plugins.mindpalace.tools import palace_tools as _pt_mod
+        for _cid, meta_raw, scope in cursor.execute(
+                f"SELECT id, meta, scope FROM chunks WHERE id IN ({ph})", ids).fetchall():
+            _pt_mod._tombstone_row(cursor, meta_raw, scope)
+    except Exception as e:
+        logger.debug(f"[MINDPALACE] goal tombstones skipped: {e}")
     cursor.execute(f"DELETE FROM edges WHERE (src_type = 'chunk' AND src_id IN ({ph})) "
                    f"OR (dst_type = 'chunk' AND dst_id IN ({ph}))", ids + ids)
     cursor.execute(f"DELETE FROM chunks WHERE id IN ({ph})", ids)

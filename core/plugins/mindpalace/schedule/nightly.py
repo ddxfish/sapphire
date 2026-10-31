@@ -76,15 +76,20 @@ def run(event):
         # ledger-spam find, 2026-07-24): every pass batch nests under it and
         # run_end writes the single after-action line she actually reads.
         # A quiet night still reports "nothing to do" — presence is signal.
-        for sc in tended:
-            librarian.run_begin(sc, 'nightly tending')
+        # A scope with a live run (a drain the human started) is skipped
+        # tonight: run_begin returns no token for it, and only the opener
+        # closes its row (2026-10-31).
+        tokens = {sc: librarian.run_begin(sc, 'nightly tending') for sc in tended}
+        for sc, tok in tokens.items():
+            if tok is None:
+                notes.append(f"{sc}: busy (a run is live) — skipped tonight")
         try:
             for kind in librarian.PASS_KINDS:
                 if not librarian.pass_enabled(kind):
                     notes.append(f"{kind}: off (Admin toggle)")
                     continue
                 for scope, on in tended.items():
-                    if kind not in on:
+                    if kind not in on or tokens.get(scope) is None:
                         continue
                     # One crashed pass must not abort the rest of the round.
                     try:
@@ -99,8 +104,8 @@ def run(event):
                         logger.warning(f"[LIBRARIAN] Nightly {kind} pass skipped "
                                        f"for '{scope}': {msg}")
         finally:
-            for sc in tended:
-                librarian.run_end(sc)
+            for sc, tok in tokens.items():
+                librarian.run_end(sc, token=tok)
 
     result = " | ".join(notes)
     logger.info(f"[LIBRARIAN] Nightly round done — {result}")

@@ -58,7 +58,7 @@ _TEMPORAL_RE = re.compile(
     r')\b', re.IGNORECASE)
 
 _URL_RE = re.compile(r'https?://')
-_WORD_RE = re.compile(r"[A-Za-z][\w'’-]*")
+_WORD_RE = re.compile(r"[^\W\d_][\w'’-]*")   # Unicode: Zoë, José
 _SENT_SPLIT = re.compile(r'[.!?]\s+|\n+')
 
 # Sentence-position filtering handles ordinary capitalization; this only
@@ -173,9 +173,14 @@ def entity_aliases(cursor, scope):
     Canonical name first, then nicknames from meta.fields.nicknames (CSV,
     person template) — so 'the boss' matches Krem everywhere match_entities
     runs (save-time seeding, backfill, spider epicenter resolution)."""
+    # Scope-local first, then global, then by id: alias_map keeps the FIRST
+    # claim of a name, so a local person and a global one sharing a name
+    # resolve the same way in the linker, the resolver and the spider
+    # (the split-identity find, 2026-10-31).
     rows = cursor.execute(
-        "SELECT id, name, meta FROM entities WHERE scope IN (?, 'global')",
-        (scope,)).fetchall()
+        "SELECT id, name, meta FROM entities WHERE scope IN (?, 'global') "
+        "ORDER BY CASE WHEN scope = ? THEN 0 ELSE 1 END, id",
+        (scope, scope)).fetchall()
     out = []
     for eid, name, meta_raw in rows:
         out.append((eid, name, name))
@@ -334,7 +339,12 @@ def merge_derived(old, fresh: dict, anchor=None) -> dict:
         if not when and old.get('when_src') != 'ai':
             old.pop('when', None)
             old.pop('when_src', None)
-            if anchor is not None:
+            # Only dates the LIBRARIAN set make a librarian plan: a "ruled
+            # dateless" verdict keeps the regex floor's dates as search
+            # metadata, and those are exactly what plans() excludes (bare
+            # weekdays) — minting them as plans put the junk back on
+            # Upcoming at the v3 backfill (2026-10-31).
+            if anchor is not None and keep.get('event_date_src') == 'librarian':
                 from plugins.mindpalace.tools import temporal
                 w = temporal.when_from(keep.get('event_dates'), anchor)
                 if w:

@@ -361,15 +361,21 @@ def test_people_entity_and_tier_mapping(palace_env):
         assert entity_id == ent_id
         assert layer == "entities"
 
-    # whitelist flags landed in meta, content built from descriptive columns
+    # whitelist flags landed in meta; the headline is WHO they are (the v1
+    # notes slot), never the contact fields — those live on the entity's
+    # card fields only (2026-10-31)
     krem_chunk = c.execute(
         "SELECT content, meta FROM chunks WHERE layer='entities' "
-        "AND content LIKE '%krem@example.com%'").fetchone()
-    conn.close()
+        "AND content = 'loves Sapphire'").fetchone()
     assert krem_chunk is not None
     meta = json.loads(krem_chunk[1])
     assert meta.get("email_whitelisted") == 1
-    assert "Relationship: creator" in krem_chunk[0]
+    assert c.execute("SELECT COUNT(*) FROM chunks WHERE layer='entities' "
+                     "AND content LIKE '%krem@example.com%'").fetchone()[0] == 0
+    efields = json.loads(c.execute("SELECT meta FROM entities WHERE id = ?",
+                                   (ent_id,)).fetchone()[0])['fields']
+    conn.close()
+    assert efields['email'] == 'krem@example.com' and efields['relationship'] == 'creator'
 
 
 def test_knowledge_group_identity_preserved(palace_env):
@@ -699,3 +705,170 @@ def test_knowledge_serves_normally_without_library_migration(palace_env, monkeyp
         "WHERE layer='knowledge'").fetchall()
     conn.close()
     assert flags and all(f[0] is None for f in flags)
+
+
+# ─── Hunt 2026-10-31: removed-before needs positive evidence ─────────────────
+
+def _build_goals_db(path: Path):
+    conn = sqlite3.connect(path)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE goals (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT,
+                 description TEXT, status TEXT, priority TEXT, parent_id INTEGER,
+                 scope TEXT DEFAULT 'default', permanent INTEGER DEFAULT 0,
+                 created_at TEXT, updated_at TEXT, completed_at TEXT)''')
+    c.execute('''CREATE TABLE goal_progress (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 goal_id INTEGER, note TEXT, created_at TEXT)''')
+    c.execute("INSERT INTO goals (title, status, priority, parent_id, scope, created_at) "
+              "VALUES ('learn the cello', 'active', 'medium', NULL, 'default', '2026-01-10 10:00:00')")
+    c.execute("INSERT INTO goals (title, status, priority, parent_id, scope, created_at) "
+              "VALUES ('buy rosin', 'active', 'low', 1, 'default', '2026-01-11 10:00:00')")
+    c.execute("INSERT INTO goal_progress (goal_id, note, created_at) "
+              "VALUES (1, 'first lesson booked', '2026-01-12 10:00:00')")
+    conn.commit()
+    conn.close()
+
+
+def _run_maintenance(env, action, scope='default', **extra):
+    from plugins.mindpalace.routes import browse
+    out = browse.maintenance(body={'action': action, 'scope': scope, 'confirm': scope, **extra})
+    assert not (isinstance(out, tuple) and out[1] >= 400), out
+    return out
+
+
+def test_removed_before_is_evidence_not_inference(palace_env):
+    """A fresh palace pointed at ANY classic database has nothing to call
+    removed (the 28-row incident). After an import the key is recorded;
+    clearing the ledger keeps the record; a classic row whose text changed
+    since is new again, not removed."""
+    env = palace_env
+    assert env.import_tools.preview(env.config)['removed'] == 0
+    env.import_tools.start(env.config, sync=True)
+    conn = _mind_conn(env)
+    assert conn.execute("SELECT COUNT(*) FROM import_seen WHERE src = 'run'").fetchone()[0] == 11
+    cid = conn.execute("SELECT id FROM chunks WHERE content = 'space-format memory'").fetchone()[0]
+    conn.execute('DELETE FROM chunks WHERE id = ?', (cid,))
+    conn.commit()
+    conn.close()
+    assert _classes(env)['v2:memories:1'] == 'removed'
+    _run_maintenance(env, 'clear_ledger')
+    assert _classes(env)['v2:memories:1'] == 'removed'              # the ledger is not the evidence
+    src = sqlite3.connect(env.user_dir / 'memory.db')
+    src.execute("UPDATE memories SET content = 'space-format memory, edited since' WHERE id = 1")
+    src.commit()
+    src.close()
+    assert _classes(env)['v2:memories:1'] == 'new'                  # not the row this palace saw
+
+
+def test_tester_resets_make_rows_new_again(palace_env):
+    """wipe_scope and clear_layer exist to re-import: their rows must read
+    new on the Import tab, never 'removed before'."""
+    env = palace_env
+    env.import_tools.start(env.config, sync=True)
+    _run_maintenance(env, 'clear_layer', layer='events')
+    cls = _classes(env)
+    assert cls['v2:memories:1'] == 'new' and cls['v2:people:1'] == 'imported'
+    _run_maintenance(env, 'wipe_scope')
+    cls = _classes(env)
+    assert cls['v2:people:1'] == 'new' and cls['v2:knowledge:1'] == 'new'
+    assert cls['v2:memories:2'] == 'imported'                        # the work scope kept its rows
+    assert env.import_tools.preview(env.config)['removed'] == 0
+
+
+def test_goal_deletes_tombstone_and_notes_follow_their_parent(palace_env):
+    env = palace_env
+    _build_goals_db(env.user_dir / 'goals.db')
+    env.import_tools.start(env.config, sync=True, what='goals')
+    assert {k: v for k, v in _classes(env).items() if k.startswith('v2:goal')} == {
+        'v2:goal:1': 'imported', 'v2:goal:2': 'imported', 'v2:goalnote:1': 'imported'}
+    from plugins.mindpalace.tools import goal_tools
+    conn = _mind_conn(env)
+    gid = conn.execute("SELECT id FROM chunks WHERE content = 'learn the cello'").fetchone()[0]
+    conn.close()
+    assert goal_tools._delete('default', gid)[1]
+    cls = _classes(env)
+    assert cls['v2:goal:1'] == cls['v2:goal:2'] == cls['v2:goalnote:1'] == 'tombstoned'
+    p = env.import_tools.preview(env.config)['stores']['goals']
+    assert p['pending'] == 0 and p['tombstoned'] == 3      # no note nudging forever
+
+
+def test_note_under_a_removed_goal_reads_removed_not_new(palace_env):
+    env = palace_env
+    _build_goals_db(env.user_dir / 'goals.db')
+    env.import_tools.start(env.config, sync=True, what='goals')
+    conn = _mind_conn(env)
+    conn.execute("DELETE FROM chunks WHERE content IN ('learn the cello', 'first lesson booked')")
+    conn.commit()
+    conn.close()
+    cls = _classes(env)
+    assert cls['v2:goal:1'] == 'removed' and cls['v2:goalnote:1'] == 'removed'
+    env.import_tools.start(env.config, sync=True, what='goals', include_removed=True)
+    conn = _mind_conn(env)
+    g = conn.execute("SELECT id FROM chunks WHERE content = 'learn the cello'").fetchone()[0]
+    n = conn.execute("SELECT json_extract(meta, '$.progress_of') FROM chunks "
+                     "WHERE content = 'first lesson booked'").fetchone()[0]
+    conn.close()
+    assert n == g                                                    # hierarchy back together
+
+
+def test_scrub_tombstones_only_what_it_deleted(palace_env):
+    env = palace_env
+    from plugins.mindpalace.routes import import_routes
+    env.import_tools.start(env.config, sync=True)
+    conn = _mind_conn(env)
+    conn.execute("DELETE FROM chunks WHERE content = 'space-format memory'")
+    conn.commit()
+    conn.close()
+    src = sqlite3.connect(env.user_dir / 'memory.db')
+    src.execute("DELETE FROM memories WHERE id = 1")   # gone from the source already
+    src.commit()
+    src.close()
+    assert env.import_tools.preview(env.config)['removed'] == 0
+    out = import_routes.scrub(body={'scope': 'default', 'confirm': 'default'})
+    assert out['success'] and out['scrubbed'] == 0
+    conn = _mind_conn(env)
+    assert conn.execute("SELECT COUNT(*) FROM import_tombstones").fetchone()[0] == 0
+    conn.close()
+
+
+def test_her_import_goes_through_the_tabs_door(palace_env):
+    """import_v2 runs via start(): the tab's status sees it and a second
+    run while one is live is a refusal, not a success message."""
+    env = palace_env
+    out, ok = env.import_tools.execute('import_v2', {'what': 'all'}, env.config)
+    assert ok and '6 copied' in out
+    assert env.import_tools.status()['result'] == out
+    env.import_tools._run_state['running'] = True
+    try:
+        out, ok = env.import_tools.execute('import_v2', {'what': 'all'}, env.config)
+        assert not ok and 'already running' in out
+    finally:
+        env.import_tools._run_state['running'] = False
+
+
+def test_no_classic_databases_means_no_run_and_no_row(palace_env, monkeypatch):
+    env = palace_env
+    import core.notify as notify
+    from contextlib import contextmanager
+    rows = []
+
+    @contextmanager
+    def _prog(*a, **k):
+        rows.append(a)
+        yield types.SimpleNamespace(update=lambda *a, **k: None, text=lambda *a, **k: None)
+    monkeypatch.setattr(notify, 'progress', _prog)
+    for f in ('memory.db', 'knowledge.db'):
+        (env.user_dir / f).unlink()
+    msg, ok = env.import_tools.start(env.config, sync=True)
+    assert not ok and 'nothing to import' in msg and rows == []
+
+
+def test_nudge_fires_at_boot_only(palace_env, monkeypatch):
+    env = palace_env
+    from plugins.mindpalace.hooks import ready
+    calls = []
+    monkeypatch.setattr(env.import_tools, 'nudge_if_pending', lambda cfg: calls.append(1))
+    ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'toggle'}))
+    ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'reload'}))
+    assert calls == []
+    ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'scan'}))
+    assert calls == [1]
