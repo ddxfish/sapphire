@@ -93,6 +93,7 @@ export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
+export const chatPromptPreview = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/prompt-preview`, {}, 30000);
 export const listCommands = () => fetchWithTimeout('/api/commands', {}, 10000);
 export const runCommand = (line) => fetchWithTimeout('/api/commands/run' + _viewQS(), {
     method: 'POST',

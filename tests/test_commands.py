@@ -158,12 +158,76 @@ def test_compact_refuses_a_chat_that_is_not_there(sm, monkeypatch):
 
 def test_the_menu_lists_every_command():
     names = [c['name'] for c in commands.all_commands()]
-    assert {'compact', 'remove'} <= set(names) and names == sorted(names)
+    assert {'compact', 'continue', 'help', 'prompt', 'remove', 'repair', 'replay', 'retry', 'status',
+            'trim'} <= set(names) and names == sorted(names)
+
+
+@pytest.mark.parametrize('name', ['retry', 'continue', 'replay'])
+def test_page_actions_leave_the_history_alone_and_she_cannot_call_them(sm, name):
+    before = list(sm.rows)
+    assert commands.run(f'/{name}', 'c') == {'ok': True, 'do': name}
+    assert not commands.run(f'/{name}', 'c', by='ai')['ok']
+    assert sm.rows == before
+
+
+def test_she_still_only_has_remove():
+    assert set(commands.ai_commands()) == {'remove'}
+
+
+def test_a_command_with_no_args_refuses_them(sm):
+    assert not commands.run('/retry please', 'c')['ok']
+
+
+@pytest.mark.parametrize('name', ['trim', 'repair', 'prompt'])
+def test_dialogs_open_for_this_chat(sm, name):
+    assert commands.run(f'/{name}', 'c') == {'ok': True, 'open': name, 'chat': 'c'}
+
+
+@pytest.mark.parametrize('name', ['trim', 'compact'])
+def test_a_games_transcript_is_off_limits(sm, monkeypatch, name):
+    monkeypatch.setattr(sm, 'read_chat_settings', lambda chat: {'mode': 'game'})
+    assert not commands.run(f'/{name}', 'c')['ok']
+
+
+def test_help_lists_all_or_one(sm):
+    assert 'remove' in [c['name'] for c in commands.run('/help', 'c')['commands']]
+    assert [c['name'] for c in commands.run('/help /remove', 'c')['commands']] == ['remove']
+    assert not commands.run('/help nope', 'c')['ok']
+
+
+def test_status_reads_the_chat_it_was_asked_about(sm, monkeypatch):
+    monkeypatch.setattr(sm, 'read_chat_settings', lambda chat: {'persona': 'p1', 'llm_primary': 'claude'})
+    out = commands.run('/status', 'c')
+    assert (out['open'], out['chat'], out['persona'], out['provider']) == ('status', 'c', 'p1', 'claude')
+    assert out['turns'] == 3 and out['messages'] == len(sm.rows) and out['context']['used'] > 0
+
+
+def test_plugin_commands_register_refuse_collisions_and_leave_with_the_plugin(sm):
+    try:
+        assert commands.register('lights', lambda c, a, b: {'ok': True, 'say': a}, args='x', plugin='p1')
+        assert commands.run('/lights on', 'c') == {'ok': True, 'say': 'on'}
+        assert not commands.register('lights', lambda c, a, b: None, plugin='p2')
+        assert not commands.register('remove', lambda c, a, b: None, plugin='p2')
+        assert not commands.register('bad name', lambda c, a, b: None, plugin='p2')
+        assert not commands.run('/lights on', 'c', by='ai')['ok']
+        assert commands._commands['remove']['plugin'] is None
+    finally:
+        commands.unregister_plugin('p1')
+    assert 'lights' not in commands._commands
+
+
+def test_a_plugin_handler_returning_junk_still_answers(sm):
+    try:
+        commands.register('junk', lambda c, a, b: 'words', plugin='p1')
+        assert commands.run('/junk', 'c') == {'ok': True}
+    finally:
+        commands.unregister_plugin('p1')
 
 
 def test_one_compress_dialog_and_the_menu_is_wired():
     static = ROOT / 'interfaces/web/static'
-    assert 'cm-c-go' not in (static / 'views/chat-manage.js').read_text(encoding='utf-8')
+    manage = (static / 'views/chat-manage.js').read_text(encoding='utf-8')
+    assert 'cm-c-go' not in manage and 'cm-trim-go' not in manage and '_llmCache' not in manage
     assert "compact: ({ chat }) => openCompressModal(chat)" in (static / 'handlers/commands.js').read_text(encoding='utf-8')
     src = (static / 'handlers/send-handlers.js').read_text(encoding='utf-8')
     assert 'if (onCommandKey(e)) return;' in src and 'onCommandInput(input)' in src

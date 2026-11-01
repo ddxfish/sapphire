@@ -994,6 +994,14 @@ class PluginLoader:
                     voice_match=voice_match
                 )
 
+        # Slash commands (core/commands.py): `command` or `handle` in the handler file
+        for cd in capabilities.get("commands", []):
+            handler_func = self._load_handler(plugin_dir, cd.get("handler"), "command", ns_cache=hook_ns)
+            if handler_func:
+                from core import commands
+                commands.register(cd.get("name"), handler_func, args=cd.get("args", ""),
+                                  description=cd.get("description", ""), plugin=name)
+
         # Register tools with FunctionManager. A refusal dict means a tool-name
         # collision with an already-loaded plugin — mutual exclusivity by design
         # (e.g. memory vs mindpalace share tool names on purpose). Unwind this
@@ -1008,6 +1016,8 @@ class PluginLoader:
             if refusal:
                 self._function_manager.unregister_plugin_tools(name)
                 hook_runner.unregister_plugin(name)
+                from core import commands
+                commands.unregister_plugin(name)
                 # A refused plugin's tool files already EXEC'd — any
                 # module-level side effects (contacts providers, etc.) must
                 # unwind too, or a "not loaded" plugin keeps serving
@@ -1448,6 +1458,8 @@ class PluginLoader:
             logger.info(f"[PLUGINS] {name} unloading — {quiet} stay loaded; "
                         f"their {name} hooks go quiet until it is back")
         hook_runner.unregister_plugin(name)
+        from core import commands
+        commands.unregister_plugin(name)
         if self._function_manager:
             self._function_manager.unregister_plugin_tools(name)
         self._unregister_routes(name)

@@ -257,7 +257,7 @@ def derivable_meta(content: str, exclude_names=(), anchor=None,
         if plan:
             meta['when'] = plan[0]
             meta['when_src'] = 'regex'
-        rec = temporal.recurring(content)
+        rec = temporal.recurring(content, anchor)
         if rec:
             meta['recurring_dates'] = rec
     except Exception as e:

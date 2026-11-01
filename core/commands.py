@@ -8,8 +8,11 @@
 # Discord typing /remove 5).
 #
 # A handler takes (chat, args, by) and returns {'ok': bool, 'say': words} and/or
-# {'open': name}, a dialog handlers/commands.js knows how to draw. by is 'user'
-# or 'ai'; only commands registered with ai=True can be called by 'ai'.
+# {'open': name}, a dialog handlers/commands.js knows how to draw, or {'do': name},
+# an action only the page can run because the stream lives there. by is 'user' or
+# 'ai'; only commands registered with ai=True can be called by 'ai'. A plugin adds
+# its own through capabilities.commands, words only and for the person only: her
+# tool's description is built before plugins load, and a plugin has tools for her.
 #
 # The store refuses history edits on a streaming chat, so what her own turn asks
 # for waits: defer() holds it, finish_turn() runs it when the turn's stream ends.
@@ -21,13 +24,26 @@ import threading
 logger = logging.getLogger(__name__)
 
 _LINE_RE = re.compile(r'^/([A-Za-z][\w-]*)(?:\s+(.*))?$', re.DOTALL)
+_NAME_RE = re.compile(r'[a-z][\w-]*')
 _commands = {}
 _pending = {}       # chat name -> callables waiting for its turn to end
 _lock = threading.Lock()
 
 
-def register(name, handler, args='', description='', ai=False):
-    _commands[name.lower()] = {'handler': handler, 'args': args, 'description': description, 'ai': ai}
+def register(name, handler, args='', description='', ai=False, plugin=None):
+    """False when a plugin's name isn't usable: first come keeps it, and core's come first."""
+    name = str(name or '').lower()
+    held = _commands.get(name)
+    if plugin and (not _NAME_RE.fullmatch(name) or (held and held['plugin'] != plugin)):
+        logger.warning(f"[COMMANDS] {plugin}: can't register /{name}")
+        return False
+    _commands[name] = {'handler': handler, 'args': args, 'description': description, 'ai': ai, 'plugin': plugin}
+    return True
+
+
+def unregister_plugin(plugin):
+    for name in [n for n, c in _commands.items() if c['plugin'] == plugin]:
+        del _commands[name]
 
 
 def all_commands():
@@ -49,8 +65,11 @@ def run(line, chat, by='user'):
         return {'ok': False, 'say': f'No command /{name}. To send it as a message, start with //.'}
     if not chat:
         return {'ok': False, 'say': f'/{name} needs a chat, and this turn has none.'}
+    if args and not cmd['args']:
+        return {'ok': False, 'say': f"/{name} doesn't take anything after it."}
     try:
-        return cmd['handler'](chat, args, by)
+        out = cmd['handler'](chat, args, by)
+        return out if isinstance(out, dict) else {'ok': True}
     except Exception as e:
         logger.error(f"[COMMANDS] /{name} failed: {e}", exc_info=True)
         return {'ok': False, 'say': f'/{name} failed: {e}'}
@@ -143,13 +162,58 @@ def _remove(chat, args, by):
                                'This turn stays.'}
 
 
-def _compact(chat, args, by):
-    """The dialog does the rest: POST /api/chats/{chat}/compress holds every rule."""
-    if _sm().read_chat_settings(chat) is None:
+def _dialog(name, games=True):
+    """The dialog does the rest: its route holds every rule. A game's transcript is
+    the tale and its journal points into it, so Chat Manager offers no trim or
+    compress there and neither do these."""
+    def handler(chat, args, by):
+        settings = _sm().read_chat_settings(chat)
+        if settings is None:
+            return {'ok': False, 'say': f"Chat '{chat}' not found."}
+        if not games and settings.get('mode') == 'game':
+            return {'ok': False, 'say': f"/{name} doesn't work on a game's chat."}
+        return {'ok': True, 'open': name, 'chat': chat}
+    return handler
+
+
+def _action(name):
+    return lambda chat, args, by: {'ok': True, 'do': name}
+
+
+def _help(chat, args, by):
+    rows = all_commands()
+    if args:
+        want = args.lstrip('/').lower()
+        rows = [c for c in rows if c['name'] == want]
+        if not rows:
+            return {'ok': False, 'say': f'No command /{want}.'}
+    return {'ok': True, 'open': 'help', 'commands': rows}
+
+
+def _status(chat, args, by):
+    from core.chat import budget
+    from core.chat.history import count_message_tokens, turn_spans
+    sm = _sm()
+    settings, exported = sm.read_chat_settings(chat), sm.export_chat(chat)
+    if settings is None or exported is None:
         return {'ok': False, 'say': f"Chat '{chat}' not found."}
-    return {'ok': True, 'open': 'compact', 'chat': chat}
+    rows = exported['messages']
+    stored = sum(count_message_tokens(m.get('content', ''), include_images=False) for m in rows)
+    return {'ok': True, 'open': 'status', 'chat': chat, 'persona': settings.get('persona'),
+            'prompt': settings.get('prompt'), 'toolset': settings.get('toolset'),
+            'provider': settings.get('llm_primary') or 'auto', 'model': settings.get('llm_model') or '',
+            'private': bool(settings.get('private_chat')), 'streaming': bool(sm.is_streaming(chat)),
+            'messages': len(rows), 'turns': len(turn_spans(rows)), 'context': budget.meter(chat, stored)}
 
 
-register('compact', _compact, description='summarize older history (opens the compress dialog)')
+register('compact', _dialog('compact', games=False), description='summarize older history (opens the compress dialog)')
+register('continue', _action('continue'), description='keep writing the last reply')
+register('help', _help, args='[command]', description='list the slash commands')
+register('prompt', _dialog('prompt'), description='show the prompt the next turn would send')
+register('repair', _dialog('repair'), description='check for unreadable messages (opens the repair dialog)')
+register('replay', _action('replay'), description='read the last reply aloud again')
+register('retry', _action('retry'), description='redo the last reply')
+register('status', _status, description="this chat's persona, model, toolset and size")
+register('trim', _dialog('trim', games=False), description='keep the first and last turns (opens the trim dialog)')
 register('remove', _remove, args='N', ai=True,
          description='remove the last N turns (a turn: one user message and every reply to it)')

@@ -17,7 +17,8 @@ import { vaultStatus } from '../shared/vault-api.js';
 import { snapScroll } from '../shared/dom-guard.js';
 import { responseError, errWords } from '../shared/fetch.js';
 import { saveBlob, saveJson } from '../shared/download.js';
-import { openCompressModal, resumeCompressPollIfRunning, watchCompress, vaultOpenFor } from '../shared/compress-modal.js';
+import { openCompressModal, resumeCompressPollIfRunning, watchCompress } from '../shared/compress-modal.js';
+import { openTrimModal, openRepairModal } from '../shared/chat-tools-modal.js';
 
 let container = null;
 let chats = [];
@@ -405,9 +406,9 @@ async function doRowAction(act, name) {
         }
         await refresh();
     } else if (act === 'trim') {
-        openTrimModal(name);
+        openTrimModal(name, chats.find(c => c.name === name), refresh);
     } else if (act === 'repair') {
-        openRepairModal(name);
+        openRepairModal(name, chats.find(c => c.name === name), refresh);
     } else if (act === 'compress') {
         openCompressModal(name, chats.find(c => c.name === name));
     } else if (act === 'delete') {
@@ -423,163 +424,6 @@ async function doRowAction(act, name) {
         selected.delete(name);
         await refresh();
     }
-}
-
-/* ── trim + compress modals (v1b) ────────────────────────────────────── */
-
-function openModal(html) {
-    const overlay = container.querySelector('#cm-modal');
-    overlay.querySelector('#cm-modal-box').innerHTML = html;
-    overlay.style.display = '';
-    return overlay;
-}
-
-function closeModal() {
-    const overlay = container.querySelector('#cm-modal');
-    overlay.style.display = 'none';
-    overlay.querySelector('#cm-modal-box').innerHTML = '';
-}
-
-// Vault hunt U4 (the P4 second gate, now shared): the vault can LOCK while
-// a dialog sits open (idle-lock, another tab). The server refuses anyway
-// (the chat is hidden = nonexistent), but "Chat not found" is a lying error
-// for a chat the user is looking at — re-check and say what happened.
-// Returns true when it's safe to proceed; closes the modal otherwise.
-async function ensureVaultOpenFor(chat, verb) {
-    if (await vaultOpenFor(chat, verb)) return true;
-    closeModal();
-    return false;
-}
-
-function openTrimModal(name) {
-    const chat = chats.find(c => c.name === name);
-    const overlay = openModal(`
-        <h3>✂️ Trim "${esc(chat?.display_name || name)}"</h3>
-        <p class="cm-hint">A turn = your message + everything until your next one.
-        Tool chains never split. The middle gets deleted.</p>
-        <div id="cm-trim-shape" class="cm-hint" style="font-weight:600"></div>
-        <div class="cm-form-row">
-            Keep first <input type="number" id="cm-trim-first" value="0" min="0" style="width:4.5em">
-            and last <input type="number" id="cm-trim-last" value="40" min="1" style="width:4.5em"> turns
-        </div>
-        <div id="cm-trim-preview" class="cm-hint"></div>
-        <div class="cm-modal-btns">
-            <button class="cm-btn" id="cm-trim-cancel">Cancel</button>
-            <button class="cm-btn cm-danger" id="cm-trim-go">Trim</button>
-        </div>`);
-    const vals = () => ({
-        keep_first_turns: parseInt(overlay.querySelector('#cm-trim-first').value, 10) || 0,
-        keep_last_turns: parseInt(overlay.querySelector('#cm-trim-last').value, 10) || 1,
-    });
-    const preview = async () => {
-        const out = overlay.querySelector('#cm-trim-preview');
-        if (!out) return null;   // modal closed while a debounced preview was pending
-        try {
-            const r = await api.trimChat(name, { ...vals(), preview: true });
-            overlay.querySelector('#cm-trim-shape').textContent =
-                `This chat: ${r.messages_total} messages · ${r.turns_total} turns`;
-            const asked = r.kept_first_turns + r.kept_last_turns;
-            out.textContent = r.no_op
-                ? `Keep ${r.kept_first_turns} + ${r.kept_last_turns} = ${asked} turns, `
-                  + `but this chat only has ${r.turns_total} — nothing would be deleted.`
-                : `Deletes ${r.deleted_messages} of ${r.messages_total} messages `
-                  + `(~${(r.deleted_tokens_est / 1000).toFixed(1)}k tokens). `
-                  + `${r.messages_after} messages remain.`;
-            return r;
-        } catch (e) {
-            out.textContent = `Preview failed: ${e.message}`;
-            return null;
-        }
-    };
-    // Live preview: numbers on open, fresh numbers as you type
-    let previewTimer = null;
-    const debouncedPreview = () => {
-        clearTimeout(previewTimer);
-        previewTimer = setTimeout(preview, 350);
-    };
-    overlay.querySelector('#cm-trim-first').addEventListener('input', debouncedPreview);
-    overlay.querySelector('#cm-trim-last').addEventListener('input', debouncedPreview);
-    preview();
-    overlay.querySelector('#cm-trim-cancel').addEventListener('click', closeModal);
-    overlay.querySelector('#cm-trim-go').addEventListener('click', async () => {
-        if (!await ensureVaultOpenFor(chat, 'trim')) return;   // U4 second gate
-        const p = await preview();          // fresh numbers, never stale
-        if (!p) return;
-        if (p.no_op) { ui.showToast('Nothing to trim', 'warning'); return; }
-        if (!confirm(`Delete ${p.deleted_messages} messages from "${name}"?`)) return;
-        try {
-            const r = await api.trimChat(name, { ...vals(), preview: false });
-            ui.showToast(`Trimmed ${name}: ${r.deleted_messages} messages removed`, 'success');
-            closeModal();
-            // Local dispatch too — the open-chat transcript must refresh even
-            // if the SSE echo of this event is missed (reconnect gap etc.)
-            eventBus.dispatch('chat_trimmed', { chat_name: name });
-            await refresh();
-        } catch (e) {
-            ui.showToast(`Trim failed: ${e.message}`, 'error');
-        }
-    });
-}
-
-function openRepairModal(name) {
-    const chat = chats.find(c => c.name === name);
-    const overlay = openModal(`
-        <h3>🔧 Repair "${esc(chat?.display_name || name)}"</h3>
-        <p class="cm-hint">Unreadable messages move to a quarantine (kept verbatim
-        — recoverable if a matching vault backup returns), the rest are kept and
-        re-numbered, and the chat can save again.</p>
-        <div id="cm-repair-preview" class="cm-hint">Diagnosing…</div>
-        <div class="cm-modal-btns">
-            <button class="cm-btn" id="cm-repair-cancel">Cancel</button>
-            <button class="cm-btn cm-danger" id="cm-repair-go" disabled>Repair</button>
-        </div>`);
-    let plan = null;
-    const goBtn = overlay.querySelector('#cm-repair-go');
-    const out = overlay.querySelector('#cm-repair-preview');
-    const preview = async () => {
-        try {
-            plan = await api.repairChat(name, { preview: true });
-            if (plan.vault_mismatch) {
-                out.innerHTML = `⚠ <b>Most of this chat can't be decrypted `
-                    + `(${plan.bad.length} of ${plan.total} rows).</b> That usually means `
-                    + `the vault changed — <b>restoring the matching vault backup recovers `
-                    + `everything</b>; repair would quarantine most of the chat. Only `
-                    + `proceed if you're sure there's no matching backup.`;
-            } else if (!plan.bad.length && !plan.gap_count) {
-                out.textContent = 'Nothing to repair — this chat reads clean now.';
-            } else {
-                const dec = plan.bad.filter(b => b.reason === 'decrypt').length;
-                const par = plan.bad.length - dec;
-                out.textContent = `${plan.total} rows: ${plan.ok} healthy · `
-                    + `${par} corrupt · ${dec} undecryptable`
-                    + (plan.gap_count ? ` · ${plan.gap_count} sequence gap(s)` : '')
-                    + `. Repair keeps ${plan.ok} messages and quarantines ${plan.bad.length}.`;
-            }
-            goBtn.disabled = false;
-        } catch (e) {
-            out.textContent = `Diagnosis failed: ${e.message}`;
-        }
-    };
-    preview();
-    overlay.querySelector('#cm-repair-cancel').addEventListener('click', closeModal);
-    goBtn.addEventListener('click', async () => {
-        if (!plan) return;
-        const force = !!plan.vault_mismatch;
-        if (force && !confirm(`Really quarantine ${plan.bad.length} of ${plan.total} `
-                + `messages in "${name}"? A matching vault backup would recover them all.`)) return;
-        if (!force && plan.bad.length
-                && !confirm(`Quarantine ${plan.bad.length} unreadable message(s) from "${name}"?`)) return;
-        try {
-            const r = await api.repairChat(name, { preview: false, force });
-            ui.showToast(r.no_op ? `${name}: nothing to repair`
-                : `Repaired ${name}: ${r.quarantined} quarantined, ${r.kept} kept`, 'success');
-            closeModal();
-            eventBus.dispatch('chat_repaired', { chat_name: name });
-            await refresh();
-        } catch (e) {
-            ui.showToast(`Repair failed: ${e.message}`, 'error');
-        }
-    });
 }
 
 /* ── view module ─────────────────────────────────────────────────────── */
@@ -681,22 +525,12 @@ export default {
                 </tr></thead>
                 <tbody id="cm-body"></tbody>
             </table>
-        </div>
-        <div id="cm-modal" style="display:none"><div id="cm-modal-box"></div></div>`;
-
-        // Backdrop click closes the modal (box clicks don't bubble past it)
-        el.querySelector('#cm-modal').addEventListener('click', e => {
-            if (e.target.id === 'cm-modal') closeModal();
-        });
+        </div>`;
 
         // Vault hunt U2: lock/unlock changes WHICH CHATS EXIST — without
         // ears here, private names lingered on this table indefinitely
         // after an idle-lock (the walk-up exposure the vault exists to
         // prevent). Same PROMPT_CHANGED/action ride main.js uses.
-        // Provider add/delete/edit → forget the compress modal's roster (scout U6)
-        eventBus.on(eventBus.Events.SETTINGS_CHANGED, (data) => {
-            if (['LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS'].includes(data?.key)) _llmCache = null;
-        });
         eventBus.on(eventBus.Events.PROMPT_CHANGED, (data) => {
             if (data?.action === 'vault_changed' && visible) refresh();
         });

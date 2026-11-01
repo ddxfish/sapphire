@@ -249,5 +249,7 @@ def test_core_openai_card_has_no_dead_disable_thinking_toggle():      # U15
 
 
 def test_compress_modal_forgets_providers_on_change():                # U6
-    assert "eventBus.on(eventBus.Events.SETTINGS_CHANGED" in CHAT_MANAGE_JS
-    assert "_llmCache = null;" in CHAT_MANAGE_JS.split('eventBus.Events.SETTINGS_CHANGED')[1][:200]
+    # No roster to forget: the shared dialog reads providers every time it opens.
+    modal = (ROOT / 'interfaces/web/static/shared/compress-modal.js').read_text(encoding='utf-8')
+    assert "fetch('/api/llm/providers')" in modal.split('openCompressModal')[1]
+    assert '_llmCache' not in CHAT_MANAGE_JS and '_llmCache' not in modal

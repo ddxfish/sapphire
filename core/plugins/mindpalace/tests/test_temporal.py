@@ -182,3 +182,55 @@ def test_noon_and_midnight():
 
 def test_pre_1970_anchor_never_raises():
     assert temporal.resolve('tomorrow', '1960-01-01T00:00:00+00:00') == ['1960-01-02']
+
+
+def test_a_recurrence_keyword_names_one_date():
+    assert temporal.recurring("June 24 2026: I chose my birthday — July 10th") == ['--07-10']
+    assert temporal.recurring("July 10 2026 — MY FIRST BIRTHDAY") == ['--07-10']
+    assert temporal.recurring("MY BIRTHDAY: January 21, 2025 at 12:11 AM. First commit") == ['--01-21']
+    assert temporal.recurring("Skye's birthday is March 3 and Anita's anniversary is Dec 25") == ['--03-03', '--12-25']
+
+
+# ─── her today-stamp (2026-10-31) ────────────────────────────────────────────
+# Chats span days and she wrote the date she last saw: on dev 185 of 339
+# stamps ran one to seven days early of the save. The save time is the truth.
+
+S = '2026-03-05T14:30:00+00:00'      # saved March 5; the chat began March 3
+
+
+def test_strip_stamp_forms():
+    s = lambda t: temporal.strip_stamp(t, S)
+    assert s('March 3 2026: today we fixed the bug') == ('today we fixed the bug', '2026-03-03')
+    assert s('March 3, 2026 — today we fixed the bug') == ('today we fixed the bug', '2026-03-03')
+    assert s('2026-03-05: Trinity was born') == ('Trinity was born', '2026-03-05')
+    assert s('3/3/2026: a slash date') == ('a slash date', '2026-03-03')
+    assert s('Core memory — March 3 2026: the boat') == ('Core memory: the boat', '2026-03-03')
+    assert s('Milestone (March 3 2026): shipped it') == ('Milestone: shipped it', '2026-03-03')
+    assert s('Change log, March 3rd 2026, moved the lake') == ('Change log: moved the lake', '2026-03-03')
+    assert s('March 3 2026 We fixed the bug') == ('We fixed the bug', '2026-03-03')
+    assert s('March 3 2026\nA new line body') == ('A new line body', '2026-03-03')
+
+
+def test_strip_stamp_leaves_content_dates_alone():
+    s = lambda t: temporal.strip_stamp(t, S)
+    for t in ('March 3 2026 was a hard day',                 # a sentence, not a stamp
+              'On March 3 2026 we did X',
+              'Sapphire since March 3 2026: the whole story',
+              "1997-05-12: Krem's birth date",               # history is content
+              'March 20 2026: the launch',                    # ahead = a plan
+              'February 2026: a month only',
+              'March 3 2026:',                                # nothing but a date
+              'Today is my anniversary',
+              'February 18 2026: fifteen days back'):
+        assert s(t) == (t, None), t
+    # the window: fourteen days before the save day to one after (UTC)
+    assert s('February 19 2026: two weeks back')[1] == '2026-02-19'
+    assert s('March 6 2026: a day late')[1] == '2026-03-06'
+    assert s('March 7 2026: two days ahead')[1] is None
+    assert temporal.strip_stamp(None, S) == (None, None)
+
+
+def test_recurring_takes_today_from_the_anchor():
+    assert temporal.recurring('Today is my anniversary', S) == ['--03-05']
+    assert temporal.recurring('my birthday is tomorrow', S) == ['--03-06']
+    assert temporal.recurring("June 24 2026: I chose my birthday — July 10th", S) == ['--07-10']

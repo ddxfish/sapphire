@@ -436,7 +436,7 @@ function ledgerLine(r) {
         <span class="palace-ledger-sum">${escHtml(r.summary)}</span>
         ${r.children ? `<button class="mind-btn-sm palace-ledger-kids" data-id="${r.id}" data-n="${r.children}">▸ ${r.children}</button>` : ''}
         ${r.actor !== 'ai' ? `<button class="mind-btn-sm palace-ledger-why" data-id="${r.id}" data-reason="${escAttr((r.detail || {}).reason || '')}" title="Add or edit the why — it lands next to this change in her ledger">✏</button>` : ''}
-        ${r.actor === 'librarian' && r.action === 'pass' ? `<button class="mind-btn-sm palace-ledger-revert" data-id="${r.id}" title="Undo everything this run did — retirements come back, merges and splits unwind, ratings, dates and links go back to what they were">↶</button>` : ''}
+        ${(r.actor === 'librarian' && r.action === 'pass') || r.action === 'unstamp' ? `<button class="mind-btn-sm palace-ledger-revert" data-id="${r.id}" title="Undo everything this run did — retirements come back, merges and splits unwind, ratings, dates, links and stripped date stamps go back to what they were">↶</button>` : ''}
     </div>`;
 }
 
@@ -491,7 +491,7 @@ async function renderLedger(el) {
     });
     box.querySelectorAll('.palace-ledger-revert').forEach(btn => {
         btn.addEventListener('click', async () => {
-            if (!confirm('Undo everything this librarian run did?\n\nRetired memories come back, merges and splits unwind, ratings, dates and links go back to what they were. The run stays in the ledger with a "reverted" line.')) return;
+            if (!confirm('Undo everything this run did?\n\nRetired memories come back, merges and splits unwind, ratings, dates, links and stripped date stamps go back to what they were. The run stays in the ledger with a "reverted" line.')) return;
             try {
                 const r = await palaceSend('maintenance', 'POST', { action: 'revert_run', scope, run_id: Number(btn.dataset.id) });
                 ui.showToast(`Reverted: ${r.restored} restored · ${r.retired} retired · ${r.ratings} ratings · ${r.dates} dates · ${r.links} links put back`, 'success');

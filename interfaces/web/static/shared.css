@@ -1546,12 +1546,12 @@ input[type="range"]:focus::-webkit-slider-thumb {
           background: transparent; color: var(--text-primary, #ddd); cursor: pointer; }
 .cm-btn:hover { border-color: var(--accent, #4a9eff); }
 .cm-btn.cm-danger:hover { border-color: #e5534b; color: #e5534b; }
-#cm-modal, .cm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+.cm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
                          display: flex; align-items: center; justify-content: center; z-index: 1000; }
-#cm-modal-box, .cm-overlay-box { background: var(--bg-primary, #1c1c22); border: 1px solid var(--border-color, #444);
+.cm-overlay-box { background: var(--bg-primary, #1c1c22); border: 1px solid var(--border-color, #444);
                                  border-radius: 10px; padding: 18px 22px; max-width: 520px; width: 92%;
                                  max-height: 85vh; overflow-y: auto; }
-#cm-modal-box h3, .cm-overlay-box h3 { margin: 0 0 8px; }
+.cm-overlay-box h3 { margin: 0 0 8px; }
 .cm-hint { color: var(--text-muted); font-size: var(--font-sm); margin: 6px 0; min-height: 1em; }
 .cm-form-row { margin: 10px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .cm-form-row input[type="number"], .cm-form-row select {

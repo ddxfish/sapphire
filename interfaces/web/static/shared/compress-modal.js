@@ -24,18 +24,34 @@ export async function vaultOpenFor(chat, verb) {
     return true;
 }
 
+// A chat's row from /api/chats?stats=1, or null after saying so.
+export async function readChatRow(name) {
+    let chat = null;
+    try {
+        chat = (await api.fetchChatListStats()).chats?.find(c => c.name === name);
+    } catch (e) { /* the refusal below says it */ }
+    if (!chat) showToast(`Couldn't read chat "${name}"`, 'error');
+    return chat || null;
+}
+
+// One dialog at a time, on the page's body: Esc and the backdrop close it.
+export function openOverlay(html) {
+    document.querySelector('.cm-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'cm-overlay';
+    overlay.innerHTML = `<div class="cm-overlay-box">${html}</div>`;
+    document.body.appendChild(overlay);
+    let dropEsc = () => {};
+    const close = () => { dropEsc(); overlay.remove(); };
+    dropEsc = setupModalClose(overlay, close);
+    return { overlay, close };
+}
+
 // chat: the caller's row from /api/chats?stats=1, else read here. No row means no
 // dialog: the private-chat provider filter below can't run blind.
 export async function openCompressModal(name, chat = null) {
-    if (!chat) {
-        try {
-            chat = (await api.fetchChatListStats()).chats?.find(c => c.name === name);
-        } catch (e) { /* the refusal below says it */ }
-        if (!chat) {
-            showToast(`Couldn't read chat "${name}"`, 'error');
-            return;
-        }
-    }
+    chat = chat || await readChatRow(name);
+    if (!chat) return;
     let llm = null;     // {providers, metadata} from /api/llm/providers
     let chatLLM = { primary: '', model: '' };
     let chatPersona = '';
@@ -63,10 +79,7 @@ export async function openCompressModal(name, chat = null) {
     }
     const defaultProv = provs.some(p => p.key === chatLLM.primary) ? chatLLM.primary : provs[0].key;
 
-    document.querySelector('.cm-overlay')?.remove();
-    const overlay = document.createElement('div');
-    overlay.className = 'cm-overlay';
-    overlay.innerHTML = `<div class="cm-overlay-box">
+    const { overlay, close } = openOverlay(`
         <h3>\u{1F5DC}️ Compress "${esc(chat.display_name || name)}"</h3>
         <p class="cm-hint">Older history becomes AI-written summaries; the recent
         tail stays verbatim. Runs in the background — minutes on a local model.</p>
@@ -109,11 +122,7 @@ export async function openCompressModal(name, chat = null) {
         <div class="cm-modal-btns">
             <button class="cm-btn" id="cm-c-cancel">Cancel</button>
             <button class="cm-btn cm-danger" id="cm-c-go">Compress</button>
-        </div></div>`;
-    document.body.appendChild(overlay);
-    let dropEsc = () => {};
-    const close = () => { dropEsc(); overlay.remove(); };
-    dropEsc = setupModalClose(overlay, close);
+        </div>`);
 
     // Buttons bind BEFORE any data-dependent population — a populate failure
     // must never leave the modal with dead buttons (learned 2026-07-10:

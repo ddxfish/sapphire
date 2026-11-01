@@ -1111,8 +1111,9 @@ def merge_entities(body=None, **_):
 def maintenance(body=None, **_):
     """Self-serve rescue actions (Mind → Admin). Every action is
     an UPDATE on metadata columns/keys — memory content is never touched and
-    nothing is deleted, by construction. Alpha-feature support: undo what
-    importance or the librarian wrote, per scope."""
+    nothing is deleted, by construction — with one named exception:
+    strip_stamps edits text, previewed, ledgered and revertable. Alpha-
+    feature support: undo what importance or the librarian wrote, per scope."""
     pt = _pt()
     if not pt._ensure_db():
         return {'error': 'mind database unavailable'}, 500
@@ -1449,7 +1450,7 @@ def maintenance(body=None, **_):
                                or meta.get('event_date_src') == 'librarian')
                 # recurring_dates is regex-OWNED (librarian never writes it),
                 # so it refreshes even on verdict-protected chunks.
-                rec = temporal.recurring(content)
+                rec = temporal.recurring(content, created)
                 if rec != (meta.get('recurring_dates') or []):
                     if rec:
                         meta['recurring_dates'] = rec
@@ -1609,9 +1610,16 @@ def maintenance(body=None, **_):
         _publish('events', scope, 'update')
         return {'success': True, 'wiped': wiped}
 
+    if action == 'strip_stamps':
+        # The one action that edits memory TEXT: her today-stamps come off
+        # (2026-10-31). Preview first (counts, no text); the live run is one
+        # ledger run with before/after per row — revert_run puts it back.
+        return pt.strip_stamps(scope, dry=bool(b.get('preview')))
+
     if action == 'revert_run':
-        # Undo one librarian run from its ledger rows (2026-10-30): the
-        # night-after-a-bad-model button. Soft throughout, recorded.
+        # Undo one run from its ledger rows (2026-10-30): the night-after-a-
+        # bad-model button, and the undo for Strip date stamps. Soft
+        # throughout, recorded.
         try:
             run_id = int(b.get('run_id'))
         except (TypeError, ValueError):

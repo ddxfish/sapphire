@@ -67,7 +67,10 @@ Notepad
 Net checks
 ask_user question card
 self_command slash commands
-Composer /remove
+Composer /help /status
+/retry /continue /replay
+/remove /trim /compact
+/prompt /repair
 schedule_task
 set_scene set_motion
 set_voice
@@ -187,6 +190,7 @@ Widget samples
 tools
 hooks
 voice_commands
+commands slash
 routes HTTP
 settings UI
 web scripts

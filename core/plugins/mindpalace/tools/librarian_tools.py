@@ -722,13 +722,15 @@ def revert_run(scope, run_id):
     pt = _pt()
     from plugins.mindpalace.tools import ledger as lg
     counts = {'restored': 0, 'retired': 0, 'ratings': 0, 'dates': 0,
-              'links': 0, 'skipped': 0}
+              'links': 0, 'content': 0, 'skipped': 0}
     with pt._get_connection() as conn:
         cur = conn.cursor()
         root = cur.execute('SELECT id, actor, scope FROM ledger WHERE id = ?',
                            (int(run_id),)).fetchone()
-        if not root or root[2] != scope or root[1] != 'librarian':
-            return None, "not a librarian run in this scope"
+        # A run is a librarian night or a Strip date stamps pass (actor
+        # 'user', 2026-10-31); its children share the root's actor.
+        if not root or root[2] != scope or root[1] not in ('librarian', 'user'):
+            return None, "not a revertable run in this scope"
         if cur.execute("SELECT 1 FROM ledger WHERE scope = ? AND action = 'reverted' "
                        "AND target = ?", (scope, str(run_id))).fetchone():
             return None, "this run was already reverted"
@@ -739,7 +741,7 @@ def revert_run(scope, run_id):
             ph = ','.join('?' * len(frontier))
             kids = cur.execute(
                 f"SELECT id, action, target, detail FROM ledger WHERE parent_id IN ({ph}) "
-                f"AND actor = 'librarian'", frontier).fetchall()
+                f"AND actor = ?", [*frontier, root[1]]).fetchall()
             rows += kids
             frontier = [k[0] for k in kids]
         now = pt._now()
@@ -868,6 +870,20 @@ def revert_run(scope, run_id):
                         m[k] = before[k]
                 put(tid, m)
                 counts['dates'] += 1
+            elif act == 'unstamped':
+                # The words go back — only if nobody rewrote them since.
+                before, after = d.get('before'), d.get('after')
+                r = cur.execute('SELECT content, created, meta FROM chunks WHERE id = ?',
+                                (tid,)).fetchone()
+                if not r or not isinstance(before, str) or r[0] != after:
+                    counts['skipped'] += 1
+                    continue
+                try:
+                    m = json.loads(r[2] or '{}')
+                except Exception:
+                    m = {}
+                pt._rewrite_content(cur, tid, before, r[1], m, scope, now)
+                counts['content'] += 1
             elif act == 'linked':
                 eids, at = d.get('entity_ids') or [], d.get('at')
                 if eids and at:
@@ -883,6 +899,8 @@ def revert_run(scope, run_id):
                   summary=(f"reverted run [{run_id}]: {counts['restored']} restored, "
                            f"{counts['retired']} retired, {counts['ratings']} ratings, "
                            f"{counts['dates']} dates, {counts['links']} links put back"
+                           + (f", {counts['content']} texts put back"
+                              if counts['content'] else '')
                            + (f"; {counts['skipped']} changed since, left alone"
                               if counts['skipped'] else '')),
                   detail=counts)
@@ -1367,6 +1385,7 @@ def _set_event_dates(entries):
         return "set_event_dates needs entries: [{memory_id, dates}, ...].", False
     dated = dateless = 0
     refused = []
+    filed = set()
     with pt._get_connection() as conn:
         cursor = conn.cursor()
         now = pt._now()
@@ -1382,6 +1401,16 @@ def _set_event_dates(entries):
             if mid not in allowed:
                 refused.append(f"[{mid}] not in this pass")
                 continue
+            # One verdict per memory per pass: a model that re-sends an
+            # earlier message's entries dated 357 rows 652 times on the dev
+            # drain (2026-10-31) — the second verdict silently replaced the
+            # first and the run report counted both.
+            with _pass_lock:
+                done_already = _open_pass is not None and mid in _open_pass['done']
+            if done_already or mid in filed:
+                refused.append(f"[{mid}] already filed this pass")
+                continue
+            filed.add(mid)
             dates = [d.strip() for d in (e.get('dates') or [])
                      if isinstance(d, str) and d.strip()][:4]
             bad = [d for d in dates if not _valid_iso_event(d)]

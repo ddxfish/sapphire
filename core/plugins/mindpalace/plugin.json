@@ -3,7 +3,7 @@
   "tool_expires": "never",
   "short_display_name": "Mind",
   "short_name": "Mind Palace",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Layered memory supersystem (v3) — self/events/entities/knowledge layers behind one tool surface. Mutually exclusive with the Memory plugin: enable one, not both. Import copies from the classic system; old data is never touched.",
   "author": "sapphire",
   "icon": "🏛️",
@@ -256,6 +256,14 @@
         "default": 6000,
         "help": "Size cap for the 'Connected memories' block at depth 2 — about 8K total with a typical base return. Depth 3+ clamps to 2.",
         "tab": "Search"
+      },
+      {
+        "key": "strip_head_stamp",
+        "type": "boolean",
+        "label": "Strip her date stamp from memories",
+        "default": true,
+        "help": "A memory that opens with a date within two weeks of its save day ('March 3 2026: …', 'Core memory — March 3 2026: …') is her writing the day she last saw — chats span days, and the save time already carries the real day. On: the leading date comes off at save, edit and import, and the receipt says so. Off: text is stored as written. Memories already here: Mind → Admin → Dates → Strip date stamps (previewed, ledgered, the ↶ on the run row undoes it).",
+        "tab": "Memories"
       },
       {
         "key": "knowledge_search_chunks",

@@ -41,6 +41,7 @@ const PASSES = [
           { label: '⚠ Run ALL (drain queue)…', drain: { what: 'all', pass: 'dates' } },
           { label: 'Redate all (built-in rules)', maint: 'redate_regex' },
           { label: 'Redate all (librarian model)', maint: 'redate_model' },
+          { label: '✂ Strip date stamps…', maint: 'strip_stamps' },
       ] },
     { key: 'link', icon: '\u{1F517}', title: 'Link',
       blurb: 'Connect memories to the existing people, places, and things they name.',
@@ -180,6 +181,16 @@ const MAINT = {
             'the wrong model. Merges are not undone (Restore retired covers ' +
             'those). Memory content is never touched.',
     },
+    strip_stamps: {
+        preview: (s, r) => `Strip her date stamps in scope '${s}'?\n\n` +
+            `${r.stripped} memories open with a date within two weeks of their ` +
+            'save day — the day she last saw, not the day she wrote (chats span ' +
+            `days). The date comes off the text; the save time carries the day. ` +
+            `${r.stale} are early by a day or more, ${r.same_day} match the save day.` +
+            (r.kept_anniversary ? `\n${r.kept_anniversary} kept: an anniversary depends on the stamp.` : '') +
+            (r.private ? `\n${r.private} private memories left alone.` : '') +
+            '\n\nRecorded in the ledger — the ↶ on the run row puts the words back.',
+    },
     redate_model: {
         confirm: s => `Re-date scope '${s}' with the librarian model?\n\n` +
             'All date verdicts reopen and a dates pass starts now (batch and ' +
@@ -253,7 +264,7 @@ async function savePluginSettings(patch) {
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Admin', { doc: 'MEMORY.md', inline: true }), status: '\u{1F6E0}️ Mind Palace — the operator console. Librarian pipeline, migration, rescue. Nothing here edits memory content; only the Danger box deletes.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Admin', { doc: 'MEMORY.md', inline: true }), status: '\u{1F6E0}️ Mind Palace — the operator console. Librarian pipeline, migration, rescue. Nothing here edits memory content except ✂ Strip date stamps (previewed, undoable from the Ledger); only the Danger box deletes.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">
@@ -937,8 +948,19 @@ async function runAction(el, spec, action) {
         body.confirm = typed;
     } else if (gate.confirm && !confirm(gate.confirm(scope))) return;
     try {
+        if (gate.preview) {
+            const p = await palaceSend('maintenance', 'POST', { ...body, preview: true });
+            if (!p.stripped) {
+                setResult(el, spec.key, 'No date stamps to strip'
+                    + (p.kept_anniversary ? ` (${p.kept_anniversary} kept for an anniversary)` : ''));
+                return;
+            }
+            if (!confirm(gate.preview(scope, p))) return;
+        }
         const r = await palaceSend('maintenance', 'POST', body);
         const bits = [];
+        if ('stripped' in r) bits.push(`${r.stripped} date stamps stripped`
+            + (r.kept_anniversary ? ` · ${r.kept_anniversary} kept for an anniversary` : ''));
         if ('cleared' in r) bits.push(`${r.cleared} cleared`);
         if ('restored' in r) bits.push(`${r.restored} restored`);
         if (r.skipped) bits.push(`${r.skipped} kept (atomize/merge)`);

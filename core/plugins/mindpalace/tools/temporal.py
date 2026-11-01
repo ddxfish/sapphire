@@ -70,6 +70,81 @@ RX_CLOCK = re.compile(
     re.IGNORECASE)
 
 
+# Her today-stamp: a date at the head of a memory ("March 3 2026: …",
+# "Core memory — March 3 2026: …"). Chats span days and she wrote the date
+# she last saw, so on dev 185 of 339 stamps ran one to seven days EARLY of
+# the save (2026-10-31). The save time is the truth; the stamp comes off.
+STAMP_WINDOW = (14, 1)          # days before / after the save day a leading date is a stamp
+STAMP_LEAD = 30                 # chars of label allowed before it ("Core memory — ")
+_STAMP_DATE = (
+    r'(?:19|20)\d{2}-\d{2}-\d{2}'
+    r'|\d{1,2}/\d{1,2}/(?:19|20)\d{2}'
+    r'|(?:' + _MONTH_PAT + r')\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+(?:19|20)\d{2})?'
+    r'|\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:' + _MONTH_PAT + r')(?:,?\s+(?:19|20)\d{2})?')
+RX_STAMP = re.compile(r'^(?P<lead>[^\n]{0,%d}?)(?P<date>%s)(?!\d)' % (STAMP_LEAD, _STAMP_DATE),
+                      re.IGNORECASE)
+RX_STAMP_SEP = re.compile(r'\s*(?:[:：—–\-,.;)\]]+\s*)+|\s*\n\s*')
+RX_LEAD_TAIL = re.compile(r'[\s—–\-(:,\[]+$')
+# A lead that ends in one of these is a sentence, not a label ("Sapphire since
+# March 3 2026: …" must stay whole).
+_LEAD_STOP = {'since', 'on', 'from', 'until', 'till', 'by', 'before', 'after',
+              'in', 'at', 'of', 'to', 'for', 'as', 'and', 'or', 'the', 'a', 'an'}
+
+
+def strip_stamp(text, anchor):
+    """(text without her today-stamp, the stamp's ISO day) or (text, None).
+    The stamp: a date in the head of the text — bare or after a short label —
+    whose day lies within STAMP_WINDOW of the anchor (the save moment). A
+    label keeps its place with one colon ("Core memory: …"). Dates outside
+    the window are content (a birth date, last year's trip) and stay; a
+    memory that is nothing but a date stays. Never raises."""
+    if not text:
+        return text, None
+    try:
+        return _strip_stamp(text, anchor)
+    except Exception:
+        return text, None
+
+
+def _strip_stamp(text, anchor):
+    m = RX_STAMP.match(text)
+    if not m:
+        return text, None
+    lead = m.group('lead')
+    lead_s = lead.strip()
+    words = re.findall(r"[A-Za-z']+", lead_s)
+    label_like = (not lead_s or lead_s[-1] in '—–-(:,['
+                  or (re.fullmatch(r"[A-Za-z' ]+", lead_s) and len(words) <= 3))
+    if not label_like or (words and words[-1].lower() in _LEAD_STOP):
+        return text, None
+    rest = text[m.end():]
+    sep = RX_STAMP_SEP.match(rest)
+    if sep and sep.end() > 0:
+        body = rest[sep.end():]
+    elif not lead_s and re.match(r'\s+[A-Z]', rest):
+        body = rest.lstrip()            # "March 3 2026 We fixed the bug"
+    else:
+        return text, None
+    if not body.strip():
+        return text, None
+    tok = m.group('date')
+    sm = re.fullmatch(r'(\d{1,2})/(\d{1,2})/((?:19|20)\d{2})', tok)
+    if sm:
+        mo, d, y = int(sm[1]), int(sm[2]), int(sm[3])
+        day = datetime(y, mo, d) if _valid(y, mo, d) else None
+    else:
+        got = resolve(tok, anchor)
+        day = datetime.fromisoformat(got[0][:10]) if got and len(got[0]) >= 10 else None
+    if day is None:
+        return text, None
+    delta = (day.date() - _parse_anchor(anchor).date()).days
+    if not (-STAMP_WINDOW[0] <= delta <= STAMP_WINDOW[1]):
+        return text, None
+    label = RX_LEAD_TAIL.sub('', lead).strip()
+    new = f"{label}: {body}" if label else body
+    return new.strip(), day.strftime('%Y-%m-%d')
+
+
 # The zone "local" means. None = the system's (the product). Tests pin a
 # ZoneInfo here so the local-day arithmetic proves out on every box and OS
 # the same way (2026-10-31: the suite failed east of UTC+9:30 and had no
@@ -391,16 +466,17 @@ RX_RECUR_KEY = re.compile(
 _RECUR_WINDOW = 40      # chars between keyword and date phrase
 
 
-def recurring(content):
+def recurring(content, anchor=None):
     """Annual '--MM-DD' entries the rules are SURE of (max MAX_DATES).
-    Never raises."""
+    `anchor` (the save moment; None = now) lets "today is my anniversary"
+    name its day once her today-stamp is gone (2026-10-31). Never raises."""
     try:
-        return _recurring(content)
+        return _recurring(content, anchor)
     except Exception:
         return []
 
 
-def _recurring(text):
+def _recurring(text, anchor=None):
     out, seen = [], set()
 
     def add(mo, d):
@@ -413,28 +489,41 @@ def _recurring(text):
                 out.append(s)
 
     key_spans = [m.span() for m in RX_RECUR_KEY.finditer(text)]
-    if key_spans:
-        def near(m):
-            s, e = m.span()
-            return any(ks - _RECUR_WINDOW < e and s < ke + _RECUR_WINDOW
-                       for ks, ke in key_spans)
-
-        for m in RX_HOLIDAY.finditer(text):
-            if near(m):
-                add(*_HOLIDAYS[m[1].lower()])
-        for m in RX_ISO.finditer(text):
-            if near(m):
-                add(int(m[2]), int(m[3]))
-        for rx, mi, di in ((RX_MONTH_DAY, 1, 2), (RX_DAY_MONTH, 2, 1)):
-            for m in rx.finditer(text):
-                mo = _MONTHS.get(m[mi].lower().rstrip('.'))
-                # Same month-verb guard as _resolve (scouts 2026-07-19/20):
-                # lowercase may/march never mint a recurrence — "her
-                # birthday, the 3rd may be rainy" must not create --05-03.
-                if m[mi].rstrip('.') in ('may', 'march'):
-                    continue
-                if mo and near(m):
-                    add(mo, int(m[di]))
+    if not key_spans:
+        return out
+    # Every date phrase in the text, with its span.
+    cands = []
+    for m in RX_HOLIDAY.finditer(text):
+        cands.append((m.span(), _HOLIDAYS[m[1].lower()]))
+    for m in RX_ISO.finditer(text):
+        cands.append((m.span(), (int(m[2]), int(m[3]))))
+    for rx, mi, di in ((RX_MONTH_DAY, 1, 2), (RX_DAY_MONTH, 2, 1)):
+        for m in rx.finditer(text):
+            mo = _MONTHS.get(m[mi].lower().rstrip('.'))
+            # Same month-verb guard as _resolve (scouts 2026-07-19/20):
+            # lowercase may/march never mint a recurrence — "her
+            # birthday, the 3rd may be rainy" must not create --05-03.
+            if m[mi].rstrip('.') in ('may', 'march'):
+                continue
+            if mo:
+                cands.append((m.span(), (mo, int(m[di]))))
+    base = _parse_anchor(anchor)
+    for m in RX_RELDAY.finditer(text):
+        delta = {'today': 0, 'tonight': 0, 'tomorrow': 1, 'yesterday': -1}[m[1].lower()]
+        dt = base + timedelta(days=delta)
+        cands.append((m.span(), (dt.month, dt.day)))
+    # A keyword names ONE date: the nearest phrase inside its window. Her
+    # diary stamps lead most entries ("June 24 2026: I chose my birthday —
+    # July 10th"), and taking every date in the window made the stamp an
+    # anniversary too (dev dates run, 2026-10-31).
+    for ks, ke in key_spans:
+        best = None
+        for (s, e), md in cands:
+            gap = max(0, s - ke, ks - e)
+            if gap < _RECUR_WINDOW and (best is None or gap < best[0]):
+                best = (gap, md)
+        if best:
+            add(*best[1])
     return out[:MAX_DATES]
 
 

@@ -48,7 +48,7 @@ The **self-sheet** is who she says she is — short sections she writes and tend
 
 Five passes, run per scope from the Admin cards. Each works a queue of untended chunks in batches:
 
-- **Dates** — stamps when things happened. Powers the Self page's *Upcoming / Just happened* strips and recurring-date reminders.
+- **Dates** — stamps when things happened. Powers the Self page's *Upcoming / Just happened* strips and recurring-date reminders. Every date anchors to the save time, so her own date stamps at the head of a memory ("March 3 2026: …" — the day she last saw in a chat that spanned days) come off at save, edit and import (`strip_head_stamp`, default on); **✂ Strip date stamps** on the Dates card heals the memories already there, previewed, ledgered, and undone with ↶ on the run row.
 - **Link** — wires connections: memory↔memory, memory↔entity. Junk gets ruled connection-free rather than force-linked.
 - **Dedup** — clusters near-duplicates and soft-merges them (originals retire to the archive, recoverable). The 🔍 dry-run is free — no LLM — and shows the clusters first. ⭐ favorite anything that must never merge; favorites refuse merges in code and are excluded from clusters entirely.
 - **Sort** — the judgment pass, and the expensive one: per-item verdicts to mark, split, promote (minting new entities), or retire. Splits and promotions deliberately re-enter the dates/link queues; the nightly grazes them back down.

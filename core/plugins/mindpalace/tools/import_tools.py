@@ -200,6 +200,9 @@ def _import_memories(config, dest_cursor, existing_keys, scopes_seen, skip_keys=
         ) if c in cols]
         scur.execute(f"SELECT {', '.join(select_cols)} FROM memories")
 
+        from plugins.mindpalace.tools import temporal
+        from plugins.mindpalace.tools.palace_tools import _strip_stamps_enabled
+        strip = _strip_stamps_enabled()
         pending = 0
         for r in scur.fetchall():
             row = {k: r[k] for k in r.keys()}
@@ -222,6 +225,10 @@ def _import_memories(config, dest_cursor, existing_keys, scopes_seen, skip_keys=
             private_key = row.get('private_key')
             created, original = _normalize_ts(row.get('timestamp'))
             emb, prov, dim = _provenance(row)
+            if strip:
+                content, stamp = temporal.strip_stamp(str(content), created)
+                if stamp:
+                    emb = prov = dim = None     # the copied vector was for the stamped text
 
             meta = {"import_key": key}
             if original is not None:

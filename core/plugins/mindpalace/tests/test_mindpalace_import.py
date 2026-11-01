@@ -872,3 +872,24 @@ def test_nudge_fires_at_boot_only(palace_env, monkeypatch):
     assert calls == []
     ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'scan'}))
     assert calls == [1]
+
+
+def test_import_drops_her_today_stamp(palace_env):
+    """A classic row that opens with the date she last saw (chats span days)
+    arrives without it; the copied vector was for the stamped text, so the
+    provenance triple is NULLed for the backfill to re-embed (2026-10-31)."""
+    env = palace_env
+    src = sqlite3.connect(env.user_dir / "memory.db")
+    src.execute("INSERT INTO memories (content, timestamp, scope, embedding, "
+                "embedding_provider, embedding_dim) VALUES (?, ?, ?, ?, ?, ?)",
+                ("March 3 2026: today we fixed the bug", "2026-03-05 14:30:00",
+                 "default", _EMB_BLOB, "provX", 4))
+    src.commit()
+    src.close()
+    out, ok = env.import_tools.execute("import_v2", {"what": "all"}, env.config)
+    assert ok, out
+    conn = _mind_conn(env)
+    row = conn.execute("SELECT content, embedding, embedding_provider, embedding_dim "
+                       "FROM chunks WHERE content LIKE '%fixed the bug%'").fetchone()
+    conn.close()
+    assert row == ('today we fixed the bug', None, None, None)

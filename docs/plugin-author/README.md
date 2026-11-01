@@ -36,6 +36,7 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | [Hooks](hooks.md) | All hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
 | [Voice Routing](voice-routing.md) | Sending her voice somewhere else — what each TTS hook carries, the Play speech here switch, consumed chunks, an avatar example |
 | [Voice Commands](voice-commands.md) | Keyword triggers that bypass the LLM — match modes, handlers, macros |
+| [Slash Commands](commands.md) | `/name` commands typed in the chat composer |
 | [Tools](tools.md) | Tool file format, schema flags, scopes, reading settings, plugin + chat-scoped state, privacy patterns |
 | [Routes](routes.md) | Custom HTTP endpoints — path params, auth enforcement, handler signature |
 | [Schedule](schedule.md) | Cron tasks — manifest fields, handler contract, examples |

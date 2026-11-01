@@ -214,6 +214,20 @@ who is doing the tending.
 passes per day per scope+kind (3), duplicate threshold (0.9), context
 tokens, drain batches per chat.
 
+**Her date stamps (`strip_head_stamp`, default ON):** a memory that opens
+with a date within two weeks of its save day ("March 3 2026: …", "Core
+memory — March 3 2026: …") is her writing the day she last saw — chats span
+days, so on a real mind half of those stamps ran one to seven days early.
+The save time is the real day, and every date rule (the regex floor, the
+librarian's dates pass, "today is my anniversary") anchors to it. The
+leading date comes off at save, edit and import, with a note on the
+receipt. Memories already here: Admin → Dates → **✂ Strip date stamps** —
+previews the counts first (nothing shown, nothing written), then one
+ledger run with the old and new text per row; ↶ on the run row puts every
+word back. Dates outside the window (a birth date, a plan ahead) are
+content and stay; a stamp an anniversary depends on stays when it is the
+save day itself; private rows are left alone.
+
 ## Import / Export (per tab, per scope)
 
 Every tab's toolbar has ⬇ Export / ⬆ Import: **one layer × one scope per

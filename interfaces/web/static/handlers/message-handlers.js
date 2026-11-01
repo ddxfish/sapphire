@@ -28,7 +28,8 @@ export async function handleTrash(idx) {
 // second flow that hid Stop for the first (hunt 21).
 let _regenning = false;
 
-export async function handleRegen(idx) {
+// ask: false when it was typed (/retry): the words already said so.
+export async function handleRegen(idx, ask = true) {
     if (getIsProc() || _regenning) {
         console.log('Regenerate blocked: busy');
         return;
@@ -47,7 +48,7 @@ export async function handleRegen(idx) {
     // mirror (main.js gates on !getAbortController()), so a live foreign
     // turn never flipped isProc and regen proceeded into a 409 AFTER
     // deleting the turn (S1 #3, hunt 2026-08-30).
-    if (!confirm('Regenerate this response?')) return;
+    if (ask && !confirm('Regenerate this response?')) return;
 
     // Regen means "that answer was wrong" — cut its voice at the click, not
     // at the new turn's first chunk (a slow CPU = 10s+ of the wrong answer
@@ -137,7 +138,7 @@ export async function handleEdit(idx) {
     });
 }
 
-export async function handleContinue(idx) {
+export async function handleContinue(idx, ask = true) {
     if (getIsProc()) {
         console.log('Continue blocked: isProc is true');
         return;
@@ -156,7 +157,8 @@ export async function handleContinue(idx) {
         audioFn, 
         refresh, 
         abortController,
-        getIsCancelling
+        getIsCancelling,
+        ask
     );
     
     if (len !== null) setHistLen(len);

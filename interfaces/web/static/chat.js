@@ -462,7 +462,7 @@ export const autoRefresh = async (isProc, lastLen, sceneUpdateFn) => {
 // edits the row on success — a Stop that generated nothing changes nothing.
 // On the page the existing bubble is adopted as the streaming message, so
 // the tool half of a turn stays put and the sentence carries on in place.
-export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null) => {
+export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null, ask = true) => {
     let viewer = false;
     try {
         const hist = await api.fetchHistory();
@@ -481,7 +481,7 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
             ui.showToast('Nothing to continue — that reply ended in a tool call', 'error');
             return null;
         }
-        if (!confirm('Continue this assistant message?')) return null;
+        if (ask && !confirm('Continue this assistant message?')) return null;
 
         setProc(true);
         const msgEl = document.querySelectorAll('#chat-container .message:not(.status):not(.error)')[idx];

@@ -1716,6 +1716,13 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
                     f"({MAX_CHUNKS_PER_SCOPE_LAYER:,}). Delete some memories first."), False
 
         content = content.strip()
+        stamp_note = ''
+        if layer == 'events' and _strip_stamps_enabled():
+            from plugins.mindpalace.tools import temporal
+            content, stamp = temporal.strip_stamp(content, _now())
+            if stamp:
+                stamp_note = (f" Dropped the leading date ({stamp}) — the save "
+                              f"time carries the day; write the text only.")
         label = label.strip().lower() if label else None
         private_key = private_key.strip() if (private_key and private_key.strip()) else None
         favorite = bool(favorite)
@@ -1849,7 +1856,7 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         if dropped:
             logger.info(f"[MINDPALACE] save trimmed {len(dropped)} chars over cap (chunk {chunk_id})")
         note = (self_note + entity_note + (_trim_note(dropped, chunk_id) if dropped else '')
-                + when_note)
+                + when_note + stamp_note)
         msg = f"Memory saved ({', '.join(bits)})"
         return (f"{msg}.{note}" if note else msg), True
 
@@ -2353,6 +2360,135 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
         return f"Failed to delete memory: {e}", False
 
 
+def _rewrite_content(cursor, memory_id, new_content, created, old_meta, scope, now=None):
+    """New words on an existing row — the one path for her edits, Strip
+    date stamps and its revert. Re-embeds, restamps the derivable
+    annotations INTO the bag anchored to the row's own created (the words
+    were lived then, not at edit time), re-seeds mention edges. Everything
+    else survives: provenance, queue stamps, retirement marks, import keys,
+    plugin fields (before 2026-10-30 the bag was rebuilt and an edit
+    resurrected retired rows). The librarian's date verdict goes with the
+    old words: the floor restamps and the row re-queues for the dates pass.
+    Returns (meta, embed_failed)."""
+    from plugins.mindpalace.tools import metadata as md
+    now = now or _now()
+    blob = provider = dim = None
+    embed_failed = False
+    embedder = _get_embedder()
+    if embedder.available:
+        embs = embedder.embed([new_content], prefix='search_document')
+        if embs is not None:
+            from core.embeddings import stamp_embedding
+            blob, provider, dim = stamp_embedding(embs[0], embedder)
+        else:
+            embed_failed = True
+    old_meta = dict(old_meta) if isinstance(old_meta, dict) else {}
+    for k in ('temporal_at', 'event_dates', 'event_date_src'):
+        old_meta.pop(k, None)
+    if old_meta.get('when_src') == 'librarian':
+        old_meta.pop('when', None)
+        old_meta.pop('when_src', None)
+    meta, mention_ids = dict(old_meta), []
+    try:
+        arows = md.entity_aliases(cursor, scope)
+        amap = md.alias_map(arows)
+        hits = md.match_entities(new_content, [a for _, _, a in arows])
+        seen = set()
+        for h in hits:
+            pair = amap.get(h.lower())
+            if pair and pair[0] not in seen:
+                seen.add(pair[0])
+                mention_ids.append(pair[0])
+        meta = md.merge_derived(old_meta, md.save_meta(
+            new_content, exclude_names={h.lower() for h in hits}, anchor=created))
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] Meta restamp failed (update continues): {e}")
+    cursor.execute(
+        'UPDATE chunks SET content = ?, meta = ?, updated = ?, '
+        'embedding = ?, embedding_provider = ?, embedding_dim = ? WHERE id = ?',
+        (new_content, json.dumps(meta, ensure_ascii=False), now,
+         blob, provider, dim, memory_id))
+    # The graph follows the words: old mention edges out, fresh in.
+    cursor.execute("DELETE FROM edges WHERE src_type = 'chunk' AND src_id = ? "
+                   "AND kind = 'mentions'", (memory_id,))
+    if mention_ids:
+        try:
+            md.seed_edges(cursor, memory_id, mention_ids, now)
+        except Exception as e:
+            logger.warning(f"[MINDPALACE] Edge re-seed failed (update continues): {e}")
+    return meta, embed_failed
+
+
+def strip_stamps(scope, dry=True):
+    """Mind → Admin → Strip date stamps: her today-stamps come off the
+    memories already here (chats spanned days; she wrote the date she last
+    saw, 2026-10-31). Events only. Keyed rows are left alone — their text
+    never enters the ledger. A stamp an anniversary depends on stays when
+    it IS the save day (it was right); a stale one goes and the anniversary
+    it named goes with it (it was wrong). dry=True counts and samples ids,
+    writes nothing. Live: one ledger run, one 'unstamped' child per row
+    with before/after text — revert_run puts the words back."""
+    from plugins.mindpalace.tools import temporal, ledger as lg
+    counts = {'scanned': 0, 'stripped': 0, 'same_day': 0, 'stale': 0,
+              'kept_anniversary': 0, 'wrong_anniversary_removed': 0, 'private': 0}
+    sample, run_id = [], None
+    with _get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT id, content, created, meta, private_key FROM chunks "
+            "WHERE scope = ? AND layer = 'events' "
+            "AND json_extract(meta, '$.superseded_at') IS NULL ORDER BY id",
+            (scope,)).fetchall()
+        now = _now()
+        for cid, content, created, raw, pk in rows:
+            counts['scanned'] += 1
+            new, stamp = temporal.strip_stamp(content or '', created)
+            if not stamp:
+                continue
+            if pk:
+                counts['private'] += 1
+                continue
+            same = stamp == temporal._parse_anchor(created).strftime('%Y-%m-%d')
+            lost = (set(temporal.recurring(content, created))
+                    - set(temporal.recurring(new, created)))
+            if lost and same:
+                counts['kept_anniversary'] += 1
+                continue
+            counts['stripped'] += 1
+            counts['same_day' if same else 'stale'] += 1
+            if lost:
+                counts['wrong_anniversary_removed'] += 1
+            if len(sample) < 20:
+                sample.append(cid)
+            if dry:
+                continue
+            if run_id is None:
+                run_id = lg.record(scope, 'user', 'unstamp', target='run', cursor=cur,
+                                   summary='stripping date stamps…')
+            try:
+                old_meta = json.loads(raw or '{}')
+            except Exception:
+                old_meta = {}
+            _rewrite_content(cur, cid, new, created, old_meta, scope, now)
+            lg.record(scope, 'user', 'unstamped', layer='events', target=cid,
+                      parent_id=run_id, cursor=cur,
+                      summary=f"dropped the leading date {stamp} from [{cid}]: "
+                              f"{_ledger_preview(new, None)}",
+                      detail={'before': content, 'after': new, 'stamp': stamp, 'at': now})
+        if run_id is not None:
+            cur.execute('UPDATE ledger SET summary = ? WHERE id = ?',
+                        (f"stripped date stamps from {counts['stripped']} memories "
+                         f"({counts['stale']} early by a day or more, "
+                         f"{counts['same_day']} on the save day)"
+                         + (f"; {counts['kept_anniversary']} kept for an anniversary"
+                            if counts['kept_anniversary'] else ''), run_id))
+        conn.commit()
+    if run_id is not None:
+        bump_matrix_gen()
+        _publish_mind('events', scope, 'update')
+    return {**counts, 'sample': sample, 'preview': dry, 'run_id': run_id}
+
+
 def _update_memory(memory_id: int, scope: str, content: str = None,
                    label: str = None, private_key: str = None,
                    when: str = None) -> tuple:
@@ -2368,7 +2504,7 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         new_content = content.strip() if (content and content.strip()) else None
         new_label = label.strip().lower() if (label and label.strip()) else None
         when_iso = when_clear = None
-        when_note = ''
+        when_note = stamp_note = ''
         if when is not None:
             w = str(when).strip().lower()
             if w == '':
@@ -2417,66 +2553,19 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                 cursor.execute('UPDATE chunks SET label = ?, updated = ? '
                                'WHERE id = ?', (new_label, now, memory_id))
             if new_content is not None:
-                blob = provider = dim = None
-                embedder = _get_embedder()
-                if embedder.available:
-                    embs = embedder.embed([new_content], prefix='search_document')
-                    if embs is not None:
-                        from core.embeddings import stamp_embedding
-                        blob, provider, dim = stamp_embedding(embs[0], embedder)
-                    else:
-                        embed_failed = True
-                # Restamp the derivable annotations INTO the existing bag,
-                # anchored to the memory's own save date — the words were
-                # lived then, not at edit time ("tomorrow" in a March memory
-                # must not land in Upcoming today). Everything else survives:
-                # provenance, queue stamps, retirement marks, import keys,
-                # plugin fields. Before (scout find 2026-10-30) the bag was
-                # rebuilt from scratch: editing a retired memory silently
-                # resurrected it, and editing an imported one dropped its
-                # import_key so the next import copied the original again.
+                if layer == 'events' and _strip_stamps_enabled():
+                    from plugins.mindpalace.tools import temporal
+                    new_content, stamp = temporal.strip_stamp(new_content, row[5])
+                    if stamp:
+                        stamp_note = (f" Dropped the leading date ({stamp}) — "
+                                      f"the save time carries the day.")
                 old_meta = {}
                 try:
                     old_meta = json.loads(row[4] or '{}')
                 except Exception:
                     pass
-                if not isinstance(old_meta, dict):
-                    old_meta = {}
-                meta, mention_ids = dict(old_meta), []
-                try:
-                    from plugins.mindpalace.tools import metadata as md
-                    arows = md.entity_aliases(cursor, scope)
-                    amap = md.alias_map(arows)
-                    hits = md.match_entities(new_content, [a for _, _, a in arows])
-                    seen = set()
-                    for h in hits:
-                        pair = amap.get(h.lower())
-                        if pair and pair[0] not in seen:
-                            seen.add(pair[0])
-                            mention_ids.append(pair[0])
-                    meta = md.merge_derived(old_meta, md.save_meta(
-                        new_content, exclude_names={h.lower() for h in hits},
-                        anchor=row[5]))
-                except Exception as e:
-                    logger.warning(f"[MINDPALACE] Meta restamp failed "
-                                   f"(update continues): {e}")
-                cursor.execute(
-                    'UPDATE chunks SET content = ?, meta = ?, updated = ?, '
-                    'embedding = ?, embedding_provider = ?, embedding_dim = ? '
-                    'WHERE id = ?',
-                    (new_content, json.dumps(meta, ensure_ascii=False), now,
-                     blob, provider, dim, memory_id))
-                # The graph follows the words: old mention edges out, fresh in.
-                cursor.execute("DELETE FROM edges WHERE src_type = 'chunk' "
-                               "AND src_id = ? AND kind = 'mentions'",
-                               (memory_id,))
-                if mention_ids:
-                    try:
-                        from plugins.mindpalace.tools import metadata as md
-                        md.seed_edges(cursor, memory_id, mention_ids, now)
-                    except Exception as e:
-                        logger.warning(f"[MINDPALACE] Edge re-seed failed "
-                                       f"(update continues): {e}")
+                _m, embed_failed = _rewrite_content(cursor, memory_id, new_content,
+                                                    row[5], old_meta, scope, now)
             if when_clear or when_iso:
                 raw = cursor.execute('SELECT meta FROM chunks WHERE id = ?',
                                      (memory_id,)).fetchone()[0]
@@ -2518,7 +2607,7 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
             logger.info(f"[MINDPALACE] update trimmed {len(dropped)} chars over cap (chunk {memory_id})")
         msg = f"Memory updated ({', '.join(bits)})"
         return ((f"{msg}.{_trim_note(dropped, memory_id)}" if dropped else msg)
-                + when_note), True
+                + when_note + stamp_note), True
     except Exception as e:
         logger.error(f"[MINDPALACE] Error updating memory: {e}")
         return f"Failed to update memory: {e}", False
@@ -2612,6 +2701,18 @@ _CARD_FIELDS = (('relationship', 'Relationship'), ('birthday', 'Birthday'),
 _WAKE_CARD_FIELDS = tuple(f for f in _CARD_FIELDS
                           if f[0] not in ('phone', 'email', 'address', 'notes'))
 WAKE_CARD_CHARS = 600
+
+
+def _strip_stamps_enabled() -> bool:
+    """strip_head_stamp (default ON): her today-stamp comes off a memory's
+    head at save, edit and import — chats span days and she wrote the day
+    she last saw; the save time is the real day (2026-10-31)."""
+    try:
+        from core.plugin_loader import plugin_loader
+        return bool(plugin_loader.get_plugin_settings('mindpalace')
+                    .get('strip_head_stamp', True))
+    except Exception:
+        return True
 
 
 def _people_card_chars() -> int:

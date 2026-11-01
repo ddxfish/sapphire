@@ -387,3 +387,91 @@ def test_wipe_dates_then_redate_regex_rebuilds_the_floor(palace):
     assert meta.get('event_dates') == ['2026-09-15']     # rebuilt from content
     assert meta.get('event_date_src') == 'regex'
     assert 'temporal_at' not in meta                     # verdict stays open
+
+
+# ─── strip_stamps — the one action that edits text (2026-10-31) ──────────────
+
+SAVED = '2026-03-05T14:30:00+00:00'
+
+
+def _as_written(monkeypatch):
+    monkeypatch.setattr(pt, '_strip_stamps_enabled', lambda: False)
+
+
+def test_strip_stamps_preview_run_and_revert(palace, monkeypatch):
+    from plugins.mindpalace.tools import librarian_tools as lt
+    _as_written(monkeypatch)
+    stale = _save('March 3 2026: today we fixed the bug')
+    _set(stale, created=SAVED, meta={'event_dates': ['2026-03-03'], 'event_date_src': 'librarian',
+                                     'temporal_at': 'x', 'when': '2026-03-03', 'when_src': 'librarian'})
+    same = _save('Core memory — March 5 2026: the boat')
+    _set(same, created=SAVED)
+    birthday = _save('July 10 2026: my birthday party was great')
+    _set(birthday, created='2026-07-10T20:00:00+00:00')
+    history = _save("1997-05-12: Krem's birth date")
+    _set(history, created=SAVED)
+    msg, ok = pt._save_memory('March 4 2026: a keyed one', 'default', private_key='k')
+    keyed = int(re.search(r'ID: (\d+)', msg).group(1))
+    _set(keyed, created=SAVED)
+
+    p = browse.maintenance({'action': 'strip_stamps', 'scope': 'default', 'preview': True})
+    assert p['preview'] and p['stripped'] == 2 and p['stale'] == 1 and p['same_day'] == 1
+    assert p['kept_anniversary'] == 1 and p['private'] == 1 and p['run_id'] is None
+    assert _row(stale)[1].startswith('March 3 2026:')          # preview writes nothing
+
+    r = browse.maintenance({'action': 'strip_stamps', 'scope': 'default'})
+    assert r['stripped'] == 2 and r['run_id']
+    assert _row(stale)[1] == 'today we fixed the bug'
+    assert _row(same)[1] == 'Core memory: the boat'
+    assert _row(birthday)[1].startswith('July 10 2026:')         # the anniversary lives on the stamp
+    assert _row(history)[1].startswith('1997-05-12:')
+    assert _row(keyed)[1].startswith('March 4 2026:')
+    # the old verdict went with the old words: "today" is now the save day
+    m = json.loads(_row(stale)[2])
+    assert m['event_dates'] == ['2026-03-05'] and m['event_date_src'] == 'regex'
+    assert 'temporal_at' not in m and 'when' not in m
+    with pt._get_connection() as conn:
+        run = conn.execute('SELECT actor, action, target FROM ledger WHERE id = ?',
+                           (r['run_id'],)).fetchone()
+        kids = conn.execute("SELECT action, detail FROM ledger WHERE parent_id = ?",
+                            (r['run_id'],)).fetchall()
+    assert run == ('user', 'unstamp', 'run') and len(kids) == 2
+    assert all(a == 'unstamped' and json.loads(d)['before'].startswith(('March', 'Core'))
+               for a, d in kids)
+
+    # a row rewritten since is left alone; the rest go back word for word
+    pt._update_memory(same, 'default', content='Core memory: the boat, revised')
+    counts, err = lt.revert_run('default', r['run_id'])
+    assert err is None and counts['content'] == 1 and counts['skipped'] == 1
+    assert _row(stale)[1] == 'March 3 2026: today we fixed the bug'
+    assert _row(same)[1] == 'Core memory: the boat, revised'
+    assert lt.revert_run('default', r['run_id']) == (None, 'this run was already reverted')
+
+
+def test_save_and_update_drop_her_today_stamp(palace):
+    import calendar
+    from datetime import datetime
+    d = datetime.now()
+    msg, ok = pt._save_memory(f'{calendar.month_name[d.month]} {d.day} {d.year}: today we fixed the bug',
+                              'default')
+    assert ok and 'Dropped the leading date' in msg
+    cid = int(re.search(r'ID: (\d+)', msg).group(1))
+    assert _row(cid)[1] == 'today we fixed the bug'
+    msg, ok = pt._save_memory("1997-05-12: Krem's birth date", 'default')
+    assert ok and 'Dropped' not in msg                          # history is content
+    cid2 = _save('plain text')
+    _set(cid2, created=SAVED)                                   # the edit anchors to the row's own day
+    msg, ok = pt._update_memory(cid2, 'default', content='March 3 2026: now with a stamp')
+    assert ok and 'Dropped the leading date (2026-03-03)' in msg
+    assert _row(cid2)[1] == 'now with a stamp'
+
+
+def test_strip_setting_off_stores_as_written(palace, monkeypatch):
+    _as_written(monkeypatch)
+    import calendar
+    from datetime import datetime
+    d = datetime.now()
+    text = f'{calendar.month_name[d.month]} {d.day} {d.year}: today we fixed the bug'
+    msg, ok = pt._save_memory(text, 'default')
+    assert ok and 'Dropped' not in msg
+    assert _row(int(re.search(r'ID: (\d+)', msg).group(1)))[1] == text

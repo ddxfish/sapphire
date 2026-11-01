@@ -663,3 +663,19 @@ def test_preview_shows_the_error_not_an_empty_queue(palace, monkeypatch):
     monkeypatch.setattr(st, '_read_self', lambda *a, **k: ('boom', False))
     out = librarian.preview_message('default', 'self', stage='tend')
     assert not out['live'] and 'preview failed' in out['text'] and 'unreadable' in out['text']
+
+
+def test_one_date_verdict_per_memory_per_pass(palace):
+    """The dev drain (2026-10-31): 357 rows, 652 verdicts — a model that
+    re-sends earlier entries dated one memory sixteen times. The second
+    verdict refuses; the first stands."""
+    a = _save("we met on 2026-03-03 at the dock")
+    lt.open_pass('default', [a], kind='dates')
+    msg, ok = _run('set_event_dates', {'entries': [
+        {'memory_id': a, 'dates': ['2026-03-03']},
+        {'memory_id': a, 'dates': ['2026-03-04']}]})
+    assert ok and 'already filed' in msg
+    msg, ok = _run('set_event_dates', {'entries': [{'memory_id': a, 'dates': ['2026-03-05']}]})
+    assert not ok and 'already filed' in msg
+    assert _meta(a)['event_dates'] == ['2026-03-03']
+    lt.close_pass()

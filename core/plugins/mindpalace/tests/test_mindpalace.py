@@ -780,8 +780,10 @@ def test_update_memory_keeps_the_bag_and_anchors_to_created(palace):
     _, ok = palace._update_memory(b, "default", content="concert tomorrow")
     assert ok
     m = _get(b)
-    assert m['event_dates'] == ['2026-04-04'] and m['event_date_src'] == 'librarian'
-    assert m['temporal_at'] == 't'
+    # New words, new dates (2026-10-31): the verdict was about the old text —
+    # the floor restamps against created and the row re-queues for the pass.
+    assert m['event_dates'] == ['2026-03-02'] and m['event_date_src'] == 'regex'
+    assert 'temporal_at' not in m
 
 
 # ─── entity resolution + roster (2026-09-08) ────────────────────────────────
