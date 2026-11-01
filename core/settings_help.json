@@ -444,6 +444,14 @@
     "short": "Let the AI switch its own LLM",
     "long": "Adds a switch_model tool so the AI can switch between the models you list below. When disabled the tool is completely hidden from the AI. The model list doubles as scope control: only listed models are switchable."
   },
+  "AI_SLASH_COMMANDS_ENABLED": {
+    "short": "Adds slash_command. Off hides it from the AI completely.",
+    "long": "Adds a slash_command tool so the AI can run the slash commands marked for it, today /remove, without a click. When disabled the tool is completely hidden from the AI. A web page or message it reads could talk it into using this, so it is off by default. /undo brings back its last removal."
+  },
+  "AI_REMOVE_MAX_TURNS": {
+    "short": "The AI isn't told this number. Your own /remove has no limit.",
+    "long": "The AI's /remove refuses a bigger number, and it isn't told what this number is. Your own /remove has no such limit."
+  },
   "AI_MODEL_SWITCH_ROSTER": {
     "short": "Models the AI may switch between (top = least private)",
     "long": "Ordered list of providers the AI can switch between with switch_model. Order matters when the privacy ratchet is on: top is least private, bottom is most private."

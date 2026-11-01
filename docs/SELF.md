@@ -71,11 +71,13 @@ Web image view
 Notepad
 Net checks
 ask_user question card
-self_command slash commands
+slash_command slash commands
 Composer /help /status
 /context token breakdown
 /retry /continue /replay
 /remove /trim /compact
+/undo her last /remove
+slash_command: Settings Tools
 /prompt /repair
 schedule_task
 set_scene set_motion

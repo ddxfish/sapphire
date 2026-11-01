@@ -11,6 +11,7 @@ import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from '.
 import { populateChatDropdown } from './features/chat-manager.js';
 import { hasPendingActivate, fetchStatus, fetchChatList } from './api.js';
 import { getBoundChat } from './core/bound-chat.js';
+import { resumeCompressPollIfRunning } from './shared/compress-modal.js';
 import { updateScene, updateSendButtonLLM, resetProviderMeta } from './features/scene.js';
 import { applyTrimColor, setDefaultBackground } from './features/chat-settings.js';
 import { setInstanceColor } from './features/logo.js';
@@ -431,6 +432,7 @@ async function init() {
 
         // Init nav rail + router (after data so chat sidebar loads with correct chat)
         initNavRail();
+        resumeCompressPollIfRunning();     // a reload mustn't lose /compact's finish toast
         // The setup wizard's boot gate (tmp/setup-wizard-plan.md): an unfinished
         // setup opens the #setup view, and wins over a stale #chat hash. No init
         // data (the fetch failed) = no gate.

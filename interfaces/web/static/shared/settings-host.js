@@ -46,6 +46,8 @@ const MANAGED_HIDDEN_TABS = new Set(['audio', 'wakeword', 'system', 'network', '
 
 const LABEL_OVERRIDES = {
     TTS_LOCAL_PLAYBACK: 'Play speech here',
+    AI_SLASH_COMMANDS_ENABLED: 'Let the AI run slash commands',
+    AI_REMOVE_MAX_TURNS: 'Most turns it can remove at once',
     LLM_REQUEST_TIMEOUT: 'LLM Request Timeout',   // error messages name it; "Llm" read as a typo
     LLM_MAX_HISTORY: 'LLM Max History',
 };

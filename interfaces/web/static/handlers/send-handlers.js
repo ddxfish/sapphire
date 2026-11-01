@@ -83,10 +83,11 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
 
     // Slash commands never become a turn (core/commands.py). A refused one keeps
     // its text in the box; // sends a literal leading slash.
-    if (!fromCard && txt.startsWith('//')) {
+    const typed = txt;     // a failed send gives back what was typed, // and all
+    if (!fromCard && txt.startsWith('//') && isCommand(txt.slice(1))) {
         txt = txt.slice(1);
     } else if (!fromCard && isCommand(txt)) {
-        if (await runCommand(txt)) {
+        if (await runCommand(txt) && input.value.trim() === txt) {
             input.value = '';
             input.dispatchEvent(new Event('input'));
         }
@@ -340,7 +341,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
     function restoreDraft() {
         myBubble?.remove();
         if (!fromCard && !input.value) {
-            input.value = txt;
+            input.value = typed;
             input.dispatchEvent(new Event('input'));
         }
         if (attach && sentImages.length) {

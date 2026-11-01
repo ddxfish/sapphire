@@ -17,6 +17,9 @@ from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
+# The one undo for her last /remove, in the chat's own data (core/commands.py).
+TURN_UNDO_STORE, TURN_UNDO_KEY = 'core-commands', 'turn_undo'
+
 
 def _vault_ref_sync(new_name, old_name):
     """Prompt-reference bookkeeping for the vault references index (chat
@@ -2754,23 +2757,61 @@ class ChatSessionManager:
         return True, {"start": spans[have - count][0], "end": end, "turns": count,
                       "digest": self.messages_digest(msgs[:end])}
 
-    def apply_turn_cut(self, chat_name: str, plan: dict):
+    def apply_turn_cut(self, chat_name: str, plan: dict, undo: bool = False, with_own_turn: bool = False):
         """Write a plan_turn_cut. Refuses when any row up to the cut changed since
         the plan: the indexes would land on other words. Rows after the cut (the
-        turn that made the plan) may have grown. Returns (ok, error)."""
+        turn that made the plan) may have grown. with_own_turn=True takes that
+        turn too, however it grew, and nothing after it. undo=True keeps the rows for
+        undo_turn_cut in the chat's own data, so they seal, rename and delete with
+        it; no copy, no cut. Returns (ok, error)."""
         exported = self.export_chat(chat_name)
         if exported is None:
             return False, f"Chat '{chat_name}' not found"
         msgs = exported["messages"]
         if self.messages_digest(msgs[:plan["end"]]) != plan["digest"]:
             return False, "Chat changed since the removal was planned, nothing was removed."
-        ok, err = self.replace_messages(chat_name, msgs[:plan["start"]] + msgs[plan["end"]:],
+        start, end, turns = plan["start"], plan["end"], plan["turns"]
+        if with_own_turn:
+            end = next((e for s, e in turn_spans(msgs) if s == end), end)
+            turns += 1
+        if undo:
+            try:
+                self.plugin_data_put(TURN_UNDO_STORE, chat_name, TURN_UNDO_KEY, {
+                    "rows": msgs[start:end], "start": start, "turns": turns,
+                    "digest": self.messages_digest(msgs[:plan["start"]])})
+            except Exception as e:
+                logger.error(f"Turn cut refused, no undo copy: {e}")
+                return False, "Couldn't keep a copy to undo, nothing was removed."
+        ok, err = self.replace_messages(chat_name, msgs[:start] + msgs[end:],
                                         expected_count=len(msgs))
         if not ok:
+            if undo:
+                self.plugin_data_delete(TURN_UNDO_STORE, chat_name, TURN_UNDO_KEY)
             return False, err
         self._prune_orphaned_tool_images(chat_name)
         publish(Events.MESSAGE_REMOVED, {"from": "turn_cut", "chat_name": chat_name})
         return True, None
+
+    def undo_turn_cut(self, chat_name: str):
+        """Put back the rows an undo=True cut kept, where they were. Refuses when
+        anything before them changed. Returns (turns put back, error)."""
+        kept = self.plugin_data_get(TURN_UNDO_STORE, chat_name, TURN_UNDO_KEY)
+        if not kept:
+            return 0, "There's no removal of hers to undo."
+        exported = self.export_chat(chat_name)
+        if exported is None:
+            return 0, "This chat can't be read right now."
+        msgs, start, rows = exported["messages"], kept["start"], kept["rows"]
+        if self.messages_digest(msgs[:start]) != kept["digest"]:
+            return 0, "The chat changed before those turns, so they can't go back in."
+        if msgs[start:start + len(rows)] != rows:     # a crash between the copy and the cut: nothing went
+            ok, err = self.replace_messages(chat_name, msgs[:start] + rows + msgs[start:],
+                                            expected_count=len(msgs))
+            if not ok:
+                return 0, err
+            publish(Events.MESSAGE_REMOVED, {"from": "turn_cut_undo", "chat_name": chat_name})
+        self.plugin_data_delete(TURN_UNDO_STORE, chat_name, TURN_UNDO_KEY)
+        return kept["turns"], None
 
     def _any_vaulted_rows(self) -> bool:
         """Vault hunt G3 probe: True when any vaulted chat exists. Raises on
@@ -4920,6 +4961,15 @@ class ChatSessionManager:
                     msgs_blob = row["messages"] or "[]"
                     # Extract all live IMG IDs from message content
                     live_ids = _live_image_ids(msgs_blob)
+                # Rows waiting for /undo still own their pictures.
+                undo = conn.execute(
+                    "SELECT value FROM plugin_chat_data WHERE plugin = ? AND chat_name = ? AND key = ?",
+                    (TURN_UNDO_STORE, chat_name, TURN_UNDO_KEY)).fetchone()
+                if undo:
+                    v = self._dec_value(undo["value"], "prune scan undo", chat_name)
+                    if v is None:
+                        return 0
+                    live_ids = set(live_ids) | set(_live_image_ids(v))
                 # Find stored image IDs for this chat that aren't in live_ids
                 stored = conn.execute(
                     "SELECT id FROM tool_images WHERE chat_name = ?", (chat_name,)

@@ -4,11 +4,12 @@ import * as ui from '../ui.js';
 import { showModal, showHelpModal, escapeHtml } from '../shared/modal.js';
 import { openCompressModal } from '../shared/compress-modal.js';
 import { openTrimModal, openRepairModal } from '../shared/chat-tools-modal.js';
+import * as audio from '../audio.js';
 import { getIsProc } from '../core/state.js';
+import { getViewedChat } from '../core/bound-chat.js';
 import { handleRegen, handleContinue, handleReplay } from './message-handlers.js';
 
-// `/remove 2` is a command; `/home/me/x` has a second slash and is a message.
-export const isCommand = (text) => /^\/[a-z][\w-]*(\s|$)/i.test(text);
+export { isCommand } from '../shared/slash.js';
 
 const CONTEXT_LABELS = { system: 'System prompt', schemas: 'Tool definitions', you: 'Your messages', her: 'Her replies',
     results: 'Tool results', calls: 'Tool calls', images: 'Images', injected: 'Ghost and documents', thinking: 'Thinking', framing: 'Message framing' };
@@ -20,12 +21,12 @@ const contextBar = (label, n, total, note = '') => `<div style="margin:6px 0">
 
 function contextDialog({ chat, meter, parts, image_count, tools, thinking_stored, pictures_stored }) {
     const total = Object.values(parts).reduce((a, b) => a + b, 0);
-    const rows = Object.entries(parts).filter(([, n]) => n).sort((a, b) => b[1] - a[1]).map(([k, n]) =>
+    const rows = Object.entries(parts).filter(([k, n]) => n && (k !== 'images' || meter.measured)).sort((a, b) => b[1] - a[1]).map(([k, n]) =>
         contextBar(CONTEXT_LABELS[k] || k, n, total, k === 'images' ? `${image_count} sent` : ''));
     const toolRows = tools.slice(0, 12).map(t => contextBar(t.name, t.schema + t.calls + t.results, total,
         t.runs ? `${t.runs} run${t.runs === 1 ? '' : 's'}, ${t.results.toLocaleString()} in results` : 'definition only'));
     const notes = [
-        meter.measured ? 'From her last send.' : 'No send yet since the app started, so this is the stored chat, without the prompt, tool definitions or images. Send a message to measure it.',
+        meter.measured ? 'From her last send.' : 'Not measured since the app started or this history last changed, so this is the stored chat, without the prompt, tool definitions or images. Send a message to measure it.',
         meter.out_of_view ? `${meter.out_of_view} oldest turn(s) are out of her view.` : '',
         meter.stubbed ? `${meter.stubbed} old tool result(s) were cut to one line.` : '',
         `Thinking stored in this chat: ${thinking_stored.toLocaleString()} tokens. Only what is listed above gets sent.`,
@@ -75,7 +76,9 @@ const dialogs = {
 
 // The newest message's place in the transcript, as the toolbar counts it.
 async function lastIndex(role = null) {
-    const hist = await api.fetchHistory();
+    const { messages: hist, chat_name } = await api.fetchHistoryFull();
+    const viewed = getViewedChat();
+    if (viewed && chat_name && chat_name !== viewed) throw new Error('This tab is still catching up to its chat. Try again.');
     for (let i = hist.length - 1; i >= 0; i--) {
         if (!role || hist[i].role === role) return i;
     }
@@ -86,17 +89,18 @@ async function lastIndex(role = null) {
 const actions = {
     retry: async () => {
         const i = await lastIndex();
-        if (i < 0) return ui.showToast('Nothing to retry yet', 'error');
+        if (i < 0) { ui.showToast('Nothing to retry yet', 'error'); return false; }
         handleRegen(i, false);
     },
     continue: async () => {
         const i = await lastIndex();
-        if (i < 0) return ui.showToast('Nothing to continue yet', 'error');
+        if (i < 0) { ui.showToast('Nothing to continue yet', 'error'); return false; }
         handleContinue(i, false);
     },
     replay: async () => {
         const i = await lastIndex('assistant');
-        if (i < 0) return ui.showToast('Nothing to replay yet', 'error');
+        if (i < 0) { ui.showToast('Nothing to replay yet', 'error'); return false; }
+        if (audio.isTtsPlaying()) audio.stop(true);     // the toolbar's button toggles; this says replay
         handleReplay(i);
     },
 };
@@ -114,7 +118,7 @@ export async function run(line) {
                 ui.showToast(`/${out.do} has to wait for this reply to finish`, 'error');
                 return false;
             }
-            await actions[out.do]();
+            return (await actions[out.do]()) !== false;
         } else if (out.open && dialogs[out.open]) dialogs[out.open](out);
         else if (out.say) ui.showToast(out.say, out.ok ? 'success' : 'error');
         return !!out.ok;

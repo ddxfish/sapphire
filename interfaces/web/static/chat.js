@@ -4,6 +4,8 @@ import * as api from './api.js';
 import * as audio from './audio.js';
 import { releaseOwnership } from './core/state.js';
 import { getBoundChat } from './core/bound-chat.js';
+import { isCommand } from './shared/slash.js';
+import { restorePending } from './ui-images.js';
 
 const handleError = (e, action) => {
     if (e.message === 'Cancelled') return console.log(`${action} cancelled by user`);
@@ -243,6 +245,20 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
     }
 };
 
+// A stored picture is a handle whose row goes with the message, so its bytes are
+// read before the turn is deleted. Throws rather than resend without it.
+async function picturesToResend(images = []) {
+    return Promise.all(images.map(async (img) => {
+        if (!img.id) return { data: img.data, media_type: img.media_type };
+        const res = await fetch(`/api/tool-image/${encodeURIComponent(img.id)}`);
+        if (!res.ok) throw new Error("Couldn't read a picture on that message, so nothing was changed");
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return { data: btoa(bin), media_type: img.media_type };
+    }));
+}
+
 export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null) => {
     console.log(`[REGEN DEBUG] Starting regen at index ${idx}`);
     let viewer = false;
@@ -259,11 +275,12 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         const clicked = hist[idx];
         console.log(`[REGEN DEBUG] Clicked message role: ${clicked.role}`);
         
-        let userMessage, userStamp;
+        let userMessage, userStamp, userRow;
         
         if (clicked.role === 'user') {
             userMessage = clicked.content;
             userStamp = clicked.timestamp;
+            userRow = clicked;
             console.log(`[REGEN DEBUG] User message selected`);
         } else {
             console.log('[REGEN DEBUG] Assistant message, finding previous user message...');
@@ -273,6 +290,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     userIdx = i;
                     userMessage = hist[i].content;
                     userStamp = hist[i].timestamp;
+                    userRow = hist[i];
                     break;
                 }
             }
@@ -289,6 +307,9 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         
         // (confirm happens in message-handlers.handleRegen, BEFORE the
         // abort controller is registered -- S1 #3)
+        const images = await picturesToResend(userRow?.images);
+        const files = userRow?.files || [];
+
         console.log('[REGEN DEBUG] Setting proc...');
         setProc(true);
         
@@ -298,7 +319,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
         await refreshFn(false);
         
         console.log('[REGEN DEBUG] Adding user message...');
-        ui.addUserMessage(userMessage);
+        ui.addUserMessage(userMessage, images.length ? images : null, files.length ? files : null);
         ui.showStatus();
         ui.updateStatus('Regenerating...');
         
@@ -361,7 +382,11 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     const bubbles = document.querySelectorAll('#chat-container .message.user');
                     bubbles[bubbles.length - 1]?.remove();
                     const inp = document.getElementById('prompt-input');
-                    if (inp) { inp.value = userMessage; inp.dispatchEvent(new Event('input')); }
+                    if (inp) { inp.value = isCommand(userMessage) ? '/' + userMessage : userMessage; inp.dispatchEvent(new Event('input')); }
+                    if (images.length) {
+                        restorePending(images);
+                        import('./handlers/send-handlers.js').then(m => m.updateImagePreviewArea());
+                    }
                     ui.showToast(e.message, 'error');
                     return;
                 }
@@ -405,7 +430,9 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     ui.showStatus();
                     ui.updateStatus('Generating...');
                 }
-            }
+            },
+            images,
+            files
         );
         
         console.log('[REGEN DEBUG] Counting messages...');

@@ -1,6 +1,7 @@
-"""Slash commands (core/commands.py): /remove by the person and by her self_command."""
+"""Slash commands (core/commands.py): /remove by the person and by her slash_command."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,7 +23,7 @@ def _turn(n, tools=False):
 class FakeSM:
     """The store's contract, in memory: refuses while streaming, like replace_messages."""
     def __init__(self, rows):
-        self.rows, self.streaming = rows, False
+        self.rows, self.streaming, self.slot, self.seal = rows, False, None, False
 
     from core.chat.history import ChatSessionManager as _C
     plan_turn_cut = _C.plan_turn_cut
@@ -47,6 +48,19 @@ class FakeSM:
     def read_chat_settings(self, chat):
         return {}
 
+    undo_turn_cut = _C.undo_turn_cut
+
+    def plugin_data_put(self, plugin, chat, key, value):
+        if self.seal:
+            raise RuntimeError('sealed')
+        self.slot = json.loads(json.dumps(value))
+
+    def plugin_data_get(self, plugin, chat, key, default=None):
+        return self.slot or default
+
+    def plugin_data_delete(self, plugin, chat, key=None):
+        self.slot = None
+
 
 @pytest.fixture
 def sm(monkeypatch):
@@ -55,6 +69,8 @@ def sm(monkeypatch):
     monkeypatch.setattr('core.rooms.is_room', lambda chat: False)
     monkeypatch.setattr('core.chat.history.publish', lambda *a, **k: None)
     monkeypatch.setattr(commands, '_tell', lambda *a, **k: None)
+    monkeypatch.setattr(commands, '_call_chats', lambda: set())
+    monkeypatch.setattr(commands, '_asking_streams', lambda chat: [])
     commands._pending.clear()
     yield fake
     commands._pending.clear()
@@ -94,7 +110,7 @@ def test_user_remove_refused_during_a_live_turn(sm):
     assert sm.rows == before
 
 
-def test_her_remove_waits_and_spares_her_own_turn(sm):
+def test_her_remove_waits_and_takes_her_own_turn_too(sm):
     sm.streaming = True
     out = commands.run('/remove 2', 'c', by='ai')
     assert out['ok'] and _users(sm) == ['u1', 'u2', 'u3']
@@ -103,7 +119,14 @@ def test_her_remove_waits_and_spares_her_own_turn(sm):
     assert _users(sm) == ['u1', 'u2', 'u3']
     sm.streaming = False
     commands.finish_turn(sm, 'c')
-    assert sm.rows == _turn(3) + [{'role': 'assistant', 'content': 'done'}]
+    assert sm.rows == []                                              # two before hers, and hers
+
+
+def test_her_cut_leaves_a_turn_queued_after_hers(sm):
+    commands.run('/remove 1', 'c', by='ai')
+    sm.rows = sm.rows + _turn(4)
+    commands.finish_turn(sm, 'c')
+    assert _users(sm) == ['u1', 'u4']
 
 
 def test_her_turn_cannot_be_counted(sm):
@@ -123,9 +146,154 @@ def test_one_removal_per_turn(sm):
 
 def test_stop_drops_her_waiting_removal(sm):
     before = list(sm.rows)
+    asking = SimpleNamespace(cancel_flag=False)
+    commands._asking_streams = lambda chat: [asking]
     commands.run('/remove 1', 'c', by='ai')
-    commands.finish_turn(sm, 'c', cancelled=True)
+    asking.cancel_flag = True
+    commands.finish_turn(sm, 'c')
     assert sm.rows == before and not commands._pending
+
+
+def test_the_next_turns_clean_end_does_not_run_a_stopped_turns_cut(sm):
+    before = list(sm.rows)
+    stopped = SimpleNamespace(cancel_flag=False)
+    commands._asking_streams = lambda chat: [stopped]
+    commands.run('/remove 1', 'c', by='ai')
+    stopped.cancel_flag = True
+    sm.streaming = True                  # the next turn is running
+    commands.finish_turn(sm, 'c')
+    sm.streaming = False                 # and ends clean
+    commands.finish_turn(sm, 'c')
+    assert sm.rows == before
+
+
+def test_stopping_a_later_turn_keeps_a_clean_turns_cut(sm):
+    commands._asking_streams = lambda chat: [SimpleNamespace(cancel_flag=False)]
+    commands.run('/remove 1', 'c', by='ai')
+    commands.finish_turn(sm, 'c')        # the later stopped stream isn't an owner
+    assert _users(sm) == ['u1']
+
+
+def test_her_cap_refuses_without_naming_a_number(sm, monkeypatch):
+    monkeypatch.setattr('config.AI_REMOVE_MAX_TURNS', 1, raising=False)
+    out = commands.run('/remove 2', 'c', by='ai')
+    assert not out['ok'] and not any(ch.isdigit() for ch in out['say']) and not commands._pending
+    out = commands.run('/remove 999', 'c', by='ai')
+    assert not out['ok'] and not any(ch.isdigit() for ch in out['say'])
+    monkeypatch.setattr('config.AI_REMOVE_MAX_TURNS', 5, raising=False)
+    out = commands.run('/remove 99', 'c', by='ai')          # under no cap: still no count leaks
+    assert not out['ok'] and not any(ch.isdigit() for ch in out['say'])
+
+
+def test_the_cap_is_hers_alone(sm, monkeypatch):
+    monkeypatch.setattr('config.AI_REMOVE_MAX_TURNS', 1, raising=False)
+    assert commands.run('/remove 3', 'c')['ok']
+
+
+def _her_cut(sm, n=1):
+    sm.rows = sm.rows + [{'role': 'user', 'content': 'please'}, {'role': 'assistant', 'content': 'ok'}]
+    assert commands.run(f'/remove {n}', 'c', by='ai')['ok']
+    commands.finish_turn(sm, 'c')
+
+
+def test_undo_puts_her_cut_back_in_place_and_only_once(sm):
+    before = list(sm.rows) + [{'role': 'user', 'content': 'please'}, {'role': 'assistant', 'content': 'ok'}]
+    _her_cut(sm, 2)
+    assert _users(sm) == ['u1']
+    sm.rows = sm.rows + [{'role': 'user', 'content': 'later'}]
+    assert commands.run('/undo', 'c')['ok']
+    assert sm.rows == before + [{'role': 'user', 'content': 'later'}]
+    assert not commands.run('/undo', 'c')['ok']
+
+
+def test_undo_refuses_when_what_came_before_changed(sm):
+    _her_cut(sm)
+    sm.rows[0] = {'role': 'user', 'content': 'edited'}
+    before = list(sm.rows)
+    assert not commands.run('/undo', 'c')['ok'] and sm.rows == before
+
+
+def test_undo_never_doubles_rows_when_the_cut_did_not_land(sm):
+    before = list(sm.rows)
+    plan = sm.plan_turn_cut('c', 1)[1]
+    sm.slot = {'rows': before[plan['start']:plan['end']], 'start': plan['start'], 'turns': 1,
+               'digest': sm.messages_digest(before[:plan['start']])}
+    assert commands.run('/undo', 'c')['ok'] and sm.rows == before and sm.slot is None
+
+
+def test_no_undo_copy_means_no_cut(sm):
+    sm.seal = True
+    before = list(sm.rows)
+    commands.run('/remove 1', 'c', by='ai')
+    commands.finish_turn(sm, 'c')
+    assert sm.rows == before
+
+
+def test_she_cannot_call_undo_and_the_persons_own_remove_keeps_no_copy(sm):
+    assert not commands.run('/undo', 'c', by='ai')['ok']
+    commands.run('/remove 1', 'c')
+    assert sm.slot is None
+
+
+def test_remove_keeps_the_game_and_phone_call_rules(sm, monkeypatch):
+    before = list(sm.rows)
+    monkeypatch.setattr(commands, '_call_chats', lambda: {'c'})
+    assert not commands.run('/remove 1', 'c')['ok'] and sm.rows == before
+    monkeypatch.setattr(commands, '_call_chats', lambda: set())
+    monkeypatch.setattr(sm, 'read_chat_settings', lambda chat: {'mode': 'game'})
+    assert not commands.run('/remove 1', 'c', by='ai')['ok'] and not commands._pending
+
+
+@pytest.mark.parametrize('line', ['/status', '/context', '/remove', '/remove 1'])
+def test_a_chat_with_a_bad_row_points_at_repair(sm, monkeypatch, line):
+    monkeypatch.setattr(sm, 'export_chat', lambda chat: None)
+    assert '/repair' in commands.run(line, 'c')['say']
+
+
+def test_a_failed_cut_never_names_a_private_chat(sm, monkeypatch):
+    told = []
+    monkeypatch.setattr(commands, '_tell', lambda chat, title, level='info': told.append(title))
+    commands.run('/remove 1', 'c', by='ai')
+    sm.rows[0] = {'role': 'user', 'content': 'edited'}
+    commands.finish_turn(sm, 'c')
+    assert told == ['AI could not remove turns']
+
+
+def test_a_sealed_chats_row_stays_out_of_the_notification_center(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(commands, '_sm', lambda: SimpleNamespace(read_chat_settings=lambda chat: None))
+    monkeypatch.setattr('core.notify.notify', lambda title, level, **k: seen.update(k))
+    commands._tell('c', 'x')
+    assert seen['private'] is True
+
+
+def test_slash_command_is_hidden_until_turned_on():
+    from functions import slash_command
+    assert slash_command.SETTINGS_GATED == {'slash_command': 'AI_SLASH_COMMANDS_ENABLED'}
+    d = json.loads((ROOT / 'core/settings_defaults.json').read_text(encoding='utf-8'))
+    assert d['tools']['AI_SLASH_COMMANDS_ENABLED'] is False and d['tools']['AI_REMOVE_MAX_TURNS'] == 5
+
+
+def test_slash_command_refuses_when_off(monkeypatch):
+    from functions import slash_command
+    monkeypatch.setattr('config.AI_SLASH_COMMANDS_ENABLED', False, raising=False)
+    assert slash_command.execute('slash_command', {'command': '/remove 1'})[1] is False
+
+
+def test_odd_tool_call_shapes_do_not_kill_a_turn():
+    rows = [{'role': 'assistant', 'content': '', 'tool_calls': [{'id': 't', 'function': 'look'}]},
+            {'role': 'tool', 'tool_call_id': 't', 'content': 'r'}]
+    assert budget._parts(rows, None, 'patches')['calls'] > 0
+    budget._expire(rows, 0, lambda name: None)
+
+
+def test_parallel_results_land_on_their_own_tools():
+    rows = [{'role': 'assistant', 'content': '', 'tool_calls': [{'id': 'a', 'function': {'name': 'one'}},
+                                                                {'id': 'b', 'function': {'name': 'two'}}]},
+            {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'a', 'content': 'short'},
+                                         {'type': 'tool_result', 'tool_use_id': 'b', 'content': 'much longer words ' * 20}]}]
+    by = budget._parts(rows, None, 'patches')['by_tool']
+    assert by['one']['runs'] == by['two']['runs'] == 1 and by['two']['results'] > by['one']['results'] > 0
 
 
 def test_changed_rows_refuse_the_waiting_cut(sm):
@@ -161,7 +329,7 @@ def test_compact_refuses_a_chat_that_is_not_there(sm, monkeypatch):
 def test_the_menu_lists_every_command():
     names = [c['name'] for c in commands.all_commands()]
     assert {'compact', 'context', 'continue', 'help', 'prompt', 'remove', 'repair', 'replay', 'retry', 'status',
-            'trim'} <= set(names) and names == sorted(names)
+            'trim', 'undo'} <= set(names) and names == sorted(names)
 
 
 @pytest.mark.parametrize('name', ['retry', 'continue', 'replay'])
@@ -299,3 +467,54 @@ def test_one_compress_dialog_and_the_menu_is_wired():
 def test_composer_catches_commands_before_the_turn():
     src = (ROOT / 'interfaces/web/static/handlers/send-handlers.js').read_text(encoding='utf-8')
     assert src.index('isCommand(txt)') < src.index('dispatch(Events.USER_SENT')
+    assert 'input.value = typed' in src
+
+
+def test_a_regen_resends_what_the_message_carried():
+    src = (ROOT / 'interfaces/web/static/chat.js').read_text(encoding='utf-8')
+    assert src.index('picturesToResend(userRow?.images)') < src.index('await api.removeFromUserMessage(userMessage')
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    """The real store, one chat of three turns; the second carries a stored picture."""
+    from unittest.mock import patch
+    defaults = {'prompt': 'default'}
+    monkeypatch.setattr('core.chat.history.publish', lambda *a, **k: None)
+    with patch('core.chat.history.get_system_defaults', side_effect=lambda: dict(defaults)), \
+         patch('core.chat.history.get_user_defaults', side_effect=lambda: dict(defaults)):
+        from core.chat.history import ChatSessionManager
+        m = ChatSessionManager(history_dir=str(tmp_path))
+        m.create_chat('s')
+        rows = _turn(1) + _turn(2) + _turn(3)
+        rows[3]['content'] = 'see <<IMG::tool:pic1>>'
+        assert m.replace_messages('s', rows)[0]
+        with m._get_connection() as conn:
+            conn.execute("INSERT INTO tool_images (id, chat_name, data, created_at) VALUES ('pic1', 's', x'00', 'now')")
+            conn.commit()
+        yield m
+
+
+def _pictures(m):
+    with m._get_connection() as conn:
+        return [r['id'] for r in conn.execute('SELECT id FROM tool_images')]
+
+
+def test_undo_on_the_real_store_keeps_rows_and_their_pictures(store):
+    before = store.export_chat('s')['messages']
+    ok, plan = store.plan_turn_cut('s', 1, keep_last=1)
+    assert ok and store.apply_turn_cut('s', plan, undo=True, with_own_turn=True)[0]
+    assert len(store.export_chat('s')['messages']) == len(before) - 4
+    store._prune_orphaned_tool_images('s')
+    assert _pictures(store) == ['pic1']                   # /undo still owes it
+    assert store.undo_turn_cut('s') == (2, None)
+    assert store.export_chat('s')['messages'] == before
+    assert store.undo_turn_cut('s')[0] == 0
+
+
+def test_the_undo_copy_goes_with_the_chat(store):
+    ok, plan = store.plan_turn_cut('s', 1, keep_last=1)
+    assert ok and store.apply_turn_cut('s', plan, undo=True)[0]
+    store.delete_chat('s')
+    store.create_chat('s')
+    assert store.undo_turn_cut('s')[0] == 0

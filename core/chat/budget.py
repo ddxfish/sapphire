@@ -163,6 +163,12 @@ def _results(m):
     return blocks if blocks and all(b.get('type') == 'tool_result' for b in blocks) else []
 
 
+def _fn_name(d):
+    """A tool or tool call's name; a provider's odd shape must not kill the turn."""
+    fn = d.get('function')
+    return fn.get('name') if isinstance(fn, dict) else None
+
+
 def _is_result(m) -> bool:
     return m.get('role') == 'tool' or bool(_results(m))
 
@@ -249,7 +255,7 @@ def _expire(msgs, live_from, expiry, pressure=False, only=None):
     for i, m in enumerate(msgs):
         for tc in m.get('tool_calls') or []:
             if isinstance(tc, dict):
-                called[tc.get('id')] = (tc.get('function') or {}).get('name')
+                called[tc.get('id')] = _fn_name(tc)
         if _is_person(m):
             turns += 1
         elif _is_result(m) and not m.get('_stub'):
@@ -538,25 +544,32 @@ def _parts(msgs, tools, family) -> dict:
         if isinstance(t, dict):
             n = count_tokens(json.dumps({'type': t.get('type'), 'function': t.get('function')}, ensure_ascii=False))
             p['schemas'] += n
-            tool((t.get('function') or {}).get('name'))['schema'] += n
+            tool(_fn_name(t))['schema'] += n
     for m in msgs:
         p['framing'] += MSG_OVERHEAD
         for tc in m.get('tool_calls') or []:
             if isinstance(tc, dict):
-                name = (tc.get('function') or {}).get('name')
+                name = _fn_name(tc)
                 called[tc.get('id')] = name
                 tool(name)['calls'] += count_tokens(json.dumps(tc, ensure_ascii=False))
         if m.get('tool_calls'):
             p['calls'] += count_tokens(json.dumps(m['tool_calls'], ensure_ascii=False))
         if m.get('thinking_raw'):
             p['thinking'] += count_tokens(json.dumps(m['thinking_raw'], ensure_ascii=False, default=str))
+        if _results(m):                                # one row can answer parallel calls
+            for b in _results(m):
+                text, think = walk(b)
+                p['thinking'] += think
+                p['results'] += text
+                tool(called.get(b.get('tool_use_id')))['results'] += text
+                tool(called.get(b.get('tool_use_id')))['runs'] += 1
+            continue
         text, think = walk(m.get('content'))
         p['thinking'] += think
-        if _is_result(m):
-            name = m.get('name') if m.get('role') == 'tool' else called.get(_results(m)[0].get('tool_use_id'))
+        if m.get('role') == 'tool':
             p['results'] += text
-            tool(name)['results'] += text
-            tool(name)['runs'] += 1
+            tool(m.get('name'))['results'] += text
+            tool(m.get('name'))['runs'] += 1
         else:
             bucket = ('system' if m.get('role') == 'system' else 'injected' if m.get('_inject')
                       else 'you' if m.get('role') == 'user' else 'her')
