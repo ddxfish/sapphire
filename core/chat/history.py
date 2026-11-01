@@ -264,13 +264,13 @@ def count_message_tokens(content, include_images: bool = False) -> int:
 def _forget_fit(chat_name):
     """A chat cleared, renamed, deleted or rewritten (trim, compress, import,
     row edits): the budgeter's cut point and meter reading for that name go
-    too, and the background lanes' `task:` one (core/chat/budget.py). A cut
-    point is a count of turns, so on a rewritten list it hid the wrong ones:
-    a compress summary stayed out of her view (hunt 19)."""
+    too (core/chat/budget.py; since 2026-11-01 the task lane fits under the
+    chat's own name, so this one key is the whole of it). A cut point is a
+    count of turns, so on a rewritten list it hid the wrong ones: a compress
+    summary stayed out of her view (hunt 19)."""
     try:
         from core.chat import budget
         budget.forget(chat_name)
-        budget.forget(f"task:{chat_name}")
     except Exception:
         pass
 

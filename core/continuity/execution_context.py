@@ -11,7 +11,6 @@ import re
 import string
 import time
 from contextvars import ContextVar
-from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 
 import config
@@ -239,25 +238,13 @@ class ExecutionContext:
         ai_name = 'Sapphire'
         system_prompt = system_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
 
-        # Datetime injection. inject_datetime='date' stamps the DAY only —
-        # for multi-run sessions (librarian nights) a minute stamp would
-        # change the system prompt every run and torch the provider's
-        # prompt cache across the whole session. True keeps the classic
-        # minute form.
-        inject_dt = self.task_settings.get("inject_datetime")
-        if inject_dt:
-            try:
-                from zoneinfo import ZoneInfo
-                tz_name = getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
-                now = datetime.now(ZoneInfo(tz_name))
-                tz_label = f" ({tz_name})"
-            except Exception:
-                now = datetime.now()
-                tz_label = ""
-            if inject_dt == 'date':
-                system_prompt = f"{system_prompt}\n\nCurrent date: {now.strftime('%A, %B %d, %Y')}{tz_label}"
-            else:
-                system_prompt = f"{system_prompt}\n\nCurrent date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}{tz_label}"
+        # No clock here. Per-turn context (the time when the task asks for it,
+        # plugin ghost text, the idle line) rides the ghost row _run_inner adds
+        # before the live user row (core/ghost_messages.py), as the chat lane
+        # has since 2026-05-08. A minute stamp on this prompt re-read the whole
+        # prompt at every minute boundary on any backend that caches a prefix
+        # (an agent's tool loop runs for minutes); 'date' was the workaround
+        # and now means the same as True.
 
         # Task-supplied append (e.g. the librarian's session-start self
         # snapshot) — ambient identity context, not a message. Rides every
@@ -497,6 +484,53 @@ class ExecutionContext:
         # id and nothing else. Text only — never base64.
         return augmented, augmented
 
+    def _row_meta(self, response_msg, content, t0, t1):
+        """The metrics block the web lane stamps on every assistant row (the
+        ui.js footer: provider, model, tokens, seconds, finish). The same
+        builder, so a task's turn in a chat shows its numbers too; before
+        2026-11-01 those rows were blank and a slow turn had nothing to say."""
+        try:
+            from core.chat.chat_streaming import usage_metadata, _stamp_finish
+            model = self.model_override or getattr(self.provider, 'model', '')
+            usage = getattr(response_msg, 'usage', None)
+            if usage is not None and not isinstance(usage, dict):
+                return None                                   # a stub response: nothing real to count
+            meta = usage_metadata(self.provider_key, model, response_msg, content or '',
+                                  getattr(response_msg, 'thinking', None), t0, t1)
+            _stamp_finish(meta, getattr(response_msg, 'finish_reason', None), content or '', self.provider_key)
+            return meta
+        except Exception as e:
+            logger.debug(f"[ExecCtx] row metadata skipped: {e}")
+            return None
+
+    def _ghost_row(self, user_input):
+        """The per-turn ghost row the chat lane sends (core/ghost_messages.py):
+        the time when the task asks for it (`inject_datetime`, True or 'date'),
+        plugin `ghost_inject` text, the idle line for the chat. Labeled as the
+        app's own context, never persisted (`_inject`), placed right before the
+        live user row so the system prompt and the history stay a stable,
+        cacheable prefix. Before 2026-11-01 this lane stamped the minute onto
+        the system prompt instead. Spice stays off for a task: it has none of
+        its own, and the chat's is the web lane's business."""
+        try:
+            from core.ghost_messages import build_ghost_message
+            settings = {'inject_datetime': bool(self.task_settings.get('inject_datetime')),
+                        'spice_enabled': False}
+            text = build_ghost_message(None, settings, user_input or '',
+                                       chat_name=self.task_settings.get('chat_target') or None)
+        except Exception as e:
+            logger.warning(f"[ExecCtx] ghost row skipped: {e}")
+            return None
+        return {"role": "user", "content": text, "_inject": True} if text else None
+
+    def _with_meta(self, row, response_msg, content, t0, t1):
+        """`row` with its metrics block when one could be built; a row without
+        one stays exactly as it was (no `metadata: None` in history)."""
+        meta = self._row_meta(response_msg, content, t0, t1)
+        if meta:
+            row["metadata"] = meta
+        return row
+
     def _run_inner(self, user_input, history_messages, filter_to_thinking_only, _inject_tool_images,
                    images=None):
         # Build the user message. llm_content is what the model sees (may carry
@@ -507,18 +541,17 @@ class ExecutionContext:
         # deletes front messages, which would make a frozen msg_start_idx stale and
         # silently drop the user turn from the persisted slice. 2026-06-13.
         user_msg = {"role": "user", "content": llm_content}
+        ghost = self._ghost_row(user_input)           # per-turn context rides here, never the system prompt
         if history_messages is not None:
             # Foreground mode — use existing chat history
             messages = [{"role": "system", "content": self.system_prompt}] + history_messages
-            msg_start_idx = len(messages)  # initial position + fallback anchor
-            messages.append(user_msg)
         else:
             # Ephemeral — no history
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-            ]
-            msg_start_idx = len(messages)
-            messages.append(user_msg)
+            messages = [{"role": "system", "content": self.system_prompt}]
+        if ghost:
+            messages.append(ghost)
+        msg_start_idx = len(messages)  # the user row's initial position + fallback anchor
+        messages.append(user_msg)
 
         # The scheduler stores 0 as the "unset / use default" sentinel for
         # max_tool_rounds and max_parallel_tools (scheduler.py:320-321,
@@ -582,8 +615,10 @@ class ExecutionContext:
         def _expiry(name):
             meta = _fm.tool_meta(name) if _fm is not None and hasattr(_fm, 'tool_meta') else None
             return meta.get('expires') if isinstance(meta, dict) else False   # False: not loaded, never expires
-        # whose watermark: a run inside a chat keeps its cut point steady (the cache)
-        _mark = (f"task:{self.task_settings.get('chat_target')}"
+        # whose watermark and meter: the chat's own. ONE key per conversation,
+        # whichever lane speaks: the web turn and this one share the cut point
+        # and the context bar. A `task:` key of its own hid both (2026-11-01).
+        _mark = (self.task_settings.get('chat_target')
                  if history_messages is not None and self.task_settings.get('chat_target') else None)
         final_content = None
         llm_retries = 0  # one rescue decode per run — shared by both garbage shapes below
@@ -612,9 +647,11 @@ class ExecutionContext:
                 break
             gen_params = (self.gen_params if fitted.max_tokens == self.gen_params.get('max_tokens')
                           else {**self.gen_params, 'max_tokens': fitted.max_tokens})
+            _t0 = time.time()
             response_msg = self.tool_engine.call_llm_with_metrics(
                 self.provider, fitted.messages, gen_params, tools=self.tools
             )
+            _t1 = time.time()
             budget.learn_usage(fitted, getattr(response_msg, 'usage', None))
 
             # A cancel that landed during the LLM call: nothing from this
@@ -638,11 +675,11 @@ class ExecutionContext:
                 # Carry `thinking` for DeepSeek-reasoner round-trip on next
                 # iteration; harmless for other providers. 2026-05-14.
                 _thinking = getattr(response_msg, "thinking", None)
-                messages.append({
+                messages.append(self._with_meta({
                     "role": "assistant", "content": filtered,
                     "tool_calls": tool_calls,
                     "thinking": _thinking,
-                })
+                }, response_msg, filtered, _t0, _t1))
                 self.tool_log.extend(tc.get('function', {}).get('name', '?') for tc in tool_calls)
                 self._tell_tool(tc.get('function', {}).get('name', '?') for tc in tool_calls)
                 # Cap at source: a runaway agent can append thousands. The
@@ -740,7 +777,8 @@ class ExecutionContext:
                             f"— dropped, nothing sent.")
                         logger.warning(f"[ExecCtx] {self.degraded_reason}")
                         final_content = ""
-                        messages.append({"role": "assistant", "content": ""})
+                        messages.append(self._with_meta({"role": "assistant", "content": ""},
+                                                        response_msg, "", _t0, _t1))
                         break
                     self.degraded_reason = (
                         "LLM hit max_tokens without completing a tool call "
@@ -749,7 +787,8 @@ class ExecutionContext:
                     logger.warning(f"[ExecCtx] {self.degraded_reason}")
 
                 final_content = response_msg.content
-                messages.append({"role": "assistant", "content": final_content})
+                messages.append(self._with_meta({"role": "assistant", "content": final_content},
+                                                response_msg, final_content, _t0, _t1))
                 break
             else:
                 # No answer and no tool_calls: empty content (a small /

@@ -1022,9 +1022,11 @@ def _task(message, scope, toolset=SORT_TOOLSET, name='Librarian pass'):
         'provider': res.get('provider') or 'auto',
         'initial_message': message,
         'tts_enabled': False,
-        # 'date' granularity + the once-per-session snapshot keep the system
-        # prompt byte-stable across the night — identity whispers (system
-        # prompt), work shouts (message body). Krem's ruling 2026-07-19.
+        # The once-per-session snapshot keeps the system prompt byte-stable
+        # across the night — identity whispers (system prompt), work shouts
+        # (message body). Krem's ruling 2026-07-19. Since 2026-11-01 the time
+        # rides the ghost row before each message on this lane, never the
+        # prompt, so 'date' here means the same as True (kept for the record).
         'inject_datetime': 'date',
         'system_append': _session_snapshot(chat, scope) or None,
         'context_limit': _context_limit(),

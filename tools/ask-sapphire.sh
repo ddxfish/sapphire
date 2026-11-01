@@ -89,6 +89,9 @@ body = {
     # ASK_TOOLSET=<name> overrides the chat's toolset for ONE message (dev:
     # proving a new tool before the user toolsets learn its name). 2026-09-10.
     "toolset": os.environ.get('ASK_TOOLSET') or s.get('toolset') or s.get('ability') or 'all',
+    # ASK_DATETIME=1 asks for the time line on the ghost row for ONE message
+    # (dev: proving the task lane's ghost rail live). 2026-11-01.
+    "inject_datetime": bool(os.environ.get('ASK_DATETIME')),
     "prompt": s.get('persona') or s.get('prompt') or 'sapphire',
     # Forward chat's bound LLM provider/model. Without this, provider defaults
     # to 'auto' → first available → wrong model from global fallback order

@@ -792,6 +792,13 @@ class ContinuityExecutor:
                 task_settings = self._extract_task_settings(merged)
             else:
                 task_settings = self._extract_task_settings(task)
+            # The chat this run speaks in, by its RESOLVED name. ExecutionContext
+            # reads it for the budgeter's watermark and meter key (one per
+            # conversation), for tool provenance (set_tool_context) and for
+            # {session} affinity. The extractor never carried it, so every
+            # persistence run fit with no key: a from-scratch cut every round
+            # (the prefix moved between rounds), and no meter (2026-11-01).
+            task_settings["chat_target"] = target_chat
             # Privacy rides the CHAT here, not just the prompt (vaulted-chats
             # Phase 0, 2026-08-13). This lane is about to read the target
             # chat's whole transcript into the LLM request — before this, only

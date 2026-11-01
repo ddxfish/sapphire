@@ -26,6 +26,7 @@
 #      views go; still over: ContextFull, honest words, nothing sent.
 # The stored chat and the transcript are never touched: only the wire copy.
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -375,7 +376,8 @@ def fit(messages, tools=None, provider=None, provider_key='', model='', max_toke
     tk = [_msg_tokens(m, family) for m in msgs]          # each row counted once per fit
     raw = schema + sum(tk)
     if not window:
-        _remember(chat, int(raw * ratio), server, 0, stubbed, _parts(msgs, tools, family) if chat else None, ratio)
+        shape = _trace(chat, label, None, warm, 0, 0, msgs, sys_end, stubbed)
+        _remember(chat, int(raw * ratio), server, 0, stubbed, _parts(msgs, tools, family) if chat else None, ratio, shape)
         _record(chat, key, ids)
         return Fit(msgs, max_tokens, None, limit, server, int(raw * ratio), raw, 0, 0, stubbed, key)
 
@@ -394,6 +396,7 @@ def fit(messages, tools=None, provider=None, provider_key='', model='', max_toke
     spans = _spans(msgs, sys_end, live_from)
     cost = [sum(tk[s:e]) for s, e in spans]
     held, held_window = _watermark.get(chat, (0, None)) if chat else (0, None)
+    held0 = held                                        # what this chat's last fit left out of view
     if held_window != window or held >= len(spans):
         held = 0                                        # another window (a model switch), or turns deleted under it: start over
     if held and raw * ratio <= CUT_TO * room and not warm:
@@ -438,7 +441,8 @@ def fit(messages, tools=None, provider=None, provider_key='', model='', max_toke
     send = max_tokens
     if max_tokens or (server and window == server):    # never ask for more reply than the window has left
         send = max(floor, min(asked, window - est - margin))
-    _remember(chat, est, server, out_of_view, stubbed, _parts(msgs, tools, family) if chat else None, ratio)
+    shape = _trace(chat, label, window, warm, held0, out_of_view, msgs, sys_end, stubbed)
+    _remember(chat, est, server, out_of_view, stubbed, _parts(msgs, tools, family) if chat else None, ratio, shape)
     _record(chat, key, ids)
     return Fit(msgs, send, window, limit, server, est, raw, reserve, out_of_view, stubbed, key)
 
@@ -485,11 +489,45 @@ def _record(chat, key, ids):
             _sender[key] = chat
 
 
-def _remember(chat, est, server, out_of_view, stubbed, parts=None, ratio=1.0):
+def _remember(chat, est, server, out_of_view, stubbed, parts=None, ratio=1.0, shape=None):
     if chat:
         with _lock:
             _last[chat] = {'used': est, 'server': server, 'out_of_view': out_of_view, 'stubbed': stubbed,
-                           'parts': parts, 'ratio': ratio}
+                           'parts': parts, 'ratio': ratio, 'shape': shape}
+
+
+def _first_row(msgs, sys_end) -> str:
+    """A short fingerprint of the first history row sent after the system
+    block: the row a provider's cached prefix hangs on. A hash only, so no
+    chat text reaches a log."""
+    for m in msgs[sys_end:]:
+        if not m.get('_inject'):
+            raw = json.dumps({k: m.get(k) for k in ('role', 'content', 'tool_calls', 'tool_call_id')},
+                             sort_keys=True, default=str)[:4000]
+            return hashlib.sha1(raw.encode('utf-8', 'replace')).hexdigest()[:8]
+    return '-'
+
+
+def _trace(chat, label, window, warm, held, n, msgs, sys_end, stubbed):
+    """One line per fit whose prefix-shaping facts changed since this chat's
+    last fit (window, turns out of view, stubs, the first row sent), and a
+    WARNING when the cut moved while the provider's cache was warm: a prefix
+    re-read nobody asked for. (Strata trial 2026-11-01: 553 rows in, 244 then
+    258 out between two rounds, 14 s of re-read and no line to show it.)"""
+    if not chat:
+        return None
+    shape = {'window': window, 'n': n, 'first': _first_row(msgs, sys_end), 'stubbed': stubbed}
+    prev = (_last.get(chat) or {}).get('shape')
+    if prev == shape:
+        return shape
+    line = (f"[CONTEXT] '{label or chat}': fit window={window} warm={'yes' if warm else 'no'} held={held} "
+            f"out_of_view={n} stubbed={stubbed} first_row={shape['first']}")
+    if prev and warm and (prev.get('first') != shape['first'] or prev.get('n') != n):
+        logger.warning(f"{line} - the cached prefix MOVED while warm (was out_of_view={prev.get('n')} "
+                       f"first_row={prev.get('first')} window={prev.get('window')})")
+    else:
+        logger.info(line)
+    return shape
 
 
 def meter(chat, fallback_used: int) -> dict:

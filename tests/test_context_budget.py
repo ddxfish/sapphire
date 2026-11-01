@@ -746,8 +746,48 @@ def test_a_rewritten_chat_drops_its_cut_point():
     import inspect
     from core.chat import budget, history
     budget._watermark['c'] = (15, 8000)
-    budget._watermark['task:c'] = (4, 8000)
     history._forget_fit('c')
-    assert 'c' not in budget._watermark and 'task:c' not in budget._watermark
+    assert 'c' not in budget._watermark          # one key per conversation since 2026-11-01: the chat's name
     src = inspect.getsource(history.ChatSessionManager.replace_messages)
     assert src.count('_forget_fit(chat_name)') == 2          # both write paths
+
+
+# --- the prefix holds between rounds (2026-11-01) ---------------------------------
+def test_a_warm_fit_sends_the_first_fits_rows_plus_the_new_ones():
+    """Round two of a tool turn appends two rows and nothing else: the cut
+    point, the stubs and the first row sent all stay put while the provider's
+    cache is warm (the Strata trial re-read 31K tokens when they did not)."""
+    msgs, live = chat_of(100)
+    prov = Prov(16000)
+    f1 = budget.fit(msgs, None, prov, 'k', 'm', 1024, chat='c', live=live)
+    assert f1.out_of_view > 0
+    msgs += [{'role': 'assistant', 'content': 'calling'}, {'role': 'user', 'content': '[tool result]'}]
+    f2 = budget.fit(msgs, None, prov, 'k', 'm', 1024, chat='c', live=live)
+    assert len(f2.messages) == len(f1.messages) + 2
+    assert f2.messages[:len(f1.messages)] == f1.messages
+
+
+def test_the_meter_reads_a_fit_under_the_chats_own_name():
+    """A task's turn in a chat fits under the chat's name (ExecutionContext
+    passes chat_target), so the context bar the person watches shows it."""
+    msgs, live = chat_of(10)
+    budget.fit(msgs, None, Prov(16000), 'k', 'm', 1024, chat='c', live=live)
+    assert budget.meter('c', 0)['measured'] is True
+    assert budget.meter('task:c', 0)['measured'] is False
+
+
+def test_a_prefix_that_moves_while_warm_is_a_warning(caplog):
+    """The decision log: a warm fit whose first row or cut point differs from
+    the chat's last fit says so at WARNING; the same shape says nothing."""
+    import logging
+    msgs, live = chat_of(100)
+    prov = Prov(16000)
+    with caplog.at_level(logging.INFO, logger='core.chat.budget'):
+        budget.fit(msgs, None, prov, 'k', 'm', 1024, chat='c', live=live)
+        caplog.clear()
+        budget.fit(msgs, None, prov, 'k', 'm', 1024, chat='c', live=live)
+        assert not [r for r in caplog.records if 'fit window' in r.getMessage()]
+        shifted = msgs[:1] + msgs[3:]                   # the oldest turn deleted under the cut
+        budget.fit(shifted, None, prov, 'k', 'm', 1024, chat='c', live=live)
+    warned = [r for r in caplog.records if r.levelno == logging.WARNING and 'MOVED while warm' in r.getMessage()]
+    assert warned, [r.getMessage() for r in caplog.records]

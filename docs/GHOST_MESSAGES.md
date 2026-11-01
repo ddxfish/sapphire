@@ -13,8 +13,12 @@ ghost line + the new user message are fresh tokens — roughly an 80% input-cost
 on long Claude chats, with *stronger* effect (recency bias: the model sees the note
 right before generating, not buried 50K tokens deep).
 
-Core code: `core/ghost_messages.py`. Hook runner: `core/hooks.py`. Build site:
-`core/chat/chat.py` (`_build_base_messages`). Cache placement: `core/chat/llm_providers/claude.py`.
+Core code: `core/ghost_messages.py`. Hook runner: `core/hooks.py`. Build sites:
+`core/chat/chat.py` (`_build_base_messages`, the chat lane) and
+`core/continuity/execution_context.py` (`_ghost_row`, the task lane: cron, agents,
+rooms, triggers — since 2026-11-01; before that a task's time was stamped onto its
+system prompt, and `ghost_inject` never fired for a task). Cache placement:
+`core/chat/llm_providers/claude.py`.
 
 ---
 

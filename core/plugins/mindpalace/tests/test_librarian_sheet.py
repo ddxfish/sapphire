@@ -203,20 +203,24 @@ def test_update_self_clean_rows_untouched(palace):
 # ─── ExecutionContext: date granularity + system append ──────────────────────
 
 def test_build_prompt_date_granularity_and_append():
+    """The librarian's 'date' setting kept the system prompt byte-stable
+    across a night. Since 2026-11-01 no clock touches the system prompt on
+    this lane at all: the time rides the ghost row before the live message
+    (core/ghost_messages.py), so the prompt is stable for every setting and
+    'date' means the same as True. The snapshot still rides the prompt."""
     from core.continuity.execution_context import ExecutionContext
     ctx = object.__new__(ExecutionContext)
     ctx.task_settings = {'prompt': 'no-such-persona-xyz',
                          'inject_datetime': 'date',
                          'system_append': 'SNAPSHOT RIDES HERE'}
     out = ctx._build_prompt()
-    assert 'Current date:' in out
-    assert 'Current date/time' not in out               # no minute stamp
+    assert 'Current date' not in out                    # no stamp of any kind
     assert not re.search(r'\d{1,2}:\d{2} [AP]M', out)
     assert out.rstrip().endswith('SNAPSHOT RIDES HERE')
-    ctx.task_settings = {'prompt': 'no-such-persona-xyz',
-                         'inject_datetime': True}
-    out = ctx._build_prompt()
-    assert 'Current date/time' in out                   # classic form intact
+    ctx.task_settings = {'prompt': 'no-such-persona-xyz', 'inject_datetime': True}
+    assert ctx._build_prompt() == ctx._build_prompt()   # byte-stable, whatever the setting
+    ghost = ctx._ghost_row('sort these')
+    assert ghost and ghost['_inject'] and ghost['content'].count('Time:') == 1
 
 
 def test_present_self_first_tending_when_sheet_empty(palace, monkeypatch):
