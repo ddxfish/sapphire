@@ -11,6 +11,7 @@ from .llm_providers import LLMResponse, get_generation_params
 from .llm_providers.base import LENGTH_FINISH
 from .llm_errors import explain_finish, is_context_error
 from . import budget
+from core import documents
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
 from core.metrics import metrics as token_metrics
@@ -741,7 +742,9 @@ class StreamingChat:
             # story_act is NEVER_FENCED, so essentially every story turn
             # disarmed it (negspace N4, 2026-08-31).
             def _filtered_enabled_tools():
-                tools = self._effective_enabled_tools()
+                tools = documents.fence_tools(self._effective_enabled_tools(), chat_name,
+                                              self.main_chat.function_manager.all_possible_tools,
+                                              chat_settings.get('rag_context'))
                 try:
                     # NO local import here: binding hook_runner OR HookEvent
                     # locally shadows the module-level names for the WHOLE
@@ -788,6 +791,13 @@ class StreamingChat:
                     yield self._emit_llm_done(tts_pump, refused=True)
                     yield {"type": "final", "text": "", "cancelled": False, "error": True}
                     return
+
+            # The chat's documents, now the real window is known (core/documents.py).
+            # For a Continue the person's row is the question, so they sit before it.
+            self.main_chat.insert_documents(
+                messages, _live,
+                user_input if not continue_from else (_live.get('content') if isinstance(_live.get('content'), str) else ''),
+                provider, tools=any(t.get('function', {}).get('name') in documents.TOOL_NAMES for t in enabled_tools))
 
             # A model with no vision reads a description in place of each stored
             # image on the wire — pasted this turn or replayed by the vision

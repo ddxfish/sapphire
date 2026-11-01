@@ -313,6 +313,41 @@ _REPLAY_NOTE = ("[The image(s) that tool call returned, as shown to you and the 
                 "at the time. Not a new message from the user.]")
 
 
+def _window_start(msgs, window) -> int:
+    """Index of the first row inside the vision window: the last `window` user turns."""
+    start, seen = len(msgs), 0
+    for i in range(len(msgs) - 1, -1, -1):
+        if msgs[i]["role"] == "user":
+            seen += 1
+            start = i
+            if seen >= window:
+                break
+    return start
+
+
+def images_in_view(messages, window) -> list:
+    """What the next turns will replay, for the row above the composer: [{id, turns,
+    source}], newest first. turns = how many more messages she'll still see it on. The
+    same walk as the wire (_window_start), so the row can't claim more than is sent.
+    An inline legacy image has no id to show or hide, so it isn't listed."""
+    from core.chat.llm_errors import is_error_row
+    if window <= 0:
+        return []
+    rows = [m for m in messages if not is_error_row(m)]
+    out, seen = [], 0
+    for m in reversed(rows[_window_start(rows, window):]):
+        content = m.get("content")
+        if m["role"] == "tool" and isinstance(content, str):
+            out += [{'id': i, 'turns': window - seen, 'source': 'tool'} for i in _IMG_MARKER_RE.findall(content)]
+        elif m["role"] == "user":
+            if isinstance(content, list):
+                out += [{'id': str(b.get('handle'))[4:], 'turns': window - seen, 'source': 'you'} for b in content
+                        if isinstance(b, dict) and b.get('type') == 'image'
+                        and str(b.get('handle') or '').startswith('img:')]
+            seen += 1
+    return out
+
+
 def _replay_images(msgs, refs, window, loader):
     """The vision window. For the last `window` user turns, re-attach what the
     model saw live: a user row's pasted images as blocks on that row; a tool
@@ -322,13 +357,7 @@ def _replay_images(msgs, refs, window, loader):
     [('id', tool_image_id) | ('inline', base64, media_type)]; loader(id) →
     (bytes, media_type) | None (stashed/hidden/missing images stay out)."""
     import base64 as _b64
-    start, seen = len(msgs), 0
-    for i in range(len(msgs) - 1, -1, -1):
-        if msgs[i]["role"] == "user":
-            seen += 1
-            start = i
-            if seen >= window:
-                break
+    start = _window_start(msgs, window)
 
     def blocks(items):
         out = []
@@ -2504,6 +2533,7 @@ class ChatSessionManager:
                     self.landing_chat_name = safe_name
             logger.info(f"Renamed chat '{old_name}' -> '{safe_name}'")
             _idle_moved(old_name, safe_name)
+            self._documents_follow('rename_chat', old_name, safe_name)
             return True, safe_name
         except Exception as e:
             logger.error(f"rename_chat('{old_name}' -> '{new_name}') failed: {e}")
@@ -2749,6 +2779,17 @@ class ChatSessionManager:
         with self._get_connection() as conn:
             return conn.execute(
                 "SELECT 1 FROM chats WHERE vaulted LIMIT 1").fetchone() is not None
+
+    @staticmethod
+    def _documents_follow(move, *chats):
+        """A chat's documents go where it goes. Here, not in a route: every way a chat
+        is renamed or deleted passes through this manager (a room guest, a reaped
+        phone chat), and documents left behind pass to the next chat of that name."""
+        try:
+            from core import documents
+            getattr(documents, move)(*chats)
+        except Exception as e:
+            logger.warning(f"Chat documents didn't follow ({move}): {e}")
 
     def _vault_hidden(self, chat_name: str) -> bool:
         """Disclosure gate (vaulted chats Phase 1): True when this chat is
@@ -3623,6 +3664,7 @@ class ChatSessionManager:
                 except Exception:
                     pass
                 logger.info(f"Deleted chat: {chat_name}")
+                self._documents_follow('delete_chat', chat_name)
                 self._rows_state.pop(chat_name, None)
                 self._rows_degraded.pop(chat_name, None)
                 self._degraded_toasted.discard(chat_name)
@@ -5359,6 +5401,8 @@ class ChatSessionManager:
                         hook_runner.fire("chat_deleted", HookEvent(metadata={"name": name}))
             except Exception as e:
                 logger.warning(f"chat_deleted dispatch for reaped chats failed: {e}")
+            for name in to_delete:
+                self._documents_follow('delete_chat', name)
         return to_delete
 
     def reset_chat_scope_ref(self, setting_key: str, deleted_scope: str,
@@ -5731,6 +5775,27 @@ class ChatSessionManager:
         if not row or not row[0]:
             return None
         return self.get_tool_image(image_id)
+
+    def images_in_view(self, chat_name: str) -> list:
+        """The active chat's images the vision window will still replay. [] for any
+        other chat: only the active one's rows are in memory, and sealed rows stay shut."""
+        if chat_name != self.get_active_chat_name():
+            return []
+        try:
+            window = max(0, int(getattr(config, 'IMAGE_MEMORY_TURNS', 0) or 0))
+        except (TypeError, ValueError):
+            window = 0
+        return [i for i in images_in_view(self.current_chat.messages, window) if self.visible_tool_image(i['id'])]
+
+    def hide_image_from_view(self, chat_name: str, image_id: str) -> bool:
+        """Stop replaying an image. It stays in the chat and she can still open it by
+        its handle: visible=0 is what a stashed image already is to the vision window."""
+        self._ensure_db()
+        with self._get_connection() as conn:
+            done = conn.execute("UPDATE tool_images SET visible = 0 WHERE id = ? AND chat_name = ?",
+                                (image_id, chat_name)).rowcount
+            conn.commit()
+        return bool(done)
 
     def image_caption(self, image_id: str) -> Optional[str]:
         """The image's description in words (core.image_describe), or None.

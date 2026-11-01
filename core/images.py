@@ -347,6 +347,24 @@ def gallery(title, entries, *, view=True):
 
 # ── contract ─────────────────────────────────────────────────────────────────
 
+def wire_safe(data: str, media_type: str) -> tuple:
+    """(base64, media type) an OpenAI-shaped server can decode. LM Studio refuses WebP
+    with "'url' field must be a base64 encoded image", while JPEG, PNG and GIF pass, and
+    the stored image stays as it came. Unreadable data goes on as it is: the server's
+    refusal says more than a guess here would."""
+    if 'webp' not in str(media_type).lower():
+        return data, media_type
+    try:
+        img = _open(base64.b64decode(data))
+        alpha = img.mode in ('RGBA', 'LA', 'P') and img.convert('RGBA').getextrema()[3][0] < 255
+        out = io.BytesIO()
+        img.convert('RGBA').save(out, 'PNG') if alpha else img.convert('RGB').save(out, 'JPEG', quality=90)
+        return base64.b64encode(out.getvalue()).decode('ascii'), 'image/png' if alpha else 'image/jpeg'
+    except Exception as e:
+        logger.warning(f"[IMAGES] couldn't convert a WebP for the wire: {e}")
+        return data, media_type
+
+
 def result(text, images=(), display_only=False) -> dict:
     """The tool-return contract. `images` = raw bytes (jpeg/png/…)."""
     return {"text": text,

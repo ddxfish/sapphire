@@ -23,11 +23,12 @@ import re
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from html.parser import HTMLParser
 from pathlib import Path
 
 import numpy as np
 from statistics import NormalDist
+
+from core.text_extract import decode_bytes, decode_text, extract_epub, extract_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -191,16 +192,6 @@ def get_connection():
 
 # ─── Text handling ───────────────────────────────────────────────────────────
 
-def decode_bytes(raw: bytes) -> str:
-    """utf-8 first, cp1252 second (the Win10 default), replace as last resort."""
-    for enc in ('utf-8', 'cp1252'):
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode('utf-8', errors='replace')
-
-
 def _write_working(path, text):
     """CRLF/CR -> LF before writing working.md. Path.write_text translates
     every '\n' to os.linesep blindly — pre-existing '\r' becomes '\r\r\n' on
@@ -219,134 +210,13 @@ def _extract(ext, raw):
     """→ (markdown_text, file_meta, error). error = honest refusal (scanned
     PDF, DRM epub, corrupt file) — the caller creates nothing on refusal."""
     if ext in TEXT_KINDS:
-        return decode_bytes(raw), {}, None
+        text, err = decode_text(raw)
+        return text, {}, err
     if ext == '.pdf':
-        return _extract_pdf(raw)
+        return extract_pdf(raw)      # refuses a scan: the Library has no way to show a page
     if ext == '.epub':
-        return _extract_epub(raw)
+        return extract_epub(raw)
     return None, {}, f"'{ext}' isn't importable — txt, md, pdf, epub."
-
-
-def _extract_pdf(raw):
-    """pypdf text layer. Scanned PDFs have none — refused honestly, no OCR
-    (Krem's ruling: 'yeet those')."""
-    import io
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(raw))
-        if reader.is_encrypted:
-            try:
-                reader.decrypt('')
-            except Exception:
-                return None, {}, "PDF is password-protected — can't read it."
-        pages = [(p.extract_text() or '').strip() for p in reader.pages]
-        text = '\n\n'.join(p for p in pages if p)
-        if not text or len(text) < 40 * max(1, len(pages)):
-            return None, {}, ("This PDF has no usable text layer (scanned "
-                              "pages?) — OCR isn't supported. Export it as "
-                              "text and import that instead.")
-        meta = {}
-        try:
-            info = reader.metadata
-            if info and info.title:
-                meta['title'] = str(info.title).strip()
-            if info and info.author:
-                meta['author'] = str(info.author).strip()
-        except Exception:
-            pass
-        return text, meta, None
-    except Exception as e:
-        return None, {}, f"PDF parse failed: {e}"
-
-
-class _HTMLText(HTMLParser):
-    """EPUB chapter HTML → plain text + first heading (stdlib, no bs4).
-    Heading text is captured separately and re-emitted as a markdown # so
-    the chunker's chapter breadcrumbs work."""
-    def __init__(self):
-        super().__init__()
-        self.parts, self.title = [], None
-        self._skip = 0
-        self._in_head = False
-        self._head = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ('script', 'style'):
-            self._skip += 1
-        elif tag in ('h1', 'h2', 'h3') and self.title is None:
-            self._in_head = True
-        elif tag in ('p', 'div', 'br', 'li', 'tr'):
-            self.parts.append('\n\n')
-
-    def handle_endtag(self, tag):
-        if tag in ('script', 'style'):
-            self._skip = max(0, self._skip - 1)
-        elif tag in ('h1', 'h2', 'h3') and self._in_head:
-            self._in_head = False
-            t = ' '.join(''.join(self._head).split())
-            if t and self.title is None:
-                self.title = t
-
-    def handle_data(self, data):
-        if self._skip:
-            return
-        (self._head if self._in_head else self.parts).append(data)
-
-
-def _html_to_text(html):
-    p = _HTMLText()
-    try:
-        p.feed(html)
-    except Exception:
-        pass
-    text = re.sub(r'\n{3,}', '\n\n',
-                  '\n'.join(l.strip() for l in ''.join(p.parts).split('\n')))
-    return text.strip(), p.title
-
-
-def _extract_epub(raw):
-    """ebooklib needs a real path — staged through a temp file. Each spine
-    document becomes a '# chapter' section in the working markdown."""
-    import tempfile
-    try:
-        import ebooklib
-        from ebooklib import epub
-        # delete=False + close before reopen: Windows cannot open a
-        # NamedTemporaryFile by name while the first handle is live.
-        tf = tempfile.NamedTemporaryFile(suffix='.epub', delete=False)
-        try:
-            tf.write(raw)
-            tf.close()
-            book = epub.read_epub(tf.name, options={'ignore_ncx': True})
-        finally:
-            try:
-                Path(tf.name).unlink(missing_ok=True)
-            except OSError:
-                pass
-        parts = []
-        for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-            text, head = _html_to_text(
-                item.get_content().decode('utf-8', 'replace'))
-            if not text:
-                continue
-            parts.append(f"# {head}\n\n{text}" if head else text)
-        text = '\n\n'.join(parts)
-        if not text.strip():
-            return None, {}, ("EPUB contained no readable text — likely "
-                              "DRM-protected. Import a DRM-free copy.")
-        meta = {}
-        try:
-            t = book.get_metadata('DC', 'title')
-            a = book.get_metadata('DC', 'creator')
-            if t:
-                meta['title'] = str(t[0][0]).strip()
-            if a:
-                meta['author'] = str(a[0][0]).strip()
-        except Exception:
-            pass
-        return text, meta, None
-    except Exception as e:
-        return None, {}, f"EPUB parse failed (DRM or corrupt?): {e}"
 
 
 # ─── Images (Arc 2, I1) ──────────────────────────────────────────────────────

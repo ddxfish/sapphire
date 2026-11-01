@@ -140,7 +140,6 @@ You now have a complete AI persona. Or skip building your own and use one of the
 Each chat has its own settings, and the chat sidebar *is* the settings panel — what you see there is what this chat uses:
 - Prompt, toolset, spice set, LLM provider — dropdowns, all independent per chat
 - **Mind** accordion — scopes that isolate memory, knowledge, entities per chat
-- **Documents** accordion — attach files for the AI to reference (RAG)
 - **TTS (Voice)** accordion — voice, pitch, and speed for this chat
 
 Creating, renaming, importing, and organizing chats is covered in [CHATS.md](CHATS.md). The 🎨 button in the sidebar header opens Appearance — themes, scenes, and motion ([APPEARANCE.md](APPEARANCE.md)).

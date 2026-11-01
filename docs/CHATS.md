@@ -16,7 +16,7 @@ A chat is not just a transcript. Stored on each chat:
 - **Voice, pitch, speed** — how she sounds in this chat
 - **Memory scopes** — which memory/knowledge/goals boxes she reads and writes
 - **Spice set, spice on/off, spice turns** — personality variation
-- **Documents (RAG)** — files uploaded to this chat, plus a context level
+- **Documents** — files attached with the + by the message box, plus their budget level (see [KNOWLEDGE.md](KNOWLEDGE.md))
 - **Custom Context and Ghost Message** — extra per-chat prompt injections
 - **Date/Time toggle** — whether the current date rides the prompt
 

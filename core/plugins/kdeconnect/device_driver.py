@@ -347,7 +347,7 @@ def _landed(row, config, peer, filename, data, mode):
         text = _document_text(ext, data)
     if mode == 'files':
         if text and saved:
-            _to_knowledge(config, row, name, text)
+            _to_knowledge(config, row, name, data)
         return
     how = 'Your reply stays in the chat.'
     if picture is not None:
@@ -356,7 +356,7 @@ def _landed(row, config, peer, filename, data, mode):
     elif text:
         more = f" The whole document is in this chat's documents." if len(text) > DOC_CHARS and saved else ''
         if len(text) > DOC_CHARS and saved:
-            _to_knowledge(config, row, name, text)
+            _to_knowledge(config, row, name, data)
         _said(row, _line(row, 'Document shared from phone', how),
               f"{name} ({size} bytes).{kept}{more}\n\n{text[:DOC_CHARS]}")
     else:
@@ -366,45 +366,28 @@ def _landed(row, config, peer, filename, data, mode):
 
 def _document_text(ext, data):
     """The words of a document, or None when it is not one we read."""
+    from core import text_extract as tx
     if ext == '.pdf':
-        try:
-            from pypdf import PdfReader
-            pages = [p.extract_text() or '' for p in PdfReader(io.BytesIO(data)).pages]
-            return '\n\n'.join(p for p in pages if p.strip()).strip() or None
-        except Exception as e:
-            logger.info(f"[kdeconnect] a PDF could not be read: {e}")
+        pages, _, err = tx.pdf_pages(data)
+        if err:
+            logger.info(f"[kdeconnect] a PDF could not be read: {err}")
             return None
-    if ext in TEXT_EXT or (not ext and b'\x00' not in data[:4096]):
-        for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
-            try:
-                return data.decode(enc).strip() or None
-            except (UnicodeDecodeError, ValueError):
-                continue
+        return '\n\n'.join(p for p in pages if p).strip() or None
+    if ext in TEXT_EXT or not ext:
+        text, _ = tx.decode_text(data)
+        return (text or '').strip() or None
     return None
 
 
-def _to_knowledge(config, row, filename, text):
-    """The document into the chat's own documents (per-chat RAG), the way the
-    Knowledge upload door does it. Quiet when the memory plugin is away."""
+def _to_knowledge(config, row, filename, data):
+    """The document into the chat's own documents: the same door as the chat's +."""
     try:
+        from core import documents
         from core.devices import voice
-        from plugins.memory.tools import knowledge_tools as kb
         chat, settings, _ = voice.chat_for(config, row['id'])
         if settings is None:
             return
-        scope = f"__rag__:{chat}"
-        kb.create_scope(scope)
-        tab_id = kb.create_tab(filename, scope=scope, tab_type='user')
-        if not tab_id:
-            with kb._get_connection() as conn:
-                hit = conn.cursor().execute('SELECT id FROM knowledge_tabs WHERE name = ? AND scope = ?',
-                                            (filename, scope)).fetchone()
-            if not hit:
-                return
-            tab_id = hit[0]
-            kb.delete_entries_by_filename(tab_id, filename)
-        for i, chunk in enumerate(kb._chunk_text(text)):
-            kb.add_entry(tab_id, chunk, chunk_index=i, source_filename=filename)
+        documents.add(chat, filename, data)
         logger.info(f"[kdeconnect] {row['id']}: {filename} added to the documents of chat '{chat}'")
     except Exception as e:
         logger.info(f"[kdeconnect] {filename} was not added to the chat's documents: {e}")

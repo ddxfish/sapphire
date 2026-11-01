@@ -4,6 +4,7 @@ import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
 import * as Images from '../ui-images.js';
+import { attachDocument } from '../features/doc-bar.js';
 import { dispatch, on, Events } from '../core/event-bus.js';
 import { focusUnlessEditing } from '../shared/dom-guard.js';
 import { getBoundChat } from '../core/bound-chat.js';
@@ -78,7 +79,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         return;
     }
     let txt = fromCard ? text.trim() : input.value.trim();
-    if (!txt && !(attach && (Images.hasPendingUploadImages() || Images.hasPendingFiles()))) return;
+    if (!txt && !(attach && Images.hasPendingUploadImages())) return;
 
     // Slash commands never become a turn (core/commands.py). A refused one keeps
     // its text in the box; // sends a literal leading slash.
@@ -106,18 +107,14 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         input.dispatchEvent(new Event('input'));
     }
     
-    // Get pending images and files, then clear them (not for a card's answer)
+    // Get pending images, then clear them (not for a card's answer)
     const pendingImages = attach ? Images.getImagesForApi() : [];
     const hasImages = pendingImages.length > 0;
-    const pendingFilesForApi = attach ? Images.getFilesForApi() : [];
-    const hasFiles = pendingFilesForApi.length > 0;
 
-    ui.addUserMessage(txt, hasImages ? Images.getPendingUploadImages() : null, hasFiles ? Images.getPendingFiles() : null);
+    ui.addUserMessage(txt, hasImages ? Images.getPendingUploadImages() : null);
     const sentImages = attach ? [...(Images.getPendingUploadImages() || [])] : [];   // restoreDraft puts them back
-    const sentFiles = attach ? [...(Images.getPendingFiles() || [])] : [];
     if (attach) {
         Images.clearPendingUploadImages();
-        Images.clearPendingFiles();
         updateImagePreviewArea();
     }
 
@@ -346,8 +343,8 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             input.value = txt;
             input.dispatchEvent(new Event('input'));
         }
-        if (attach && (sentImages.length || sentFiles.length)) {
-            Images.restorePending(sentImages, sentFiles);
+        if (attach && sentImages.length) {
+            Images.restorePending(sentImages);
             updateImagePreviewArea();
         }
     }
@@ -435,7 +432,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             null,  // prefill
             onToolStart, onToolEnd, onStreamStarted, onIterationStart,
             hasImages ? pendingImages : null,
-            hasFiles ? pendingFilesForApi : null,
+            null,
             queueHooks
         );
         return null;
@@ -470,9 +467,8 @@ export function updateImagePreviewArea() {
 
     previewArea.innerHTML = '';
     const pendingImgs = Images.getPendingUploadImages();
-    const pendingFilesList = Images.getPendingFiles();
 
-    if (pendingImgs.length === 0 && pendingFilesList.length === 0) {
+    if (pendingImgs.length === 0) {
         previewArea.style.display = 'none';
         return;
     }
@@ -485,45 +481,6 @@ export function updateImagePreviewArea() {
         });
         previewArea.appendChild(preview);
     });
-    pendingFilesList.forEach((file, idx) => {
-        const chip = Images.createFilePreview(file, idx, (index) => {
-            Images.removePendingFile(index);
-            updateImagePreviewArea();
-        });
-        previewArea.appendChild(chip);
-    });
-}
-
-// Handle text file upload (read client-side)
-export async function handleFileUpload(file) {
-    const dot = file.name.lastIndexOf('.');
-    const ext = dot !== -1 ? file.name.slice(dot).toLowerCase() : '';
-
-    if (!Images.ALLOWED_FILE_EXTENSIONS.has(ext)) {
-        ui.showToast(`Unsupported file type: ${ext || 'no extension'}`, 'error');
-        return;
-    }
-
-    if (file.size > 100 * 1024) {
-        ui.showToast('File too large (max 100KB)', 'error');
-        return;
-    }
-
-    try {
-        const text = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(new Error('Failed to read file'));
-            reader.readAsText(file);
-        });
-
-        Images.addPendingFile({ filename: file.name, text });
-        updateImagePreviewArea();
-        ui.showToast(`File attached: ${file.name}`, 'success', 2000);
-    } catch (e) {
-        console.error('File read failed:', e);
-        ui.showToast(e.message, 'error');
-    }
 }
 
 // Handle image file selection/paste/drop
@@ -587,7 +544,7 @@ export function setupImageHandlers() {
                 if (file.type.startsWith('image/')) {
                     await handleImageUpload(file);
                 } else {
-                    await handleFileUpload(file);
+                    attachDocument(file);    // the server reads it, or says why not
                 }
             }
             fileInput.value = '';
@@ -601,14 +558,21 @@ export function setupImageHandlers() {
         if (e.target?.closest?.('[data-keeps-focus], .app-host-content')) return;
         const items = e.clipboardData?.items;
         if (!items) return;
-        
-        for (const item of items) {
-            if (item.type.startsWith('image/')) {
-                e.preventDefault();
-                const file = item.getAsFile();
-                if (file) await handleImageUpload(file);
-                return;
-            }
+        // This listens on the whole document, and a file is stored the moment it lands:
+        // only a chat on screen takes one. Pasting into a field elsewhere stays that field's.
+        if (!document.getElementById('prompt-input')?.offsetParent) return;
+        const inField = e.target?.closest?.('input, textarea, [contenteditable]');
+        if (inField && e.target.id !== 'prompt-input') return;
+
+        // Word and Excel copy text with a picture of it: the words are what was meant
+        const list = [...items];
+        if (list.some(i => i.type === 'text/plain')) return;
+        for (const item of list) {
+            const file = item.kind === 'file' ? item.getAsFile() : null;
+            if (!file) continue;
+            e.preventDefault();
+            if (item.type.startsWith('image/')) await handleImageUpload(file);
+            else attachDocument(file);
         }
     });
     
@@ -635,12 +599,7 @@ export function setupImageHandlers() {
                 if (file.type.startsWith('image/')) {
                     await handleImageUpload(file);
                 } else {
-                    // Try as text file
-                    const dot = file.name.lastIndexOf('.');
-                    const ext = dot !== -1 ? file.name.slice(dot).toLowerCase() : '';
-                    if (Images.ALLOWED_FILE_EXTENSIONS.has(ext)) {
-                        await handleFileUpload(file);
-                    }
+                    attachDocument(file);
                 }
             }
         });

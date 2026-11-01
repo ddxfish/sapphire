@@ -372,6 +372,8 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | POST | `/api/chats/{name}/documents` | Upload document to chat |
 | GET | `/api/chats/{name}/documents` | List chat documents |
 | DELETE | `/api/chats/{name}/documents/{file}` | Remove document |
+| GET | `/api/chats/{name}/images-in-view` | Pictures she can still see, with turns left |
+| POST | `/api/chats/{name}/images-in-view/{id}/hide` | Stop replaying a picture |
 
 ### Heartbeat (Scheduled Tasks)
 

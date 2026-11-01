@@ -336,17 +336,13 @@ def test_delete_inactive_chat_does_not_reapply(chat_client):
 
 # ─── 2.23 Delete chat cleans up RAG scope ────────────────────────────────────
 
-def test_delete_chat_deletes_rag_scope(chat_client, monkeypatch):
-    """[PROACTIVE] Per-chat RAG documents must be purged when the chat is
-    deleted — otherwise uploaded docs linger forever in __rag__:{chat_name}."""
-    from plugins.memory.tools import knowledge_tools as knowledge_mod
-    c, csrf, mock_system, fm, captured = chat_client
-    delete_scope_mock = MagicMock(return_value=True)
-    monkeypatch.setattr(knowledge_mod, 'delete_scope', delete_scope_mock)
-
-    r = c.delete('/api/chats/dead_chat', headers={'X-CSRF-Token': csrf})
-    assert r.status_code == 200
-    delete_scope_mock.assert_called_once_with('__rag__:dead_chat')
+def test_delete_chat_deletes_rag_scope():
+    """[PROACTIVE] A chat's documents go wherever a chat is deleted or renamed, in the
+    manager every path passes through: a room guest and a reaped phone chat use no route."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / 'core' / 'chat' / 'history.py').read_text(encoding='utf-8')
+    assert src.count("self._documents_follow('delete_chat'") == 2      # delete_chat, reap_ephemeral_chats
+    assert src.count("self._documents_follow('rename_chat'") == 1
 
 
 # ─── 2.24 Delete chat dismisses per-chat agents ──────────────────────────────

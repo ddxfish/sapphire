@@ -162,11 +162,11 @@ def kt_tmp(tmp_path, monkeypatch):
 class TestKnowledgeRenameScope:
     def test_rename_scope_moves_tabs(self, kt_tmp):
         kt = kt_tmp
-        kt.create_scope("__rag__:old_chat")
-        assert kt.rename_scope("__rag__:old_chat", "__rag__:new_chat")
+        kt.create_scope("old_chat")
+        assert kt.rename_scope("old_chat", "new_chat")
         names = [s["name"] for s in kt.get_scopes()]
-        assert "__rag__:new_chat" in names
-        assert "__rag__:old_chat" not in names
+        assert "new_chat" in names
+        assert "old_chat" not in names
 
     def test_rename_missing_scope_is_noop_true(self, kt_tmp):
         kt = kt_tmp

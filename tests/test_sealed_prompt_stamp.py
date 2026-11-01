@@ -180,8 +180,7 @@ class TestSidebarPerKeySave:
                          ("sb-spice-toggle", "spice_enabled"), ("sb-spice-turns", "spice_turns"),
                          ("sb-datetime-toggle", "inject_datetime"),
                          ("sb-custom-context", "custom_context"), ("sb-ghost-context", "ghost_context"),
-                         ("sb-llm-model", "llm_model"), ("sb-llm-model-custom", "llm_model"),
-                         ("sb-rag-context", "rag_context")]:
+                         ("sb-llm-model", "llm_model"), ("sb-llm-model-custom", "llm_model")]:
             assert f"'{cid}': ['{key}']" in table, cid
         assert "'sb-llm-primary': ['llm_primary', 'llm_model']" in table
         assert "/^sb-(.+)-scope$/.exec(id)" in src   # scope dropdowns by id scheme

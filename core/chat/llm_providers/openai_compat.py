@@ -652,8 +652,8 @@ class OpenAICompatProvider(BaseProvider):
                             elif block.get('type') == 'image':
                                 # Internal: {"type": "image", "data": "...", "media_type": "..."}
                                 # OpenAI:   {"type": "image_url", "image_url": {"url": "data:...;base64,..."}}
-                                media_type = block.get('media_type', 'image/jpeg')
-                                data = block.get('data', '')
+                                from core.images import wire_safe
+                                data, media_type = wire_safe(block.get('data', ''), block.get('media_type', 'image/jpeg'))
                                 openai_content.append({
                                     "type": "image_url",
                                     "image_url": {"url": f"data:{media_type};base64,{data}"}

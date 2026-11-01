@@ -7,9 +7,6 @@ let scrollAfterImagesTimeout = null;
 // Track pending upload images (before send)
 let pendingUploadImages = [];
 
-// Track pending upload files (before send)
-let pendingFiles = [];
-
 export const hasPendingImages = () => {
     return pendingImages.size > 0;
 };
@@ -101,72 +98,17 @@ const TEXT_EXTENSIONS = {
     '.c': 'c', '.cpp': 'cpp', '.h': 'c',
 };
 
-export const ALLOWED_FILE_EXTENSIONS = new Set(Object.keys(TEXT_EXTENSIONS));
-
 const extToLang = (filename) => {
     const dot = filename.lastIndexOf('.');
     if (dot === -1) return 'text';
     return TEXT_EXTENSIONS[filename.slice(dot).toLowerCase()] || 'text';
 };
 
-export const getPendingFiles = () => [...pendingFiles];
-
-export const addPendingFile = (fileData) => {
-    // fileData: {filename: string, text: string}
-    pendingFiles.push(fileData);
-    return pendingFiles.length - 1;
-};
-
-export const removePendingFile = (index) => {
-    if (index >= 0 && index < pendingFiles.length) {
-        pendingFiles.splice(index, 1);
-    }
-};
-
-export const clearPendingFiles = () => { pendingFiles = []; };
-
-// A send that never reached her gives its attachments back (send-handlers
+// A send that never reached her gives its pictures back (send-handlers
 // restoreDraft). Their object URLs were revoked on send: previews fall back
 // to the data URI (createUploadPreview).
-export const restorePending = (images = [], files = []) => {
+export const restorePending = (images = []) => {
     pendingUploadImages = [...images.map(img => ({ ...img, previewUrl: null })), ...pendingUploadImages];
-    pendingFiles = [...files, ...pendingFiles];
-};
-
-export const hasPendingFiles = () => pendingFiles.length > 0;
-
-export const getFilesForApi = () => {
-    return pendingFiles.map(f => ({
-        filename: f.filename,
-        text: f.text
-    }));
-};
-
-// Create preview chip for file in upload zone
-export const createFilePreview = (fileData, index, onRemove) => {
-    const chip = document.createElement('div');
-    chip.className = 'file-preview-chip';
-    chip.dataset.index = index;
-
-    const lineCount = (fileData.text.match(/\n/g) || []).length + 1;
-
-    const label = document.createElement('span');
-    label.className = 'file-chip-label';
-    label.textContent = `${fileData.filename} (${lineCount} lines)`;
-
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'file-chip-remove';
-    removeBtn.innerHTML = '×';
-    removeBtn.title = 'Remove file';
-    removeBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onRemove(index);
-    };
-
-    chip.appendChild(label);
-    chip.appendChild(removeBtn);
-    return chip;
 };
 
 // Create file accordion for history rendering

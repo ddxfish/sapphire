@@ -11,6 +11,7 @@ import { updateSettingsBatch } from '../shared/settings-api.js';
 import { switchView, getCurrentView } from '../core/router.js';
 import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
 import { initAgentStatus } from '../features/agent-status.js';
+import { initDocBar, refreshDocBar } from '../features/doc-bar.js';
 import { mountScenePicker } from '../shared/scene-picker.js';
 import { setupModalClose, escapeHtml as quoteSafe } from '../shared/modal.js';
 import { getMotions, setChatMotion, chatMotionId } from '../core/motions.js';
@@ -63,6 +64,7 @@ export default {
     init(container) {
         // Agent pill bar
         initAgentStatus();
+        initDocBar();
         // The stage: an app beside the chat (surface/stage.js)
         initStage(container);
 
@@ -427,58 +429,6 @@ export default {
         // Listen for persona-loaded events (added/removed in show/hide)
         _personaHandler = () => loadSidebar();
 
-        // Save As New Persona button
-        // Document upload handler
-        const docUpload = container.querySelector('#sb-doc-upload');
-        if (docUpload) {
-            docUpload.addEventListener('change', async () => {
-                const file = docUpload.files[0];
-                if (!file) return;
-                const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
-                if (!chatName) return;
-                const form = new FormData();
-                form.append('file', file);
-                try {
-                    const resp = await fetch(`/api/chats/${encodeURIComponent(chatName)}/documents`, {
-                        method: 'POST', body: form
-                    });
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        ui.showToast(`Uploaded ${data.filename} (${data.chunks} chunks)`, 'success');
-                        loadDocuments(container, chatName);
-                    } else {
-                        const err = await resp.json().catch(() => ({}));
-                        ui.showToast(err.detail || 'Upload failed', 'error');
-                    }
-                } catch (e) {
-                    ui.showToast('Upload failed', 'error');
-                }
-                docUpload.value = '';
-            });
-        }
-
-        // Document delete handler (event delegation)
-        const docList = container.querySelector('#sb-doc-list');
-        if (docList) {
-            docList.addEventListener('click', async e => {
-                const btn = e.target.closest('.sb-doc-del');
-                if (!btn) return;
-                const filename = btn.dataset.filename;
-                const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
-                if (!chatName || !filename) return;
-                try {
-                    const resp = await fetch(`/api/chats/${encodeURIComponent(chatName)}/documents/${encodeURIComponent(filename)}`, {
-                        method: 'DELETE'
-                    });
-                    if (resp.ok) {
-                        ui.showToast(`Removed ${filename}`, 'success');
-                        loadDocuments(container, chatName);
-                    }
-                } catch (e) {
-                    ui.showToast('Delete failed', 'error');
-                }
-            });
-        }
     },
 
     async show() {
@@ -487,6 +437,7 @@ export default {
         if (_personaHandler) window.addEventListener('persona-loaded', _personaHandler);
         await steerOffGameChat();
         await refreshInitData();
+        refreshDocBar();    // a lent composer came home
         await loadSidebar();
         // the rail is painted for the chat the picker shows, every time this view
         // opens: a rail lent to a room or a game comes home empty (surface/organs.js)
@@ -549,31 +500,6 @@ function toggleSidebar(container) {
     if (!sidebar) return;
     const collapsed = sidebar.classList.toggle('collapsed');
     localStorage.setItem('sapphire-chat-sidebar', collapsed ? 'collapsed' : 'expanded');
-}
-
-async function loadDocuments(container, chatName) {
-    const list = container.querySelector('#sb-doc-list');
-    const badge = container.querySelector('#sb-doc-count');
-    if (!list) return;
-    try {
-        const resp = await fetch(`/api/chats/${encodeURIComponent(chatName)}/documents`);
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const docs = data.documents || [];
-        list.innerHTML = docs.map(d => {
-            const fn = escapeHtml(d.filename);
-            return `<div class="sb-doc-item">
-                <span title="${fn} (${d.chunks} chunks)">${fn}</span>
-                <button class="sb-doc-del" data-filename="${fn}" title="Remove">&times;</button>
-            </div>`;
-        }).join('');
-        if (badge) {
-            badge.textContent = docs.length;
-            badge.style.display = docs.length ? '' : 'none';
-        }
-    } catch (e) {
-        console.warn('Failed to load documents:', e);
-    }
 }
 
 // ── Sidebar accordion open/closed memory ──────────────────────────────
@@ -878,12 +804,6 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
 
         renderPersonaStrip(container, settings, init);
 
-        // RAG context level
-        setVal(container, '#sb-rag-context', settings.rag_context || 'normal');
-
-        // Load per-chat documents
-        loadDocuments(container, chatName);
-
         // Inject plugin-registered accordions
         await _loadPluginAccordions(container, init);
 
@@ -917,7 +837,6 @@ const _KEY_BY_ID = {
     'sb-custom-context': ['custom_context'], 'sb-ghost-context': ['ghost_context'],
     'sb-llm-primary': ['llm_primary', 'llm_model'],
     'sb-llm-model': ['llm_model'], 'sb-llm-model-custom': ['llm_model'],
-    'sb-rag-context': ['rag_context'],
 };
 function keysFor(el) {
     const id = el?.id || '';
@@ -1145,7 +1064,6 @@ function collectSettings(container) {
         llm_primary: getVal(container, '#sb-llm-primary') || 'auto',
         llm_model: getSelectedModel(container),
         ...scopeValues,
-        rag_context: getVal(container, '#sb-rag-context') || 'normal'
     };
 }
 

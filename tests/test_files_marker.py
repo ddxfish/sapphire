@@ -117,7 +117,7 @@ def test_live_turn_wire_copy_is_built_without_the_marker(monkeypatch):
     monkeypatch.setattr('core.ghost_messages.build_ghost_message', lambda *a, **k: '')
     me = SimpleNamespace(session_manager=_Session(), system=None,
                          _get_system_prompt=lambda: ('SYSTEM', 'user', ''),
-                         _get_rag_context=lambda text: None)
+                         _get_rag_context=lambda *a: (None, []))
     take = '[Keys: 3 notes]\nC4 E4 G4\n(The take is saved.)\n' + _marker('Keys take')
     msgs = chat_mod.LLMChat._build_base_messages(me, take)
     assert msgs[-1] == {'role': 'user', 'content': '[Keys: 3 notes]\nC4 E4 G4\n(The take is saved.)'}

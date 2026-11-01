@@ -760,7 +760,11 @@ class ClaudeProvider(BaseProvider):
         # only a ghost was skipped: a chat with documents got the marker on its
         # RAG row, so the history cache was written every turn and never read.
         def per_turn(m):
-            c = m.get("content") if isinstance(m.get("content"), str) else ""
+            c = m.get("content")
+            if isinstance(c, list):     # a scan's pages: pictures under a text line
+                c = next((b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"), "")
+                return m.get("role") == "user" and c.startswith("[Pages of the scanned documents")
+            c = c if isinstance(c, str) else ""
             return m.get("role") == "user" and (
                 c.startswith(_GHOST_PREFIX) or c.startswith("[Operator metadata for assistant")
                 or c.startswith("[Reference Documents]") or c.startswith("[RAG documents are configured"))

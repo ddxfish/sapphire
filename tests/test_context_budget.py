@@ -299,7 +299,7 @@ def test_the_metrics_label_never_renames_the_turns_chat():
 
 def test_the_app_marks_its_own_rows():
     chat = (ROOT / 'core' / 'chat' / 'chat.py').read_text()
-    assert '"content": ghost_text, "_inject": True' in chat and '"content": rag_context, "_inject": True' in chat
+    assert '"content": ghost_text, "_inject": True' in chat and '"content": doc_text, "_inject": True' in chat
     assert '"_inject": True' in (ROOT / 'core' / 'chat' / 'history.py').read_text()
 
 

@@ -43,6 +43,8 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 | `save_person` | knowledge_tools.py | Save/update contact info (upsert by name) |
 | `save_knowledge` | knowledge_tools.py | Store reference data in categories (auto-chunks) |
 | `search_knowledge` | knowledge_tools.py | Search people + knowledge + RAG documents |
+| `read_attachment` | documents.py | Read a chat's attached file by part, or a PDF page |
+| `search_attachments` | documents.py | Search a chat's attached files by meaning and exact words |
 | `delete_knowledge` | knowledge_tools.py | Delete AI-created entries or categories |
 | `create_goal` | goals_tools.py | Create goal or subtask with priority |
 | `list_goals` | goals_tools.py | Overview or detailed view of goals |

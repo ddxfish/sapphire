@@ -48,6 +48,7 @@ function restoreAll() {
     _records = [];
     wipe();
     clearBoundChat();                        // home = the active pointer again
+    window.dispatchEvent(new Event('organs-moved'));
 }
 
 // Move the organs into a frame. Refuses (returns false) while a turn is
@@ -75,6 +76,7 @@ export function claimOrgans({ railSlot, composerSlot }, ownerId, chatName = null
     _holder = ownerId || 'unknown';
     wipe();
     setBoundChat(chatName);
+    window.dispatchEvent(new Event('organs-moved'));
     return true;
 }
 

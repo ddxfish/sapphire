@@ -430,7 +430,9 @@ def get_scopes():
             cursor.execute('SELECT name FROM knowledge_scopes ORDER BY name')
             registered = [row[0] for row in cursor.fetchall()]
             all_scopes = set(registered) | set(tab_counts.keys()) | {'default'}
-            return [{"name": name, "count": tab_counts.get(name, 0)} for name in sorted(all_scopes)]
+            # a chat's documents aren't a scope to pick: and the name is the chat's, private or not
+            return [{"name": name, "count": tab_counts.get(name, 0)} for name in sorted(all_scopes)
+                    if not name.startswith('__rag__:')]
     except Exception as e:
         logger.error(f"Error getting knowledge scopes: {e}")
         return [{"name": "default", "count": 0}]

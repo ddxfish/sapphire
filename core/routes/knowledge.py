@@ -1,6 +1,5 @@
 # core/routes/knowledge.py - Memory scopes, goal scopes, knowledge base, per-chat RAG, memory CRUD
 import asyncio
-import io
 import logging
 from pathlib import Path
 
@@ -9,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 import config
 from core.auth import require_login
+from core.text_extract import decode_text
 from core.api_fastapi import get_system
 
 logger = logging.getLogger(__name__)
@@ -289,6 +289,8 @@ async def delete_knowledge_scope(scope_name: str, request: Request, _=Depends(re
     data = await request.json()
     if data.get('confirm') != 'DELETE':
         raise HTTPException(status_code=400, detail="Confirmation required")
+    if scope_name.startswith('__rag__:'):    # a chat's documents: they go with the chat (core/documents.py)
+        raise HTTPException(status_code=400, detail="That scope belongs to a chat")
     result = knowledge.delete_scope(scope_name)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
@@ -564,27 +566,10 @@ async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Dep
     if len(raw) > 2 * 1024 * 1024:  # 2MB cap
         raise HTTPException(status_code=400, detail="File too large (max 2MB)")
 
-    # Decode: utf-8-sig FIRST — plain utf-8 also succeeds on BOM'd bytes but
-    # leaves ﻿ glued to the first word (poisoning the first chunk's
-    # embedding), so the old ('utf-8', 'utf-8-sig', ...) order made the sig
-    # entry dead code. cp1252 over latin-1 for the 8-bit fallback: same
-    # coverage, but Windows smart-quotes/em-dashes (the actual bytes in
-    # Krem's-world text files) map to the right characters instead of
-    # C1 control mojibake.
-    text = None
-    for enc in ('utf-8-sig', 'utf-8', 'cp1252', 'latin-1'):
-        try:
-            text = raw.decode(enc)
-            break
-        except (UnicodeDecodeError, ValueError):
-            continue
-    if text is None:
-        raise HTTPException(status_code=400, detail="Could not decode file — unsupported encoding")
-
-    # Normalize newlines — raw bytes skip open()'s universal-newline
-    # translation, and CRLF text never matches the '\n\n' paragraph
-    # split in _chunk_text (whole file = one chunk).
-    text = text.replace('\r\n', '\n').replace('\r', '\n').strip()
+    text, why = decode_text(raw)
+    if why:
+        raise HTTPException(status_code=400, detail=why)
+    text = text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="File is empty")
 
@@ -636,88 +621,56 @@ async def delete_knowledge_entry(entry_id: int, request: Request, _=Depends(requ
 # PER-CHAT RAG (Document Context)
 # =============================================================================
 
+def _chat_gate(system, chat_name):
+    """404 for a chat that doesn't exist, which a sealed one doesn't: its documents
+    can't be listed, added to or removed. Returns the check, to ask again later."""
+    sm = system.llm_chat.session_manager
+    alive = lambda: sm.read_chat_settings(chat_name) is not None
+    if not alive():
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return alive
+
+
 @router.post("/api/chats/{chat_name}/documents")
-async def upload_chat_document(chat_name: str, file: UploadFile = File(...), _=Depends(require_login)):
-    """Upload a document for per-chat RAG context."""
-    from plugins.memory.tools import knowledge_tools as knowledge
-
-    filename = file.filename or 'upload.txt'
-    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
-
+async def upload_chat_document(chat_name: str, file: UploadFile = File(...), _=Depends(require_login), system=Depends(get_system)):
+    """Attach a file to a chat. Off the event loop: a big PDF embeds for a while."""
+    import core.documents as documents
+    still_there = _chat_gate(system, chat_name)
     raw = await file.read()
-    if len(raw) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
-
-    # Extract text — PDF is special, everything else try to decode as text
-    if ext == 'pdf':
-        try:
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(raw))
-            pages = [page.extract_text() or '' for page in reader.pages]
-            text = '\n\n'.join(p for p in pages if p.strip())
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to read PDF: {e}")
-    else:
-        text = None
-        for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
-            try:
-                text = raw.decode(enc)
-                break
-            except (UnicodeDecodeError, ValueError):
-                continue
-        if text is None:
-            raise HTTPException(status_code=400, detail="Could not decode file — binary or unsupported encoding")
-
-    text = text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="File is empty or has no extractable text")
-
-    rag_scope = f"__rag__:{chat_name}"
-
-    # Ensure scope + tab exist (one tab per file)
-    knowledge.create_scope(rag_scope)
-    tab_id = knowledge.create_tab(filename, scope=rag_scope, tab_type='user')
-    if not tab_id:
-        # Tab already exists for this filename — delete old entries and re-upload
-        with knowledge._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id FROM knowledge_tabs WHERE name = ? AND scope = ?', (filename, rag_scope))
-            row = cursor.fetchone()
-        if row:
-            tab_id = row[0]
-            knowledge.delete_entries_by_filename(tab_id, filename)
-        else:
-            raise HTTPException(status_code=500, detail="Failed to create document tab")
-
-    chunks = knowledge._chunk_text(text)
-    for i, chunk in enumerate(chunks):
-        knowledge.add_entry(tab_id, chunk, chunk_index=i, source_filename=filename)
-
-    return {"filename": filename, "chunks": len(chunks), "scope": rag_scope}
+    try:
+        return await asyncio.to_thread(documents.add, chat_name, file.filename, raw, still_there)
+    except documents.Refused as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/api/chats/{chat_name}/documents")
-async def list_chat_documents(chat_name: str, _=Depends(require_login)):
-    """List uploaded documents for a chat."""
-    from plugins.memory.tools import knowledge_tools as knowledge
-    rag_scope = f"__rag__:{chat_name}"
-    entries = knowledge.get_entries_by_scope(rag_scope)
-    return {"documents": entries}
+async def list_chat_documents(chat_name: str, _=Depends(require_login), system=Depends(get_system)):
+    import core.documents as documents
+    _chat_gate(system, chat_name)
+    return {"documents": await asyncio.to_thread(documents.listing, chat_name)}
 
 
 @router.delete("/api/chats/{chat_name}/documents/{filename:path}")
-async def delete_chat_document(chat_name: str, filename: str, _=Depends(require_login)):
-    """Delete a specific document from a chat's RAG scope."""
-    from plugins.memory.tools import knowledge_tools as knowledge
-    rag_scope = f"__rag__:{chat_name}"
-    count = knowledge.delete_entries_by_scope_and_filename(rag_scope, filename)
-    if count == 0:
+async def delete_chat_document(chat_name: str, filename: str, _=Depends(require_login), system=Depends(get_system)):
+    import core.documents as documents
+    _chat_gate(system, chat_name)
+    if not await asyncio.to_thread(documents.remove, chat_name, filename):
         raise HTTPException(status_code=404, detail="Document not found")
-    # If scope is now empty, clean it up
-    remaining = knowledge.get_entries_by_scope(rag_scope)
-    if not remaining:
-        knowledge.delete_scope(rag_scope)
-    return {"deleted": count, "filename": filename}
+    return {"filename": filename}
+
+
+@router.get("/api/chats/{chat_name}/images-in-view")
+async def chat_images_in_view(chat_name: str, _=Depends(require_login), system=Depends(get_system)):
+    """Pictures she can still see, with the turns left (the row above the composer)."""
+    return {"images": await asyncio.to_thread(system.llm_chat.session_manager.images_in_view, chat_name)}
+
+
+@router.post("/api/chats/{chat_name}/images-in-view/{image_id}/hide")
+async def hide_image_in_view(chat_name: str, image_id: str, _=Depends(require_login), system=Depends(get_system)):
+    _chat_gate(system, chat_name)
+    if not await asyncio.to_thread(system.llm_chat.session_manager.hide_image_from_view, chat_name, image_id):
+        raise HTTPException(status_code=404, detail="Image not found")
+    return {"hidden": image_id}
 
 
 # =============================================================================
@@ -1158,7 +1111,8 @@ async def find_duplicates(request: Request, _=Depends(require_login)):
     with knowledge._get_connection() as conn:
         cursor = conn.cursor()
 
-        scope_filter = "WHERE t.scope = ?" if scope else ""
+        # a chat's documents are no one's duplicates: resolving one would hole the file
+        scope_filter = "WHERE t.scope = ?" if scope else "WHERE substr(t.scope, 1, 8) != '__rag__:'"
         scope_params = (scope,) if scope else ()
 
         cursor.execute(f'''

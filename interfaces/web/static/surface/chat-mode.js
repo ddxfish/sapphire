@@ -24,7 +24,10 @@ export const chatMode = {
     formArea: `
                         <div id="context-bar"></div>
                         <div id="context-notch"></div>
-                        <div id="image-preview-area" style="display: none;"></div>
+                        <div id="attach-row">
+                            <div id="image-preview-area" style="display: none;"></div>
+                            <div id="doc-pills"></div>
+                        </div>
                         <form id="chat-form">
                             <!-- Mic split: #mic-btn keeps every gesture handler; the caret is a
                                  SIBLING (never a child) and opens this device's audio flyout —
@@ -47,10 +50,10 @@ export const chatMode = {
                                 </div>
                             </div>
                             <div class="textarea-wrapper">
-                                <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">&#x1F4CE;</button>
-                                <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
+                                <button type="button" id="image-upload-btn" title="Attach a file or image (or paste/drop)">+</button>
+                                <textarea id="prompt-input" placeholder="Type message... (paste or drop files)" rows="1"></textarea>
                             </div>
-                            <input type="file" id="image-upload-input" accept="image/*,.py,.txt,.md,.js,.ts,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.sh,.bash,.html,.css,.xml,.csv,.log,.env,.rs,.go,.java,.c,.cpp,.h" multiple style="display: none;">
+                            <input type="file" id="image-upload-input" accept="image/*,.py,.txt,.md,.js,.ts,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.sh,.bash,.html,.css,.xml,.csv,.log,.env,.rs,.go,.java,.c,.cpp,.h,.pdf,.epub,.tsv,.jsonl,.rst,.tex,.sql" multiple style="display: none;">
                             <div class="send-btn-wrapper">
                                 <button type="submit" id="send-btn"><span class="btn-txt">Send</span><span class="btn-ico" aria-hidden="true">&#x27A4;</span></button>
                                 <button type="button" id="stop-btn" style="display: none;"><span class="btn-txt">Stop</span><span class="btn-ico" aria-hidden="true">&#x23F9;</span></button>
@@ -168,31 +171,6 @@ export const chatMode = {
                             </div>
                             <div class="sidebar-accordion-content" style="display:none">
                                 <div id="sb-scope-dropdowns"></div>
-                            </div>
-                        </div>
-
-                        <!-- Documents (RAG) Accordion -->
-                        <div class="sidebar-section sidebar-accordion" data-acc="core:&#x1F4CE; Documents">
-                            <div class="sidebar-accordion-header">
-                                <span class="accordion-arrow">&#x25B6;</span>
-                                <span>&#x1F4CE; Documents</span>
-                                <span id="sb-doc-count" class="sb-badge" style="display:none">0</span>
-                            </div>
-                            <div class="sidebar-accordion-content" style="display:none">
-                                <div class="sb-field">
-                                    <label for="sb-rag-context">context</label>
-                                    <select id="sb-rag-context">
-                                        <option value="off">Off</option>
-                                        <option value="light">Light</option>
-                                        <option value="normal" selected>Normal</option>
-                                        <option value="heavy">Heavy</option>
-                                    </select>
-                                </div>
-                                <div id="sb-doc-list"></div>
-                                <label class="sb-upload-btn">
-                                    Upload file
-                                    <input type="file" id="sb-doc-upload" hidden>
-                                </label>
                             </div>
                         </div>
 

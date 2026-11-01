@@ -229,5 +229,5 @@ class TestWiring:
         """delete_chat rebinds the active chat by hand — the hook can't see
         it, so the route's apply must stay."""
         src = (ROOT / "core/routes/chat.py").read_text(encoding="utf-8")
-        m = re.search(r"def _delete_one_chat\([\s\S]+?# Cleanup per-chat RAG", src)
+        m = re.search(r"def _delete_one_chat\([\s\S]+?# Dismiss any agents", src)
         assert m and "_apply_chat_settings(system, settings)" in m.group(0)

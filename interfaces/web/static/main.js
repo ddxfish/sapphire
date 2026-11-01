@@ -461,7 +461,7 @@ async function init() {
             micBtn.disabled = false;
             micBtn.style.opacity = '1';
         }
-        input.placeholder = 'Type message... (paste or drop images)';
+        input.placeholder = 'Type message... (paste or drop files)';
         input.classList.remove('loading');
         ui.hideStatus();
 
@@ -489,7 +489,7 @@ async function init() {
             micBtn.style.opacity = '1';
         }
         if (input) {
-            input.placeholder = 'Type message... (paste or drop images)';
+            input.placeholder = 'Type message... (paste or drop files)';
             input.classList.remove('loading');
         }
         ui.hideStatus();

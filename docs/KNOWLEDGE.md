@@ -44,16 +44,21 @@ The **AI Knowledge** tab shows knowledge tabs the AI created itself using the `s
 
 ---
 
-## Per-Chat Documents (RAG)
+## Per-Chat Documents
 
-Each chat can have documents attached directly. These are separate from the Knowledge tabs — they're scoped strictly to that one chat.
+Each chat can have files attached directly. They're separate from the Knowledge tabs and belong strictly to that one chat. Attach with the **+** beside the message box, by dropping a file on it, or by pasting a copied file. Text files, PDF and EPUB work, up to 25MB.
 
-In Chat Settings sidebar → **Documents** accordion:
-- Upload files (auto-chunked and embedded)
-- Set context level: Off, Light, Normal, Heavy
-- View and remove attached documents
+Attached files appear as a row of pills above the message box, with an X to remove each one. Pictures you send show there too, counting down the turns the AI can still see them.
 
-Useful for giving the AI reference material for a specific conversation without polluting the global knowledge base.
+**The Docs dropdown** in that row sets how much she's handed each turn, across all the chat's documents: Off, Light (~2K tokens), Normal (~8K) or Heavy (~24K), never more than a quarter of the model's window. Everything that fits arrives whole. Otherwise she gets the best matching excerpts and a list of what she isn't seeing.
+
+**She can always read more.** `read_attachment` walks a file part by part or opens a PDF page, and `search_attachments` looks for meaning and exact words. They're offered whenever the chat has documents and any tools at all, whatever the toolset. Off withholds them too.
+
+**Scanned PDFs** have no text, so search can't reach them. There's no OCR: she looks at the pages as pictures, which takes a model that can see. On one that can't, the image describer speaks for it, so its quality depends on Settings > Images. Some pages can't be shown, like vector charts (their text still reads) and JBIG2 scans unless `jbig2dec` is installed.
+
+A pill marked in amber is found by exact words only until an embedding provider has processed it. Chat export doesn't include documents.
+
+**In a private chat, documents aren't protected.** Sealing the chat encrypts its messages and images but not its documents, so anyone with access to the disk can read their text and the stored PDFs. They're allowed, and their pills turn red with a warning. While sealed, the app hides them.
 
 ---
 

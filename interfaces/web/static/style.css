@@ -461,10 +461,22 @@ body {
     color: var(--text-muted);
     font-size: 0.75rem;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s, border-color var(--transition-normal);
     touch-action: manipulation;
 }
 .mic-caret:hover, .mic-split.open .mic-caret { background: var(--bg-hover); color: var(--text); }
+/* One button to the eye: the ring and the mic's state colors wrap both halves. The
+   split draws the ring, or the caret would sit on top of the mic's own. */
+.mic-split { border-radius: var(--radius-md); transition: box-shadow var(--transition-normal); }
+.mic-split:has(> #mic-btn:focus), .mic-split:has(> .mic-caret:focus) { box-shadow: 0 0 0 3px var(--focus-ring); }
+.mic-split > #mic-btn:focus, .mic-split > .mic-caret:focus { outline: none; box-shadow: none; }
+.mic-split:has(> #mic-btn:hover) > .mic-caret { border-color: var(--text); }
+.mic-split:has(> #mic-btn.recording) > .mic-caret { border-color: var(--danger); }
+.mic-split:has(> #mic-btn.tts-playing) > .mic-caret { border-color: var(--danger-red); }
+.mic-split:has(> #mic-btn.tts-playing:hover) > .mic-caret { border-color: var(--danger); }
+.mic-split:has(> #mic-btn.convo-on) > .mic-caret { border-color: var(--success, #22c55e); }
+.mic-split:has(> #mic-btn.stt-needs-restart:not(.tts-playing)) > .mic-caret { border-color: var(--warning, orange); }
+.mic-split:has(> #mic-btn.stt-disabled:not(.tts-playing):hover) > .mic-caret { border-color: var(--border); }
 .mic-flyout-row { display: flex; align-items: center; gap: 8px; }
 .mic-flyout-row #volume-slider { flex: 1; min-width: 120px; }
 .mic-flyout-label {
@@ -1169,29 +1181,6 @@ body {
     cursor: pointer;
     display: block;
     padding: 4px 0;
-}
-
-.sb-doc-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 3px 0;
-    font-size: var(--font-xs);
-}
-
-.sb-doc-item .sb-doc-del {
-    opacity: 0.4;
-    cursor: pointer;
-    border: none;
-    background: none;
-    color: var(--text-muted);
-    font-size: var(--font-xs);
-    padding: 0 2px;
-}
-
-.sb-doc-item .sb-doc-del:hover {
-    opacity: 1;
-    color: var(--error);
 }
 
 /* Kebab buttons */
@@ -5249,7 +5238,7 @@ span[data-image-gone] {
     width: 100%;
     min-height: 1.4em;
     grid-area: 1 / 1 / 2 / 2;
-    padding: 10px 10px 10px 42px; /* Extra left padding for paperclip */
+    padding: 10px 10px 10px 42px; /* Extra left padding for the + */
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     font-size: var(--font-md);
@@ -6098,14 +6087,112 @@ span[data-image-gone] {
    IMAGE UPLOAD
    ============================================================================= */
 
+/* The row above the composer: pictures staged for the next message, then what she
+   has of this chat (features/doc-bar.js). Nothing in it, no height. */
+#attach-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    max-width: var(--chat-max-width);
+    max-height: 30vh;      /* many pills can't push the chat off a phone */
+    overflow-y: auto;
+    margin: 0 auto;
+    padding: 0 12px;
+}
+
+#attach-row:has(#doc-pills > *), #attach-row:has(#image-preview-area > *) {
+    padding: 6px 12px;
+}
+
+#doc-pills {
+    display: contents;
+}
+
+.doc-pill .agent-name {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.doc-pill.doc-keyword { border-color: var(--warning, #e6c229); }
+.doc-pill.doc-exposed {     /* a private chat's document: sealing doesn't encrypt it */
+    border-color: var(--error, #d9534f);
+    background: color-mix(in srgb, var(--error, #d9534f) 28%, var(--bg-secondary));
+    color: var(--text-bright, #fff);
+    font-weight: 600;
+}
+
+.doc-pill.doc-uploading { animation: agent-pulse 1.6s ease-in-out infinite; }
+
+.doc-pill.doc-image img {
+    width: 20px;
+    height: 20px;
+    object-fit: cover;
+    border-radius: 4px;
+}
+
+/* The budget: first in the row, opens upward. Trim-colored words and a quiet tint. */
+.agent-pill.doc-level {
+    position: relative;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--trim) 55%, transparent);
+    background: color-mix(in srgb, var(--trim) 10%, var(--bg-secondary));
+    color: var(--trim);
+}
+
+.agent-pill.doc-level:hover {
+    border-color: var(--trim);
+}
+
+.agent-pill.doc-level::after {
+    content: '\25B4';
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+
+.doc-level select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    padding: 5px 28px 5px 14px;
+}
+
+@media (max-width: 768px) {
+    .doc-pill .agent-x { padding: 4px; font-size: 1.1rem; }   /* a finger, not a cursor */
+    .doc-level select { font-size: 16px; }                    /* iOS zooms in on anything smaller */
+}
+
+.doc-level select option {
+    background: var(--bg-secondary);
+    color: var(--text-primary, inherit);
+}
+
 #image-preview-area {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    padding: 8px;
-    background: var(--bg-secondary);
-    border-radius: var(--radius-sm);
-    margin-bottom: 8px;
+}
+
+.upload-preview-item::after {
+    content: 'next message';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    text-align: center;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.6);
+    pointer-events: none;
 }
 
 .upload-preview-item {
@@ -6144,49 +6231,6 @@ span[data-image-gone] {
 
 .upload-preview-remove:hover {
     background: var(--danger);
-}
-
-/* File preview chips in upload area */
-.file-preview-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--accent-blue, #4a9eff);
-    border-radius: var(--radius-sm);
-    font-size: var(--font-sm);
-    color: var(--text);
-    max-width: 200px;
-}
-
-.file-chip-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--font-mono);
-}
-
-.file-chip-remove {
-    flex-shrink: 0;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.3);
-    color: var(--text);
-    border: none;
-    cursor: pointer;
-    font-size: 0.75rem;
-    line-height: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-}
-
-.file-chip-remove:hover {
-    background: var(--danger);
-    color: white;
 }
 
 /* File accordion in chat history */

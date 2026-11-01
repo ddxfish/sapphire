@@ -235,6 +235,9 @@ def _explain(e, provider_key):
         return out(f"{Who}'s address is wrong (nothing there). Check its Base URL in Settings › LLM.")
     if 'image' in err and any(k in err for k in ('exceeds', 'too large', 'too big', 'maximum', 'mb')):
         return out(f"That image is too big for {who}. Try a smaller one.")
+    # the server read the picture and refused the file: the model isn't the problem
+    if 'image' in err and any(k in err for k in ('base64', 'invalid', 'decode', 'corrupt', 'format', 'unsupported image')):
+        return out(f"{Who} couldn't read that image file. Try it as a JPEG or PNG.")
     if any(k in err for k in ('image', 'vision', 'multimodal', 'content_type')):
         return out("This model can't see images. Send without the image, or pick a vision model in Settings › LLM.")
     if 'prefill' in err or 'final assistant content' in err:

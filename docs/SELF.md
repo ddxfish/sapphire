@@ -10,8 +10,13 @@ Idle clock
 Thinking blocks
 Image upload vision
 CLIP describe fallback
-File attachments
-RAG docs per-chat
+Chat documents row
+PDF, EPUB, text
+Scan pages pictures
+Document budget levels
+read_attachment
+search_attachments
+Picture turn countdown
 Multi-bot chat rooms
 Remote Sapphire guests
 ### History

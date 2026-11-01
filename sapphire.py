@@ -363,13 +363,13 @@ class VoiceChatSystem:
     def _cleanup_orphaned_rag(self):
         """Remove RAG scopes for chats that no longer exist."""
         try:
-            from plugins.memory.tools import knowledge_tools as knowledge
+            from core import documents
             # include_hidden: boot always comes up vault-sealed, so the plain
             # list omits vaulted chats — treating them as orphans would DELETE
             # their RAG documents. A sweep that deletes must never run blind.
             chat_names = [c["name"] for c in
                           self.llm_chat.session_manager.list_chat_files(include_hidden=True)]
-            knowledge.cleanup_orphaned_rag_scopes(chat_names)
+            documents.sweep_orphans(chat_names)
         except Exception as e:
             logger.warning(f"RAG orphan cleanup failed: {e}", exc_info=True)
 

@@ -1353,12 +1353,6 @@ def _delete_one_chat(system, chat_name: str, origin=None):
         # this explicit apply stays. Don't "symmetrize" it away.
         settings = system.llm_chat.session_manager.get_chat_settings()
         _apply_chat_settings(system, settings)
-    # Cleanup per-chat RAG documents
-    try:
-        from plugins.memory.tools import knowledge_tools as knowledge
-        knowledge.delete_scope(f"__rag__:{chat_name}")
-    except Exception:
-        pass
     # Dismiss any agents spawned for this chat, and forget their rows
     try:
         if hasattr(system, 'agent_manager') and system.agent_manager:
@@ -1553,12 +1547,6 @@ async def rename_chat(chat_name: str, request: Request, _=Depends(require_login)
     ok, result = system.llm_chat.session_manager.rename_chat(chat_name, new_name)
     if not ok:
         raise HTTPException(status_code=400, detail=result)
-    # Carry the per-chat RAG scope along
-    try:
-        from plugins.memory.tools import knowledge_tools as knowledge
-        knowledge.rename_scope(f"__rag__:{chat_name}", f"__rag__:{result}")
-    except Exception:
-        pass
     # ...and its inbox, its room runtime, and its agents' rows
     try:
         from core.chat import inbox
@@ -2065,7 +2053,7 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
         # and the origin-less TOOLSET_CHANGED that made every tab refetch
         # 7 endpoints per click (hunt 2026-08-17 M16). Nothing in
         # _apply_chat_settings reads these two keys.
-        if new_settings and set(new_settings) <= {"motion", "background"}:
+        if new_settings and set(new_settings) <= {"motion", "background", "rag_context"}:
             origin = request.headers.get('X-Session-ID')
             publish(Events.CHAT_SETTINGS_CHANGED,
                     {"chat": chat_name, "settings": new_settings, "origin": origin})

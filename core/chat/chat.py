@@ -6,6 +6,7 @@
 # chat() below is a blocking CONSUMER of that pipeline, not a second one.
 # (Until the 2026-08-17 "Million Dollar Bug Hunt" merge this file carried a
 # parallel ~470-line blocking engine that drifted from streaming for a year.)
+import base64
 import logging
 import re
 from typing import Dict, Any, Optional, List
@@ -650,56 +651,54 @@ class LLMChat:
         if dynamic_context:
             messages.insert(1, {"role": "system", "content": dynamic_context, "_dynamic": True})
 
-        # RAG injection — if chat has uploaded documents, search and inject
-        rag_context = self._get_rag_context(user_input)
-        if rag_context:
-            messages.insert(-1, {"role": "user", "content": rag_context, "_inject": True})
-
         return messages
 
-    # Per-chat RAG context levels: (top_k, max_tokens)
-    _RAG_LEVELS = {
-        'light':  (2, 1500),
-        'normal': (5, 4000),
-        'heavy':  (10, 8000),
-    }
+    def insert_documents(self, messages, live, words, provider=None, tools=True):
+        """This chat's documents, right before `live` (the person's row). Runs once the
+        provider is chosen: the budget needs the model's real window, or a small local
+        model is sent more than it holds and every turn fails the same way. Before the
+        person's row, not the tail, so a Continue has its documents too."""
+        at = next((i for i, m in enumerate(messages) if m is live), None)
+        if at is None:
+            return
+        doc_text, doc_pictures = self._get_rag_context(words, messages[:at], provider, tools)
+        rows = []
+        if doc_text:
+            rows.append({"role": "user", "content": doc_text, "_inject": True})
+        if doc_pictures:
+            blocks = [{"type": "image", "data": base64.b64encode(raw).decode('ascii'), "media_type": mt}
+                      for raw, mt in doc_pictures]
+            rows.append({"role": "user", "_inject": True, "content":
+                         [{"type": "text", "text": "[Pages of the scanned documents above]"}] + blocks})
+        messages[at:at] = rows
 
-    def _get_rag_context(self, user_input):
-        """Search per-chat RAG documents and return context string, or None."""
+    def _get_rag_context(self, words, history_messages=(), provider=None, tools=True):
+        """(text, pictures) from this chat's documents. `words` are what the person
+        typed, with no attached text or image receipts in them: those swamped the
+        search. The turn before rides along, so "and the second one?" can find it."""
         chat_settings = self.session_manager.get_chat_settings()
-        rag_level = chat_settings.get('rag_context', 'normal')
-        if rag_level == 'off':
-            return None
+        level = chat_settings.get('rag_context', 'normal')
+        if level == 'off':
+            return None, []
 
         # Effective chat, not active (matches the get_chat_settings() above): a phone
         # call / background conversation reads ITS chat's RAG docs, never the operator's
         # active-chat documents. Without this a stranger's call could pull owner files.
         chat_name = self.session_manager._effective_chat_name()
-        rag_scope = f"__rag__:{chat_name}"
-
+        previous = next((m.get('content') for m in reversed(history_messages)
+                         if m.get('role') == 'user' and not m.get('_inject')
+                         and isinstance(m.get('content'), str)), '')
+        query = f"{previous[-500:]}\n{words[-2000:]}" if words else ''
         try:
-            from plugins.memory.tools import knowledge_tools as knowledge
-            entries = knowledge.get_entries_by_scope(rag_scope)
-            if not entries:
-                return None
-
-            top_k, max_tokens = self._RAG_LEVELS.get(rag_level, self._RAG_LEVELS['normal'])
-
-            results = knowledge.search_rag(
-                user_input, rag_scope,
-                limit=top_k,
-                threshold=config.RAG_SIMILARITY_THRESHOLD,
-                max_tokens=max_tokens
-            )
-            if not results:
-                return None
-            parts = ["[Reference Documents]"]
-            for r in results:
-                parts.append(f"--- {r['filename']} (relevance: {r['score']:.0%}) ---\n{r['content']}")
-            return "\n\n".join(parts)
+            from core import documents
+            from core.chat import budget
+            from core.chat.llm_providers.resolve import provider_sees
+            window = min([n for n in (budget._limit(), budget.server_window(provider)) if n] or [0])
+            sees = provider is None or provider_sees(provider)
+            return documents.context(chat_name, query, level, tools=tools, window=window, sees=sees)
         except Exception as e:
             logger.error(f"[RAG] Failed to get context: {e}", exc_info=True)
-            return f"[RAG documents are configured but failed to load: {e}]"
+            return f"[Reference Documents]\nThis chat's documents failed to load: {e}", []
 
     def chat(self, user_input: str, on_event=None):
         """Blocking consumer of THE turn engine (chat_streaming.chat_stream).
