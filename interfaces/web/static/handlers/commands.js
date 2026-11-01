@@ -10,6 +10,33 @@ import { handleRegen, handleContinue, handleReplay } from './message-handlers.js
 // `/remove 2` is a command; `/home/me/x` has a second slash and is a message.
 export const isCommand = (text) => /^\/[a-z][\w-]*(\s|$)/i.test(text);
 
+const CONTEXT_LABELS = { system: 'System prompt', schemas: 'Tool definitions', you: 'Your messages', her: 'Her replies',
+    results: 'Tool results', calls: 'Tool calls', images: 'Images', injected: 'Ghost and documents', thinking: 'Thinking', framing: 'Message framing' };
+
+// One row of /context: label, tokens, and a bar sized against the whole.
+const contextBar = (label, n, total, note = '') => `<div style="margin:6px 0">
+    <div style="display:flex;justify-content:space-between;gap:12px"><span>${escapeHtml(label)}</span><span>${n.toLocaleString()}${note ? ` <small>${escapeHtml(note)}</small>` : ''}</span></div>
+    <div style="height:6px;border-radius:3px;background:var(--bg-secondary,#333)"><div style="height:100%;border-radius:3px;background:var(--accent,#4a9eff);width:${total ? Math.min(100, n * 100 / total) : 0}%"></div></div></div>`;
+
+function contextDialog({ chat, meter, parts, image_count, tools, thinking_stored, pictures_stored }) {
+    const total = Object.values(parts).reduce((a, b) => a + b, 0);
+    const rows = Object.entries(parts).filter(([, n]) => n).sort((a, b) => b[1] - a[1]).map(([k, n]) =>
+        contextBar(CONTEXT_LABELS[k] || k, n, total, k === 'images' ? `${image_count} sent` : ''));
+    const toolRows = tools.slice(0, 12).map(t => contextBar(t.name, t.schema + t.calls + t.results, total,
+        t.runs ? `${t.runs} run${t.runs === 1 ? '' : 's'}, ${t.results.toLocaleString()} in results` : 'definition only'));
+    const notes = [
+        meter.measured ? 'From her last send.' : 'No send yet since the app started, so this is the stored chat, without the prompt, tool definitions or images. Send a message to measure it.',
+        meter.out_of_view ? `${meter.out_of_view} oldest turn(s) are out of her view.` : '',
+        meter.stubbed ? `${meter.stubbed} old tool result(s) were cut to one line.` : '',
+        `Thinking stored in this chat: ${thinking_stored.toLocaleString()} tokens. Only what is listed above gets sent.`,
+        pictures_stored ? `Pictures saved in tool results: ${pictures_stored}.` : '',
+    ].filter(Boolean).map(n => `<p class="cm-hint" style="margin:4px 0">${escapeHtml(n)}</p>`).join('');
+    showModal(`Context: ${chat}`, [{ type: 'html', value:
+        `<div style="font-weight:600">${meter.used.toLocaleString()} of ${meter.limit.toLocaleString()} tokens (${meter.percent}%)${meter.server ? `, model holds ${meter.server.toLocaleString()}` : ''}</div>`
+        + rows.join('') + (toolRows.length ? `<h4 style="margin:14px 0 4px">Biggest tools</h4>${toolRows.join('')}` : '')
+        + (tools.length > 12 ? `<p class="cm-hint">and ${tools.length - 12} more</p>` : '') + notes }], null);
+}
+
 // The dialogs a command can ask for ({open: name}).
 const dialogs = {
     remove: ({ turns }) => showModal('Remove turns', [
@@ -17,6 +44,7 @@ const dialogs = {
         { id: 'cmd-remove-count', label: 'Newest turns to remove', type: 'number', value: '1' },
     ], (data) => run(`/remove ${String(data['cmd-remove-count'] || '').trim()}`), { saveLabel: 'Remove' }),
     compact: ({ chat }) => openCompressModal(chat),
+    context: contextDialog,
     trim: ({ chat }) => openTrimModal(chat),
     repair: ({ chat }) => openRepairModal(chat),
     help: ({ commands }) => showHelpModal('Slash commands', commands.map(c =>

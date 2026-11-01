@@ -84,6 +84,7 @@ def test_generator_raising_on_next_becomes_a_json_500(monkeypatch):
     pipeline is *called*; the error surfaces on the first next()."""
     ts = import_tts_server()
     monkeypatch.setattr(ts, "_voice_pack", lambda v, **k: torch.zeros(1))
+    monkeypatch.setattr(ts, "_kokoro_device", "cpu")      # on cuda this moves to the cpu instead
 
     def boom(text, voice, speed):
         raise RuntimeError("CUDA error: device-side assert")
@@ -139,3 +140,44 @@ def test_another_computer_names_a_voice_never_a_file():
     for voice in ("/etc/some.pt", "some.pt", "../voices/x"):
         with pytest.raises(ValueError):
             ts._voice_pack(voice, remote=True)
+
+
+def _speaks(*words, fail_after=None, why="CUDA out of memory"):
+    def pipe(text, voice, speed):
+        for i, w in enumerate(words):
+            if i == fail_after:
+                raise RuntimeError(why)
+            yield None, None, w
+    return pipe
+
+
+def test_cuda_failure_moves_to_cpu_and_carries_on_without_repeating(monkeypatch):
+    ts = import_tts_server()
+    monkeypatch.setattr(ts, "_kokoro_device", "cuda")
+    monkeypatch.setattr(ts, "pipeline", _speaks("a", "b", "c", fail_after=1))
+    monkeypatch.setattr(ts, "_init_kpipeline", lambda: _speaks("a", "b", "c"))
+    assert list(ts._segments("x", None, 1.0)) == ["a", "b", "c"]
+    assert ts._kokoro_device == "cpu"
+
+
+def test_a_failure_that_is_not_the_card_stays_on_cuda(monkeypatch):
+    import pytest
+    ts = import_tts_server()
+    monkeypatch.setattr(ts, "_kokoro_device", "cuda")
+    monkeypatch.setattr(ts, "pipeline", _speaks("a", fail_after=0, why="bad phoneme"))
+    monkeypatch.setattr(ts, "_init_kpipeline", lambda: pytest.fail("no reload for a word it can't say"))
+    with pytest.raises(RuntimeError):
+        list(ts._segments("x", None, 1.0))
+    assert ts._kokoro_device == "cuda"
+
+
+def test_health_names_the_device_here_and_not_at_the_shared_door(monkeypatch):
+    ts = import_tts_server()
+    monkeypatch.setattr(ts, "_kokoro_device", "cpu")
+    h = _fake_handler(ts, "/health", b"")
+    h._handle_health()
+    assert _status_and_json(h)[1] == {"status": "ok", "device": "cpu"}
+    h = _fake_handler(ts, "/health", b"")
+    h.remote = True
+    h._handle_health()
+    assert _status_and_json(h)[1] == {"status": "ok"}

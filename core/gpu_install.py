@@ -7,10 +7,11 @@ cannot be replaced. So the button only QUEUES the install and restarts;
 main.py runs pip here, before sapphire.py exists, with nothing loaded
 (2026-10-16, tmp/single-instance-plan.md, Wave C step 3).
 
-Wheel rule, no choices shown: compute capability below 7.0 (Maxwell, Pascal)
-gets cu126, everything else cu128. cu128 covers Volta through Blackwell and
-its index stops at torch 2.11; cu126 has no Blackwell. Offered on Windows
-only: Linux gets CUDA from PyPI already and its failures are driver cases.
+Wheel rule, no choices shown: compute capability below 7.5 (Maxwell, Pascal,
+Volta) gets cu126, everything else cu128. cu128 stops at torch 2.11, whose
+Windows wheel starts at sm_75 and runs through Blackwell; cu126 starts at sm_50
+and has no Blackwell. Below 5.0 no wheel fits, so nothing is offered. Offered
+on Windows only: Linux gets CUDA from PyPI already and its failures are driver cases.
 Testing knobs: SAPPHIRE_GPU_INDEX=cu126|cu128 forces the offer and the index
 (a box without a card); SAPPHIRE_GPU_INSTALL_DRY_RUN=1 makes pip only resolve.
 """
@@ -30,10 +31,12 @@ INDEX_URL = 'https://download.pytorch.org/whl/{index}'
 INDEXES = ('cu126', 'cu128')
 TORCH_SPEC = 'torch>=2.7.0'
 STEP_TIMEOUT = 2700        # seconds per pip step: a 2.5 GB wheel on a slow line
+HEARTBEAT = 60             # seconds between "still working" lines: pip is silent while it downloads
+MIN_COMPUTE_CAP = 5.0      # Maxwell: the oldest card any wheel here carries
 
 
 def index_for(compute_cap):
-    return 'cu126' if compute_cap is not None and compute_cap < 7.0 else 'cu128'
+    return 'cu126' if compute_cap is not None and compute_cap < 7.5 else 'cu128'
 
 
 def plan(status, managed=False):
@@ -44,9 +47,13 @@ def plan(status, managed=False):
     if managed or sys.platform != 'win32':
         return None
     status = status or {}
-    if status.get('state') not in ('cpu_torch', 'arch_unsupported'):
+    if status.get('state') not in ('cpu_torch', 'arch_unsupported', 'torch_broken'):
         return None
     gpu = status.get('gpu') or {}
+    if not gpu:      # a broken torch on a box with no card: no GPU wheel is the answer
+        return None
+    if gpu.get('compute_cap') is not None and gpu['compute_cap'] < MIN_COMPUTE_CAP:
+        return None
     index = index_for(gpu.get('compute_cap'))
     return {'index': index, 'why': f"{gpu.get('name') or 'NVIDIA GPU'} (compute {gpu.get('compute_cap')}) -> {index}"}
 
@@ -81,36 +88,66 @@ def pip_commands(index, python=None):
     return [base + ['--force-reinstall', '--no-deps', TORCH_SPEC], base + [TORCH_SPEC]]
 
 
-def _write_result(ok, index, message):
+def _write_result(ok, index, message, **extra):
     try:
         RESULT.parent.mkdir(parents=True, exist_ok=True)
         tmp = RESULT.with_suffix('.json.tmp')
         tmp.write_text(json.dumps({'ok': ok, 'index': index, 'message': message,
-                                   'at': time.strftime('%Y-%m-%d %H:%M:%S')}), encoding='utf-8')
+                                   'at': time.strftime('%Y-%m-%d %H:%M:%S'), **extra}), encoding='utf-8')
         tmp.replace(RESULT)
     except OSError:
         pass
 
 
 def _run(cmd, log, logfile):
-    """One pip step, its lines to `log` and the logfile; killed after STEP_TIMEOUT."""
+    """One pip step, its lines to `log` and the logfile; killed after STEP_TIMEOUT.
+    pip never outlives this: Sapphire boots next and must not meet half a swap."""
     logfile.write(' '.join(cmd) + '\n')
     logfile.flush()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                             text=True, encoding='utf-8', errors='replace',
-                            env=dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONUNBUFFERED='1'))
-    killer = threading.Timer(STEP_TIMEOUT, proc.kill)
-    killer.daemon = True
-    killer.start()
+                            env=dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK='1', PYTHONUNBUFFERED='1',
+                                     PYTHONIOENCODING='utf-8'))
+    timed_out = threading.Event()
+    finished = threading.Event()
+
+    def say(line):
+        try:
+            log(line)
+        except Exception:      # a console that can't print this line must not end the install
+            pass
+
+    def killer():
+        timed_out.set()
+        proc.kill()
+
+    def heartbeat():
+        minutes = 0
+        while not finished.wait(HEARTBEAT):
+            minutes += HEARTBEAT // 60
+            say(f"[GPU] Still working, {minutes} min so far. Closing this window now would interrupt it.")
+
+    timer = threading.Timer(STEP_TIMEOUT, killer)
+    timer.daemon = True
+    timer.start()
+    threading.Thread(target=heartbeat, name='gpu-install-heartbeat', daemon=True).start()
     try:
         for line in proc.stdout:
             line = line.rstrip()
             if line:
                 logfile.write(line + '\n')
-                log(line)
-        return proc.wait()
+                say(line)
+        code = proc.wait()
     finally:
-        killer.cancel()
+        timer.cancel()
+        finished.set()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    if timed_out.is_set():
+        raise TimeoutError(f"one step ran past {STEP_TIMEOUT // 60} minutes, usually a slow download. "
+                           "Try again on a faster connection. Torch was not changed if it was still downloading.")
+    return code
 
 
 def apply_pending(log=print):
@@ -128,6 +165,8 @@ def apply_pending(log=print):
         _write_result(False, index, f'bad request ({index!r}) ignored')
         return False
     log(f"[GPU] Installing torch from PyTorch's {index} index (a 2-3 GB download; Sapphire starts when it is done)")
+    # Stays as the result if this window dies mid-swap: nothing else would say so.
+    _write_result(False, index, 'The install was interrupted before it finished.', running=True)
     LOG.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(LOG, 'w', encoding='utf-8') as logfile:

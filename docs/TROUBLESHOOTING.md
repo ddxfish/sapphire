@@ -535,15 +535,21 @@ The Status page shows `[CPU]` with a warning mark next to TTS or STT while `cuda
 `user/logs/kokoro.log` says `torch.cuda.is_available()=False`, and the Status page or the TTS/STT
 settings tab says why. The card is almost never the problem:
 
-- **Windows:** the default `torch` from PyPI has no CUDA at all, for any card. The TTS and STT settings
-  tabs offer **Install GPU torch and restart**, which picks the right wheel for your card (a 2-3 GB download;
+- **Windows:** the default `torch` from PyPI has no CUDA at all, for any card. The top of the TTS and STT
+  settings tabs offers **Install GPU torch and restart**, which picks the right wheel for your card (a 2-3 GB download;
   it runs on the restart, before Sapphire boots, and the console or launcher pane shows pip's progress).
-  A notification says the card is idle, once per torch build, and opens that tab.
+  A notification says the card is idle on every start while Kokoro or Whisper is local and set to `cuda`. Set that
+  voice device to `cpu` if you want the CPU, and the reminder stops.
+- **"Torch will not load, so local voice is down":** an install was interrupted or a DLL is missing. On Windows with an
+  NVIDIA card the same button repairs it. A failed install never takes voice down by itself: pip puts the old torch back.
+- **Kokoro or Whisper fell back mid-session:** when the card fails while speaking or listening (out of memory, a lost
+  device), that engine moves to the CPU until the next start. The Status page shows `[CPU]` with a warning mark.
   By hand, inside the sapphire env:
   ```
   pip install torch --index-url https://download.pytorch.org/whl/cu128
   ```
-  GTX 10-series and 900-series cards (Pascal, Maxwell) are not in the cu128 build: use `cu126` in the URL instead.
+  GTX 10-series and 900-series cards (Pascal, Maxwell) and Volta cards like the Titan V are not in the cu128 build:
+  use `cu126` in the URL instead. Cards older than Maxwell (GTX 700 and earlier) are not in any current build.
 - **"is not in this torch build":** the build predates your card (RTX 50-series needs CUDA 12.8 or newer). Same command.
 - **"driver may be too old":** update the NVIDIA driver. In Docker, make sure the container was given the GPU.
 

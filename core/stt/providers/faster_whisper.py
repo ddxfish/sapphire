@@ -11,6 +11,7 @@ import numpy as np
 
 import config
 from core.stt.providers.base import BaseSTTProvider
+from core.gpu_status import cuda_failed
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,8 @@ class FasterWhisperProvider(BaseSTTProvider):
         logger.info(f"Loading faster-whisper model: {model_size}")
         self.model = None
         self._lock = threading.Lock()
+        self._model_size = model_size
+        self._on_cuda = False
 
         try:
             from faster_whisper import WhisperModel
@@ -111,9 +114,10 @@ class FasterWhisperProvider(BaseSTTProvider):
                     for compute in gpu_compute_types:
                         try:
                             logger.info(f"Loading with device=cuda:{cuda_device}, compute_type={compute}")
-                            self.model = _load_whisper(WhisperModel, model_size, device=device,
+                            self.model = _load_whisper(WhisperModel, model_size, device=device, device_index=cuda_device,
                                                        compute_type=compute, num_workers=num_workers)
                             logger.info(f"Successfully loaded model with compute_type={compute}")
+                            self._on_cuda = True
                             return
                         except Exception as e:
                             logger.warning(f"Failed with compute_type={compute}: {e}")
@@ -136,6 +140,24 @@ class FasterWhisperProvider(BaseSTTProvider):
         except Exception as e:
             raise RuntimeError(f"Failed to initialize STT model: {e}")
 
+    def _run(self, audio_path, params) -> list:
+        """The model's segments, called under self._lock. Loading on CUDA proves
+        little: on Windows a missing cuBLAS only shows at the first transcribe.
+        A CUDA failure reloads on the CPU until the next start and tries again."""
+        try:
+            segments, _ = self.model.transcribe(audio_path, **params)
+            return list(segments)
+        except Exception as e:
+            if not self._on_cuda or not cuda_failed(e):
+                raise
+            logger.warning(f"Whisper failed on CUDA ({e}), moving to the CPU (int8) until the next start")
+        from faster_whisper import WhisperModel
+        self.model = _load_whisper(WhisperModel, self._model_size, device="cpu", compute_type="int8",
+                                   num_workers=getattr(config, 'FASTER_WHISPER_NUM_WORKERS', 2))
+        self._on_cuda = False
+        segments, _ = self.model.transcribe(audio_path, **params)
+        return list(segments)
+
     def transcribe_segments(self, audio_path: str, **params) -> list:
         """faster-whisper's own segments (text, no_speech_prob, avg_logprob, …).
         Thread-safe. `params` override the defaults (a caller may pass
@@ -146,8 +168,7 @@ class FasterWhisperProvider(BaseSTTProvider):
             **params,
         }
         with self._lock:
-            segments, _info = self.model.transcribe(audio_path, **transcription_params)
-            return list(segments)
+            return self._run(audio_path, transcription_params)
 
     def _transcribe_impl(self, audio_path: str) -> Optional[str]:
         """Transcribe an audio file. Thread-safe.
@@ -186,7 +207,7 @@ class FasterWhisperProvider(BaseSTTProvider):
                     'vad_parameters': getattr(config, 'FASTER_WHISPER_VAD_PARAMETERS', None)
                 }
 
-                segments, _ = self.model.transcribe(temp_path, **transcription_params)
+                segments = self._run(temp_path, transcription_params)
                 # Filter out segments where Whisper thinks there's no speech
                 text = " ".join([
                     segment.text for segment in segments

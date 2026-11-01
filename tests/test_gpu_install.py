@@ -11,7 +11,8 @@ def _card(cap, state='cpu_torch'):
 
 
 def test_index_rule():
-    assert gi.index_for(12.0) == 'cu128' and gi.index_for(7.0) == 'cu128'
+    assert gi.index_for(12.0) == 'cu128' and gi.index_for(7.5) == 'cu128'
+    assert gi.index_for(7.0) == 'cu126'      # Volta: the newest cu128 wheel has no sm_70
     assert gi.index_for(6.1) == 'cu126' and gi.index_for(5.2) == 'cu126'
     assert gi.index_for(None) == 'cu128'
 
@@ -28,6 +29,8 @@ def test_plan_is_windows_only_unless_forced(monkeypatch):
     assert gi.plan({'state': 'driver_old', 'gpu': {'compute_cap': 12.0}}) is None
     assert gi.plan(_card(12.0), managed=True) is None
     assert gi.plan(None) is None
+    assert gi.plan(_card(12.0, 'torch_broken'))['index'] == 'cu128'
+    assert gi.plan({'state': 'torch_broken', 'gpu': None}) is None
 
 
 def test_forced_index_for_a_box_without_a_card(monkeypatch):
@@ -66,7 +69,10 @@ class _Proc:
         return self._code
 
     def kill(self):
-        pass
+        self.killed = True
+
+    def poll(self):
+        return getattr(self, 'done', None)
 
 
 def test_apply_runs_both_steps_and_records(files, monkeypatch):
@@ -90,6 +96,67 @@ def test_apply_failure_records_and_never_loops(files, monkeypatch):
     assert gi.pending() is False                 # a failing install is not retried every boot
     r = gi.last_result()
     assert r['ok'] is False and 'pip exited 1' in r['message']
+
+
+def test_a_window_closed_mid_install_leaves_a_failed_result(files, monkeypatch):
+    def killed(cmd, **k):
+        assert gi.last_result()['running'] is True      # already on disk when pip starts
+        raise KeyboardInterrupt
+    monkeypatch.setattr(gi.subprocess, 'Popen', killed)
+    gi.request('cu128')
+    with pytest.raises(KeyboardInterrupt):
+        gi.apply_pending(log=lambda m: None)
+    r = gi.last_result()
+    assert r['ok'] is False and 'interrupted' in r['message']
+
+
+def test_the_finished_result_drops_the_running_mark(files, monkeypatch):
+    monkeypatch.setattr(gi.subprocess, 'Popen', lambda cmd, **k: _Proc([], 0))
+    gi.request('cu128')
+    gi.apply_pending(log=lambda m: None)
+    assert 'running' not in gi.last_result()
+
+
+def test_a_console_that_cant_print_never_leaves_pip_running(files, monkeypatch):
+    p = _Proc(['caf\ufffd\n'], 0)
+    monkeypatch.setattr(gi.subprocess, 'Popen', lambda cmd, **k: p)
+
+    def cp1252(line):
+        raise UnicodeEncodeError('cp1252', line, 0, 1, 'no')
+    assert gi._run(['pip'], cp1252, open(gi.LOG.parent.parent / 'l.txt', 'w', encoding='utf-8')) == 0
+
+
+def test_a_read_failure_kills_pip_before_sapphire_boots(files, monkeypatch):
+    class Dies(_Proc):
+        @property
+        def stdout(self):
+            raise OSError('pipe')
+
+        @stdout.setter
+        def stdout(self, v):
+            pass
+    p = Dies([], 0)
+    monkeypatch.setattr(gi.subprocess, 'Popen', lambda cmd, **k: p)
+    gi.request('cu128')
+    assert gi.apply_pending(log=lambda m: None) is False
+    assert p.killed is True and gi.last_result()['ok'] is False
+
+
+def test_a_timeout_says_so(files, monkeypatch):
+    class Slow(_Proc):
+        def kill(self):
+            super().kill()
+            self.stdout = iter([])
+    p = Slow(iter([]), 1)
+    p.stdout = (l for l in ())
+    monkeypatch.setattr(gi.subprocess, 'Popen', lambda cmd, **k: p)
+    monkeypatch.setattr(gi, 'STEP_TIMEOUT', 0)
+    orig = p.wait
+    import time
+    p.wait = lambda: (time.sleep(0.2), orig())[1]
+    gi.request('cu128')
+    assert gi.apply_pending(log=lambda m: None) is False
+    assert 'slow download' in gi.last_result()['message']
 
 
 def test_apply_without_a_request_is_a_noop(files, monkeypatch):

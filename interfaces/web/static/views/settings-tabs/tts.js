@@ -62,20 +62,21 @@ export default {
                     <span id="tts-test-result" style="margin-left: 0.75rem; font-size: var(--font-sm);"></span>
                 </div>
             </div>`;
-        const gpu = `<div id="tts-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>`;
+        // First thing on the tab: this is the difference between fast and slow speech.
+        const gpu = ctx.settings.TTS_PROVIDER === 'kokoro' ? '<div id="tts-gpu-notice" class="gpu-notice"></div>' : '';
         // Shared Kokoro (core/worker_door.py): which computers may use it.
         const door = ctx.settings.TTS_PROVIDER === 'kokoro' && ctx.settings.TTS_SHARE_ENABLED
             ? `<div id="tts-door" style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);"></div>` : '';
 
         // The setup wizard (2026-10-24): the cards, one Advanced fold, the test button.
         if (ctx.wizard) {
-            return renderProviderCompact(cfg, ctx, {
+            return gpu + renderProviderCompact(cfg, ctx, {
                 fold: ctx.renderFields(['TTS_LOCAL_PLAYBACK', ...STREAMING_KEYS]) + door,
                 after: test,
-            }) + gpu;
+            });
         }
 
-        let html = renderProviderTab(cfg, ctx);
+        let html = gpu + renderProviderTab(cfg, ctx);
 
         // Play speech here (2026-10-17): "make speech" and "play it on this
         // computer" used to be one switch. Off = plugins and devices still
@@ -93,7 +94,7 @@ export default {
                 ${ctx.renderFields(STREAMING_KEYS)}
             </details>`;
 
-        return html + test + gpu + door;
+        return html + test + door;
     },
 
     async attachListeners(ctx, el) {

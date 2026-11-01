@@ -169,12 +169,12 @@ export default {
 
     render(ctx) {
         const cfg = _mergedConfig || tabConfig;
-        const gpu = '<div id="stt-gpu-notice" style="margin-top: 0.5rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020);"></div>';
+        const gpu = ctx.settings.STT_PROVIDER === 'faster_whisper' ? '<div id="stt-gpu-notice" class="gpu-notice"></div>' : '';
         // The setup wizard (2026-10-24): the cards, one Advanced fold (VAD inside).
         // Managed hides the Audio tab, and there the browser is the only mic.
         const mic = window.__managed ? browserMicHtml() : '';
-        if (ctx.wizard) return renderProviderCompact(cfg, ctx, { fold: renderVADFold(ctx) }) + gpu + mic;
-        return renderProviderTab(cfg, ctx) + renderVADSection(ctx) + gpu + mic;
+        if (ctx.wizard) return gpu + renderProviderCompact(cfg, ctx, { fold: renderVADFold(ctx) }) + mic;
+        return gpu + renderProviderTab(cfg, ctx) + renderVADSection(ctx) + mic;
     },
 
     async attachListeners(ctx, el) {

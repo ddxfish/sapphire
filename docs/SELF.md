@@ -68,6 +68,7 @@ Net checks
 ask_user question card
 self_command slash commands
 Composer /help /status
+/context token breakdown
 /retry /continue /replay
 /remove /trim /compact
 /prompt /repair

@@ -52,6 +52,7 @@ except Exception as e:
     PORT = 5012
 from core.tts.kokoro_files import REPO_ID, DEFAULT_VOICE   # shared with the parent's pre-fetch (core/tts/kokoro_files.py)
 from core.hf_words import why as _why                        # a hub failure in words a person can act on
+from core.gpu_status import cuda_failed
 
 
 # --- Cross-platform temp directory ---
@@ -211,7 +212,8 @@ def _unavailable_status(e):
 def _init_kpipeline():
     """Model from cache-resolved files, moved to the device: cuda, falling
     back to cpu when CUDA fails at runtime (driver mismatch, OOM, context
-    corruption) even though torch.cuda.is_available() said yes."""
+    corruption) even though torch.cuda.is_available() said yes. A card that
+    takes the model and then cannot run it is _segments' catch."""
     global _kokoro_device
     kmodel = KModel(repo_id=REPO_ID, config=_hf_file('config.json'),
                     model=_hf_file(KModel.MODEL_NAMES[REPO_ID]))
@@ -225,6 +227,28 @@ def _init_kpipeline():
         _kokoro_device = 'cpu'
         kmodel = kmodel.to('cpu').eval()
     return KPipeline(lang_code='a', repo_id=REPO_ID, model=kmodel)
+
+
+def _segments(text, voice, speed):
+    """Kokoro's audio segments, called under pipeline_lock. A CUDA failure
+    (out of memory, a build without this card, a lost device) moves her to the
+    CPU until the next start and carries on from the segment that failed: the
+    same text splits the same way, so a stream never repeats itself."""
+    global pipeline, _kokoro_device
+    done = 0
+    try:
+        for _, _, seg in pipeline(text, voice=voice, speed=speed):
+            yield seg
+            done += 1
+    except Exception as e:
+        if _kokoro_device != 'cuda' or not cuda_failed(e):
+            raise
+        logger.warning(f"Kokoro failed on CUDA ({e}), moving to the cpu until the next start")
+        _kokoro_device = 'cpu'
+        pipeline = _init_kpipeline()
+        for i, (_, _, seg) in enumerate(pipeline(text, voice=voice, speed=speed)):
+            if i >= done:
+                yield seg
 
 
 
@@ -253,10 +277,20 @@ logger.info(f"Model loaded successfully on device='{_kokoro_device}'. Using temp
 # Warm the default voice: a box that can't reach Hugging Face says so here,
 # in kokoro.log at boot, instead of as a 500 on the first sentence.
 try:
-    _voice_pack(DEFAULT_VOICE)
+    _warm = _voice_pack(DEFAULT_VOICE)
 except Exception as _e:
+    _warm = None
     logger.warning(f"Default voice '{DEFAULT_VOICE}' is not cached and could not be downloaded "
                    f"({_why(_e)}); uncached voices will fail until it can be")
+# One word on the card: a card that took the model but cannot run it moves to
+# the CPU here, at boot, not on her first sentence.
+if _warm is not None and _kokoro_device == 'cuda':
+    try:
+        for _seg in _segments('Hello.', _warm, 1.0):
+            pass
+        logger.info(f"Kokoro spoke its first word on device='{_kokoro_device}'")
+    except Exception as _e:
+        logger.warning(f"Kokoro's first word failed: {_e}")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
@@ -365,7 +399,9 @@ class TTSHandler(BaseHTTPRequestHandler):
         # Status only: this door may face the network, and a request counter
         # there tells a stranger when she talks. The rest goes to the log.
         logger.debug(f"health: device={_kokoro_device} requests={request_count} memory={mem_gb:.2f}/{MAX_MEMORY_GB} GB")
-        _json_response(self, {'status': 'ok'})
+        # This computer's Status page shows the device; the shared door doesn't say.
+        _json_response(self, {'status': 'ok'} if getattr(self, 'remote', False)
+                       else {'status': 'ok', 'device': _kokoro_device})
 
     def _handle_tts(self):
         global request_count
@@ -424,10 +460,10 @@ class TTSHandler(BaseHTTPRequestHandler):
         generation_start = time.time()
         try:
             with pipeline_lock:
-                generator = pipeline(text_to_speak, voice=voice_pack, speed=speed)
+                generator = _segments(text_to_speak, voice_pack, speed)
                 # Copy each segment to decouple from PyTorch tensor memory
                 # Without copy, GC of generator tensors can free memory numpy still references → SIGSEGV
-                audio_segments = [np.copy(seg) for _, _, seg in generator]
+                audio_segments = [np.copy(seg) for seg in generator]
                 del generator
         except Exception as e:
             _private_error(f"Synthesis failed (voice={voice})", e)
@@ -621,8 +657,8 @@ class TTSHandler(BaseHTTPRequestHandler):
 
         try:
             with pipeline_lock:
-                generator = pipeline(text_to_speak, voice=voice_pack, speed=speed)
-                for _, _, seg in generator:
+                generator = _segments(text_to_speak, voice_pack, speed)
+                for seg in generator:
                     # If downstream already failed (client gone), bail early —
                     # no point finishing inference for a dead socket.
                     if writer_err['exc'] is not None:

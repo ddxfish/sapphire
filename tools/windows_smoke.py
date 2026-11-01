@@ -216,7 +216,9 @@ def install_test(args, base):
                 res = json.loads(RESULT_FILE.read_text(encoding='utf-8'))
             except Exception:
                 res = {'ok': False, 'message': 'result file unreadable'}
-            break
+            if not res.get('running'):      # the mark pip leaves while it works
+                break
+            res = None
         if runner.poll() is not None:
             break
         time.sleep(5)

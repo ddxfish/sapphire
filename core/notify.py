@@ -533,7 +533,7 @@ def _boot_results():
         r = gpu_install.last_result()
         if r:
             key = f"gpu-install:{r.get('at') or ''}"
-            go = {'view': 'settings', 'tab': 'stt'}
+            go = {'view': 'settings', 'tab': 'tts'}
             if r.get('ok'):
                 notify(f"GPU torch installed ({r.get('index') or ''})", 'success', str(r.get('message') or ''),
                        key=key, once=True, go=go)

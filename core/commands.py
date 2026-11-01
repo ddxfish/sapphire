@@ -206,7 +206,16 @@ def _status(chat, args, by):
             'messages': len(rows), 'turns': len(turn_spans(rows)), 'context': budget.meter(chat, stored)}
 
 
+def _context(chat, args, by):
+    from core.chat import budget
+    exported = _sm().export_chat(chat)
+    if exported is None:
+        return {'ok': False, 'say': f"Chat '{chat}' not found."}
+    return {'ok': True, 'open': 'context', 'chat': chat, **budget.report(chat, exported['messages'])}
+
+
 register('compact', _dialog('compact', games=False), description='summarize older history (opens the compress dialog)')
+register('context', _context, description="what's taking up this chat's context, biggest first")
 register('continue', _action('continue'), description='keep writing the last reply')
 register('help', _help, args='[command]', description='list the slash commands')
 register('prompt', _dialog('prompt'), description='show the prompt the next turn would send')

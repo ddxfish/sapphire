@@ -9,6 +9,7 @@ and read by the Status page, the TTS/STT settings tabs and the boot log.
 """
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -25,9 +26,16 @@ _done = threading.Event()
 _cached = {'state': 'probing', 'message': ''}
 
 
+def cuda_failed(e):
+    """Whether an exception is the card's fault rather than the work's: only
+    this may move Kokoro or Whisper to the CPU."""
+    return bool(re.search(r'cuda|cublas|cudnn|nvcuda|no kernel image', str(e), re.I))
+
+
 def _nvidia_smi():
-    """The first NVIDIA card as {name, compute_cap, driver}, None without one.
-    `compute_cap` is a newer query field; older drivers get a second, plainer ask."""
+    """The newest NVIDIA card as {name, compute_cap, driver}, None without one:
+    torch runs on the fastest by default, whatever slot it is in. `compute_cap`
+    is a newer query field; older drivers get a second, plainer ask."""
     exe = shutil.which('nvidia-smi')
     if not exe:
         return None
@@ -41,15 +49,19 @@ def _nvidia_smi():
         text = (r.stdout or '') + (getattr(r, 'stderr', '') or '')
         if 'NVIDIA-SMI has failed' in text:
             return {'name': 'NVIDIA GPU', 'compute_cap': None, 'driver': None, 'broken': True}
-        parts = [p.strip() for p in ((r.stdout or '').strip().splitlines() or [''])[0].split(',')]
-        if len(parts) == fields.count(',') + 1 and parts[0]:
-            cap = None
-            if len(parts) == 3:
-                try:
-                    cap = float(parts[1])
-                except ValueError:
-                    pass
-            return {'name': parts[0], 'compute_cap': cap, 'driver': parts[-1]}
+        cards = []
+        for line in (r.stdout or '').strip().splitlines():
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) == fields.count(',') + 1 and parts[0]:
+                cap = None
+                if len(parts) == 3:
+                    try:
+                        cap = float(parts[1])
+                    except ValueError:
+                        pass
+                cards.append({'name': parts[0], 'compute_cap': cap, 'driver': parts[-1]})
+        if cards:
+            return max(cards, key=lambda c: c['compute_cap'] or 0)
     return None
 
 
@@ -65,9 +77,12 @@ def _torch_probe():
             return json.loads(lines[-1])
         except ValueError:
             pass
-    if 'No module named' in (r.stderr or ''):
+    err = r.stderr or ''
+    if "No module named 'torch'" in err:
         return {'torch': None}
-    return {'error': (r.stderr or '').strip()[-200:] or f'exit {r.returncode}'}
+    # a traceback: torch is there and will not import (half a swap, a missing
+    # DLL). Anything else (a crash, the timeout above) says nothing about it.
+    return {'error': err.strip()[-200:] or f'exit {r.returncode}', 'broken': 'Traceback' in err}
 
 
 def _sm(cap):
@@ -93,6 +108,9 @@ def _covers(archs, cap):
 
 def classify(gpu, t, managed=False):
     """(state, message). An empty message means there is nothing to say."""
+    if t.get('broken'):
+        last = (t.get('error') or '').strip().splitlines()[-1:] or ['']
+        return 'torch_broken', f"Torch will not load, so local voice is down. {last[0]}".strip()
     if t.get('error'):
         return 'unknown', ''
     if gpu is None:
@@ -105,6 +123,8 @@ def classify(gpu, t, managed=False):
         return 'no_torch', ''
     fix = '' if managed else " Fix: docs/TROUBLESHOOTING.md, 'Voice runs on the CPU'."
     cuda = t.get('cuda')
+    if gpu.get('compute_cap') is not None and gpu['compute_cap'] < 5.0:
+        return 'card_too_old', f"{name} is too old for current torch builds, so voice runs on the CPU."
     if not cuda:
         return 'cpu_torch', (f"{name} found, but this torch ({t['torch']}) has no CUDA, so voice runs on the CPU. "
                              f"On Windows that is the default torch.{fix}")
@@ -112,14 +132,22 @@ def classify(gpu, t, managed=False):
     archs = t.get('archs') or []
     if cap is not None and archs and not _covers(archs, cap):
         return 'arch_unsupported', (f"{name} ({_sm(cap)}) is not in this torch build (CUDA {cuda}: {', '.join(archs)}), "
-                                    f"so voice runs on the CPU. It needs a build whose CUDA knows this card "
-                                    f"(cu128 for Volta and newer, cu126 for older).{fix}")
+                                    f"so voice can't rely on it. It needs a build whose CUDA knows this card "
+                                    f"(cu128 for RTX 20-series and newer, cu126 for older).{fix}")
     if not t.get('available'):
         return 'driver_old', (f"{name} found and torch {t['torch']} has CUDA {cuda}, but torch cannot open it, "
                               f"so voice runs on the CPU. The NVIDIA driver ({gpu.get('driver') or 'unknown'}) may be "
                               f"too old for CUDA {cuda}"
                               + (", or this container has no GPU access." if managed else ". Update the driver."))
     return 'ok', ''
+
+
+def _install_failed():
+    try:
+        from core import gpu_install
+        return (gpu_install.last_result() or {}).get('ok') is False
+    except Exception:
+        return False
 
 
 def _managed():
@@ -130,16 +158,45 @@ def _managed():
         return False
 
 
-def _tell(state, message, verdict):
-    """One warning row per torch build when the card is idle for voice; the
-    body names the TTS tab's button where the installer is offered."""
+def _voice_tab(state):
+    """The voice tab a row should open, None when no local engine wants this
+    card: another provider, or a device set to CPU on purpose (which is how a
+    person turns the reminder off). A broken torch matters at either device."""
+    import config
+    any_device = state == 'torch_broken'
+    if getattr(config, 'TTS_PROVIDER', '') == 'kokoro' and (any_device or getattr(config, 'KOKORO_DEVICE', 'cuda') == 'cuda'):
+        return 'tts'
+    if getattr(config, 'STT_PROVIDER', '') == 'faster_whisper' and (any_device or getattr(config, 'FASTER_WHISPER_DEVICE', 'cuda') != 'cpu'):
+        return 'stt'
+    return None
+
+
+def _tell(state, message, verdict, refresh=False):
+    """A row when local voice can't use the card. The two a button can fix come
+    back unread every boot, with the last failed install in the body; the rest
+    (a driver is the person's to fix) post once per torch build."""
     try:
         from core import gpu_install, notify
+        tab = _voice_tab(state)
+        if not tab:
+            return
         card = (verdict.get('gpu') or {}).get('name') or 'NVIDIA GPU'
         button = gpu_install.plan(verdict, managed=_managed())
-        body = message + (" Settings > TTS has the button: Install GPU torch and restart." if button else "")
-        notify.notify(f"{card} is idle for voice", 'warning', body, go={'view': 'settings', 'tab': 'tts'},
-                      key=f"gpu:{state}:{verdict.get('torch')}", once=True)
+        broken = state == 'torch_broken'
+        body = message
+        if button:
+            last = gpu_install.last_result()
+            if last and last.get('ok') is False:
+                body += f" Last install failed: {last.get('message')}"
+            body += f" Settings > {tab.upper()} has the button: Install GPU torch and restart."
+            if not broken:
+                body += " Set the voice device to CPU to stop this reminder."
+        elif broken and not _managed():
+            body += " Fix by hand, in the sapphire env: pip install --force-reinstall torch"
+        notify.notify('Local voice is down: torch will not load' if broken else f"{card} is idle for voice",
+                      'error' if broken else 'warning', body, go={'view': 'settings', 'tab': tab},
+                      key=f"gpu:{state}" if button or broken else f"gpu:{state}:{verdict.get('torch')}",
+                      once=refresh or not (button or broken))
     except Exception as e:
         logger.debug(f"[GPU] row not posted: {e}")
 
@@ -152,13 +209,15 @@ def status(refresh=False):
             return dict(_cached)
         gpu = _nvidia_smi()
         t = _torch_probe()
+        if t.get('torch', 0) is None and _install_failed():     # the swap took torch away and died
+            t = {'error': 'The GPU torch install stopped partway and left no torch.', 'broken': True}
         state, message = classify(gpu, t, _managed())
         _cached = {'state': state, 'message': message, 'gpu': gpu, 'torch': t.get('torch'),
                    'cuda': t.get('cuda'), 'available': t.get('available'), 'archs': t.get('archs') or []}
         _done.set()
         if message:
             logger.warning(f"[GPU] {message}")
-            _tell(state, message, _cached)
+            _tell(state, message, _cached, refresh)
         elif gpu and t.get('torch'):
             logger.info(f"[GPU] {state}: {gpu['name']}, torch {t['torch']}, CUDA {t.get('cuda')}")
         else:

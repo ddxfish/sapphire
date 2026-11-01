@@ -1,9 +1,11 @@
 """Slash commands (core/commands.py): /remove by the person and by her self_command."""
+import json
 from pathlib import Path
 
 import pytest
 
 from core import commands
+from core.chat import budget
 from core.chat.history import turn_spans
 
 ROOT = Path(__file__).absolute().parent.parent
@@ -158,7 +160,7 @@ def test_compact_refuses_a_chat_that_is_not_there(sm, monkeypatch):
 
 def test_the_menu_lists_every_command():
     names = [c['name'] for c in commands.all_commands()]
-    assert {'compact', 'continue', 'help', 'prompt', 'remove', 'repair', 'replay', 'retry', 'status',
+    assert {'compact', 'context', 'continue', 'help', 'prompt', 'remove', 'repair', 'replay', 'retry', 'status',
             'trim'} <= set(names) and names == sorted(names)
 
 
@@ -200,6 +202,67 @@ def test_status_reads_the_chat_it_was_asked_about(sm, monkeypatch):
     out = commands.run('/status', 'c')
     assert (out['open'], out['chat'], out['persona'], out['provider']) == ('status', 'c', 'p1', 'claude')
     assert out['turns'] == 3 and out['messages'] == len(sm.rows) and out['context']['used'] > 0
+
+
+def _wire():
+    return [{'role': 'system', 'content': 'be kind'},
+            {'role': 'user', 'content': 'hello there'},
+            {'role': 'assistant', 'content': '', 'tool_calls': [{'id': 't1', 'function': {'name': 'look', 'arguments': '{}'}}],
+             'thinking_raw': [{'type': 'thinking', 'thinking': 'hmm'}]},
+            {'role': 'tool', 'tool_call_id': 't1', 'name': 'look', 'content': 'a long result ' * 50},
+            {'role': 'user', 'content': 'ghost words', '_inject': True},
+            {'role': 'assistant', 'content': 'a reply'}]
+
+
+_TOOLS = [{'type': 'function', 'function': {'name': 'look', 'description': 'look around'}},
+          {'type': 'function', 'function': {'name': 'idle', 'description': 'never run'}}]
+
+
+def test_context_buckets_add_up_to_what_the_budget_counts():
+    p = budget._parts(_wire(), _TOOLS, 'patches')
+    raw = budget.fit(_wire(), _TOOLS, limit=100000).raw
+    assert sum(v for k, v in p.items() if k not in ('by_tool', 'image_count')) == raw
+    assert p['by_tool']['look']['runs'] == 1 and p['by_tool']['look']['results'] == p['results']
+    assert p['by_tool']['idle']['schema'] > 0 and p['by_tool']['idle']['runs'] == 0
+    assert all(p[k] for k in ('system', 'schemas', 'you', 'her', 'calls', 'results', 'injected', 'thinking'))
+
+
+def test_context_reports_the_last_send_with_the_biggest_tool_first(monkeypatch):
+    budget.forget('ctx')
+    try:
+        budget.fit(_wire(), _TOOLS, chat='ctx', limit=100000)
+        r = budget.report('ctx', _wire())
+        assert r['meter']['measured'] and r['tools'][0]['name'] == 'look'
+        assert sum(r['parts'].values()) <= r['meter']['used'] and r['parts']['schemas'] > 0
+    finally:
+        budget.forget('ctx')
+
+
+def test_context_before_a_send_reads_the_stored_chat_and_its_thinking():
+    budget.forget('ctx')
+    rows = [{'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': 'hey', 'thinking': 'a long thought'}]
+    r = budget.report('ctx', rows)
+    assert not r['meter']['measured'] and r['parts']['schemas'] == 0
+    assert r['thinking_stored'] > 0 and r['parts']['thinking'] == 0
+
+
+def test_thinking_held_in_both_fields_counts_once():
+    budget.forget('ctx')
+    rows = [{'role': 'assistant', 'content': 'hey', 'thinking': 'one thought',
+             'thinking_raw': [{'type': 'thinking', 'thinking': 'one thought'}]}]
+    r = budget.report('ctx', rows)
+    assert r['thinking_stored'] == budget.count_tokens(json.dumps(rows[0]['thinking_raw'], ensure_ascii=False, default=str))
+    assert r['parts']['thinking'] == 0
+
+
+def test_a_picture_counts_as_an_image_not_as_text():
+    p = budget._parts([{'role': 'user', 'content': [{'type': 'text', 'text': 'see'}, {'type': 'image', 'data': 'AAAA'}]}],
+                      None, 'patches')
+    assert p['image_count'] == 1 and p['images'] > 0 and p['you'] == budget.count_tokens('see')
+
+
+def test_context_refuses_a_chat_that_is_not_there(sm):
+    assert not commands.run('/context', 'gone')['ok']
 
 
 def test_plugin_commands_register_refuse_collisions_and_leave_with_the_plugin(sm):

@@ -369,7 +369,7 @@ def fit(messages, tools=None, provider=None, provider_key='', model='', max_toke
     tk = [_msg_tokens(m, family) for m in msgs]          # each row counted once per fit
     raw = schema + sum(tk)
     if not window:
-        _remember(chat, int(raw * ratio), server, 0, stubbed)
+        _remember(chat, int(raw * ratio), server, 0, stubbed, _parts(msgs, tools, family) if chat else None, ratio)
         _record(chat, key, ids)
         return Fit(msgs, max_tokens, None, limit, server, int(raw * ratio), raw, 0, 0, stubbed, key)
 
@@ -432,7 +432,7 @@ def fit(messages, tools=None, provider=None, provider_key='', model='', max_toke
     send = max_tokens
     if max_tokens or (server and window == server):    # never ask for more reply than the window has left
         send = max(floor, min(asked, window - est - margin))
-    _remember(chat, est, server, out_of_view, stubbed)
+    _remember(chat, est, server, out_of_view, stubbed, _parts(msgs, tools, family) if chat else None, ratio)
     _record(chat, key, ids)
     return Fit(msgs, send, window, limit, server, est, raw, reserve, out_of_view, stubbed, key)
 
@@ -479,10 +479,11 @@ def _record(chat, key, ids):
             _sender[key] = chat
 
 
-def _remember(chat, est, server, out_of_view, stubbed):
+def _remember(chat, est, server, out_of_view, stubbed, parts=None, ratio=1.0):
     if chat:
         with _lock:
-            _last[chat] = {'used': est, 'server': server, 'out_of_view': out_of_view, 'stubbed': stubbed}
+            _last[chat] = {'used': est, 'server': server, 'out_of_view': out_of_view, 'stubbed': stubbed,
+                           'parts': parts, 'ratio': ratio}
 
 
 def meter(chat, fallback_used: int) -> dict:
@@ -500,6 +501,90 @@ def meter(chat, fallback_used: int) -> dict:
     return {'used': used, 'limit': limit, 'percent': pct, 'notch': notch, 'server': server,
             'out_of_view': last['out_of_view'] if last else 0, 'stubbed': last['stubbed'] if last else 0,
             'measured': bool(last)}
+
+
+def _parts(msgs, tools, family) -> dict:
+    """What a message list is made of, in tokens as counted: {buckets, 'by_tool'}.
+    The buckets add up to what _msg_tokens and tools_tokens count; by_tool shares
+    them out per tool. Counts and tool names only: no chat text stays behind."""
+    p = dict.fromkeys(('system', 'schemas', 'you', 'her', 'calls', 'results', 'injected', 'images', 'thinking', 'framing'), 0)
+    p['image_count'] = 0
+    tools_seen, called = {}, {}
+
+    def tool(name):
+        return tools_seen.setdefault(name or 'tool', {'schema': 0, 'calls': 0, 'results': 0, 'runs': 0})
+
+    def walk(content):
+        """(tokens of text, thinking in old-style tags) with images counted on the way."""
+        text = think = 0
+        for b in (content if isinstance(content, list) else [content]):
+            if isinstance(b, dict) and b.get('type') == 'image':
+                p['images'] += image_tokens(*_size(str(b.get('data') or '')), family)
+                p['image_count'] += 1
+            elif isinstance(b, dict) and b.get('type') == 'tool_result':
+                t, k = walk(b.get('content'))
+                text, think = text + t, think + k
+            elif isinstance(b, dict):
+                text += count_tokens(str(b.get('text') or ''))
+            elif b:
+                if isinstance(b, str) and '<think' in b:
+                    clean, thought = _history._extract_thinking_from_content(b)
+                    text, think = text + count_tokens(clean), think + count_tokens(thought)
+                else:
+                    text += count_tokens(b)
+        return text, think
+
+    for t in tools or []:
+        if isinstance(t, dict):
+            n = count_tokens(json.dumps({'type': t.get('type'), 'function': t.get('function')}, ensure_ascii=False))
+            p['schemas'] += n
+            tool((t.get('function') or {}).get('name'))['schema'] += n
+    for m in msgs:
+        p['framing'] += MSG_OVERHEAD
+        for tc in m.get('tool_calls') or []:
+            if isinstance(tc, dict):
+                name = (tc.get('function') or {}).get('name')
+                called[tc.get('id')] = name
+                tool(name)['calls'] += count_tokens(json.dumps(tc, ensure_ascii=False))
+        if m.get('tool_calls'):
+            p['calls'] += count_tokens(json.dumps(m['tool_calls'], ensure_ascii=False))
+        if m.get('thinking_raw'):
+            p['thinking'] += count_tokens(json.dumps(m['thinking_raw'], ensure_ascii=False, default=str))
+        text, think = walk(m.get('content'))
+        p['thinking'] += think
+        if _is_result(m):
+            name = m.get('name') if m.get('role') == 'tool' else called.get(_results(m)[0].get('tool_use_id'))
+            p['results'] += text
+            tool(name)['results'] += text
+            tool(name)['runs'] += 1
+        else:
+            bucket = ('system' if m.get('role') == 'system' else 'injected' if m.get('_inject')
+                      else 'you' if m.get('role') == 'user' else 'her')
+            p[bucket] += text
+    p['by_tool'] = tools_seen
+    return p
+
+
+def report(chat, rows) -> dict:
+    """/context: what this chat's last send was made of, scaled to the provider's
+    count like the meter; before a send this run, the stored rows. Thinking stays
+    on a stored row and mostly isn't sent, so that's counted from `rows` as well;
+    a row with signed thinking_raw holds the same thought in `thinking` too."""
+    from core.chat.history import _IMG_MARKER_RE
+    stored = _parts(rows, None, 'patches')
+    kept = stored.pop('thinking')                      # on the row, not on the wire
+    stored['thinking'] = 0
+    kept += sum(count_tokens(m.get('thinking') or '') for m in rows if not m.get('thinking_raw'))
+    pictures = sum(len(_IMG_MARKER_RE.findall(_text_of(m.get('content')))) for m in rows)
+    last = _last.get(chat) or {}
+    parts, ratio = last.get('parts') or stored, last.get('ratio') or 1.0
+    scale = lambda n: int(n * ratio)
+    tools = [{'name': name, **{k: scale(t[k]) for k in ('schema', 'calls', 'results')}, 'runs': t['runs']}
+             for name, t in parts['by_tool'].items()]
+    tools.sort(key=lambda t: t['schema'] + t['calls'] + t['results'], reverse=True)
+    buckets = {k: scale(v) for k, v in parts.items() if k not in ('by_tool', 'image_count')}
+    return {'meter': meter(chat, sum(buckets.values())), 'parts': buckets, 'image_count': parts['image_count'],
+            'tools': tools, 'thinking_stored': kept, 'pictures_stored': pictures}
 
 
 def _full_words(est, window, schema, limit, server) -> str:

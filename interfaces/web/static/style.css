@@ -3921,6 +3921,8 @@ div.hb-response-summary {
 }
 .net-section h4 { margin: 0 0 8px; font-size: var(--font-sm); }
 .net-cred-status { font-size: var(--font-sm); margin-bottom: 8px; }
+.gpu-notice { margin-bottom: 0.75rem; font-size: var(--font-sm); color: var(--color-warning, #e0a020); }
+.gpu-notice:empty { display: none; }
 .net-test-result {
     margin-top: 8px;
     padding: 8px 12px;
