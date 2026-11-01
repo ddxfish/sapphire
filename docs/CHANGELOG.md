@@ -3,6 +3,7 @@
 - Choose RAG injection strength
 - Images show how many turns until decay
 - PDF support without vectorized graphics
+- /remove N - slash command removes last N message pairs
 # 2.15.9 - Slash commands
 - /compact is the first slash command
 - self_command() tool lets the AI run them

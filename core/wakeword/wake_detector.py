@@ -9,6 +9,7 @@ import config
 from core.audio import convert_to_mono, resample_audio
 from core.event_bus import publish, Events
 from core.devices import wake as room     # one listener answers a wake word: this app first
+from core.stt.providers.base import STTFailed
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,9 @@ class WakeWordDetector:
             process_time = time.time()
             try:
                 text = self.system.whisper_client.transcribe_file(audio_file)
+            except STTFailed:
+                self.system.speak_error('stt_failed')
+                return
             finally:
                 try:
                     os.unlink(audio_file)

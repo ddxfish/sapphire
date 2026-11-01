@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 import config
-from core.stt.providers.base import BaseSTTProvider
+from core.stt.providers.base import BaseSTTProvider, stt_failed
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +47,12 @@ class FireworksWhisperProvider(BaseSTTProvider):
         """
         api_key = self._resolve_api_key()
         if not api_key:
-            logger.error("Fireworks Whisper: no API key configured")
-            return None
+            raise stt_failed("Fireworks Whisper has no API key")
 
         try:
             import httpx
         except ImportError:
-            logger.error("httpx not installed — pip install httpx")
-            return None
+            raise stt_failed("httpx is not installed: pip install httpx")
 
         model = self._get_model()
         endpoint = FIREWORKS_ENDPOINTS.get(model, FIREWORKS_ENDPOINTS['whisper-v3-turbo'])
@@ -80,8 +78,7 @@ class FireworksWhisperProvider(BaseSTTProvider):
             return text
 
         except Exception as e:
-            logger.error(f"Fireworks transcription failed: {e}")
-            return None
+            raise stt_failed(f"Fireworks transcription failed: {e}")
 
     def is_available(self) -> bool:
         return bool(self._resolve_api_key())

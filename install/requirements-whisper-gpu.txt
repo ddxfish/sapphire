@@ -1,0 +1,5 @@
+# Whisper on an NVIDIA card, Linux only. CTranslate2 needs CUDA 12's cuBLAS, and
+# PyPI torch moved to CUDA 13. On demand, not in the main install: a machine that
+# needs it is told so (core/stt/providers/faster_whisper.py gpu_offer), and the
+# 550 MB stays off every other box. Windows gets the DLL from its GPU torch.
+nvidia-cublas-cu12>=12.8,<13

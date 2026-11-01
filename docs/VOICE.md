@@ -24,7 +24,7 @@ Pick a provider in **Settings → STT**:
 | Provider | Runs | Notes |
 |----------|------|-------|
 | **Disabled** | — | No voice input; mic button inert |
-| **Local (Faster Whisper)** | Your machine | Free, private. Model sizes tiny → large; `.en` variants are English-only and faster |
+| **Local (Faster Whisper)** | Your machine, in its own process | Free, private. Model sizes tiny → large; `.en` variants are English-only and faster. Runs on the CPU when it can't use the card, and the bell says why. On Linux the card needs **Install Whisper GPU support** in Settings › STT |
 | **Fireworks Whisper** | Cloud | Needs a Fireworks API key; fast, no local VRAM |
 | **Sapphire Router (Managed)** | Cloud | Managed/hosted installs |
 

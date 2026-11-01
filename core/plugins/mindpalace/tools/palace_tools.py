@@ -1506,7 +1506,7 @@ def _format_time_ago(timestamp_str: str, absolute_after: int = 14) -> str:
     (the goals list converts to weeks itself)."""
     try:
         ts, now = _to_user_tz(timestamp_str)
-        diff = now - ts
+        diff = now.astimezone(timezone.utc) - ts     # same zone on both would subtract wall clocks, an hour off across DST
         days, hours, minutes = diff.days, diff.seconds // 3600, (diff.seconds % 3600) // 60
         if absolute_after is not None and days >= absolute_after:
             return _fmt_day(timestamp_str, with_year=days > 365)

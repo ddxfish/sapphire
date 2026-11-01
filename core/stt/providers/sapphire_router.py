@@ -8,7 +8,7 @@ import requests
 
 from core import net
 
-from core.stt.providers.base import BaseSTTProvider
+from core.stt.providers.base import BaseSTTProvider, STTFailed, stt_failed
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class SapphireRouterSTTProvider(BaseSTTProvider):
     def _transcribe_impl(self, audio_path: str) -> Optional[str]:
         url = self._get_url()
         if not url:
-            return None
+            raise stt_failed("Sapphire Router has no URL")
         try:
             headers = {}
             tenant_id = self._get_tenant_id()
@@ -46,15 +46,15 @@ class SapphireRouterSTTProvider(BaseSTTProvider):
                 logger.error(f"Sapphire Router STT: router redirected ({resp.status_code}) — "
                              f"LAN redirects are refused by policy; check SAPPHIRE_ROUTER_URL "
                              f"for a trailing-slash/path mismatch")
-                return None
+                raise stt_failed(f"The router redirected ({resp.status_code})")
             resp.raise_for_status()
             return resp.json().get('text', '').strip() or None
         except requests.exceptions.ConnectionError:
-            logger.error(f"Sapphire Router STT: cannot reach router at {url}")
-            raise RuntimeError("STT service unavailable — router is down")
+            raise stt_failed(f"Sapphire Router STT: cannot reach router at {url}")
+        except STTFailed:
+            raise
         except Exception as e:
-            logger.error(f"Sapphire Router STT failed: {e}")
-            return None
+            raise stt_failed(f"Sapphire Router STT failed: {e}")
 
     def is_available(self) -> bool:
         return bool(self._get_url())

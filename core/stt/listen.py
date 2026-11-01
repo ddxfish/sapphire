@@ -12,6 +12,7 @@ import threading
 import time
 
 import config
+from core.stt.providers.base import STTFailed
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,8 @@ def once(system, seconds=20, cue=None):
         return ("The microphone could not be opened." if why == 'mic_busy' else "The recording could not be saved.") + deaf, False
     try:
         text = _words(system, path)
+    except STTFailed as e:
+        return f"Heard a voice, and the speech-to-text engine failed: {e}{deaf}", False
     finally:
         try:
             os.unlink(path)

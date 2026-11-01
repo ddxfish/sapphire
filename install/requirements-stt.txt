@@ -1,3 +1,5 @@
 # Speech-to-Text (Faster Whisper)
-faster-whisper>=1.0.0
-torch>=2.0.0  # Required by faster-whisper
+# Caps: CTranslate2 past 4.8 is untested and could want another CUDA's cuBLAS.
+faster-whisper>=1.0.0,<2
+ctranslate2<4.9
+torch>=2.0.0  # Windows: Whisper's worker finds cublas64_12.dll in torch's folder

@@ -66,6 +66,11 @@ async def gpu_state(request: Request, refresh: bool = False, _=Depends(require_l
     out['install'] = gpu_install.plan(out, managed=settings.is_managed())   # what the button would do, or None
     out['pending'] = gpu_install.pending()
     out['last_install'] = gpu_install.last_result()
+    try:
+        report = getattr(get_system().whisper_client, 'report', None)
+    except Exception:       # no system yet: torch's half of the answer still stands
+        report = None
+    out['whisper'] = report() if report else None       # Whisper has its own library: torch's verdict can't speak for it
     return out
 
 

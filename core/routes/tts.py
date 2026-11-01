@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 import config
 from core.auth import require_login, check_endpoint_rate
 from core.api_fastapi import get_system
+from core.stt.providers.base import STTFailed
 from core.stt.utils import can_transcribe
 from core.tts.utils import validate_voice as _validate_tts_voice, default_voice as _tts_default_voice
 
@@ -525,6 +526,8 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
             raise HTTPException(status_code=504, detail="Turning speech into text took too long. Try a smaller model or a lower beam size in Settings › STT.")
     except HTTPException:
         raise
+    except STTFailed as e:
+        raise HTTPException(status_code=503, detail=f"Speech-to-text failed, this isn't your mic: {e}")
     except Exception as e:
         logger.error(f"Transcription error: {e}")
         raise HTTPException(status_code=500, detail="Sapphire couldn't turn that recording into text. Try again.")
@@ -536,7 +539,8 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
         except Exception:
             pass
     if transcribed_text is None:
-        # None = nothing usable heard (silence, or the hallucination filter): a how-to, not a crash
+        # None = nothing usable heard (silence, or the hallucination filter): a how-to, not a crash.
+        # An engine failure raised STTFailed above and never gets here.
         raise HTTPException(status_code=422, detail="Didn't catch any words. Hold the mic button while you talk, a little closer to the mic.")
 
     # post_stt hook — mirror wakeword pipeline. Plugins that correct /

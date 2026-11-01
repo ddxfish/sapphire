@@ -3,7 +3,30 @@
 // and the one button that fixes it: queue the GPU torch install and restart.
 // pip runs in the runner's window before Sapphire boots, because a loaded
 // torch DLL cannot be replaced on Windows. Says nothing when all is well.
-export async function gpuNotice(el, selector) {
+// The STT tab also says when Whisper is on the CPU, with its own button: on Linux
+// it needs a library torch no longer brings, and the install restarts only Whisper.
+function whisperButton(line) {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-secondary';
+    btn.style.cssText = 'width:auto;margin-left:0.75rem;margin-top:0.35rem';
+    btn.textContent = 'Install Whisper GPU support';
+    btn.title = "NVIDIA's CUDA 12 cuBLAS, a 550 MB download. Whisper moves to the card when it lands, no restart.";
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            const r = await fetch('/api/system/extras/whisper-gpu/install', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
+            const d = await r.json().catch(() => ({}));
+            line.textContent = r.ok ? '⏳ Installing. The bell shows the progress and says when Whisper moves to the card.'
+                : `Could not start the install: ${d.detail || r.status}`;
+        } catch (e) {
+            line.textContent = `Could not start the install: ${e.message}`;
+        }
+    });
+    return btn;
+}
+
+export async function gpuNotice(el, selector, { whisper = false } = {}) {
     const box = el.querySelector(selector);
     if (!box) return;
     try {
@@ -11,8 +34,14 @@ export async function gpuNotice(el, selector) {
         if (!res.ok) return;
         const g = await res.json();
         box.textContent = '';
+        if (whisper && g.whisper?.why && g.whisper.device === 'cpu') {
+            const line = document.createElement('div');
+            line.textContent = `⚠ Whisper is on the CPU: ${g.whisper.why}`;
+            box.appendChild(line);
+            if (g.whisper.offer) line.appendChild(whisperButton(line));
+        }
         if (g.pending) {
-            box.textContent = '⏳ GPU torch install is queued; it runs on the next start, before Sapphire boots.';
+            box.append('⏳ GPU torch install is queued; it runs on the next start, before Sapphire boots.');
             return;
         }
         if (!g.message) return;

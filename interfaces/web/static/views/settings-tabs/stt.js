@@ -201,7 +201,7 @@ export default {
         // the generic tab render and the VAD section, badge poll and test
         // button vanished until the tab was re-entered (D2#2, 2026-09-08).
         attachProviderListeners(cfg, ctx, el, this);
-        gpuNotice(el, '#stt-gpu-notice');
+        gpuNotice(el, '#stt-gpu-notice', { whisper: true });
         attachBrowserMic(el);
 
         // VAD wiring — badge polling + test button only. The checkbox is

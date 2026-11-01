@@ -599,14 +599,8 @@ def get_full_status_sync(scope=_FROM_CHAT):
         stt_device_configured = (getattr(config, 'FASTER_WHISPER_DEVICE', 'cuda') or 'cuda').strip().lower()
         stt_device_actual = None
         try:
-            # WhisperModel.model.device is the post-init device. Faster-whisper
-            # stores the underlying ctranslate2 model; its .device attr is the
-            # cleanest source of truth.
-            stt_obj = getattr(system, 'whisper_client', None)    # 'stt' never existed: the device always read unknown
-            wm = getattr(stt_obj, 'model', None) if stt_obj else None
-            if wm is not None:
-                # ctranslate2 model exposes .device as a string ('cuda' or 'cpu')
-                stt_device_actual = getattr(wm, 'device', None) or getattr(getattr(wm, 'model', None), 'device', None)
+            # What Whisper's worker says it is on, after any fallback.
+            stt_device_actual = getattr(getattr(system, 'whisper_client', None), 'device', None)
         except Exception:
             pass
 

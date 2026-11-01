@@ -45,7 +45,9 @@ psutil>=5.9.0
 kokoro>=0.9.0
 
 # STT (Faster Whisper)
-faster-whisper>=1.0.0
+# Caps: CTranslate2 past 4.8 is untested and could want another CUDA's cuBLAS.
+faster-whisper>=1.0.0,<2
+ctranslate2<4.9
 torch>=2.0.0
 
 # Wake Word (OpenWakeWord)

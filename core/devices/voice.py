@@ -59,6 +59,7 @@ import time
 import uuid
 
 from core.devices import wake
+from core.stt.providers.base import STTFailed
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,8 @@ def transcribe(audio, suffix='.wav'):
         with os.fdopen(fd, 'wb') as f:
             f.write(audio)
         text = stt.transcribe_file(path)
+    except STTFailed as e:
+        return '', f"Speech recognition failed: {e}"
     except Exception as e:
         logger.error(f"[DEVICES] transcribe failed: {e}", exc_info=True)
         return '', f"Speech recognition failed ({type(e).__name__})."

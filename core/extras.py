@@ -71,6 +71,16 @@ EXTRAS = {
         'note': "openWakeWord, so she can listen for her name.",
         'restart': False,
     },
+    # Offered only to a Linux box whose Whisper can't reach its card for want of
+    # this library (faster_whisper.py gpu_offer). The worker restarts onto it.
+    'whisper-gpu': {
+        'label': 'Whisper GPU support',
+        'file': 'install/requirements-whisper-gpu.txt',
+        'modules': ('nvidia.cublas',),
+        'note': "NVIDIA's CUDA 12 cuBLAS, a 550 MB download. Whisper runs on the CPU without it.",
+        'restart': False,
+        'after': '_reload_whisper',
+    },
 }
 
 _lock = threading.Lock()
@@ -232,6 +242,17 @@ def start(name):
     return out
 
 
+def _reload_whisper():
+    """The live Whisper picks the new library up by restarting its worker."""
+    try:
+        from core.api_fastapi import get_system
+        client = getattr(get_system(), 'whisper_client', None)
+        if hasattr(client, 'reload'):
+            client.reload()
+    except Exception as e:
+        logger.warning(f"[EXTRAS] Whisper did not restart onto the new library: {e}")
+
+
 def _install(job, spec):
     from core import notify
     # PYTHONIOENCODING: pip writes in the console's code page (cp1252 on
@@ -287,6 +308,8 @@ def _install(job, spec):
         logger.info(f"[EXTRAS] installed '{job['name']}'")
         if job.get('nid'):
             notify.finish(job['nid'], title=f"{spec['label']}: installed")
+        if spec.get('after'):
+            globals()[spec['after']]()
         if spec.get('plugin'):
             # a plugin whose hard dependencies were missing sat enabled-but-
             # unloaded; it loads now (the optional case reloads harmlessly)

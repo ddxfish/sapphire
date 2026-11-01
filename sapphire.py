@@ -860,13 +860,15 @@ class VoiceChatSystem:
             if not isinstance(self.whisper_client, NullWhisperClient):
                 logger.info("STT stopped, unloading provider")
                 self._quiesce_recorder()
-                self.whisper_client = NullWhisperClient()
+                old, self.whisper_client = self.whisper_client, NullWhisperClient()
+                self._close_stt(old)
                 self.whisper_recorder = NullAudioRecorder()
             return True
 
         try:
             logger.info(f"Hot-loading STT provider: {provider_name}")
-            self.whisper_client = get_stt_provider(provider_name)
+            old, self.whisper_client = self.whisper_client, get_stt_provider(provider_name)
+            self._close_stt(old)
             self.stt_why = None
             # Ensure real recorder if switching from disabled (not needed for router)
             from core.stt.stt_null import NullAudioRecorder
@@ -897,6 +899,14 @@ class VoiceChatSystem:
             self.whisper_recorder = _NullRec()
             self._publish_stt_fallback_event(provider_name, e)
             return False
+
+    @staticmethod
+    def _close_stt(old):
+        """A replaced provider ends what it runs (Whisper's worker). It waits for a
+        transcription in flight, so it never holds up the new one's first word."""
+        close = getattr(old, 'close', None)
+        if close:
+            threading.Thread(target=close, name='stt-close', daemon=True).start()
 
     def toggle_stt(self, enabled: bool):
         """Legacy compat — maps to switch_stt_provider. Persists STT_PROVIDER."""
@@ -1170,6 +1180,7 @@ class VoiceChatSystem:
         error_messages = {
             'file': "File creation error",
             'speech': "No speech heard",
+            'stt_failed': "Speech recognition failed. The bell says why.",
             'recording': "Recording error",
             'processing': "Processing error",
             # New keys mapped from recorder.last_failure_reason. These
@@ -1328,7 +1339,7 @@ class VoiceChatSystem:
                     from core.stt.providers import stt_registry
                     self._publish_stt_fallback_event(
                         provider, getattr(stt_registry, 'last_error', None) or RuntimeError("it failed to load"))
-                    return False
+                    return True     # an ear is never worth the app: chat stays up, and Settings can fix it
                 # Router/API providers don't need local mic — audio comes via browser
                 if provider == 'sapphire_router':
                     from core.stt.stt_null import NullAudioRecorder
@@ -1355,12 +1366,12 @@ class VoiceChatSystem:
                 logger.error(f"STT provider '{provider}' not available: {e}")
                 self.whisper_client = NullWhisperClient()
                 self._publish_stt_fallback_event(provider, e)
-                return False
+                return True
             except RuntimeError as e:
                 logger.error(f"Failed to initialize STT provider '{provider}': {e}")
                 self.whisper_client = NullWhisperClient()
                 self._publish_stt_fallback_event(provider, e)
-                return False
+                return True
         else:
             logger.info("STT disabled - skipping initialization")
 
@@ -1376,6 +1387,7 @@ class VoiceChatSystem:
             # can block, or it resurrects a child systemd already SIGTERMed
             # (KillMode=control-group) and the unit hangs in stop-sigterm.
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
+            ("STT worker", lambda: self._close_stt(self.whisper_client)),
             ("live turns", self._drain_live_turns),
             # what still WAITS in the chats' inboxes is dropped with notice (each door's on_drop fires)
             ("inbox", lambda: __import__('core.chat.inbox', fromlist=['shutdown']).shutdown()),

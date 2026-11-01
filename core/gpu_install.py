@@ -1,8 +1,8 @@
 """The GPU torch installer: opt-in, and run where nothing holds torch.
 
 Windows gets a CPU-only torch from PyPI (core/gpu_status.py says so). The
-fix is a wheel from PyTorch's own index, but sapphire.py imports torch for
-Whisper and the Kokoro child imports it too, and on Windows a loaded DLL
+fix is a wheel from PyTorch's own index, but the Whisper worker and the Kokoro
+child both import torch, and on Windows a loaded DLL
 cannot be replaced. So the button only QUEUES the install and restarts;
 main.py runs pip here, before sapphire.py exists, with nothing loaded
 (2026-10-16, tmp/single-instance-plan.md, Wave C step 3).

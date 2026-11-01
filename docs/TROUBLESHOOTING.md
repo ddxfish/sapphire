@@ -542,6 +542,9 @@ settings tab says why. The card is almost never the problem:
   voice device to `cpu` if you want the CPU, and the reminder stops.
 - **"Torch will not load, so local voice is down":** an install was interrupted or a DLL is missing. On Windows with an
   NVIDIA card the same button repairs it. A failed install never takes voice down by itself: pip puts the old torch back.
+- **"Whisper is running on the CPU" (Linux):** Whisper runs in its own process and needs CUDA 12's cuBLAS, which current
+  PyPI torch no longer brings. Settings > STT offers **Install Whisper GPU support** (550 MB), and Whisper moves to the card
+  when it lands, no restart. By hand: `pip install -r install/requirements-whisper-gpu.txt`. Its log is `user/logs/whisper.log`.
 - **Kokoro or Whisper fell back mid-session:** when the card fails while speaking or listening (out of memory, a lost
   device), that engine moves to the CPU until the next start. The Status page shows `[CPU]` with a warning mark.
   By hand, inside the sapphire env:
@@ -553,7 +556,7 @@ settings tab says why. The card is almost never the problem:
 - **"is not in this torch build":** the build predates your card (RTX 50-series needs CUDA 12.8 or newer). Same command.
 - **"driver may be too old":** update the NVIDIA driver. In Docker, make sure the container was given the GPU.
 
-Restart Sapphire afterwards. Linux installs get CUDA from PyPI already and usually only hit the driver case.
+Restart Sapphire afterwards. On Linux, Kokoro gets CUDA from PyPI's torch already and usually only hits the driver case.
 
 ### Troubleshoot Nvidia 5000 series on Linux
 Try Sapphire first. Most won't need this. Only do this if STT and TTS are not using your GPU. It's a nightly build of torch with cuda 12.8 that may work better with the Linux open-kernel drivers if you get stuck. Don't use this if you don't need it.
@@ -579,7 +582,7 @@ The crash is in C-extension code (no Python traceback), and it's deterministic â
 **Cause:** Two separate audio libraries both default to GPU 0 and initialize at the same time:
 
 - **Kokoro** (TTS) loads as a subprocess, picks `cuda:0` by default
-- **Whisper** (STT) loads in the main process, defaults to `cuda:0`
+- **Whisper** (STT) loads in its own worker process, defaults to `cuda:0`
 
 When both grab the same GPU during the boot init storm, their CUDA contexts conflict and corrupt the heap. The next allocation (often inside the wakeword model's first audio buffer) trips glibc's malloc integrity check and the process aborts.
 
@@ -596,7 +599,7 @@ In your settings (`user/settings.json` or via the Settings UI):
 }
 ```
 
-`KOKORO_CUDA_DEVICE` accepts the device index as a string. It sets `CUDA_VISIBLE_DEVICES` on the Kokoro subprocess at the OS level, so Kokoro physically can't see the other GPU. Whisper uses `FASTER_WHISPER_CUDA_DEVICE` directly via PyTorch.
+`KOKORO_CUDA_DEVICE` accepts the device index as a string. It sets `CUDA_VISIBLE_DEVICES` on the Kokoro subprocess at the OS level, so Kokoro physically can't see the other GPU. Whisper uses `FASTER_WHISPER_CUDA_DEVICE` directly through CTranslate2.
 
 Restart Sapphire after changing these. Verify in `user/logs/sapphire.log`:
 

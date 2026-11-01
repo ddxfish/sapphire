@@ -415,6 +415,13 @@ def dismiss(rid, origin=None):
     return True
 
 
+def forget(key):
+    """Remove the row with this key, if there is one: what it said stopped being true."""
+    for r in rows():
+        if r.get('key') == key and r['state'] != 'active':
+            dismiss(r['id'])
+
+
 def clear(origin=None):
     """Remove every row that is not active."""
     _load()
