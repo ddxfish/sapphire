@@ -2,7 +2,10 @@
 #
 # A toast is what you did; a notification is what happened to you. Rows live
 # here, in user/notifications.json (a ring of RING rows; active rows are never
-# pruned), and reach every tab over the bus as `notification`. The browser
+# pruned), and reach every tab over the bus as `notification`. Beside it,
+# user/notifications-once.json is the ledger of keys posted with once=True: a
+# boot result says itself one time ever, however the ring, a dismiss or Clear
+# all treat its row. The browser
 # half, shared/notify.js, paints toasts FROM rows; flash() is the passthrough,
 # a toast with no row. Levels: info is the log (never toasts, never counts),
 # success toasts, warning counts yellow, error and critical count red,
@@ -42,6 +45,7 @@ STORE = PROJECT_ROOT / 'user' / 'notifications.json'
 
 _lock = threading.RLock()
 _rows: dict = {}                  # id -> row; insertion order = creation, or the last re-fire
+_once: list = []                  # keys ever posted with once=True, oldest first (the ledger file)
 _last_tick: dict = {}             # id -> time of the last tick that went out
 _loaded = False
 _hooked = False
@@ -102,18 +106,31 @@ def _load():
         if swept:
             _save_locked()
             logger.info(f"[NOTIFY] {swept} active row(s) from the last run marked interrupted")
+        try:
+            once = json.loads(_once_path().read_text(encoding='utf-8')) if _once_path().exists() else []
+            _once[:] = [k for k in once if isinstance(k, str)] if isinstance(once, list) else []
+        except Exception as e:
+            logger.warning(f"[NOTIFY] {_once_path().name} unreadable, starting empty: {e}")
+
+
+def _once_path():
+    return STORE.with_name('notifications-once.json')      # beside the ring, wherever the ring is (tests move it)
+
+
+def _write_locked(path, data):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f'.{path.stem}-', suffix='.json')
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        from core.fs_utils import replace_with_retry
+        replace_with_retry(Path(tmp), path)
+    except Exception as e:
+        logger.warning(f"[NOTIFY] could not write {path.name}: {e}")
 
 
 def _save_locked():
-    try:
-        STORE.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(STORE.parent), prefix='.notifications-', suffix='.json')
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(list(_rows.values()), f)
-        from core.fs_utils import replace_with_retry
-        replace_with_retry(Path(tmp), STORE)
-    except Exception as e:
-        logger.warning(f"[NOTIFY] could not write {STORE.name}: {e}")
+    _write_locked(STORE, list(_rows.values()))
 
 
 def _prune_locked():
@@ -133,8 +150,10 @@ def notify(title, level='info', body='', source='core', go=None, key=None,
     """A row, and the toast its level earns. Returns the row id, or None for a
     flash (private=True). A key makes the row re-fire instead of piling up:
     the row with that key is updated, marked unread and moved to the front.
-    once=True with a key: if that row already exists, nothing happens (a boot
-    result that must post one time ever)."""
+    once=True with a key: posted one time ever. The key goes on the ledger
+    (user/notifications-once.json) and a key already there posts nothing, even
+    after the ring, a dismiss or Clear all took the row (a boot result that
+    must say itself once, not once per boot its row is missing)."""
     level = level if level in LEVELS else 'info'
     title = _text(title, TITLE_MAX).strip() or 'Notification'
     body = _text(body, BODY_MAX)
@@ -148,8 +167,14 @@ def notify(title, level='info', body='', source='core', go=None, key=None,
         if key:
             key = _text(key, KEY_MAX)
             row = next((r for r in _rows.values() if r.get('key') == key), None)
-            if row is not None and once:
-                return row['id']
+            if once:
+                if key in _once:
+                    return row['id'] if row else None
+                _once.append(key)
+                del _once[:-RING]
+                _write_locked(_once_path(), list(_once))
+                if row is not None:                   # said before the ledger existed: on the ledger now, not said again
+                    return row['id']
         if row is not None:
             _rows.pop(row['id'], None)
             row.update(title=title, body=body, level=level, updated=now, read=False,

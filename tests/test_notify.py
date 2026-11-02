@@ -29,6 +29,7 @@ def n(tmp_path, monkeypatch, bus):
     from core import notify
     monkeypatch.setattr(notify, 'STORE', tmp_path / 'notifications.json')
     monkeypatch.setattr(notify, '_rows', {})
+    monkeypatch.setattr(notify, '_once', [])
     monkeypatch.setattr(notify, '_last_tick', {})
     monkeypatch.setattr(notify, '_loaded', False)
     monkeypatch.setattr(notify, '_hooked', False)
@@ -63,6 +64,25 @@ class TestRows:
         assert a == b and len(n.rows()) == 1
         row = n.get(a)
         assert row['title'] == 'second' and row['read'] is False
+
+    def test_once_means_once_ever(self, n):
+        """A boot result (Restored from...) posts one time ever: Clear all, a dismiss or the
+        ring taking its row never earns it a fresh row at the next boot (user report, 2026-11-02)."""
+        rid = n.notify('Restored from remembrance:x', 'success', key='restore-result:1', once=True)
+        n.mark_read(rid)
+        assert n.notify('Restored from remembrance:x', 'success', key='restore-result:1', once=True) == rid
+        assert n.get(rid)['read'] is True                   # not re-fired either
+        n._once.clear()                                     # a ring from before the ledger: the row seeds it, no re-fire
+        assert n.notify('Restored from remembrance:x', 'success', key='restore-result:1', once=True) == rid
+        assert n.get(rid)['read'] is True and n._once == ['restore-result:1']
+        n.clear()
+        assert n.notify('Restored from remembrance:x', 'success', key='restore-result:1', once=True) is None
+        n._loaded = False                                   # the next boot reads the ledger back
+        n._rows.clear()
+        n._once.clear()
+        assert n.notify('Restored from remembrance:x', 'success', key='restore-result:1', once=True) is None
+        assert n.rows() == []
+        assert n.get(n.notify('Updated to v2', 'success', key='update-result:2', once=True))['title'] == 'Updated to v2'
 
     def test_private_is_a_flash_not_a_row(self, n, seen):
         assert n.notify('secret', 'error', 'words', private=True) is None
