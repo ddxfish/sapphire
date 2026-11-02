@@ -385,3 +385,22 @@ def test_the_seat_tools_go_to_a_persona_key_and_a_cues_pictures_ride_as_image_bl
     said = mcp.handle(world.system, rpc('initialize'), persona='claude')['result']['instructions']
     assert '`room_wait` waits for your turn' in said
     assert 'room_wait' not in mcp.handle(world.system, rpc('initialize'))['result']['instructions']
+
+
+def test_the_persona_door_follows_the_engine_that_owns_the_scope(world, memory, monkeypatch):
+    """A palace install must never write the classic store: the loader's
+    engine pin read those rows as classic data (hunt 2026-11-01, A1)."""
+    import sys
+    from core.chat.function_manager import SCOPE_REGISTRY
+    calls = []
+    palace = SimpleNamespace(**{fn: (lambda *a, _fn=fn, **k: (calls.append((_fn, a, k)), (f'{_fn} ran', True))[1])
+                                for fn in ('_save_memory', '_search_memory', '_get_recent_memories', '_delete_memory')})
+    monkeypatch.setitem(sys.modules, 'plugins.mindpalace.tools.palace_tools', palace)
+    monkeypatch.setitem(SCOPE_REGISTRY, 'memory', {**SCOPE_REGISTRY['memory'], 'plugin': 'mindpalace'})
+    mcp.call(world.system, 'memory_save', {'content': 'a thing'}, persona='claude')
+    mcp.call(world.system, 'memory_recent', {'count': 2}, persona='claude')
+    assert [fn for fn, _, _ in calls] == ['_save_memory', '_get_recent_memories'] and memory == []
+    assert all(k['scope'] == 'claude' for _, _, k in calls)
+    monkeypatch.setitem(SCOPE_REGISTRY, 'memory', {**SCOPE_REGISTRY['memory'], 'plugin': 'elsewhere'})
+    text, ok = mcp.call(world.system, 'memory_save', {'content': 'x'}, persona='claude')
+    assert not ok and 'elsewhere' in text and memory == [] and len(calls) == 2

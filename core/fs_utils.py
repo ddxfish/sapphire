@@ -8,7 +8,8 @@ import os
 import shutil
 import stat
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -47,3 +48,22 @@ def replace_with_retry(tmp_path: Path, target_path: Path,
         except PermissionError:
             time.sleep(delay)
     tmp_path.replace(target_path)
+
+
+def ro_uri(path) -> str:
+    """The `file:` URI that opens a SQLite store read-only:
+    sqlite3.connect(ro_uri(p), uri=True). Path.as_uri() puts a UNC host
+    (\\\\server\\share\\...) in the URI authority, which sqlite refuses
+    ("invalid uri authority") unless built with SQLITE_ALLOW_URI_AUTHORITY,
+    so an install on a Windows share could never read its own stores. Here
+    the authority stays empty and //server/share rides in the path, which
+    the parser accepts. '#', '?' and '%' in the install path are
+    percent-encoded: a bare f'file:{p}' truncated at the first one and
+    opened (created!) a different file read-write."""
+    p = path if isinstance(path, PurePath) else Path(path)
+    if isinstance(p, Path):
+        p = p.absolute()
+    s = p.as_posix()
+    if not s.startswith('/'):           # a Windows drive: /C:/...
+        s = '/' + s
+    return 'file://' + quote(s, safe='/:') + '?mode=ro'

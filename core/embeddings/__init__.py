@@ -755,6 +755,51 @@ def integrity_report():
             'other_stamps': 0, 'by_stamp': [],
         }
 
+    # Mind Palace's chunks, read-only on its file: the swap gate, the
+    # integrity box and the re-embed count walked the classic tables only,
+    # so a palace user swapped providers with no warning (hunt 2026-11-01, C3).
+    try:
+        from contextlib import contextmanager
+        from pathlib import Path as _P
+        from core.fs_utils import ro_uri
+        from core.paths import PROJECT_ROOT
+        _mind = _P(PROJECT_ROOT) / 'user' / 'memory' / 'mind.db'
+
+        @contextmanager
+        def _mind_ro():
+            conn = _sql.connect(ro_uri(_mind), uri=True)
+            try:
+                yield conn
+            finally:
+                conn.close()
+        if _mind.exists():
+            try:
+                with _mind_ro() as conn:
+                    rows = conn.execute(
+                        'SELECT embedding_provider, embedding_dim, COUNT(*) FROM chunks '
+                        'WHERE embedding IS NOT NULL GROUP BY embedding_provider, embedding_dim').fetchall()
+            except _sql.Error as e:
+                # Not zeros: a store that will not open is UNCOUNTED, and the
+                # swap gate must not read that as "nothing to lose" (hunt H12).
+                rows = None
+                report['tables']['palace_chunks'] = {
+                    'total': 0, 'matching_active': 0, 'legacy_unstamped': 0,
+                    'other_stamps': 0, 'by_stamp': [], 'error': str(e)}
+            if rows is not None:
+                t = {'total': 0, 'matching_active': 0, 'legacy_unstamped': 0, 'other_stamps': 0, 'by_stamp': []}
+                for pid, dim, count in rows:
+                    t['total'] += count
+                    t['by_stamp'].append({'provider': pid, 'dim': dim, 'count': count})
+                    if pid is None or dim is None:
+                        t['legacy_unstamped'] += count
+                    elif active_pid and active_dim and pid == active_pid and dim == active_dim:
+                        t['matching_active'] += count
+                    else:
+                        t['other_stamps'] += count
+                report['tables']['palace_chunks'] = t
+    except Exception as e:
+        logger.debug(f"integrity_report: palace scan failed: {e}")
+
     try:
         from plugins.memory.tools import knowledge_tools as _kt
         report['tables']['knowledge_entries'] = _scan(_kt._get_connection, 'knowledge_entries')

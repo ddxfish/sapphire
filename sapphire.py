@@ -218,11 +218,14 @@ class VoiceChatSystem:
                 for _i in _pl._plugins.values()
                 if _i.get("loaded") and isinstance(_i.get("manifest", {}).get("essential"), str)
             }
+            _groups = {}      # group string -> alternates, none of which loaded
             for _name, _info in _pl._plugins.items():
                 _ess = _info.get("manifest", {}).get("essential")
                 if not _ess or _info.get("loaded"):
                     continue
-                if isinstance(_ess, str) and _ess in _loaded_groups:
+                if isinstance(_ess, str):
+                    if _ess not in _loaded_groups:
+                        _groups.setdefault(_ess, []).append(_name)
                     continue  # An alternate in the same group carries the load
                 self._missing_essential_plugins.append(_name)
                 # verify_msg is a STATUS, not a failure: a disabled plugin with
@@ -249,6 +252,38 @@ class VoiceChatSystem:
                             'error': f"essential plugin did not load ({reason}); memory/core tools are unavailable",
                             'hint': f"python tools/sign_plugin.py core/plugins/{_name}, or ALLOW_UNSIGNED_PLUGINS=true, then restart",
                         })
+                except Exception:
+                    pass
+            for _group, _names in _groups.items():
+                # A whole group off is ONE failure, not one "re-sign the plugin"
+                # per alternate: for the memory pair it is nearly always a
+                # choice (classic turned off before the palace existed), and
+                # the fix is a switch, not a signature (hunt 2026-11-01, A7).
+                self._missing_essential_plugins.extend(_names)
+                _rows = {n: _pl._plugins[n] for n in _names}
+                _titles = " and ".join(r["manifest"].get("short_name") or n for n, r in _rows.items())
+                # Blocked, not chosen: scan already marks a blocked plugin
+                # enabled=False, so the signal is its verify_msg or a load
+                # error row (hunt of the hunt 2026-11-01, H10).
+                _broken = [n for n, r in _rows.items()
+                           if r.get("verify_msg") not in (None, "verified")
+                           or any(e.get("plugin") == n for e in _pl._load_errors)]
+                if _broken:
+                    _why = "; ".join(f"{n}: {r.get('verify_msg') if r.get('verify_msg') not in (None, 'verified') else 'load failed'}"
+                                     for n, r in _rows.items() if n in _broken)
+                    _err = f"No {_group} engine loaded ({_why}); memory tools are unavailable"
+                    _hint = (f"python tools/sign_plugin.py core/plugins/{_broken[0]}, or "
+                             "ALLOW_UNSIGNED_PLUGINS=true, then restart")
+                    logger.critical(f"ESSENTIAL GROUP NOT LOADED: {_group} — {_why}. Sapphire is running in degraded mode.")
+                    print(f"\n{'='*60}\nSAPPHIRE WARNING: no {_group} engine loaded ({_why})\nRunning in degraded mode — memory tools unavailable.\n{'='*60}\n", flush=True)
+                else:
+                    _err = f"No {_group} engine is on: {_titles} are both off, so Sapphire has no memory"
+                    _hint = "Settings › Plugins turns one on (only one runs at a time)"
+                    logger.warning(f"{_err}. {_hint}.")
+                try:   # keyed by the group, not a member's id (classic's id IS the group word)
+                    _key = f"{_group} engine"
+                    if not any(e.get('plugin') == _key for e in _pl._load_errors):
+                        _pl._load_errors.append({'plugin': _key, 'error': _err, 'hint': _hint})
                 except Exception:
                     pass
             if self._missing_essential_plugins:

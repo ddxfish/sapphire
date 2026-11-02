@@ -112,7 +112,7 @@ const OPS = [
     { key: 'migration', icon: '\u{1F4E6}', title: 'Migration',
       blurb: 'Rebuild derived metadata, and copy knowledge into the Library. The classic Memory (legacy) import lives on the Import tab, with its counts.',
       actions: [
-          { label: 'Copy knowledge into the Library (v1 + v2)', library: 'migrate' },
+          { label: 'Copy knowledge into the Library (legacy + older palace chunks)', library: 'migrate' },
           { label: 'Generate missing metadata', maint: 'generate_metadata' },
       ] },
     { key: 'rescue', icon: '\u{1F6DF}', title: 'Rescue',
@@ -122,7 +122,7 @@ const OPS = [
           { label: 'Restore retired memories', maint: 'restore_retired' },
       ] },
     { key: 'danger', icon: '☠️', title: 'Danger zone', danger: true,
-      blurb: 'Typed confirmation required, double-checked server-side. Memory v1 is a separate system — never touched.',
+      blurb: 'Typed confirmation required, double-checked server-side. Memory (legacy) is a separate system, never touched.',
       actions: [
           { label: '⚠ Delete ALL memories in scope', maint: 'wipe_scope', danger: true },
           { label: '🧹 Clear ledger history', maint: 'clear_ledger', danger: true },
@@ -149,9 +149,9 @@ const MAINT = {
             'retirements are kept — their content lives on in derived entries.',
     },
     import_v1: {
-        confirm: () => 'Import everything from the classic Memory v1 system?\n\n' +
+        confirm: () => 'Import everything from Memory (legacy)?\n\n' +
             'Additive and idempotent — re-running copies zero duplicates. All scopes ' +
-            'are imported. The v1 databases are opened read-only and are never modified.',
+            'are imported. The old databases are opened read-only and are never modified.',
     },
     generate_metadata: {},
     clear_ledger: {
@@ -166,7 +166,7 @@ const MAINT = {
         prompt: s => `⚠ PERMANENTLY DELETE one tab's data in scope '${s}' — ` +
             'just that tab, the rest of the scope stays.\n\n' +
             'Knowledge also deletes the scope\'s Library documents and their ' +
-            'files. Other scopes and Memory v1 are never touched.\n\n' +
+            'files. Other scopes and Memory (legacy) are never touched.\n\n' +
             `Type the scope name ('${s}') to confirm:`,
     },
     redate_regex: {
@@ -201,7 +201,7 @@ const MAINT = {
         prompt: s => `⚠ PERMANENTLY DELETE all Mind Palace data in scope '${s}' — ` +
             'memories, entities, connections, goals, self sheet, AND the ' +
             'scope\'s Library (documents + their files)?\n\n' +
-            'Memory v1 is a separate system and is never touched.\n\n' +
+            'Memory (legacy) is a separate system and is never touched.\n\n' +
             'Type the scope name to confirm:',
     },
     wipe_dates: {
@@ -264,7 +264,7 @@ async function savePluginSettings(patch) {
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Admin', { doc: 'MEMORY.md', inline: true }), status: '\u{1F6E0}️ Mind Palace — the operator console. Librarian pipeline, migration, rescue. Nothing here edits memory content except ✂ Strip date stamps (previewed, undoable from the Ledger); only the Danger box deletes.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Admin', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F6E0}️ Mind Palace — the operator console. Librarian pipeline, migration, rescue. Nothing here edits memory content except ✂ Strip date stamps (previewed, undoable from the Ledger); only the Danger box deletes.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">
@@ -873,15 +873,15 @@ function setResult(el, key, text) {
 
 async function runAction(el, spec, action) {
     if (action.library === 'migrate') {
-        showConfirm('Copy knowledge from Memory v1 AND old palace knowledge chunks into the Library? '
-            + 'Additive and idempotent — already-copied groups skip. v1 stays read-only and keeps '
+        showConfirm('Copy knowledge from Memory (legacy) AND older palace knowledge chunks into the Library? '
+            + 'Additive and idempotent — already-copied groups skip. Memory (legacy) stays read-only and keeps '
             + 'working; nothing is deleted anywhere. Embedding continues in the background.',
             async () => {
                 try {
                     const r = await palaceSend('library/migrate', 'POST', {});
                     const rep = r.report || {};
                     const f = s => s ? `${s.imported} in · ${s.skipped} skipped · ${s.failed} failed` : '?';
-                    const msg = `v2 chunks: ${f(rep.v2)} — v1: ${rep.v1?.absent ? 'not present' : f(rep.v1)}`;
+                    const msg = `palace chunks: ${f(rep.v2)} · legacy: ${rep.v1?.absent ? 'not present' : f(rep.v1)}`;
                     setResult(el, spec.key, msg);
                     ui.showToast('Library migration done — embedding continues in background', 'success');
                 } catch (e) { ui.showToast(e.message, 'error'); }
@@ -958,6 +958,7 @@ async function runAction(el, spec, action) {
             if (!confirm(gate.preview(scope, p))) return;
         }
         const r = await palaceSend('maintenance', 'POST', body);
+        if (r.error || r.success === false) throw new Error(r.error || r.detail || 'failed');
         const bits = [];
         if ('stripped' in r) bits.push(`${r.stripped} date stamps stripped`
             + (r.kept_anniversary ? ` · ${r.kept_anniversary} kept for an anniversary` : ''));

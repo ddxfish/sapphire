@@ -9,12 +9,15 @@ logger = logging.getLogger(__name__)
 
 
 def plugins_ready(event):
-    # Boot only: plugins_ready also fires on every toggle, reload and
-    # rescan, and each one re-read both classic databases in the request
+    # Boot, or the palace's own switch flipping on: the install that just
+    # swapped engines is the one with classic rows waiting, and nothing else
+    # pointed at Import until a restart (hunt 2026-11-01, B6). Every other
+    # toggle, reload and rescan re-read both classic databases for nothing
     # and re-posted the row (2026-10-31).
     try:
-        reason = (getattr(event, 'metadata', None) or {}).get('reason')
-        if reason not in (None, 'scan'):
+        meta = getattr(event, 'metadata', None) or {}
+        reason = meta.get('reason')
+        if reason not in (None, 'scan') and not (reason == 'toggle' and meta.get('plugin') == 'mindpalace'):
             return
         import config
         from plugins.mindpalace.tools import import_tools

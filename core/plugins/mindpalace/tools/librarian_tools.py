@@ -1613,3 +1613,12 @@ def execute(function_name, arguments, config):
     except Exception as e:
         logger.error(f"[LIBRARIAN] Verb error: {e}")
         return f"Librarian error: {e}", False
+
+
+def shutdown():
+    """Unload or app exit: a running librarian drain stops after its batch.
+    librarian.py is not a tool module, so its own shutdown never ran and a
+    drain kept writing mind.db after the engine switch, with a second one
+    starting beside it on re-enable (hunt of the hunt 2026-11-01, H3)."""
+    from plugins.mindpalace.tools import librarian
+    librarian.drain_stop()

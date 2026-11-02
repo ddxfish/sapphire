@@ -28,6 +28,7 @@
 
 import json
 import sqlite3
+import sys
 import logging
 import re
 import threading
@@ -394,6 +395,12 @@ def _now() -> str:
 
 def _get_db_path():
     global _db_path
+    if _db_path is None and 'pytest' in sys.modules:
+        # Fail loud, never write: a test that reaches the palace without
+        # redirecting _db_path (a second module copy, a sink or thread that
+        # outlives its fixture) wrote fixture rows into the real mind.db on
+        # 2026-11-01. The real store is never a test's default.
+        raise RuntimeError("palace tests must redirect palace_tools._db_path; the real user/memory/mind.db is off limits")
     if _db_path is None:
         # Anchor to config.py location (project root) — stable regardless of
         # where this file lives. Same pattern as plugins/memory (Phase 4 lesson).
@@ -805,74 +812,121 @@ def _ensure_db():
             return False
 
 
-_backfill_done = False
+_backfill_done = False          # False, True (any provider), or the (provider, dim) it completed under
+_backfill_running = False
+_backfill_stop = False          # shutdown(): finish the batch, then stop
+_backfill_guard = threading.Lock()
 
-def _backfill_embeddings():
-    """Embed + stamp provenance for chunks lacking either. Lazy, first-search.
-    Flag only latches True on clean completion (transient-failure retry, v2 lesson)."""
+
+def _active_provenance():
+    """(provider_id, dim) of the embedder the palace writes with; (None, None)
+    when there is none or it is down."""
+    try:
+        e = _get_embedder()
+        if not e or not e.available:
+            return None, None
+        return getattr(e, 'provider_id', None), getattr(e, 'dimension', None)
+    except Exception:
+        return None, None
+
+
+def _backfill_embeddings(background=False):
+    """Embed + stamp provenance for chunks lacking either, or stamped by a
+    provider that is not the active one: recall filters by the active
+    provider, so a vector from a provider the user left is one it can never
+    match (classic re-embeds on request; here the sweep does it). The latch
+    holds the provenance it completed under, so a provider swap re-opens it.
+    One sweep at a time, whoever asks (the import kick used to start a
+    second beside the search's, H5). background=True (the search path) runs
+    it on a thread: a swap's re-embed of every row must not block the first
+    search, FTS answers in the meantime. Latches only on clean completion
+    (transient-failure retry, v2 lesson)."""
+    global _backfill_running
+    if _backfill_done is True or _backfill_done == _active_provenance():
+        return
+    with _backfill_guard:
+        if _backfill_running:
+            return
+        _backfill_running = True
+
+    def _done():
+        global _backfill_running
+        with _backfill_guard:
+            _backfill_running = False
+
+    if background:
+        def _run():
+            try:
+                _sweep()
+            finally:
+                _done()
+        threading.Thread(target=_run, name='mindpalace-backfill', daemon=True).start()
+        return
+    try:
+        _sweep()
+    finally:
+        _done()
+
+
+def _sweep():
+    """Passes until one finds nothing left under the then-active provider.
+    Each pass re-reads the embedder and re-queries, so rows that arrived or
+    were reset during a pass are caught by the next (a reset mid-sweep used
+    to be wiped by the latch, H6) and a provider switch mid-sweep finishes
+    under the new provider (H5). A row is written only if its words are
+    still the ones embedded: an edit during the sweep keeps its own vector
+    and the next pass sees the new text (H4). Bounded, so a flapping
+    embedder cannot spin."""
     global _backfill_done
-    if _backfill_done:
-        return
-
-    embedder = _get_embedder()
-    if not embedder.available:
-        # Do NOT latch — the docstring's own promise ("latches only on
-        # clean completion") was broken here, and silently: rows stayed
-        # unembedded, dedup reported a false "nothing to check", and no
-        # log line said why. Warn loudly, retry next search.
-        logger.warning("[MINDPALACE] Embedding backfill skipped: embedder "
-                       "unavailable — unembedded rows wait (semantic search "
-                       "and dedup see them only after it returns).")
-        return
-
-    with _get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            'SELECT id, content FROM chunks '
-            'WHERE embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL'
-        )
-        rows = cursor.fetchall()
-
-    if not rows:
-        _backfill_done = True
-        return
-
-    logger.info(f"[MINDPALACE] Backfilling embeddings for {len(rows)} chunks...")
-    batch_size = 32
-    filled = 0
-    transient_failure = False
     from core.embeddings import stamp_embedding
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
-        ids = [r[0] for r in batch]
-        texts = [r[1] for r in batch]
-        embs = embedder.embed(texts, prefix='search_document')
-        if embs is None:
-            transient_failure = True
-            break
-        try:
-            with _get_connection() as conn:
-                cursor = conn.cursor()
-                for row_id, emb in zip(ids, embs):
-                    blob, provider_id, dim = stamp_embedding(emb, embedder)
-                    cursor.execute(
-                        'UPDATE chunks SET embedding = ?, embedding_provider = ?, embedding_dim = ? '
-                        'WHERE id = ?',
-                        (blob, provider_id, dim, row_id)
-                    )
-                conn.commit()
-                filled += len(batch)
-        except Exception as e:
-            logger.error(f"[MINDPALACE] Backfill batch failed: {e}")
-            transient_failure = True
-            break
-
-    if transient_failure:
-        logger.warning(f"[MINDPALACE] Backfill incomplete: {filled}/{len(rows)} — retry next search")
-    else:
-        _backfill_done = True
-        if filled:
-            logger.info(f"[MINDPALACE] Backfill complete: {filled}/{len(rows)} chunks embedded")
+    for n_pass in range(8):
+        current = _active_provenance()
+        embedder = _get_embedder()
+        if not embedder.available:
+            # Do NOT latch: rows stay unembedded, dedup would report a false
+            # "nothing to check". Warn loudly, retry next search.
+            logger.warning("[MINDPALACE] Embedding backfill skipped: embedder "
+                           "unavailable — unembedded rows wait (semantic search "
+                           "and dedup see them only after it returns).")
+            return
+        pid, dim = current
+        where, params = ['embedding IS NULL', 'embedding_provider IS NULL', 'embedding_dim IS NULL'], []
+        if pid:
+            where.append('embedding_provider != ?'); params.append(pid)
+        if dim:
+            where.append('embedding_dim != ?'); params.append(dim)
+        with _get_connection() as conn:
+            rows = conn.execute(f"SELECT id, content FROM chunks WHERE {' OR '.join(where)}", params).fetchall()
+        if not rows:
+            _backfill_done = current
+            return
+        logger.info(f"[MINDPALACE] Backfilling embeddings for {len(rows)} chunks (pass {n_pass + 1})...")
+        filled = 0
+        for i in range(0, len(rows), 32):
+            if _backfill_stop:
+                logger.warning(f"[MINDPALACE] Backfill stopped: {filled}/{len(rows)} — resumes on the next search")
+                return
+            batch = rows[i:i + 32]
+            embs = embedder.embed([r[1] for r in batch], prefix='search_document')
+            if embs is None:
+                logger.warning(f"[MINDPALACE] Backfill incomplete: {filled}/{len(rows)} — retry next search")
+                return
+            try:
+                with _get_connection() as conn:
+                    cursor = conn.cursor()
+                    for (row_id, text), emb in zip(batch, embs):
+                        blob, provider_id, d = stamp_embedding(emb, embedder)
+                        cursor.execute(
+                            'UPDATE chunks SET embedding = ?, embedding_provider = ?, embedding_dim = ? '
+                            'WHERE id = ? AND content = ?',
+                            (blob, provider_id, d, row_id, text))
+                        filled += cursor.rowcount
+                    conn.commit()
+            except Exception as e:
+                logger.error(f"[MINDPALACE] Backfill batch failed: {e} — retry next search")
+                return
+        logger.info(f"[MINDPALACE] Backfill pass {n_pass + 1}: {filled}/{len(rows)} chunks embedded")
+    logger.warning("[MINDPALACE] Backfill: rows kept arriving for 8 passes; the latch stays open")
 
 
 def reset_backfill_latch():
@@ -1205,9 +1259,10 @@ def delete_scope(name: str) -> dict:
             # ledger rows die; the ledger module itself stays append-only.
             cursor.execute('DELETE FROM ledger WHERE scope = ?', (name,))
             cursor.execute('DELETE FROM ledger_reads WHERE scope = ?', (name,))
-            try:   # its classic rows read NEW on the Import tab again
+            try:   # its classic rows read NEW on the Import tab again, quietly
                 from plugins.mindpalace.tools import import_tools
                 import_tools.forget_seen(cursor, name)
+                import_tools.mute_scope(cursor, name)
             except Exception as e:
                 logger.warning(f"[MINDPALACE] delete_scope: import_seen reset skipped: {e}")
             # Death row lands in 'default' — the razed scope's ledger just
@@ -2115,7 +2170,7 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
             if card:
                 card_txt = f"👤 {card[0]} — card:\n" + "\n".join(card[1])
 
-        _backfill_embeddings()
+        _backfill_embeddings(background=True)
 
         with _get_connection() as conn:
             cursor = conn.cursor()
@@ -2827,15 +2882,37 @@ def _get_people_provider(scope='default'):
     return out
 
 
-try:
-    from core.contacts import register_provider as _register_contacts_provider
-    _register_contacts_provider('mindpalace', _get_people_provider)
-except Exception as _e:
-    logger.warning(f"[MINDPALACE] contacts provider registration failed: {_e}")
+def on_load():
+    """The loader calls this every time it registers this module, fresh or
+    reused from sys.modules: the palace's registrations with core live here
+    and nowhere else. At import time they landed from any stray import (a
+    leftover drain thread, a layer plugin) while the switch was off, and a
+    copy imported that way was then reused silent for the whole session
+    (migration hunt 2026-11-01, D1; hunt of the hunt H2). plugin_loader
+    unwinds both on unload/refusal."""
+    global _backfill_stop
+    _backfill_stop = False                  # loaded again: sweeps may run (a reused module keeps its globals)
+    try:
+        from core.contacts import register_provider as _register_contacts_provider
+        _register_contacts_provider('mindpalace', _get_people_provider)
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] contacts provider registration failed: {e}")
+    try:
+        from plugins.mindpalace.tools import prompt_audit
+        prompt_audit.register()
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] prompt audit sink registration failed: {e}")
 
-try:
-    # Self-registers the core.audit sink at import (prompt ledger);
-    # plugin_loader unwinds it on unload/refusal alongside contacts.
-    from plugins.mindpalace.tools import prompt_audit as _prompt_audit  # noqa: F401
-except Exception as _e:
-    logger.warning(f"[MINDPALACE] prompt audit sink load failed: {_e}")
+
+def shutdown():
+    """Unload or app exit: the backfill sweep stops after its batch and the
+    prompt ledger flushes. A palace unloaded by the engine switch kept its
+    threads writing mind.db (migration hunt 2026-11-01, D6)."""
+    global _backfill_stop
+    _backfill_stop = True
+    pa = sys.modules.get('plugins.mindpalace.tools.prompt_audit')
+    if pa is not None:
+        try:
+            pa.flush(force=True)
+        except Exception as e:
+            logger.debug(f"[MINDPALACE] shutdown flush skipped: {e}")

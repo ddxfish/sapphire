@@ -173,7 +173,7 @@ ledger lines.
 
 MEMORY LAYERS (plugin-declared Mind Palace layers):
 - Manifest: `capabilities.memory_layers` = [{key, label?, icon?, description?, librarian? (default false), writable? (default false), mode? ('mirror' only)}]. Key: lowercase valid identifier (no hyphens), unique across plugins, first registrant wins; reserved keys refused: self, events, entities, knowledge, goals. Registered at plugin load, unregistered at unload/disable; the AI's tool schemas update live both ways.
-- Requires the `mindpalace` plugin. Import lazily INSIDE functions: `from plugins.mindpalace.tools import layer_api` wrapped in try/except ImportError — never at module top level.
+- Requires the `mindpalace` plugin. Import lazily INSIDE functions: `from plugins.mindpalace.tools import layer_api` wrapped in try/except ImportError — never at module top level. The ImportError is real: with Mind Palace switched off the module refuses to import, so a mirror never lands in the palace database under the other engine.
 - API (`core/plugins/mindpalace/tools/layer_api.py`; import name stays `plugins.mindpalace...`):
   - `save(content, layer, scope='default', label=None, fields=None, source=None) -> (chunk_id|None, message)` — full pipeline (inline embedding, FTS, entity weaving), one ledger line per call; single items only, never loops.
   - `bulk_save(items, layer, scope='default') -> (ids, message)` — items = [{'content', 'label'?, 'fields'?, 'source'?}]; one transaction, embeddings deferred to the background sweep, ONE ledger summary line; empty/over-length items skipped and counted; very large batches are cut off by a runaway backstop.

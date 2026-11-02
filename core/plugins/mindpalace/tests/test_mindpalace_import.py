@@ -671,40 +671,96 @@ def test_scope_disabled_returns_false(palace_env):
     assert "disabled" in out.lower()
 
 
+def _lib_keys(monkeypatch, keys):
+    from plugins.mindpalace.tools import library
+    monkeypatch.setattr(library, '_existing_import_keys', lambda: set(keys))
+
+
+def _knowledge_flags(env):
+    conn = _mind_conn(env)
+    rows = dict(conn.execute(
+        "SELECT content, json_extract(meta,'$.library_migrated') FROM chunks "
+        "WHERE layer='knowledge'").fetchall())
+    conn.close()
+    return rows
+
+
 def test_knowledge_defers_to_library_when_migrated(palace_env, monkeypatch):
     """Fresh-cycle order: the Library's boot migration ingests knowledge.db
-    BEFORE import_v1 runs — imported palace copies must flag library_migrated
-    so the same knowledge isn't served from two systems at once."""
+    BEFORE import_v1 runs — the imported palace copies of the groups the
+    Library holds must flag library_migrated so the same knowledge isn't
+    served from two systems at once."""
     env = palace_env
-    from plugins.mindpalace.tools import library
-    monkeypatch.setattr(library, 'migration_report',
-                        lambda: {'ran_at': 'x', 'v1': {'absent': False}})
-    out, ok = env.import_tools.execute("import_v2", {"what": "knowledge"},
-                                       env.config)
+    _lib_keys(monkeypatch, ['libmig:v1:default:1:cookbook.pdf'])
+    out, ok = env.import_tools.execute("import_v2", {"what": "knowledge"}, env.config)
     assert ok, out
-    conn = _mind_conn(env)
-    flags = conn.execute(
-        "SELECT json_extract(meta,'$.library_migrated') FROM chunks "
-        "WHERE layer='knowledge'").fetchall()
-    conn.close()
-    assert flags and all(f[0] == 'v1-boot' for f in flags)
+    flags = _knowledge_flags(env)
+    assert flags and all(v == 'v1-boot' for v in flags.values())
 
 
 def test_knowledge_serves_normally_without_library_migration(palace_env, monkeypatch):
-    """No library v1 migration on record → no flag: doubled surface beats
+    """No Library document for the group → no flag: doubled surface beats
     dark content when unsure."""
     env = palace_env
-    from plugins.mindpalace.tools import library
-    monkeypatch.setattr(library, 'migration_report', lambda: {})
-    out, ok = env.import_tools.execute("import_v2", {"what": "knowledge"},
-                                       env.config)
+    _lib_keys(monkeypatch, [])
+    out, ok = env.import_tools.execute("import_v2", {"what": "knowledge"}, env.config)
     assert ok, out
+    flags = _knowledge_flags(env)
+    assert flags and all(v is None for v in flags.values())
+
+
+def test_only_the_groups_the_library_holds_are_flagged(palace_env, monkeypatch):
+    """One whole-run flag hid knowledge added AFTER the Library's migration:
+    in mind.db, out of every read, in no Library (migration hunt C1)."""
+    env = palace_env
+    c = sqlite3.connect(env.user_dir / 'knowledge.db')
+    c.execute("INSERT INTO knowledge_entries (tab_id, content, chunk_index, source_filename) "
+              "VALUES (1, 'added after the migration', 0, NULL)")
+    c.commit(); c.close()
+    _lib_keys(monkeypatch, ['libmig:v1:default:1:cookbook.pdf'])
+    out, ok = env.import_tools.execute("import_v2", {"what": "knowledge"}, env.config)
+    assert ok, out
+    flags = _knowledge_flags(env)
+    assert flags['chunk zero'] == 'v1-boot' and flags['added after the migration'] is None
+
+
+def test_a_scope_deleted_from_the_palace_mutes_the_nudge_until_imported_again(palace_env, monkeypatch):
+    """delete_scope forgets the scope's seen rows (a tester may bring them
+    back) and used to re-arm "memories are waiting" every boot, forever, for
+    what the user had just deleted (migration hunt C2). The Import tab stays
+    honest; the boot row stays quiet; asking for the scope again lifts it."""
+    env = palace_env
+    import core.notify as notify
+    calls = []
+    monkeypatch.setattr(notify, 'notify', lambda *a, **k: calls.append(a) or 'rid')
+    env.import_tools.start(env.config, sync=True)
+    assert env.import_tools.nudge_if_pending(env.config) is None
+    env.palace_tools.delete_scope('work')
+    p = env.import_tools.preview(env.config)
+    assert p['pending'] == 0 and p['pending_muted'] == 1 and p['muted'] == ['work']
+    assert env.import_tools.nudge_if_pending(env.config) is None and calls == []
+    env.import_tools.start(env.config, sync=True)           # Import all leaves the deleted scope out (H14)
+    p = env.import_tools.preview(env.config)
+    assert p['pending_muted'] == 1 and p['muted'] == ['work']
+    env.import_tools.start(env.config, sync=True, scope='work')   # asked for by name: back, and unmuted
+    p = env.import_tools.preview(env.config)
+    assert p['pending'] == 0 and p['pending_muted'] == 0 and p['muted'] == []
+
+
+@pytest.mark.parametrize('active, carried', [(('provX', 4), True), (('provY', 4), False),
+                                             (('provX', 8), False), ((None, None), True)])
+def test_vectors_from_another_provider_are_left_for_the_backfill(palace_env, monkeypatch, active, carried):
+    """Recall filters by the active provider and the backfill filled NULLs
+    only: a classic vector copied verbatim from a provider the user has left
+    was invisible to semantic search for good (migration hunt C3)."""
+    env = palace_env
+    monkeypatch.setattr(env.import_tools, '_active_provenance', lambda: active)
+    env.import_tools.execute("import_v2", {"what": "memories"}, env.config)
     conn = _mind_conn(env)
-    flags = conn.execute(
-        "SELECT json_extract(meta,'$.library_migrated') FROM chunks "
-        "WHERE layer='knowledge'").fetchall()
+    row = conn.execute("SELECT embedding, embedding_provider, embedding_dim FROM chunks "
+                       "WHERE content='embedded memory'").fetchone()
     conn.close()
-    assert flags and all(f[0] is None for f in flags)
+    assert tuple(row) == ((_EMB_BLOB, 'provX', 4) if carried else (None, None, None))
 
 
 # ─── Hunt 2026-10-31: removed-before needs positive evidence ─────────────────
@@ -867,11 +923,13 @@ def test_nudge_fires_at_boot_only(palace_env, monkeypatch):
     from plugins.mindpalace.hooks import ready
     calls = []
     monkeypatch.setattr(env.import_tools, 'nudge_if_pending', lambda cfg: calls.append(1))
-    ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'toggle'}))
+    ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'toggle', 'plugin': 'discord'}))
     ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'reload'}))
     assert calls == []
     ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'scan'}))
     assert calls == [1]
+    ready.plugins_ready(types.SimpleNamespace(metadata={'reason': 'toggle', 'plugin': 'mindpalace'}))
+    assert calls == [1, 1]                                  # the palace's own switch: the one swap that matters (B6)
 
 
 def test_import_drops_her_today_stamp(palace_env):

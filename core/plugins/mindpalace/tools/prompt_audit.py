@@ -326,8 +326,10 @@ def flush(scope=None, force=False):
 
 atexit.register(lambda: flush(force=True))
 
-try:
-    from core.audit import register_sink as _register_audit_sink
-    _register_audit_sink('mindpalace', handle)
-except Exception as _e:
-    logger.warning(f"[MINDPALACE] audit sink registration failed: {_e}")
+
+def register():
+    """Install the prompt-ledger sink. Called from palace_tools.on_load()
+    each time the loader registers the palace, never at import (hunt of
+    the hunt 2026-11-01, H2); plugin_loader unregisters it on unload."""
+    from core.audit import register_sink
+    register_sink('mindpalace', handle)

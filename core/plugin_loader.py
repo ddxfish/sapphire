@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Any, Callable, Tuple
 
 from core.hooks import hook_runner
 from core.plugin_verify import verify_plugin
-from core.fs_utils import replace_with_retry
+from core.fs_utils import replace_with_retry, ro_uri
 
 logger = logging.getLogger(__name__)
 
@@ -87,21 +87,51 @@ CLASSIC_MEMORY_COUNTS = (
 )
 
 
-def classic_memory_rows(user_dir: Path) -> int:
-    """How many rows the classic memory engine holds for this install (read-only)."""
+def _count_rows(path: Path, sql: str):
+    """One read-only count. A table the schema never had counts 0; a store
+    that will not open (locked, malformed, a share sqlite cannot address)
+    is None: not empty, and nobody may decide anything on it."""
+    try:
+        conn = sqlite3.connect(ro_uri(path), uri=True)
+        try:
+            return conn.execute(sql).fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        if "no such table" in str(e):
+            return 0
+        logger.warning(f"[PLUGINS] {path.name} could not be read for the memory engine count: {e}")
+        return None
+
+
+def classic_memory_rows(user_dir: Path):
+    """How many rows the classic memory engine holds for this install
+    (read-only). None: a store exists but could not be read."""
     n = 0
     for db, sql in CLASSIC_MEMORY_COUNTS:
         path = user_dir / db
         if not path.exists():
             continue
-        try:
-            conn = sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True)
-            try:
-                n += conn.execute(sql).fetchone()[0]
-            finally:
-                conn.close()
-        except sqlite3.Error as e:
-            logger.debug(f"[PLUGINS] classic memory count skipped ({db}): {e}")
+        c = _count_rows(path, sql)
+        if c is None:
+            return None
+        n += c
+    return n
+
+
+def palace_memory_rows(user_dir: Path):
+    """How many rows Mind Palace holds (memories and entities), the same way.
+    Two counts: one statement over both tables read a palace without an
+    entities table as empty (hunt of the hunt H13)."""
+    path = user_dir / "memory" / "mind.db"
+    if not path.exists():
+        return 0
+    n = 0
+    for sql in ("SELECT COUNT(*) FROM chunks", "SELECT COUNT(*) FROM entities"):
+        c = _count_rows(path, sql)
+        if c is None:
+            return None
+        n += c
     return n
 
 
@@ -381,8 +411,9 @@ class PluginLoader:
         except Exception as e:
             logger.debug(f"[PLUGINS] band-move tripwires skipped: {e}")
         self._plugins.clear()
+        add, drop = {}, {}
         try:
-            self._pin_memory_engine_once()
+            add, drop = self._pin_memory_engine_once()
         except Exception as e:
             logger.warning(f"[PLUGINS] memory engine pin skipped: {e}")
         try:
@@ -391,6 +422,11 @@ class PluginLoader:
             logger.warning(f"[PLUGINS] featured plugin pin skipped: {e}")
         enabled_list = self._get_enabled_list()
         disabled_list = self._get_disabled_list()
+        # The engine verdict holds for this boot even when plugins.json could
+        # not take it (a no-op when it could): a boot on the wrong engine
+        # strands whatever it saves.
+        for key, names in (("enabled", enabled_list), ("disabled", disabled_list)):
+            names[:] = [n for n in names if n not in drop.get(key, ())] + [n for n in add.get(key, ()) if n not in names]
 
         # System plugins (priority band 0-99)
         self._scan_dir(SYSTEM_PLUGINS_DIR, band="system", enabled_list=enabled_list, disabled_list=disabled_list)
@@ -456,7 +492,7 @@ class PluginLoader:
         # (Sapph-not-Rose reboot bug, 2026-08-05.)
         self._fire_plugins_ready("scan", loaded)
 
-    def _fire_plugins_ready(self, reason: str, loaded: int = 1):
+    def _fire_plugins_ready(self, reason: str, loaded: int = 1, plugin: str = None):
         """The "registration finished, re-assert anything runtime-owned" moment.
         Fires after the boot scan AND after every out-of-scan (re)load — reload,
         enable-toggle, dep-install, dev-watcher, rescan. Manifest-only
@@ -468,7 +504,7 @@ class PluginLoader:
             if hook_runner.has_handlers("plugins_ready"):
                 from core.hooks import HookEvent
                 hook_runner.fire("plugins_ready",
-                                 HookEvent(metadata={"loaded": loaded, "reason": reason}))
+                                 HookEvent(metadata={"loaded": loaded, "reason": reason, "plugin": plugin}))
         except Exception as e:
             logger.warning(f"[PLUGINS] plugins_ready ({reason}) dispatch failed: {e}")
         # Re-derive the NO_PROXY belt now that this (re)load wave changed the
@@ -612,6 +648,16 @@ class PluginLoader:
                 f"pages or missing features until the core is updated (git pull)."
             )
 
+    def switched_on(self, name: str) -> bool:
+        """Is `name`'s switch on, as far as this loader knows? True when it
+        knows nothing (tests, scripts). A plugin module imported while its
+        switch is off must do nothing at import: the palace registered its
+        contacts provider and audit sink that way, from a doc:N picture or
+        a layer plugin's mirror, with no unload to follow (migration hunt
+        2026-11-01, D1). ONE door for every such check."""
+        info = self.get_plugin_info(name)
+        return info is None or bool(info.get("enabled"))
+
     def _read_plugins_json(self, key: str) -> list:
         """Read a list from user/webui/plugins.json; no file = the defaults. A
         corrupt file is quarantined at ERROR — silently reverting to defaults
@@ -622,7 +668,11 @@ class PluginLoader:
             return []
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
-            return data.get(key, [])
+            value = data.get(key, [])
+            if not isinstance(value, list):
+                logger.warning(f"[PLUGINS] {path.name}: '{key}' is not a list, ignored")
+                return []
+            return [n for n in value if isinstance(n, str)]
         except Exception as e:
             from datetime import datetime
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -653,19 +703,32 @@ class PluginLoader:
         """Read explicitly-disabled plugins (overrides default_enabled)."""
         return self._read_plugins_json("disabled")
 
-    def _append_plugins_json(self, pins: dict):
-        """Add names to the lists of user/webui/plugins.json (created if absent)."""
+    def _append_plugins_json(self, pins: dict, drop: dict = None):
+        """Add names to the lists of user/webui/plugins.json (created if
+        absent); `drop` takes names out of lists first (an engine moved
+        from one list to the other)."""
         with PLUGINS_JSON_LOCK:
             data = {}
             if USER_PLUGINS_JSON.exists():
                 data = json.loads(USER_PLUGINS_JSON.read_text(encoding="utf-8-sig"))
+            lst = lambda key: [n for n in data[key] if isinstance(n, str)] if isinstance(data.get(key), list) else []
+            for key in ("enabled", "disabled", "pinned"):
+                data[key] = lst(key)                 # a hand-edited null or string heals on the next write
+            for key, names in (drop or {}).items():
+                data[key] = [n for n in lst(key) if n not in names]
             for key, names in pins.items():
-                cur = list(data.get(key, []))
+                cur = lst(key)
                 data[key] = cur + [n for n in names if n not in cur]
             USER_PLUGINS_JSON.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
-            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            # fsync like the toggle route (2026-05-07): a power cut between
+            # rename and flush zeroed the file, and the engine pin rode in it.
+            from core.settings_manager import _fsync_file, _fsync_dir
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                _fsync_file(f)
             replace_with_retry(tmp_path, USER_PLUGINS_JSON)
+            _fsync_dir(USER_PLUGINS_JSON.parent)
 
     # Flipped to default_enabled for the new setup wizard (2026-10-24), which
     # shows them ticked so a new user chooses. An install that never saw that
@@ -696,7 +759,7 @@ class PluginLoader:
         logger.info(f"[PLUGINS] featured plugins kept off for an existing install: {', '.join(off)}")
         try:
             from core import notify
-            notify.notify("Some plugins stay off until you turn them on", source="plugins",
+            notify.notify("Some plugins stay off until you turn them on", level="warning", source="plugins",
                           key="featured-pin", once=True,
                           body=f"An update marked these as featured: {', '.join(off)}. This install never "
                                f"chose them, so they stay off. Settings \u203a Plugins turns any of them on.",
@@ -704,41 +767,156 @@ class PluginLoader:
         except Exception as e:
             logger.debug(f"[PLUGINS] featured pin notice skipped: {e}")
 
+    ENGINES = ("memory", "mindpalace")
+
+    def _place_engine(self, engine, enabled, disabled):
+        """The list edits that make `engine` ('memory' | 'mindpalace' | 'none')
+        the one that runs: the chosen one on, the other off. Returns (add, drop)."""
+        add, drop = {}, {}
+        for name in self.ENGINES:
+            if name == engine:
+                if name == "memory" and name not in enabled:    # classic defaults off now
+                    add.setdefault("enabled", []).append(name)
+                if name in disabled:
+                    drop.setdefault("disabled", []).append(name)
+            else:
+                if name in enabled:
+                    drop.setdefault("enabled", []).append(name)
+                if name not in disabled:
+                    add.setdefault("disabled", []).append(name)
+        return add, drop
+
+    def _engine_file(self):
+        """The engine verdict's durable home: a one-key file beside
+        plugins.json. plugins.json is quarantined on sight and rewritten by
+        other hands; this file is written only here and by the toggle route,
+        with fsync (hunt of the hunt 2026-11-01, H8)."""
+        return USER_PLUGINS_JSON.with_name("memory-engine.json")
+
+    def read_engine(self):
+        """'memory' | 'mindpalace' | 'none', or None when no verdict is recorded."""
+        try:
+            data = json.loads(self._engine_file().read_text(encoding="utf-8-sig"))
+            engine = data.get("engine") if isinstance(data, dict) else None
+            return engine if engine in ("memory", "mindpalace", "none") else None
+        except FileNotFoundError:
+            return None
+        except Exception as e:
+            logger.warning(f"[PLUGINS] memory-engine.json unreadable, ignored: {e}")
+            return None
+
+    def write_engine(self, engine: str, by: str):
+        from datetime import datetime, timezone
+        from core.settings_manager import _fsync_file, _fsync_dir
+        path = self._engine_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"engine": engine, "by": by,
+                       "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}, f, indent=2)
+            _fsync_file(f)
+        replace_with_retry(tmp, path)
+        _fsync_dir(path.parent)
+
     def _pin_memory_engine_once(self):
         """2026-10: Mind Palace became the shipped default memory engine and
         classic memory went legacy (both manifests' default_enabled flipped).
-        Only a FRESH install takes the new default. An existing install keeps
-        what it runs: classic explicitly on, or on by the old default with
-        data -> classic stays on and the palace is pinned off; classic
-        explicitly off -> no engine, as before. The pin is an explicit choice
-        in the lists, so the defaults never apply to that install again. The
-        palace already in a list (chosen either way) -> nothing to do."""
+        The engine this install runs lives in user/webui/memory-engine.json,
+        written here the first time and by the toggle route after:
+        plugins.json is quarantined on sight, and a verdict that lived only
+        there re-ran the data vote and could flip a user off the engine they
+        chose (hunt of the hunt 2026-11-01, H8). Every boot the lists are
+        made to agree with it. With no verdict yet, once per install
+        ("memory-engine" in pinned) the loader settles it:
+          - an engine already placed in a list (an earlier pin, Settings)
+            stays as placed; classic off before the palace existed = no
+            engine, as before; the palace off with classic unplaced = classic
+            ran by the old default, so classic (H7);
+          - both on, the palace on with classic unplaced (the 2026-10 toggle
+            bug's leftover), or nothing placed: the engine that holds the
+            data runs. A tie goes to classic (the palace imports classic,
+            not the reverse); an empty install takes the new default.
+        A store that exists but cannot be read is not empty: nothing is
+        recorded and this boot runs classic unless the palace is known to
+        hold more, so the next boot decides for real.
+        Returns (add, drop) for the lists. scan() applies them to this boot
+        even when plugins.json could not take them: a boot on the wrong
+        engine strands whatever it saves."""
         enabled, disabled = self._get_enabled_list(), self._get_disabled_list()
-        if "mindpalace" in enabled or "mindpalace" in disabled:
-            return
-        if "memory" in disabled:
-            classic_on = False
-        elif "memory" in enabled:
-            classic_on = True
+        marked = "memory-engine" in self._read_plugins_json("pinned")
+        chosen = self.read_engine()
+        if chosen:
+            add, drop = self._place_engine(chosen, enabled, disabled)
+            if not marked:
+                add["pinned"] = ["memory-engine"]
+            if add or drop:
+                logger.info(f"[PLUGINS] memory engine '{chosen}' restored to the lists: +{add} -{drop}")
+                try:
+                    self._append_plugins_json(add, drop)
+                except Exception as e:
+                    logger.warning(f"[PLUGINS] memory engine lists not saved ({e}); applied for this boot only")
+            return add, drop
+        if marked:
+            # Pinned before the verdict file existed: derive it from the lists
+            # once, so the durable home is there before any plugins.json loss.
+            derived = ("memory" if "memory" in enabled
+                       else "mindpalace" if "mindpalace" not in disabled else "none")
+            try:
+                self.write_engine(derived, "pin")
+            except Exception as e:
+                logger.warning(f"[PLUGINS] memory engine verdict not saved: {e}")
+            return {}, {}
+        mem_on, mem_off = "memory" in enabled, "memory" in disabled
+        mp_on, mp_off = "mindpalace" in enabled, "mindpalace" in disabled
+        notice, record = None, True
+        if mem_off:
+            engine = "mindpalace" if mp_on else "none"         # classic turned off on purpose
+        elif mp_off:
+            engine = "memory"                                   # placed, or the old default ran classic (H7)
+            if not mem_on:
+                notice = "This install stays on Memory (legacy), the engine it was running."
+        elif mem_on and not mp_on:
+            engine = "memory"
+            notice = "This install stays on Memory (legacy), the engine it was running."
         else:
-            classic_on = classic_memory_rows(USER_PLUGINS_JSON.parent.parent) > 0
-            if not classic_on:
-                return                                  # a fresh install
-        pins = {"disabled": ["mindpalace"]}
-        if classic_on and "memory" not in enabled:
-            pins["enabled"] = ["memory"]
-        self._append_plugins_json(pins)
-        logger.info("[PLUGINS] memory engine pinned for an existing install: Mind Palace off"
-                    + (", Memory (legacy) on" if classic_on else ""))
-        if classic_on:
+            user_dir = USER_PLUGINS_JSON.parent.parent
+            classic, palace = classic_memory_rows(user_dir), palace_memory_rows(user_dir)
+            record = classic is not None and palace is not None
+            c, p = (1 if classic is None else classic), (1 if palace is None else palace)
+            if p > c or c == 0:
+                engine = "mindpalace"
+                if mem_on:
+                    notice = ("Both engines were switched on; only one runs at a time. Mind Palace "
+                              "holds your data, so it runs and Memory (legacy) is off.")
+            else:
+                engine = "memory"
+                notice = "This install stays on Memory (legacy) because it holds your data."
+        add, drop = self._place_engine(engine, enabled, disabled)
+        if record:
+            add["pinned"] = ["memory-engine"]
+            try:
+                self.write_engine(engine, "pin")
+            except Exception as e:
+                logger.warning(f"[PLUGINS] memory engine verdict not saved: {e}")
+            try:
+                self._append_plugins_json(add, drop)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] memory engine pin not saved ({e}); applied for this boot only")
+        else:
+            notice = None
+            logger.warning("[PLUGINS] a memory store could not be read; the engine is chosen for this boot only")
+        if add.get("enabled") or add.get("disabled") or drop:
+            logger.info(f"[PLUGINS] memory engine '{engine}' pinned for an existing install: +{add} -{drop}")
+        if notice:
             try:
                 from core import notify
-                notify.notify("Mind Palace is the new default memory", source="plugins",
+                notify.notify("Mind Palace is the new default memory", level="warning", source="plugins",
                               key="memory-engine-pin", once=True,
-                              body="This install stays on Memory (legacy) because it holds your data. "
-                                   "Settings \u203a Plugins switches engines; Mind Palace imports the old data.")
+                              body=notice + " Settings \u203a Plugins switches engines; Mind Palace imports the old data.",
+                              go={'view': 'settings', 'tab': 'plugins'})
             except Exception as e:
                 logger.debug(f"[PLUGINS] engine pin notice skipped: {e}")
+        return add, drop
 
     def _install_pkg_alias(self, name: str, plugin_dir: Path, info: dict):
         """Make a user-band plugin importable as `plugins.<name>`.

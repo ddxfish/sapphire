@@ -263,6 +263,14 @@ def _whole(value, fallback, most):
         return fallback
 
 
+# The engine that owns the `memory` scope answers. Both expose the same four
+# functions, scope by name. Importing the other engine's module by name wrote
+# the classic store under a palace install, and the loader's engine pin then
+# read those rows as "this install holds classic data" (hunt 2026-11-01, A1).
+ENGINE_TOOLS = {'memory': 'plugins.memory.tools.memory_tools',
+                'mindpalace': 'plugins.mindpalace.tools.palace_tools'}
+
+
 def _memory(persona, name, args):
     scope = memory_scope(persona)
     if not scope:
@@ -270,11 +278,15 @@ def _memory(persona, name, args):
                 "Set its memory scope in the Personas view."), False
     from core.chat.function_manager import SCOPE_REGISTRY
     if 'memory' not in SCOPE_REGISTRY:
-        return "Memory is off on this Sapphire: the memory plugin is not loaded.", False
+        return "Memory is off on this Sapphire: the memory engine is not loaded.", False
+    owner = SCOPE_REGISTRY['memory'].get('plugin')
+    if owner not in ENGINE_TOOLS:
+        return f"Memory here is held by '{owner}', which has no persona memory door.", False
     try:
-        from plugins.memory.tools import memory_tools as mt
+        import importlib
+        mt = importlib.import_module(ENGINE_TOOLS[owner])
     except ImportError as e:
-        return f"The memory plugin could not be reached: {e}", False
+        return f"The memory engine could not be reached: {e}", False
     label = args.get('label') or None
     # The scope goes in by name on every call. It is never ambient and never the client's to give.
     if name == 'memory_save':

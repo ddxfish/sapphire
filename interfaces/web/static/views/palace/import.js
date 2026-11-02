@@ -95,7 +95,7 @@ function paint(p) {
         }
     }
     const scopeRows = Object.entries(byScope).sort(([a], [b]) => a.localeCompare(b)).map(([scope, v]) => `<tr>
-            <td style="padding:4px 10px"><b>${escHtml(scope)}</b><div class="ui-meta-text">${escHtml(v.stores.join(' · '))}</div></td>
+            <td style="padding:4px 10px"><b>${escHtml(scope)}</b>${(p.muted || []).includes(scope) ? ' <span class="ui-meta-text" title="You deleted this scope from the palace, so the boot reminder leaves it out until you import it again">(deleted from the palace; not nagged)</span>' : ''}<div class="ui-meta-text">${escHtml(v.stores.join(' · '))}</div></td>
             ${num(v.total)}${num(v.imported)}
             ${num(v.pending ? `<b>${v.pending}</b>` : `<span class="ui-meta-text">0</span>`)}
             ${num(v.removed ? `<span style="color:var(--warning,#e0a030)">${v.removed}</span>` : `<span class="ui-meta-text">0</span>`)}
@@ -118,10 +118,12 @@ function paint(p) {
         </table>` : `<div class="ui-empty">${anyStore ? 'The classic databases are empty.' : 'No Memory (legacy) databases found — nothing to import. A fresh install starts in the palace.'}</div>`;
 
     const notes = [];
+    if (p.pending_muted) notes.push(`<b>${p.pending_muted}</b> more sit in scopes you deleted from the palace: Import all and the reminder leave them out; a scope's own Import button brings it back.`);
     notes.push('<b>New</b> = never imported. <b>Removed before</b> = imported once and since deleted from the palace; those stay out unless you bring them back below. Deleting a palace memory now keeps its key as a tombstone, so it never comes back.');
     if (p.rag_rows) notes.push(`${p.rag_rows} row${p.rag_rows === 1 ? '' : 's'} in per-chat attachment tabs stay with their chats — core keeps those under either engine.`);
     notes.push('Knowledge entries also become Library documents in a second step: Admin › Migration › Copy knowledge into the Library.');
     notes.push('Re-running copies zero duplicates; switching back to Memory (legacy) is the same plugin toggle in reverse.');
+    notes.push('Scopes keep their names. The palace reads every layer from a chat\'s <b>memory</b> scope, so goals or knowledge a chat kept in a different scope than its memories land under that other name: point the chat\'s memory scope there to see them.');
 
     const removedBox = removed ? `
         <div class="ui-box" style="border-color:var(--warning-border,var(--border))">
@@ -241,8 +243,11 @@ async function runImport(opts) {
 async function poll(gen) {
     clearTimeout(_timer);
     let st;
+    // A miss is not the end: the status route shares the plugin's 60/min GET
+    // bucket, and a long import at 1/s tripped it after a minute and froze
+    // the tab at "Importing…" while the row in the sidebar kept moving (B9).
     try { st = await palaceGet('import/status'); }
-    catch { return; }
+    catch { if (gen === _gen) _timer = setTimeout(() => poll(gen), 5000); return; }
     if (gen !== _gen) return;
     const el = content();
     if (!el) return;
@@ -252,7 +257,7 @@ async function poll(gen) {
         if (fill) fill.style.width = `${pct}%`;
         const stage = el.querySelector('#pal-import-stage');
         if (stage) stage.textContent = stageText(st);
-        _timer = setTimeout(() => poll(gen), 1000);
+        _timer = setTimeout(() => poll(gen), 2500);
         return;
     }
     ui.showToast(st.error ? `Import failed: ${st.error}` : 'Import finished', st.error ? 'error' : 'success');

@@ -15,6 +15,7 @@
 
 Settings > Plugins calls `PUT /api/webui/plugins/toggle/{name}`:
 - **Enable**: Loads immediately — all capabilities register
+- **Enable / boot / reload**: each tool module's optional `on_load()` runs after its tools register, fresh or reused from `sys.modules`: the place to register with core (providers, sinks, timers), never import time
 - **Disable**: Unloads immediately — device drivers let go (presence), each tool module's optional `shutdown()` runs, then hooks, tools, routes, schedules are removed and the plugin's modules leave `sys.modules`
 
 Unsigned/tampered plugins return 403 and the toggle reverts.

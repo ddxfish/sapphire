@@ -1,10 +1,10 @@
 {
   "name": "mindpalace",
   "tool_expires": "never",
-  "short_display_name": "Mind",
+  "short_display_name": "Mind Palace",
   "short_name": "Mind Palace",
-  "version": "0.20.0",
-  "description": "Layered memory supersystem (v3) — self/events/entities/knowledge layers behind one tool surface. Mutually exclusive with the Memory plugin: enable one, not both. Import copies from the classic system; old data is never touched.",
+  "version": "0.21.0",
+  "description": "Mind Palace, Sapphire's memory engine: memories, people, knowledge and goals in layers behind one tool surface, tended by a librarian. One of two engines with Memory (legacy); only one runs at a time. The palace's Import tab copies the old data and never changes it.",
   "author": "sapphire",
   "icon": "🏛️",
   "priority": 1,

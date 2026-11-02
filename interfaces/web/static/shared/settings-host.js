@@ -598,16 +598,20 @@ export function createHost(shell = {}) {
                     const mem = countAffected(tables.memories || {});
                     const know = countAffected(tables.knowledge_entries || {});
                     const people = countAffected(tables.people || {});
-                    const total = mem + know + people;
-                    if (total > 0) {
+                    const palace = countAffected(tables.palace_chunks || {});
+                    const uncounted = Object.entries(tables).filter(([, t]) => t && t.error).map(([k]) => k);
+                    const total = mem + know + people + palace;
+                    if (total > 0 || uncounted.length) {
                         const msg =
                             `Swap embedding provider to "${valid.EMBEDDING_PROVIDER}"?\n\n` +
                             `This will make existing vectors invisible to semantic search until re-embedded:\n` +
                             `  • ${mem} memory vectors\n` +
                             `  • ${know} knowledge-entry vectors\n` +
-                            `  • ${people} people vectors\n\n` +
+                            `  • ${people} people vectors\n` +
+                            `  • ${palace} Mind Palace vectors (the palace re-embeds these itself, in the background)\n` +
+                            (uncounted.length ? `  • could not be counted: ${uncounted.join(', ')} (store unreadable right now)\n` : '') + `\n` +
                             `The data itself is preserved. FTS5 text search still works on all rows. ` +
-                            `A re-embed pipeline is coming soon — for now, plan to re-save memories/knowledge manually if needed.`;
+                            `Classic rows re-embed from Settings › Embedding; Mind Palace rows re-embed on their own after the swap.`;
                         if (!confirm(msg)) {
                             shell.onSaveBusy?.(false);
                             return;

@@ -287,6 +287,16 @@ def _group_partner_on(name: str):
     return None
 
 
+def _engine_title(name: str) -> str:
+    """A plugin's display title for words a person reads, never its id."""
+    try:
+        from core.plugin_loader import plugin_loader
+        info = plugin_loader.get_plugin_info(name) or {}
+        return _plugin_display_title(info.get("manifest") or {}, name)
+    except Exception:
+        return name
+
+
 def _cap_title(s: str, n: int = 40) -> str:
     s = (s or "").strip()
     return (s[:n].rstrip() + "…") if len(s) > n else s
@@ -484,8 +494,8 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
                 if partner:
                     raise HTTPException(
                         status_code=409,
-                        detail=(f"Turn off {partner} first — it and {plugin_name} are "
-                                f"alternate engines that share tool names, so only one "
+                        detail=(f"Turn off {_engine_title(partner)} first: it and "
+                                f"{_engine_title(plugin_name)} take turns, so only one "
                                 f"runs at a time."))
             if currently_enabled:
                 if plugin_name in enabled:
@@ -543,7 +553,7 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
                             # Manifest-only registration just replaced whatever
                             # the plugin had rendered at runtime — let it
                             # re-assert (Sapph-not-Rose toggle leg, 2026-08-05).
-                            plugin_loader._fire_plugins_ready("toggle")
+                            plugin_loader._fire_plugins_ready("toggle", plugin=plugin_name)
                         if not loaded:
                             # Load failed (verification/deps). Leave plugins.json
                             # alone — user intent (enabled) survives so a fix +
@@ -611,6 +621,34 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
         except Exception as e:
             logger.warning(f"Live plugin toggle failed for {plugin_name}: {e}")
 
+        # A group member (the memory engines) turned off while its partner is
+        # off too leaves Sapphire with no engine, and nothing said so: the
+        # next boot's pin takes the silence as a choice (hunt 2026-11-01, B5).
+        warning = None
+        try:
+            from core.plugin_loader import plugin_loader as _pl2
+            group = ((_pl2.get_plugin_info(plugin_name) or {}).get("manifest") or {}).get("essential")
+            if isinstance(group, str) and group:
+                from core import notify
+                if group == "memory":
+                    # The verdict's durable home (hunt of the hunt H8): the
+                    # loader makes the lists agree with it at every boot.
+                    _pl2.write_engine(plugin_name if new_state else (_group_partner_on(plugin_name) or "none"),
+                                      "toggle")
+                if new_state:
+                    notify.forget(f"{group}-engine-off")
+                elif not _group_partner_on(plugin_name):
+                    others = [p["name"] for p in _pl2.get_all_plugin_info()
+                              if p and p.get("name") != plugin_name
+                              and (p.get("manifest") or {}).get("essential") == group]
+                    warning = (f"{_engine_title(plugin_name)} is off and "
+                               f"{' / '.join(_engine_title(o) for o in others) or 'no alternate'} is not on, "
+                               f"so Sapphire has no {group} now. Turn one on; only one runs at a time.")
+                    notify.notify(f"No {group} engine is on", level="warning", body=warning, source="plugins",
+                                  key=f"{group}-engine-off", go={'view': 'settings', 'tab': 'plugins'})
+        except Exception as e:
+            logger.debug(f"engine-off notice skipped: {e}")
+
         # Check for missing deps + env status after toggle-on
         missing_deps = []
         env_info = None
@@ -626,7 +664,7 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
 
         return {"status": "success", "plugin": plugin_name, "enabled": new_state,
                 "reload_required": reload_required, "missing_deps": missing_deps,
-                "env": env_info}
+                "env": env_info, "warning": warning}
     finally:
         lock.release()
 

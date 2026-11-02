@@ -52,7 +52,7 @@ function content() { return container?.querySelector('#pal-ent-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'people', help: helpPills('Entities', { doc: 'MEMORY.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — the people, places, and things she knows. Mentions in new memories weave entities into the graph automatically.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'people', help: helpPills('Entities', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — the people, places, and things she knows. Mentions in new memories weave entities into the graph automatically.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">

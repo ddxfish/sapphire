@@ -690,6 +690,7 @@ class FunctionManager:
                             )
 
                 logger.info(f"Plugin '{plugin_name}' tool '{module_name}': {len(tools)} tools registered")
+                self._startup_tool_module(canonical_name, plugin_name)
 
             except ModuleNotFoundError as e:
                 logger.error(f"Missing dependency for plugin tool '{tool_path}': {e}")
@@ -699,6 +700,25 @@ class FunctionManager:
                 logger.error(f"Failed to load plugin tool '{tool_path}': {e}", exc_info=True)
                 _tool_load_error(plugin_name, f"Its tools in {tool_path} failed to load: {e}",
                                  "The plugin is on, but the AI can't use these tools until it's fixed")
+
+    @staticmethod
+    def _startup_tool_module(canonical, plugin_name):
+        """A tool module that registers something with core (a contacts
+        provider, an audit sink, a timer) does it in its optional
+        module-level on_load(), which runs every time the loader registers
+        the module: fresh, or REUSED from sys.modules. Registration at import
+        time was the bug: a module imported while its plugin was off (a lazy
+        import from a leftover thread) registered nothing, and the loader
+        then reused that silent copy for the rest of the session (hunt of
+        the hunt 2026-11-01, H2). The mirror of shutdown(). Never raises."""
+        import sys
+        fn = getattr(sys.modules.get(canonical or ''), 'on_load', None)
+        if not callable(fn):
+            return
+        try:
+            fn()
+        except Exception as e:
+            logger.warning(f"Plugin '{plugin_name}' tool module on_load() failed: {e}")
 
     @staticmethod
     def _shutdown_tool_module(canonical, plugin_name):
@@ -1228,7 +1248,15 @@ class FunctionManager:
         if not m:
             return None
         if m['category'] in CATEGORY_SCOPE:
-            return CATEGORY_SCOPE[m['category']]
+            key = CATEGORY_SCOPE[m['category']]
+            if key in SCOPE_REGISTRY or not m['plugin']:
+                return key
+            # The category's scope is not registered: the palace keeps goals
+            # and knowledge under its one memory scope, so a task that shut
+            # memory sheds those tools too (migration hunt 2026-11-01, D3).
+            if SCOPE_REGISTRY.get('memory', {}).get('plugin') == m['plugin']:
+                return 'memory'
+            return key
         if m['plugin']:
             own = [k for k, r in SCOPE_REGISTRY.items() if r.get('plugin') == m['plugin'] and r.get('setting')]
             if len(own) == 1:

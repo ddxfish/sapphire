@@ -111,6 +111,25 @@ function _sortPlugins(plugins) {
     );
 }
 
+// Alternates sharing a group-string `essential` (the two memory engines)
+// render as one pair under one head. Alphabetical order used to put MIDI
+// between them, and "one of these" was a clause cut off at the end of a
+// description (migration hunt 2026-11-01, B3).
+function _renderRows(sorted, ctx) {
+    const out = [], done = new Set();
+    for (const p of sorted) {
+        if (done.has(p.name)) continue;
+        const group = typeof p.essential === 'string' ? p.essential : '';
+        const mates = group ? sorted.filter(q => q.essential === group) : [p];
+        mates.forEach(q => done.add(q.name));
+        const rows = mates.map(q => _renderRow(q, ctx.lockedPlugins.includes(q.name))).join('');
+        out.push(mates.length > 1
+            ? `<div class="pm-pair" data-group="${_esc(group)}"><div class="pm-pair-head">${_esc(group)} engine: one of these runs at a time</div>${rows}</div>`
+            : rows);
+    }
+    return out.join('');
+}
+
 function _trustClass(p, locked) {
     if (locked) return 'pm-trust-core';
     const tier = p.verify_tier;
@@ -256,6 +275,9 @@ function _applySearch(el, ctx) {
         const match = !p || _matchesSearch(p, searchTerm);
         row.style.display = match ? '' : 'none';
         if (match) shown++;
+    });
+    el.querySelectorAll('.pm-pair').forEach(pair => {
+        pair.style.display = [...pair.querySelectorAll('.pm-row')].some(r => r.style.display !== 'none') ? '' : 'none';
     });
     const empty = el.querySelector('.pm-search-empty');
     if (empty) empty.style.display = (rows.length && !shown) ? '' : 'none';
@@ -724,7 +746,7 @@ export default {
                 </div>
             </div>
             <div class="pm-list">
-                ${sorted.length ? sorted.map(p => _renderRow(p, ctx.lockedPlugins.includes(p.name))).join('')
+                ${sorted.length ? _renderRows(sorted, ctx)
                     : '<p class="text-muted" style="text-align:center;padding:24px 0;">No plugins match this filter.</p>'}
                 <p class="pm-search-empty text-muted" style="display:none;text-align:center;padding:24px 0;">No plugins match this search.</p>
             </div>
@@ -1299,9 +1321,14 @@ export default {
                     throw new Error(body.detail || body.error || res.status);
                 }
                 const data = await res.json();
+                // data.warning rides for API callers; the notification row the
+                // route posted is the toast (shared/notify.js renders it once).
 
                 const cached = ctx.pluginList.find(p => p.name === name);
                 if (cached) cached.enabled = data.enabled;
+                // An engine switch: the Mind views' 3 s probe cache must not
+                // keep showing the old engine's tabs (hunt D7).
+                if (typeof cached?.essential === 'string') window._palaceProbe = null;
 
                 if (data.enabled && cached?.settingsUI) {
                     await ctx.loadPluginTab(name, cached.settingsUI);

@@ -2140,3 +2140,10 @@ def preview_message(scope, kind, stage=None, limit=3):
     label = _PASS_LABELS.get(kind, kind)
     header = f"(queue empty — charter shape) {label} — scope '{scope}'"
     return {'text': charter_render(scope, stage_key, header, {}), 'live': False}
+
+
+def shutdown():
+    """Unload or app exit: a running drain stops after its batch. A palace
+    unloaded by the engine switch kept draining mind.db, and a re-enable
+    could run a second drain beside the zombie (migration hunt 2026-11-01, D6)."""
+    drain_stop()

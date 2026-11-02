@@ -40,6 +40,10 @@ def get_people(scope: str = 'default') -> list:
         try:
             return fn(scope)
         except Exception as e:
-            logger.warning(f"[CONTACTS] Provider '{name}' failed ({e}); falling back to classic store")
+            # Fail closed: once an engine holds the people, the classic book
+            # is history, and a whitelist answered from it let a stale name
+            # through (migration hunt 2026-11-01, D2).
+            logger.warning(f"[CONTACTS] Provider '{name}' failed ({e}); no people this call")
+            return []
     from plugins.memory.tools.knowledge_tools import get_people as classic_get_people
     return classic_get_people(scope)

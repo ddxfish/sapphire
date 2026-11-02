@@ -390,8 +390,28 @@ def _boot_resume():
         logger.warning(f"[LIBRARY] watch scan skipped: {e}")
 
 
-if 'pytest' not in __import__('sys').modules:   # tests drive the queue by hand
+_boot_timer = None
+
+
+def on_load():
+    """The loader calls this each time it registers this module: the boot
+    resume timer is armed here, never at import, so a stray import while
+    the palace is off starts nothing (hunt of the hunt 2026-11-01, H2)."""
+    global _boot_timer
+    if 'pytest' in __import__('sys').modules:   # tests drive the queue by hand
+        return
+    if _boot_timer is not None:
+        _boot_timer.cancel()
+    _boot_timer = threading.Timer(15.0, _boot_resume)
+    _boot_timer.start()
+
+
+def shutdown():
+    """Unload or app exit: the boot timer is cancelled and the Library's
+    import drain stops after its slice (migration hunt 2026-11-01, D6)."""
+    if _boot_timer is not None:
+        _boot_timer.cancel()
     try:
-        threading.Timer(15.0, _boot_resume).start()
+        _lib().shutdown()
     except Exception:
         pass

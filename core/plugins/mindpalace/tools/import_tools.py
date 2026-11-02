@@ -74,11 +74,9 @@ def _source_path(config, filename: str) -> Path:
 def _connect_ro(path: Path):
     """Open a source DB strictly read-only. mode=ro forbids any write; if the
     file is missing sqlite raises OperationalError, which the caller treats as
-    'store absent' (skip, not error)."""
-    # as_uri percent-encodes '#', '?' and '%' in the install path — bare
-    # f'file:{path}' truncated at the first one and opened (created!) a
-    # different file read-write.
-    return sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True)
+    'store absent' (skip, not error). ro_uri keeps a UNC install readable."""
+    from core.fs_utils import ro_uri
+    return sqlite3.connect(ro_uri(path), uri=True)
 
 
 def _columns(cursor, table: str) -> set:
@@ -150,15 +148,29 @@ def _normalize_ts(raw):
 
 # ─── Provenance triple (all-or-nothing) ──────────────────────────────────────
 
+def _active_provenance():
+    """(provider_id, dim) of the embedder the palace writes with, (None, None)
+    when there is none. Tests patch this."""
+    from plugins.mindpalace.tools import palace_tools
+    return palace_tools._active_provenance()
+
+
 def _provenance(row: dict):
     """Carry (embedding, embedding_provider, embedding_dim) byte-for-byte only
-    if all three are present; otherwise all three NULL (backfill re-embeds)."""
+    if all three are present AND they are the active embedder's; otherwise
+    all three NULL and the backfill embeds the row. A vector stamped by a
+    provider the user has since left is one recall can never match, and the
+    backfill only fills NULLs: copied verbatim, those rows were invisible to
+    semantic search for good (migration hunt 2026-11-01, C3)."""
     emb = _get(row, 'embedding')
     prov = _get(row, 'embedding_provider')
     dim = _get(row, 'embedding_dim')
-    if emb is not None and prov is not None and dim is not None:
-        return emb, prov, dim
-    return None, None, None
+    if emb is None or prov is None or dim is None:
+        return None, None, None
+    pid, adim = _active_provenance()
+    if (pid and prov != pid) or (adim and dim != adim):
+        return None, None, None
+    return emb, prov, dim
 
 
 # ─── Insert helper ────────────────────────────────────────────────────────────
@@ -375,19 +387,18 @@ def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen, skip_keys
         return None
 
     # The Library's boot migration reads knowledge.db DIRECTLY (before this
-    # import ever runs on a fresh cycle) — if it already holds this content,
-    # flag the palace copies library_migrated so reads defer to the Library
-    # instead of serving the same knowledge twice. Flag only when the v1
-    # migration verifiably ran with the source present; when unsure, prefer
-    # a doubled surface over dark content.
-    lib_has_v1 = False
+    # import ever runs on a fresh cycle) and files each (scope, tab, source)
+    # group as a document under a libmig:v1 key. The palace copy of exactly
+    # those groups is flagged library_migrated so reads defer to the Library
+    # instead of serving the same knowledge twice. One whole-run flag here
+    # also hid knowledge added AFTER that migration: in mind.db, out of every
+    # read, in no Library (migration hunt 2026-11-01, C1). When unsure,
+    # a doubled surface beats dark content.
     try:
         from plugins.mindpalace.tools import library
-        rep = library.migration_report() or {}
-        lib_has_v1 = bool(rep.get('ran_at')) and \
-            not (rep.get('v1') or {}).get('absent', True)
+        lib_keys = library._existing_import_keys()
     except Exception:
-        pass
+        lib_keys = set()
 
     copied = skipped = failed = 0
     with _connect_ro(path) as src:
@@ -447,7 +458,7 @@ def _import_knowledge(config, dest_cursor, existing_keys, scopes_seen, skip_keys
 
             created, original = _normalize_ts(_get(row, 'created_at', 'updated_at'))
             meta = {"import_key": key, "tab": tab_name, "tab_type": tab_type}
-            if lib_has_v1:
+            if f"libmig:v1:{scope}:{row.get('tab_id')}:{source or f'entry:{old_id}'}" in lib_keys:
                 meta["library_migrated"] = "v1-boot"
             if original is not None:
                 meta["original_timestamp"] = original
@@ -699,6 +710,32 @@ def forget_seen(cursor, scope, layer=None):
     return cursor.rowcount
 
 
+def mute_scope(cursor, scope):
+    """A scope the user deleted from the palace. Its classic rows read NEW on
+    the Import tab again (forget_seen: a tester may bring them back), but
+    the boot nudge stays quiet about them: deleting a palace scope used to
+    re-arm "memories are waiting" every boot, forever, pushing the user to
+    re-import what they had just deleted (migration hunt 2026-11-01, C2).
+    Importing into the scope again lifts the mute."""
+    cursor.execute(_SEEN_SCHEMA)
+    cursor.execute('INSERT OR REPLACE INTO import_seen (key, scope, store, fp, ts, src) '
+                   'VALUES (?, ?, ?, NULL, ?, ?)',
+                   (f'muted:{scope}', scope, '__muted__', palace_now(), 'delete_scope'))
+
+
+def unmute_scopes(cursor, scopes):
+    if not scopes:
+        return
+    cursor.execute(_SEEN_SCHEMA)
+    cursor.execute(f"DELETE FROM import_seen WHERE store = '__muted__' AND scope IN "
+                   f"({','.join('?' * len(scopes))})", tuple(scopes))
+
+
+def muted_scopes(cursor):
+    cursor.execute(_SEEN_SCHEMA)
+    return {r[0] for r in cursor.execute("SELECT scope FROM import_seen WHERE store = '__muted__'")}
+
+
 def _seed_seen_once(cursor, rows, have, tomb):
     """First classification after the upgrade: the table does not exist
     yet, so build it from what can still be known — every classic row the
@@ -839,9 +876,11 @@ def _classify(config):
         if catch_up:
             record_seen(cur, catch_up, src='palace')
             seen.update((r['key'], r['fp']) for r in catch_up)
+        muted = muted_scopes(cur)
         conn.commit()
     by_key = {}
     for r in rows:
+        r['muted'] = r['scope'] in muted
         if not r['valid']:
             r['cls'] = 'invalid'
         elif r['key'] in have:
@@ -881,8 +920,10 @@ def preview(config) -> dict:
                                                          'knowledge': 'knowledge.db',
                                                          'goals': 'goals.db'}[s]).exists(),
                      'scopes': dict(sorted(scopes.items()))}
+        muted = {r['scope'] for r in rows if r.get('muted')}
         for k in ('total', 'imported', 'pending', 'removed', 'tombstoned'):
-            stores[s][k] = sum(v[k] for v in scopes.values())
+            stores[s][k] = sum(v[k] for sc, v in scopes.items() if not (k == 'pending' and sc in muted))
+        stores[s]['pending_muted'] = sum(v['pending'] for sc, v in scopes.items() if sc in muted)
     files = {}
     for name in _SOURCE_FILES:
         p = _source_path(config, name)
@@ -891,7 +932,9 @@ def preview(config) -> dict:
     with _state_lock:
         st = dict(_run_state)
     return {'stores': stores, 'files': files, 'rag_rows': rag,
-            'pending': sum(stores[s]['pending'] for s in STORES),
+            'muted': sorted({r['scope'] for r in rows if r.get('muted')}),
+            'pending': sum(stores[s]['pending'] for s in STORES),          # scopes deleted from the palace excluded
+            'pending_muted': sum(stores[s]['pending_muted'] for s in STORES),
             'removed': sum(stores[s]['removed'] for s in STORES),
             'tombstoned': sum(stores[s]['tombstoned'] for s in STORES),
             'running': st['running'],
@@ -985,11 +1028,10 @@ def nudge_if_pending(config):
     except Exception as e:
         logger.debug(f"[MINDPALACE] import nudge skipped: {e}")
         return None
-    if p['pending'] <= 0:
+    if p['pending'] <= 0:                      # scopes deleted from the palace are already left out
         _dismiss_nudge(notify)
         return None
-    bits = [f"{p['stores'][s]['pending']} {s}" for s in STORES
-            if p['stores'][s]['pending']]
+    bits = [f"{p['stores'][s]['pending']} {s}" for s in STORES if p['stores'][s]['pending']]
     return notify.notify(
         "Classic memories are waiting to be imported", 'warning',
         f"{', '.join(bits)} from Memory (legacy) are not in the Mind Palace "
@@ -1108,7 +1150,7 @@ def _run_import_locked(what: str, config, progress=None, scope=None,
     # What stays out (2026-10-30): tombstoned keys always; rows the user
     # removed before unless asked; other scopes when one scope was asked.
     cls, _rag = _classify(config)
-    left = {'removed': 0, 'tombstoned': 0, 'other scopes': 0}
+    left = {'removed': 0, 'tombstoned': 0, 'other scopes': 0, 'deleted scopes': 0}
     skip_keys = set()
     for r in cls:
         if r['cls'] == 'tombstoned':
@@ -1117,6 +1159,10 @@ def _run_import_locked(what: str, config, progress=None, scope=None,
             skip_keys.add(r['key']); left['removed'] += 1
         elif scope and r['scope'] != scope:
             skip_keys.add(r['key']); left['other scopes'] += 1
+        elif r.get('muted') and not scope:
+            # Deleted from the palace on purpose: "Import all" leaves it out;
+            # that scope's own Import button brings it back (hunt H14).
+            skip_keys.add(r['key']); left['deleted scopes'] += 1
     skip_keys = frozenset(skip_keys)
 
     # Totals first so the bar has a denominator.
@@ -1170,6 +1216,7 @@ def _run_import_locked(what: str, config, progress=None, scope=None,
                 "SELECT json_extract(meta, '$.import_key') FROM chunks "
                 "WHERE json_extract(meta, '$.import_key') LIKE 'v2:%'")}
             record_seen(cursor, [r for r in cand if r['key'] in now_have])
+        unmute_scopes(cursor, sorted(scopes_seen))      # asked for again: the nudge may speak of it
         # Register every distinct scope so the UI dropdown lists it. create_scope
         # opens its own connection; call after our writes are in the cursor but
         # commit first so the scopes and chunks land together-ish.
@@ -1177,6 +1224,15 @@ def _run_import_locked(what: str, config, progress=None, scope=None,
 
     for s in sorted(scopes_seen):
         palace_tools.create_scope(s)
+    # The chat sidebar's scope pickers listen for this. The palace's own scope
+    # route publishes it; the import did not, so an imported scope stayed
+    # off the dropdown until something else refreshed it (hunt B10).
+    try:
+        from core.event_bus import publish, Events
+        for s in sorted(scopes_seen):
+            publish(Events.SCOPE_CHANGED, {"kind": "memory", "action": "created", "name": s})
+    except Exception as e:
+        logger.debug(f"[IMPORT] scope change not published: {e}")
 
     # Ledger v1: one summary row per scope the run touched (ledger rows are
     # scope-keyed; the run's store totals ride on each).

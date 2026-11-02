@@ -55,7 +55,7 @@ function content() { return container?.querySelector('#pal-lib-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'knowledge', help: helpPills('Knowledge', { doc: 'MEMORY.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — the Library (L3). Books, notes, and reference docs — hers to search, read, and shelve.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'knowledge', help: helpPills('Knowledge', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — the Library (L3). Books, notes, and reference docs — hers to search, read, and shelve.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">

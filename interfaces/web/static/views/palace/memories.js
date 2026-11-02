@@ -49,7 +49,7 @@ function content() { return container?.querySelector('#pal-mem-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'memories', help: helpPills('Memories', { doc: 'MEMORY.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — her diary, one stream. Deliberate self notes ride along (chip says which); the self SHEET lives on the Self tab. Expand "meta" on any card to see how a memory was made.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'memories', help: helpPills('Memories', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — her diary, one stream. Deliberate self notes ride along (chip says which); the self SHEET lives on the Self tab. Expand "meta" on any card to see how a memory was made.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">
@@ -63,6 +63,30 @@ function render() {
         onChanged: async (s) => { scope = s || 'default'; rememberMindScope(scope); resetFilters(); scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderList();
+}
+
+// An empty palace right after the switch used to say "No memories yet" and
+// nothing else; the classic rows were a tab away (migration hunt B7). One
+// preview per minute, only while the list is empty.
+let _waiting = null;
+async function _paintWaiting(el) {
+    if (!_waiting || Date.now() - _waiting.ts > 60000) {
+        try {
+            const p = await palaceGet('import/preview');
+            const bits = Object.entries(p.stores || {})
+                .filter(([, s]) => s && !s.absent && s.pending)
+                .map(([k, s]) => `${s.pending} ${k}`);
+            _waiting = { ts: Date.now(), pending: p.pending || 0, bits };
+        } catch { _waiting = { ts: Date.now(), pending: 0, bits: [] }; }
+    }
+    const slot = el.querySelector('#pal-mem-waiting');
+    if (!slot || !_waiting.pending) return;
+    slot.innerHTML = `<div style="margin-top:8px">${escHtml(_waiting.bits.join(', '))} from Memory (legacy) are waiting to come across.
+        <button class="mind-btn-sm" id="pal-mem-import">Open Import</button></div>`;
+    slot.querySelector('#pal-mem-import')?.addEventListener('click', async () => {
+        const router = await import('../../core/router.js');
+        router.switchView('import');
+    });
 }
 
 async function renderList() {
@@ -106,7 +130,7 @@ async function renderList() {
         </div>
         ${chunks.length
             ? `<div class="palace-chunk-list">${chunks.map(c => chunkCard(c)).join('')}</div>`
-            : `<div class="ui-empty">${_search ? 'No matches' : (_retired ? 'Nothing retired' : 'No memories yet')}</div>`}
+            : `<div class="ui-empty">${_search ? 'No matches' : (_retired ? 'Nothing retired' : 'No memories yet<div id="pal-mem-waiting"></div>')}</div>`}
         ${(!_search && _offset + PAGE < data.total)
             ? `<div class="palace-more-wrap"><button class="mind-btn" id="pal-mem-more">Load more (${data.total - _offset - PAGE} older)</button></div>`
             : ''}
@@ -139,6 +163,7 @@ async function renderList() {
         _offset += PAGE; renderList();
     });
     bindChunkCards(el, renderList, ui);
+    if (!chunks.length && !_search && !_retired) _paintWaiting(el);
 }
 
 function showAddModal() {

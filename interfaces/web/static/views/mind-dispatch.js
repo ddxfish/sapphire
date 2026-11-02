@@ -30,12 +30,15 @@ const PALACE = {
     admin: `./palace/admin.js${_v}`,
 };
 
-// Palace-only views: friendly pointer instead of a missing classic module.
+// Palace-only views: one pointer with the switch in the right order and a
+// button to it, instead of three wordings that each sent the user into the
+// 409 (migration hunt 2026-11-01, B12).
 const PALACE_ONLY = {
-    self: ['\u{1F4A0} Self', 'The self layer lives in the Mind Palace memory system. Enable the Mind Palace plugin to give Sapphire a self-sheet.'],
-    import: ['\u{1F4E6} Import', 'The Import tab brings Memory (legacy) data into the Mind Palace. Enable the Mind Palace plugin (and disable Memory (legacy) — they take turns) to see what would come across and bring it in. The old databases are never changed.'],
-    admin: ['\u{1F6E0}️ Admin', 'The Admin console belongs to the Mind Palace memory system. Enable the Mind Palace plugin to manage the librarian, migration, and rescue tools.'],
+    self: ['\u{1F4A0} Self', 'The self sheet, who she is in her own words, lives in Mind Palace.'],
+    import: ['\u{1F4E6} Import', 'Import brings Memory (legacy) data into Mind Palace; the old databases are opened read-only and never changed.'],
+    admin: ['\u{1F6E0}️ Admin', 'The Admin console (librarian, migration, rescue) belongs to Mind Palace.'],
 };
+const SWITCH_NOTE = 'Mind Palace is off. In Settings › Plugins turn off Memory (legacy), then turn on Mind Palace: the two take turns, and the switch is live.';
 
 let container = null;
 let impl = null;        // the active implementation module's default export
@@ -68,7 +71,13 @@ export default {
             container.innerHTML = `<div class="view-placeholder">
                 <h2>${title}</h2>
                 <p style="color:var(--text-muted);font-size:var(--font-sm)">${note}</p>
+                <p style="color:var(--text-muted);font-size:var(--font-sm)">${SWITCH_NOTE}</p>
+                <button class="mind-btn" id="mind-open-plugins">Open Settings › Plugins</button>
             </div>`;
+            container.querySelector('#mind-open-plugins')?.addEventListener('click', async () => {
+                const notify = await import('../shared/notify.js');
+                notify.goTo({ view: 'settings', tab: 'plugins' });
+            });
             return;
         }
         if (implKind !== wantKind) {

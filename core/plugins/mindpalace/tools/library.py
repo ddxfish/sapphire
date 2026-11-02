@@ -56,6 +56,7 @@ _db_path = None            # tests monkeypatch; None = beside mind.db
 _db_initialized = False
 _worker_lock = threading.Lock()
 _worker_running = False
+_stopping = False               # shutdown(): the drain ends after its slice
 
 
 def _now():
@@ -1428,16 +1429,17 @@ def work_once() -> bool:
 def ensure_worker():
     """Spawn the drain thread if it isn't running. Daemon — dies with the app;
     the jobs table IS the durable state, so nothing is lost."""
-    global _worker_running
+    global _worker_running, _stopping
     with _worker_lock:
         if _worker_running:
             return
         _worker_running = True
+        _stopping = False
 
     def _drain():
         global _worker_running
         try:
-            while True:
+            while not _stopping:
                 try:
                     if not work_once():
                         break
@@ -1449,6 +1451,13 @@ def ensure_worker():
                 _worker_running = False
 
     threading.Thread(target=_drain, name='library-import', daemon=True).start()
+
+
+def shutdown():
+    """Unload or app exit: the import drain stops after its slice. The jobs
+    table is the durable state, so nothing is lost (migration hunt D6)."""
+    global _stopping
+    _stopping = True
 
 
 def resume_pending():

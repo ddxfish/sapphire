@@ -449,8 +449,9 @@ async def _guard_embedding_swap(settings, new_provider, confirmed: bool):
         tables = report.get('tables', {}) or {}
         def _count(t):
             return (t.get('matching_active') or 0) + (t.get('legacy_unstamped') or 0)
-        affected = sum(_count(tables.get(t, {})) for t in ('memories', 'knowledge_entries', 'people'))
-        if affected > 0:
+        affected = sum(_count(tables.get(t, {})) for t in ('memories', 'knowledge_entries', 'people', 'palace_chunks'))
+        uncounted = [t for t, v in tables.items() if isinstance(v, dict) and v.get('error')]
+        if affected > 0 or uncounted:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -458,8 +459,9 @@ async def _guard_embedding_swap(settings, new_provider, confirmed: bool):
                     "affected_vectors": affected,
                     "message": (
                         f"Swapping EMBEDDING_PROVIDER would make {affected} stored "
-                        "vectors invisible to semantic search until re-embedded. "
-                        "Resubmit with `confirm_embedding_swap: true` to proceed."
+                        "vectors invisible to semantic search until re-embedded"
+                        + (f" (and {', '.join(uncounted)} could not be counted)" if uncounted else "")
+                        + ". Resubmit with `confirm_embedding_swap: true` to proceed."
                     ),
                 },
             )

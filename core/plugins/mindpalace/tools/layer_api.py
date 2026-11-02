@@ -22,6 +22,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# The documented guard around this import is `except ImportError`, and it
+# could never fire: a namespace package always imports. Now it does: with
+# the palace switched off this module refuses to load, so a mirror plugin's
+# writes have nowhere to go instead of landing in mind.db under the other
+# engine (migration hunt 2026-11-01, D1).
+def _switched_off():
+    try:
+        from core.plugin_loader import plugin_loader
+        return not plugin_loader.switched_on('mindpalace')
+    except Exception:
+        return False
+
+
+if _switched_off():
+    raise ImportError("Mind Palace is switched off: layer_api is unavailable until it is on")
+
+
 def _pt():
     from plugins.mindpalace.tools import palace_tools
     return palace_tools

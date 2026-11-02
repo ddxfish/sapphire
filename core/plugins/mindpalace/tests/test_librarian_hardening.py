@@ -679,3 +679,80 @@ def test_one_date_verdict_per_memory_per_pass(palace):
     assert not ok and 'already filed' in msg
     assert _meta(a)['event_dates'] == ['2026-03-03']
     lt.close_pass()
+
+
+def test_backfill_re_embeds_rows_stamped_by_another_provider(palace, monkeypatch):
+    """The latch holds the provenance it completed under: a provider swap
+    re-opens it, and rows under the old provider are re-embedded alongside
+    the NULL ones (migration hunt 2026-11-01, C3)."""
+    import numpy as np
+
+    def live(pid):
+        return type('E', (), {'provider_id': pid, 'dimension': 3, 'available': True,
+                              'embed': lambda self, t, prefix='': [np.ones(3, dtype=np.float32) for _ in t]})()
+    monkeypatch.setattr(pt, '_get_embedder', lambda: live('fake2'), raising=False)
+    monkeypatch.setattr(pt, '_backfill_done', False, raising=False)
+    with pt._get_connection() as conn:
+        now = pt._now()
+        conn.execute("INSERT INTO chunks (layer, scope, content, created, updated, embedding, "
+                     "embedding_provider, embedding_dim) VALUES ('events', 'default', 'old vector', ?, ?, ?, 'old', 3)",
+                     (now, now, b'\x00' * 12))
+        conn.execute("INSERT INTO chunks (layer, scope, content, created, updated) "
+                     "VALUES ('events', 'default', 'never embedded', ?, ?)", (now, now))
+        conn.commit()
+    pt._backfill_embeddings()
+    with pt._get_connection() as conn:
+        stamps = {r[0] for r in conn.execute("SELECT embedding_provider FROM chunks")}
+    assert stamps == {'fake2'} and pt._backfill_done == ('fake2', 3)
+    monkeypatch.setattr(pt, '_get_embedder', lambda: live('fake3'), raising=False)
+    pt._backfill_embeddings()                                   # the swap re-opens the latch
+    with pt._get_connection() as conn:
+        stamps = {r[0] for r in conn.execute("SELECT embedding_provider FROM chunks")}
+    assert stamps == {'fake3'} and pt._backfill_done == ('fake3', 3)
+
+
+def test_sweep_never_overwrites_an_edit_made_during_the_pass(palace, monkeypatch):
+    """The sweep snapshots (id, text) then wrote unconditionally: an edit in the
+    middle got the OLD text's vector over its new one (hunt of the hunt H4).
+    Now a row is written only if its words are still the ones embedded, and
+    the next pass picks up the new text."""
+    import numpy as np
+    seen = []
+
+    class _Live:
+        provider_id, dimension, available = 'fake2', 3, True
+
+        def embed(self, texts, prefix=''):
+            seen.append(list(texts))
+            if len(seen) == 1:                       # the edit lands while we embed the old words
+                with pt._get_connection() as conn:
+                    conn.execute("UPDATE chunks SET content = 'new words', embedding = NULL, "
+                                 "embedding_provider = NULL, embedding_dim = NULL WHERE content = 'old words'")
+                    conn.commit()
+            return [np.ones(3, dtype=np.float32) for _ in texts]
+    monkeypatch.setattr(pt, '_get_embedder', lambda: _Live(), raising=False)
+    monkeypatch.setattr(pt, '_backfill_done', False, raising=False)
+    with pt._get_connection() as conn:
+        now = pt._now()
+        conn.execute("INSERT INTO chunks (layer, scope, content, created, updated) "
+                     "VALUES ('events', 'default', 'old words', ?, ?)", (now, now))
+        conn.commit()
+    pt._backfill_embeddings()
+    with pt._get_connection() as conn:
+        rows = conn.execute("SELECT content, embedding_provider FROM chunks").fetchall()
+    assert rows == [('new words', 'fake2')] and seen == [['old words'], ['new words']]
+    assert pt._backfill_done == ('fake2', 3)
+
+
+def test_one_sweep_at_a_time_whoever_asks(palace, monkeypatch):
+    """The import kick started a second sweep beside the search's (H5)."""
+    monkeypatch.setattr(pt, '_backfill_done', False, raising=False)
+    monkeypatch.setattr(pt, '_backfill_running', True, raising=False)   # one is running
+    calls = []
+    monkeypatch.setattr(pt, '_sweep', lambda: calls.append(1))
+    pt._backfill_embeddings()
+    pt._backfill_embeddings(background=True)
+    assert calls == []
+    monkeypatch.setattr(pt, '_backfill_running', False, raising=False)
+    pt._backfill_embeddings()
+    assert calls == [1] and pt._backfill_running is False

@@ -31,11 +31,13 @@ async function loadIntegrityStatus(el) {
         const mem = t.memories || {};
         const know = t.knowledge_entries || {};
         const people = t.people || {};
-        const matching = (mem.matching_active || 0) + (know.matching_active || 0) + (people.matching_active || 0);
+        const palace = t.palace_chunks || {};      // Mind Palace re-embeds its own rows in the background
+        const matching = (mem.matching_active || 0) + (know.matching_active || 0) + (people.matching_active || 0) + (palace.matching_active || 0);
         const legacy = (mem.legacy_unstamped || 0) + (know.legacy_unstamped || 0) + (people.legacy_unstamped || 0);
         const other = (mem.other_stamps || 0) + (know.other_stamps || 0) + (people.other_stamps || 0);
-        const orphaned = legacy + other;
-        const total = matching + orphaned;
+        const palaceStale = (palace.legacy_unstamped || 0) + (palace.other_stamps || 0);
+        const orphaned = legacy + other;           // the Re-embed button walks the classic tables only
+        const total = matching + orphaned + palaceStale;
         if (total === 0) {
             box.innerHTML = `No stored vectors yet. Saving memories will use <code>${active.provider || 'none'}</code>.`;
             if (reembedBtn) reembedBtn.disabled = true;
@@ -53,6 +55,11 @@ async function loadIntegrityStatus(el) {
         if (other > 0) {
             rows.push(
                 `&nbsp;&nbsp;• <span style="color:var(--color-warning,#f59e0b)">${other.toLocaleString()} rows stamped with a different provider</span> — invisible until re-embedded`
+            );
+        }
+        if (palaceStale > 0) {
+            rows.push(
+                `&nbsp;&nbsp;• <span style="color:var(--color-warning,#f59e0b)">${palaceStale.toLocaleString()} Mind Palace rows not under this provider</span> — the palace re-embeds them in the background after its next search`
             );
         }
         box.innerHTML = rows.join('<br>');

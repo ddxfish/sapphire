@@ -1172,6 +1172,55 @@ def execute(function_name, arguments, config):
         finally:
             sys.modules.pop(canonical, None)
 
+    def test_on_load_runs_fresh_and_on_a_reused_module(self, temp_dirs):
+        """A tool module's optional on_load() runs every time the loader
+        registers it, including when it reuses a copy already in sys.modules:
+        a copy imported while the plugin was off registered nothing at import
+        and was then reused silent all session (hunt of the hunt 2026-11-01, H2)."""
+        import types
+        from core.chat.function_manager import FunctionManager
+        plugin_dir = self._make_tool_plugin(temp_dirs["plugins"], "hook_a", """
+CALLS = []
+TOOLS = [{"type": "function", "function": {"name": "hook_a_ping", "description": "ping", "parameters": {"type": "object", "properties": {}}}}]
+def execute(function_name, arguments, config):
+    return "ok", True
+def on_load():
+    CALLS.append("loaded")
+""")
+        canonical = "plugins.hook_a.tools.hook_a_tool"
+        sys.modules.pop(canonical, None)
+
+        def _fm():
+            with patch.object(FunctionManager, "__init__", lambda self: None):
+                fm = FunctionManager()
+            fm._tools_lock = __import__("threading").Lock()
+            fm.function_modules = {}
+            fm.execution_map = {}
+            fm.all_possible_tools = []
+            fm._enabled_tools = []
+            fm._mode_filters = {}
+            fm._network_functions = set()
+            fm._hidden_tools = set()
+            fm._is_local_map = {}
+            fm._loop_warn_map = {}
+            fm._function_module_map = {}
+            fm._settings_gates = {}
+            fm.current_toolset_name = "none"
+            return fm
+        try:
+            _fm().register_plugin_tools("hook_a", plugin_dir, ["tools/hook_a_tool.py"])
+            assert sys.modules[canonical].CALLS == ["loaded"]           # fresh
+            stub = types.ModuleType(canonical)                           # a stray import's leftover copy
+            stub.CALLS = []
+            stub.TOOLS = sys.modules[canonical].TOOLS
+            stub.execute = lambda fn, args, cfg: ("stub", True)
+            stub.on_load = lambda: stub.CALLS.append("loaded again")
+            sys.modules[canonical] = stub
+            _fm().register_plugin_tools("hook_a", plugin_dir, ["tools/hook_a_tool.py"])
+            assert sys.modules[canonical] is stub and stub.CALLS == ["loaded again"]   # reused, still hooked
+        finally:
+            sys.modules.pop(canonical, None)
+
     def test_unregister_purges_sys_modules(self, temp_dirs):
         """unregister_plugin_tools must purge sys.modules entries so reload actually reloads."""
         from core.chat.function_manager import FunctionManager

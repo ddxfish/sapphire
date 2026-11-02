@@ -60,7 +60,7 @@ function content() { return container?.querySelector('#pal-goal-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'goals', help: helpPills('Goals', { doc: 'MEMORY.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — her goals (L4), woven into the graph. \u{1F512} permanent goals never fade and refuse deletion.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'goals', help: helpPills('Goals', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — her goals (L4), woven into the graph. \u{1F512} permanent goals never fade and refuse deletion.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">

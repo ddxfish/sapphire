@@ -331,20 +331,12 @@ def _install(slug, plugin_settings=None):
             state.save("install_method", install_method)
             state.save("installed_at", datetime.utcnow().isoformat() + "Z")
 
-            # Add to enabled list so it actually loads
-            plugins_json = PROJECT_ROOT / "user" / "webui" / "plugins.json"
-            plugins_json.parent.mkdir(parents=True, exist_ok=True)
-            pdata = {}
-            if plugins_json.exists():
-                try:
-                    pdata = json.loads(plugins_json.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-            enabled = pdata.get("enabled", [])
-            if plugin_name not in enabled:
-                enabled.append(plugin_name)
-                pdata["enabled"] = enabled
-                plugins_json.write_text(json.dumps(pdata, indent=2), encoding="utf-8")
+            # Add to enabled list so it actually loads: through the loader's
+            # writer (lock, BOM-tolerant read, tmp + fsync + rename). The bare
+            # rewrite here turned any parse hiccup into {"enabled": [name]}
+            # and wiped every other plugin's state (hunt of the hunt H9).
+            from core.plugin_loader import plugin_loader
+            plugin_loader._append_plugins_json({"enabled": [plugin_name]})
 
             # Rescan to discover and load the new plugin
             plugin_loader.rescan()

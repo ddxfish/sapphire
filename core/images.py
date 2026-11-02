@@ -190,6 +190,11 @@ def _scope():
 
 
 def _library():
+    from core.plugin_loader import plugin_loader
+    if not plugin_loader.switched_on('mindpalace'):
+        # Importing the palace with its switch off ran its registrations
+        # under the other engine (migration hunt 2026-11-01, D1).
+        raise ImageError("doc:N pictures live in Mind Palace, which is off")
     from plugins.mindpalace.tools import library
     return library
 

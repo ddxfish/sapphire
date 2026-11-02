@@ -291,25 +291,15 @@ export async function wireAIConfig(modal, t, data) {
                 if (!name) return;
                 const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
                 if (!clean || clean.length > 32) { alert('Invalid name'); return; }
-                const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-                const apis = ['/api/memory/scopes', '/api/knowledge/scopes',
-                              '/api/knowledge/people/scopes', '/api/goals/scopes'];
                 try {
-                    const results = await Promise.allSettled(apis.map(url =>
-                        fetch(url, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-                            body: JSON.stringify({ name: clean })
-                        })
-                    ));
-                    const anyOk = results.some(r => r.status === 'fulfilled' && r.value.ok);
-                    if (!anyOk) {
-                        // the first section that answered with a reason (memory v1 may
-                        // just 404 - the others say what was wrong with the name)
-                        const told = results.find(r => r.status === 'fulfilled' && r.value.status !== 404)
-                                  || results.find(r => r.status === 'fulfilled');
-                        const err = told ? await told.value.json().catch(() => ({})) : {};
-                        alert(told ? wordsOf(err, told.value.status) : "Can't reach Sapphire. Check that it's running, then reload the page.");
+                    // Through the shared scope API: it posts to whichever engine
+                    // declares the Mind domains. Four hard-coded classic routes
+                    // here "created" the scope in the classic databases while the
+                    // palace was on (migration hunt 2026-11-01, D5).
+                    const { createScopeEverywhere } = await import('../scope-api.js');
+                    const made = await createScopeEverywhere(clean);
+                    if (!made.ok) {
+                        alert(`Could not create scope '${clean}'. Check the name (lowercase, no spaces) and that Sapphire is running.`);
                         return;
                     }
                     // Add the new option to every mind-domain scope dropdown and

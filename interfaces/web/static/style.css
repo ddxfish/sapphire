@@ -6680,6 +6680,11 @@ span[data-image-gone] {
     transition: opacity 0.2s ease, background 0.15s ease, border-color 0.2s ease;
 }
 .pm-list > div.pm-row:last-of-type { border-bottom: none; }
+/* Alternates sharing a group `essential` (the two memory engines): one pair
+   under one head, so nobody has to guess that they take turns (2026-11-01). */
+.pm-pair { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); margin: 6px 0; }
+.pm-pair-head { font-size: 0.78em; color: var(--text-muted); padding: 6px 14px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.pm-pair > div.pm-row:last-of-type { border-bottom: none; }
 .pm-card.pm-row:hover { background: var(--highlight-subtle); }
 .pm-card.pm-row.pm-enabled { opacity: 1; }
 /* Dimmed (disabled) rows create a stacking context — lift a row while its
