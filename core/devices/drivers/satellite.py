@@ -116,6 +116,10 @@ SPEC = {
         {'key': 'off_after_min', 'takes': 'screen.off_after_min', 'type': 'number', 'label': 'Screen dark after (minutes)', 'capability': 'screen',
          'default': 0, 'min': 0, 'max': 1440,
          'help': '0 = never. The backlight goes out to save power; a touch or her stirring brings it back.'},
+        # the pendant (firmware/pendant): left alone this long it sleeps, screen, camera, mic and WiFi off; its BOOT key wakes it
+        {'key': 'sleep_after_min', 'takes': 'screen.sleep_after_min', 'type': 'number', 'label': 'Sleeps after (minutes)', 'capability': 'screen',
+         'default': 10, 'min': 0, 'max': 1440,
+         'help': '0 = never. A board on a battery: everything off but its brain, and it goes offline here. Its BOOT key wakes it.'},
         {'key': 'rotation', 'takes': 'screen.rotation', 'type': 'select', 'label': 'Rotation', 'capability': 'screen', 'default': '0',
          'options': [{'value': '0', 'label': 'landscape'}, {'value': '90', 'label': 'portrait'},
                      {'value': '180', 'label': 'landscape, upside down'}, {'value': '270', 'label': 'portrait, the other way up'}],
@@ -159,7 +163,7 @@ SPEC = {
     ],
 }
 
-SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min')
+SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min', 'sleep_after_min')
 LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
 INBOUND = ('keyboard', 'buttons', 'picker')   # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed(), pressed(), chats()/pick_chat()
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
@@ -650,6 +654,9 @@ def describe(device, config):
         'shutdown': {'help': 'switch it off. Someone must unplug and replug it to bring it back',
                      'example': ''},
     }}
+    if 'screen.sleep_after_min' in (device.get('takes') or []):     # a board that sleeps (the pendant): its BOOT key wakes it
+        told['power']['actions']['sleep'] = {'help': 'put it to sleep now: screen, camera, mic and WiFi off, so it goes offline here. '
+                                                     'Its BOOT key wakes it', 'example': ''}
     told['ir'] = {'label': 'IR blaster', 'help': 'send infrared remote codes to a TV or other appliance in that room',
                   'actions': {
         'blast': {'help': "send an IR code by name - '<appliance> <command>' from the IR library "
@@ -1708,12 +1715,14 @@ def run(device, capability, action, value, config, secrets, call_tool):
                 return _update(device, config, secrets, value)
             except Missing:
                 return "This board's program has no door for updates over the air. Update it over USB once.", False
-        if capability == 'power' and action in ('restart', 'shutdown'):
+        if capability == 'power' and action in ('restart', 'shutdown', 'sleep'):
             try:
                 out = _json(_call('POST', f'/power?action={action}', config, secrets))
             except Missing:
                 return "This satellite's program is too old to restart or shut down. Update it.", False
             wait = f" in {out['in_s']:g} seconds" if isinstance(out.get('in_s'), (int, float)) else ''
+            if action == 'sleep':
+                return f"{device['id']} is going to sleep{wait}. It goes offline until its BOOT key is pressed.", True
             if action == 'restart':
                 return f"{device['id']} is restarting{wait}. It will be back in about a minute.", True
             return (f"{device['id']} is shutting down{wait}. To bring it back, someone has to "

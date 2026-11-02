@@ -21,7 +21,7 @@ try:
     from core.chat.function_manager import register_plugin_scope
     _TEST_PLUGIN_SCOPES = (
         'memory', 'goal', 'knowledge', 'people',
-        'email', 'bitcoin', 'gcal', 'telegram', 'discord',
+        'email', 'bitcoin', 'gcal', 'telegram', 'discord', 'social',
     )
     for _scope_key in _TEST_PLUGIN_SCOPES:
         register_plugin_scope(_scope_key, plugin_name='pytest-conftest')

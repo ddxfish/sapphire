@@ -110,9 +110,9 @@ const PASSES = [
 // confirm that the server re-checks.
 const OPS = [
     { key: 'migration', icon: '\u{1F4E6}', title: 'Migration',
-      blurb: 'Rebuild derived metadata, and copy knowledge into the Library. The classic Memory (legacy) import lives on the Import tab, with its counts.',
+      blurb: 'Bringing Memory (legacy) across has one door, the Import tab, with its counts. Knowledge becomes Library documents by itself a few seconds after boot. Here: rebuild derived metadata.',
       actions: [
-          { label: 'Copy knowledge into the Library (legacy + older palace chunks)', library: 'migrate' },
+          { label: 'Open the Import tab', go: 'import' },
           { label: 'Generate missing metadata', maint: 'generate_metadata' },
       ] },
     { key: 'rescue', icon: '\u{1F6DF}', title: 'Rescue',
@@ -147,11 +147,6 @@ const MAINT = {
         confirm: s => `Restore all retired memories in scope '${s}'?\n\n` +
             'Every librarian-pruned memory returns to her recall. Atomize/merge ' +
             'retirements are kept — their content lives on in derived entries.',
-    },
-    import_v1: {
-        confirm: () => 'Import everything from Memory (legacy)?\n\n' +
-            'Additive and idempotent — re-running copies zero duplicates. All scopes ' +
-            'are imported. The old databases are opened read-only and are never modified.',
     },
     generate_metadata: {},
     clear_ledger: {
@@ -872,20 +867,9 @@ function setResult(el, key, text) {
 }
 
 async function runAction(el, spec, action) {
-    if (action.library === 'migrate') {
-        showConfirm('Copy knowledge from Memory (legacy) AND older palace knowledge chunks into the Library? '
-            + 'Additive and idempotent — already-copied groups skip. Memory (legacy) stays read-only and keeps '
-            + 'working; nothing is deleted anywhere. Embedding continues in the background.',
-            async () => {
-                try {
-                    const r = await palaceSend('library/migrate', 'POST', {});
-                    const rep = r.report || {};
-                    const f = s => s ? `${s.imported} in · ${s.skipped} skipped · ${s.failed} failed` : '?';
-                    const msg = `palace chunks: ${f(rep.v2)} · legacy: ${rep.v1?.absent ? 'not present' : f(rep.v1)}`;
-                    setResult(el, spec.key, msg);
-                    ui.showToast('Library migration done — embedding continues in background', 'success');
-                } catch (e) { ui.showToast(e.message, 'error'); }
-            }, { title: 'Library migration', saveLabel: 'Copy' });
+    if (action.go) {
+        const router = await import('../../core/router.js');
+        router.switchView(action.go);
         return;
     }
     if (action.drain) {
@@ -975,8 +959,7 @@ async function runAction(el, spec, action) {
         const msg = r.summary || bits.join(' · ') || 'done';
         setResult(el, spec.key, msg);
         ui.showToast(r.summary ? 'Import finished' : `Maintenance: ${msg}`, 'success');
-        if (action.maint === 'wipe_scope' || action.maint === 'import_v1'
-            || action.maint === 'redate_model') refreshRunning(el);
+        if (action.maint === 'wipe_scope' || action.maint === 'redate_model') refreshRunning(el);
     } catch (e) { ui.showToast(e.message, 'error'); }
 }
 

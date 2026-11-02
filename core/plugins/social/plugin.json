@@ -1,0 +1,156 @@
+{
+  "name": "social",
+  "short_display_name": "Social",
+  "version": "1.0.0",
+  "min_core_version": "2.13.0",
+  "description": "Social media — profiles (one per persona) holding connections to Facebook, X, YouTube, Instagram, LinkedIn or any provider plugin; one set of posting tools; an Outbox that holds drafts for approval. Providers register through capabilities.social — the five built-ins do it the same way a plugin would.",
+  "author": "sapphire",
+  "url": "https://sapphireblue.dev",
+  "icon": "📣",
+  "priority": 50,
+  "default_enabled": false,
+  "settingsUI": "plugin",
+  "capabilities": {
+    "tools": ["tools/social.py"],
+    "hooks": {"plugins_ready": "hooks/ready.py"},
+    "scopes": [
+      {
+        "key": "social",
+        "label": "social",
+        "endpoint": "/api/plugin/social/profiles",
+        "data_key": "profiles",
+        "value_field": "name",
+        "name_field": "name",
+        "label_template": "{label}"
+      }
+    ],
+    "routes": [
+      {"method": "GET", "path": "profiles", "handler": "routes/manage.py:list_profiles"},
+      {"method": "PUT", "path": "profiles/{profile}", "handler": "routes/manage.py:put_profile"},
+      {"method": "DELETE", "path": "profiles/{profile}", "handler": "routes/manage.py:delete_profile"},
+      {"method": "PUT", "path": "profiles/{profile}/connections/{conn}", "handler": "routes/manage.py:put_connection"},
+      {"method": "DELETE", "path": "profiles/{profile}/connections/{conn}", "handler": "routes/manage.py:delete_connection"},
+      {"method": "POST", "path": "profiles/{profile}/connections/{conn}/test", "handler": "routes/manage.py:test_connection"},
+      {"method": "GET", "path": "providers", "handler": "routes/manage.py:list_providers"},
+      {"method": "GET", "path": "config", "handler": "routes/manage.py:get_config"},
+      {"method": "GET", "path": "outbox", "handler": "routes/manage.py:list_outbox"},
+      {"method": "POST", "path": "outbox/{rid}/approve", "handler": "routes/manage.py:approve"},
+      {"method": "POST", "path": "outbox/{rid}/reject", "handler": "routes/manage.py:reject"},
+      {"method": "DELETE", "path": "outbox", "handler": "routes/manage.py:clear_outbox"},
+      {"method": "GET", "path": "outbox/{rid}/image/{n}", "handler": "routes/manage.py:outbox_image", "media": true},
+      {"method": "POST", "path": "round", "handler": "routes/manage.py:make_round"},
+      {"method": "GET", "path": "connect/{provider}/{profile}/{conn}", "handler": "routes/oauth.py:connect"},
+      {"method": "GET", "path": "callback/{provider}", "handler": "routes/oauth.py:callback"}
+    ],
+    "settings": [
+      {
+        "key": "SOCIAL_DEFAULT_MODE",
+        "type": "string",
+        "label": "New connections post as",
+        "default": "draft",
+        "options": [
+          {"value": "draft", "label": "Draft — she queues, you approve in the Outbox"},
+          {"value": "auto", "label": "Auto — she posts at once"}
+        ],
+        "help": "Each connection has its own switch; this is the default for new ones."
+      },
+      {
+        "key": "SOCIAL_DROP_SCP",
+        "type": "string",
+        "label": "Image drop folder (scp target)",
+        "default": "",
+        "placeholder": "user@host:/var/www/html/drop",
+        "help": "Instagram fetches images from a public URL. Images are copied here with scp (your ssh key) before posting."
+      },
+      {
+        "key": "SOCIAL_DROP_URL",
+        "type": "string",
+        "label": "Image drop folder (public URL)",
+        "default": "",
+        "placeholder": "https://example.com/drop",
+        "help": "Where the drop folder is served from."
+      }
+    ],
+    "social": [
+      {
+        "provider": "facebook",
+        "label": "Facebook Page",
+        "icon": "📘",
+        "module": "providers/facebook.py",
+        "auth": "oauth",
+        "capabilities": ["post", "image", "link", "inbox", "reply", "delete", "stats"],
+        "max_chars": 63206,
+        "max_images": 4,
+        "config_schema": [
+          {"key": "app_id", "type": "string", "label": "Meta App ID", "help": "developers.facebook.com → My Apps → your app → App ID. Name the app anything but 'Facebook'."},
+          {"key": "app_secret", "type": "password", "secret": true, "label": "Meta App Secret"},
+          {"key": "page", "type": "string", "label": "Page", "help": "Name or id of the Page to post as. Blank = the first Page you manage."}
+        ],
+        "notes": "Posts as a Page you manage (personal profiles cannot post by API). The Page token never expires."
+      },
+      {
+        "provider": "x",
+        "label": "X",
+        "icon": "✖",
+        "module": "providers/x.py",
+        "auth": "oauth",
+        "capabilities": ["post", "image", "link", "inbox", "reply", "delete", "stats"],
+        "max_chars": 280,
+        "max_images": 4,
+        "config_schema": [
+          {"key": "client_id", "type": "string", "label": "OAuth 2.0 Client ID", "help": "developer.x.com → your app → Settings → User authentication settings → Set up (Read and write, Web App, the callback URI shown below). Only after that does Keys and tokens show the OAuth 2.0 Client ID."},
+          {"key": "client_secret", "type": "password", "secret": true, "label": "Client Secret", "help": "Only for a confidential client; blank for a public one."}
+        ],
+        "notes": "Pay-per-use: the developer console bills per post and per read (no X Premium needed). X's rules want the Automated label: Settings and privacy → Your account → Account information → Automation, naming the human account; say it in the bio too."
+      },
+      {
+        "provider": "youtube",
+        "label": "YouTube",
+        "icon": "▶",
+        "module": "providers/youtube.py",
+        "auth": "oauth",
+        "capabilities": ["inbox", "reply", "delete", "stats"],
+        "max_chars": 10000,
+        "max_images": 0,
+        "config_schema": [
+          {"key": "client_id", "type": "string", "label": "Google Client ID", "help": "console.cloud.google.com → APIs → Credentials → OAuth client (Web application). Enable the YouTube Data API v3."},
+          {"key": "client_secret", "type": "password", "secret": true, "label": "Google Client Secret"}
+        ],
+        "notes": "Comments on your videos and replies to them; channel numbers. No posting (API uploads stay private until Google audits the app). Set the consent screen to In production or the token dies in 7 days."
+      },
+      {
+        "provider": "instagram",
+        "label": "Instagram",
+        "icon": "📷",
+        "module": "providers/instagram.py",
+        "auth": "oauth",
+        "capabilities": ["post", "image", "inbox", "reply", "stats"],
+        "max_chars": 2200,
+        "max_images": 1,
+        "public_image_url": true,
+        "config_schema": [
+          {"key": "app_id", "type": "string", "label": "Meta App ID", "help": "The same Meta app as Facebook."},
+          {"key": "app_secret", "type": "password", "secret": true, "label": "Meta App Secret"},
+          {"key": "page", "type": "string", "label": "Facebook Page", "help": "The Page your Instagram Business account is linked to. Blank = the first one."}
+        ],
+        "notes": "Business or Creator account linked to a Facebook Page. Every post needs an image at a public URL (the drop folder). Posts carry the AI label when disclosure is on."
+      },
+      {
+        "provider": "linkedin",
+        "label": "LinkedIn",
+        "icon": "💼",
+        "module": "providers/linkedin.py",
+        "auth": "oauth",
+        "capabilities": ["post", "image", "link", "delete"],
+        "max_chars": 3000,
+        "max_images": 1,
+        "config_schema": [
+          {"key": "client_id", "type": "string", "label": "LinkedIn Client ID", "help": "linkedin.com/developers → your app → Auth. Add the products Share on LinkedIn and Sign In with LinkedIn using OpenID Connect."},
+          {"key": "client_secret", "type": "password", "secret": true, "label": "LinkedIn Client Secret"}
+        ],
+        "notes": "Posts to your personal profile. Write-only: no comments or mentions come back. The token lasts 60 days, then Connect again."
+      }
+    ],
+    "cleanup_paths": ["plugin_state/social-csrf.json", "plugin_state/social-outbox"]
+  }
+}

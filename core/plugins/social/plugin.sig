@@ -1,0 +1,31 @@
+{
+  "plugin": "social",
+  "version": "1.0.0",
+  "files": {
+    "README.md": "sha256:9e7508583d908c62ac4ccb8dcdecfa60dcac8b64c04631a5ff7fe56c41100a68",
+    "__init__.py": "sha256:84355aa4c56a063575c1ac9381d630c56d7bf693dd94523b8e5b02fedcfd1547",
+    "drop.py": "sha256:bc95b9d7142dad501f64ba8430c2d3923a1b065f16ab1817d273203263a8ee51",
+    "engine.py": "sha256:a5c09df975b224abf8f295d9583b05b73e25134d3912e97ea3931ce2a80ffafb",
+    "errors.py": "sha256:da617f55c9de0abe3d2cccd56f8c1ffe84df7f07bf4cf24aaba04836329e9037",
+    "hooks/ready.py": "sha256:48f1bf7b3899e254c18909ac6adbc863ba02e8894d2f0acc648d9c796cd97e8b",
+    "outbox.py": "sha256:3441d39e94b60645278da2fb4e9406041eff53c74bb1d823fb9edaad9b6f61b9",
+    "plugin.json": "sha256:e9b2d53e77c95aaab46e235a16896cba3ba69f5e8a896b64cb15c8a2b2aad004",
+    "providers/__init__.py": "sha256:475d9b94d1684f5d2947ebbe9d45ac09d8f72c0f3e46903a5c9a104ffc4c623a",
+    "providers/_common.py": "sha256:2972ce4672b124ac3ffed8fff67094359a604cb2747f0d519db6d514de19e604",
+    "providers/_meta.py": "sha256:a50584652bfab64fcf626417d0445f3e3fca24f2610fc897a6fbf70540f52d00",
+    "providers/facebook.py": "sha256:bcb734727301593cf842358859301841419d52230186838e0fdf8a6d0533fb6e",
+    "providers/instagram.py": "sha256:42bd8b3a95c848d6216926bd767dd788959aaaef316195e3d734c1ba34cb932c",
+    "providers/linkedin.py": "sha256:5055efcef84a7e95c540d4cbd886a9d1bdeacd70a4d551335418ad233b902907",
+    "providers/x.py": "sha256:fb239f16c27b2721dc94e324c297c5f6a28c347f9cbdd59f7756b4ea75938fae",
+    "providers/youtube.py": "sha256:a197e6cde1391735d7fdacfe16c6dff3236dff3f0a5d19de025837dd73a2ba4b",
+    "registry.py": "sha256:9c6006eef12c44431559d3b557163579972eb9df39160ef4e1db2b69fd35fee5",
+    "routes/manage.py": "sha256:e6cb9d594d35078cf9d95f0585c01c36557e591fd08194ab31a1a0a74c664627",
+    "routes/oauth.py": "sha256:f83959ea774ff1d41a2433595be11927dd7e52557d4d9e2a3e9aea772dfa981b",
+    "scan.py": "sha256:de38ce022f896aa246c8e5646d77065d2461d2e0566052bdd3cdc01cd631cd6a",
+    "store.py": "sha256:cf4a4f3c08d6760cd44415cbafaf3cc38e5b5426d631e9a1bf516da64e615510",
+    "tests/test_social_core.py": "sha256:e3fc283db28b6bc3ac3029bd05714d27149f66aa6c1b705115c2baea8c4b2f47",
+    "tools/social.py": "sha256:8e21049db2d0672699cb889ed9f5e2b3c7f1f9a72273fdb30669d65df058e813",
+    "web/index.js": "sha256:e7ad198ec4ac98b0f1de52903fd2e82f0e6ca655f986ef755323e320e611793a"
+  },
+  "signature": "EWY7eja46tEAt28YuHG6amaH9BB5W+Ne08YYq3Aa5/3k97yYe8iAbaKXjVRkDgFxw5xtjXARO8weCX5NKraCAg=="
+}

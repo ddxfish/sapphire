@@ -161,6 +161,7 @@ Email IMAP/SMTP
 Discord bot
 Telegram bot/client
 Google Calendar
+Social media profiles
 ### Build
 Claude Code
 Coding harness
@@ -214,6 +215,7 @@ daemon event sources
 schedule cron
 scopes
 devices drivers
+social providers
 games
 prompts packs
 memory_layers

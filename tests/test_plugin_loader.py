@@ -752,6 +752,34 @@ class TestPluginToolIntegration:
             assert "test_tool" not in fm.execution_map
             assert len(fm.all_possible_tools) == 0
 
+    def test_refused_plugin_reports_once_with_its_own_reason(self, temp_dirs, runner):
+        """Two plugins sharing a tool name take turns (the memory engines).
+        The second one's refusal used to get a second row beside it, reading
+        "Blocked at boot: verified" (migration walk 2026-11-02)."""
+        for name in ("engine-a", "engine-b"):
+            plugin_dir = _make_plugin(temp_dirs["plugins"], name, {
+                "name": name, "version": "1.0.0",
+                "capabilities": {"tools": ["tools/my_tool.py"]}
+            })
+            _make_tool_file(plugin_dir, "tools/my_tool.py", [SAMPLE_TOOL])
+        temp_dirs["plugins_json"].write_text(
+            json.dumps({"enabled": ["engine-a", "engine-b"]}), encoding="utf-8"
+        )
+
+        fm = _make_mock_fm()
+        loader = PluginLoader()
+        with patch("core.plugin_loader.SYSTEM_PLUGINS_DIR", temp_dirs["plugins"]), \
+             patch("core.plugin_loader.USER_PLUGINS_DIR", temp_dirs["user_plugins"]), \
+             patch("core.plugin_loader.USER_PLUGINS_JSON", temp_dirs["plugins_json"]), \
+             patch("core.plugin_loader.hook_runner", runner):
+            loader.scan(function_manager=fm)
+
+        rows = [e for e in loader.get_load_errors() if e.get("plugin") == "engine-b"]
+        assert len(rows) == 1, rows
+        assert "verified" not in rows[0]["error"]
+        assert "test_tool" in rows[0]["error"]      # the refusal names the clash
+        assert not [e for e in loader.get_load_errors() if e.get("plugin") == "engine-a"]
+
     def test_disabled_plugin_tools_not_loaded(self, temp_dirs, runner):
         plugin_dir = _make_plugin(temp_dirs["plugins"], "disabled-tool", {
             "name": "disabled-tool", "version": "1.0.0",

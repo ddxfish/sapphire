@@ -17,6 +17,7 @@ import hashlib
 import base64
 import getpass
 import logging
+import re
 import socket
 import threading
 from pathlib import Path
@@ -72,6 +73,7 @@ DEFAULT_CREDENTIALS = {
     "github_accounts": {},
     "twilio_accounts": {},
     "discord_accounts": {},
+    "plugin_accounts": {},
     "ssh": {
         "servers": []
     },
@@ -1027,6 +1029,130 @@ class CredentialsManager:
         return [{'name': name, 'bot_name': acct.get('bot_name', ''), 'bot_id': acct.get('bot_id', ''),
                  'created_at': acct.get('created_at', 0.0)} for name, acct in sorted(accounts.items())]
 
+    # ── Plugin accounts (2026-11-02): ONE encrypted account store for every plugin ──
+    # plugin_accounts[plugin][name] = {'fields': {plain}, 'secrets': {k: 'enc:..'}, 'created_at': t}
+    # A new plugin with accounts uses this instead of a hand-written section above
+    # (social is the first). Plugin state (user/plugin_state) is plaintext and inside
+    # backups; this file is neither. Names may hold '/' so "profile/connection" works.
+
+    _PLUGIN_ACCT_RE = re.compile(r'[a-z0-9][a-z0-9_./-]{0,80}$')
+
+    def _plugin_acct_ok(self, plugin: str, name: str = None) -> bool:
+        if not self._PLUGIN_ACCT_RE.fullmatch(str(plugin or '')):
+            logger.warning(f"plugin account: bad plugin name {plugin!r}")
+            return False
+        if name is not None and not self._PLUGIN_ACCT_RE.fullmatch(str(name or '')):
+            logger.warning(f"plugin account: bad account name {name!r}")
+            return False
+        return True
+
+    def get_plugin_account(self, plugin: str, name: str) -> dict:
+        """One account with its secrets in the clear: {'name', 'fields', 'secrets',
+        'created_at'}; {} when unknown. A secret this machine cannot unscramble
+        comes back as '' (the warning names it) - the caller sees 'not set'."""
+        if not self._plugin_acct_ok(plugin, name):
+            return {}
+        acct = self._credentials.get('plugin_accounts', {}).get(plugin, {}).get(name)
+        if not acct:
+            return {}
+        secrets = {}
+        for k, v in (acct.get('secrets') or {}).items():
+            try:
+                secrets[k] = self._unscramble_strict(v) if v else ''
+            except DecryptionError:
+                logger.warning(f"plugin account {plugin}/{name}: secret '{k}' cannot be read on this machine")
+                secrets[k] = ''
+        return {'name': name, 'fields': dict(acct.get('fields') or {}),
+                'secrets': secrets, 'created_at': acct.get('created_at', 0.0)}
+
+    def set_plugin_account(self, plugin: str, name: str, fields: dict = None,
+                           secrets: dict = None) -> bool:
+        """Create or update one account. `fields` (plain) merge over the stored
+        ones; `secrets` merge too: a str replaces, '' clears, None keeps.
+        Secrets are scrambled before save; created_at is set once."""
+        import time as _time
+        if not self._plugin_acct_ok(plugin, name):
+            return False
+        if fields is not None and not isinstance(fields, dict):
+            return False
+        if secrets is not None and not isinstance(secrets, dict):
+            return False
+        with self._lock:
+            try:
+                table = self._credentials.setdefault('plugin_accounts', {}).setdefault(plugin, {})
+                acct = dict(table.get(name) or {})
+                acct['fields'] = dict(acct.get('fields') or {})
+                acct['secrets'] = dict(acct.get('secrets') or {})
+                for k, v in (fields or {}).items():
+                    if v is None:
+                        acct['fields'].pop(k, None)
+                    else:
+                        acct['fields'][str(k)] = v
+                for k, v in (secrets or {}).items():
+                    if v is None:
+                        continue
+                    if v == '':
+                        acct['secrets'].pop(k, None)
+                    else:
+                        acct['secrets'][str(k)] = self._scramble(str(v))
+                json.dumps(acct['fields'])              # JSON-safe or refused
+                if not acct.get('created_at'):
+                    acct['created_at'] = _time.time()
+                table[name] = acct
+                if not self._save():
+                    logger.error(f"Failed to persist plugin account {plugin}/{name}")
+                    return False
+                logger.info(f"Set plugin account {plugin}/{name}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set plugin account {plugin}/{name}: {e}")
+                return False
+
+    def delete_plugin_account(self, plugin: str, name: str) -> bool:
+        if not self._plugin_acct_ok(plugin, name):
+            return False
+        with self._lock:
+            table = self._credentials.get('plugin_accounts', {}).get(plugin, {})
+            if name not in table:
+                return False
+            del table[name]
+            if not self._save():
+                logger.error(f"Failed to persist deletion of plugin account {plugin}/{name}")
+                return False
+            logger.info(f"Deleted plugin account {plugin}/{name}")
+            return True
+
+    def rename_plugin_account(self, plugin: str, old: str, new: str) -> bool:
+        """Move an account to a new name. Never overwrites."""
+        if not self._plugin_acct_ok(plugin, old) or not self._plugin_acct_ok(plugin, new):
+            return False
+        with self._lock:
+            table = self._credentials.get('plugin_accounts', {}).get(plugin, {})
+            if old == new or old not in table:
+                return old == new and old in table
+            if new in table:
+                return False
+            table[new] = table.pop(old)
+            if self._save():
+                return True
+            table[old] = table.pop(new)
+            return False
+
+    def list_plugin_accounts(self, plugin: str) -> list:
+        """Every account of a plugin, no secret values: [{'name', 'fields',
+        'secrets': [names set], 'created_at'}], sorted by name."""
+        if not self._plugin_acct_ok(plugin):
+            return []
+        table = self._credentials.get('plugin_accounts', {}).get(plugin, {})
+        return [{'name': n, 'fields': dict(a.get('fields') or {}),
+                 'secrets': sorted((a.get('secrets') or {}).keys()),
+                 'created_at': a.get('created_at', 0.0)} for n, a in sorted(table.items())]
+
+    def has_plugin_account(self, plugin: str, name: str) -> bool:
+        if not self._plugin_acct_ok(plugin, name):
+            return False
+        return name in self._credentials.get('plugin_accounts', {}).get(plugin, {})
+
     def list_twilio_accounts(self) -> list:
         """List Twilio accounts (no secrets) — for the account dropdown + UI."""
         accounts = self._credentials.get('twilio_accounts', {})
@@ -1461,7 +1587,8 @@ class CredentialsManager:
             "email": {
                 "has_credentials": self.has_email_account('default'),
                 "accounts": len(self._credentials.get('email_accounts', {}))
-            }
+            },
+            "plugins": {p: len(t) for p, t in self._credentials.get('plugin_accounts', {}).items()}
         }
         
         for provider in self._credentials.get('llm', {}):

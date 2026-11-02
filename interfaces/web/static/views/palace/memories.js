@@ -67,22 +67,27 @@ function render() {
 
 // An empty palace right after the switch used to say "No memories yet" and
 // nothing else; the classic rows were a tab away (migration hunt B7). One
-// preview per minute, only while the list is empty.
+// preview per minute, only while the list is empty. A card, not a footnote:
+// this is the one moment a migrating user must not miss (walk 2026-11-02).
 let _waiting = null;
 async function _paintWaiting(el) {
     if (!_waiting || Date.now() - _waiting.ts > 60000) {
-        try {
-            const p = await palaceGet('import/preview');
-            const bits = Object.entries(p.stores || {})
-                .filter(([, s]) => s && !s.absent && s.pending)
-                .map(([k, s]) => `${s.pending} ${k}`);
-            _waiting = { ts: Date.now(), pending: p.pending || 0, bits };
-        } catch { _waiting = { ts: Date.now(), pending: 0, bits: [] }; }
+        try { _waiting = { ts: Date.now(), p: await palaceGet('import/preview') }; }
+        catch { _waiting = { ts: Date.now(), p: null }; }
     }
     const slot = el.querySelector('#pal-mem-waiting');
-    if (!slot || !_waiting.pending) return;
-    slot.innerHTML = `<div style="margin-top:8px">${escHtml(_waiting.bits.join(', '))} from Memory (legacy) are waiting to come across.
-        <button class="mind-btn-sm" id="pal-mem-import">Open Import</button></div>`;
+    const p = _waiting.p;
+    if (!slot || !p?.pending) return;
+    const stores = Object.entries(p.stores || {}).filter(([, s]) => s && !s.absent);
+    // This scope's own rows when the old system had this scope; else the whole set.
+    const mine = stores.filter(([, s]) => s.scopes?.[scope]?.pending).map(([k, s]) => `${s.scopes[scope].pending} ${k}`);
+    const all = stores.filter(([, s]) => s.pending).map(([k, s]) => `${s.pending} ${k}`);
+    const bits = mine.length ? mine : all;
+    const where = mine.length ? `in scope "${scope}"` : 'across every scope';
+    slot.innerHTML = `<div class="pal-waiting">
+        <div class="pal-waiting-title">${escHtml(bits.join(', '))} ${escHtml(where)} are waiting in Memory (legacy)</div>
+        <div class="ui-meta-text">One click brings everything across. The old databases are never changed.</div>
+        <button class="mind-btn pal-waiting-btn" id="pal-mem-import">Open Import</button></div>`;
     slot.querySelector('#pal-mem-import')?.addEventListener('click', async () => {
         const router = await import('../../core/router.js');
         router.switchView('import');

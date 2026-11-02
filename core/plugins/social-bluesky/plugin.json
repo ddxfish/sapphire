@@ -1,0 +1,33 @@
+{
+  "name": "social-bluesky",
+  "short_display_name": "Social: Bluesky",
+  "version": "1.0.0",
+  "min_core_version": "2.13.0",
+  "description": "Bluesky for the Social plugin — the worked example of a provider plugin: one manifest block (capabilities.social) and one module, no tools or hooks of its own. Handle + app password; posts with images, mentions and replies, delete, follower numbers.",
+  "author": "sapphire",
+  "url": "https://sapphireblue.dev",
+  "icon": "🦋",
+  "priority": 60,
+  "default_enabled": false,
+  "requires_plugins": ["social"],
+  "capabilities": {
+    "social": [
+      {
+        "provider": "bluesky",
+        "label": "Bluesky",
+        "icon": "🦋",
+        "module": "provider.py",
+        "auth": "fields",
+        "capabilities": ["post", "image", "link", "inbox", "reply", "delete", "stats"],
+        "max_chars": 300,
+        "max_images": 4,
+        "config_schema": [
+          {"key": "handle", "type": "string", "label": "Handle", "placeholder": "sapphire.bsky.social", "help": "Your Bluesky handle."},
+          {"key": "app_password", "type": "password", "secret": true, "label": "App password", "help": "bsky.app → Settings → Privacy and security → App passwords. Never your account password."},
+          {"key": "pds", "type": "string", "label": "Server", "default": "https://bsky.social", "help": "Leave as is unless you run your own PDS."}
+        ],
+        "notes": "No approval, no fees. Say it is a bot in the profile bio; interact only with people who talk to you."
+      }
+    ]
+  }
+}

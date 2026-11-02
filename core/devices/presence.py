@@ -39,6 +39,7 @@ _keeper = None
 _pending = set()           # driver ids to look at next; EVERY = all of them
 _watchers = {}             # driver id -> {'thread', 'stopped', 'plugin', 'idle'}
 _told = {}                 # (device id, driver id) -> the last thing tend was told
+_untended = {}             # (device id, driver id) -> the refusal already in the log
 _busy = {}                 # (device id, driver id) -> when its tend began
 _again = set()             # asked for again while busy
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='device-tend')
@@ -169,6 +170,10 @@ def _tend(key, row, part, leaving):
             return
         present = e.passing(spec, config, e.found(driver_id, config))
         tend(device, config, e._part_secrets(device_id, driver_id), present, False)
+        with _lock:
+            was_refused = _untended.pop(key, None)
+        if was_refused:
+            logger.info(f"[DEVICES] {device_id}: the {driver_id} driver is tended again")
         names = [t['name'] for t in present]
         if last is None or [t['id'] for t in last['present']] != [t['id'] for t in present]:
             logger.info(f"[DEVICES] {device_id}: connected: {', '.join(names) or 'nothing'}")
@@ -176,13 +181,20 @@ def _tend(key, row, part, leaving):
             _told[key] = {'device': device, 'config': config, 'plugin': spec['plugin_name'],
                           'present': present, 'tend': tend}
     except e.DeviceError as err:
-        logger.warning(f"[DEVICES] {device_id}: the {driver_id} driver was not tended: {err}")
+        # Said once per reason, not once per heartbeat: a driver that refuses
+        # the same way every 15 s filled the log (walk 2026-11-02).
+        with _lock:
+            same = _untended.get(key) == str(err)
+            _untended[key] = str(err)
+        if not same:
+            logger.warning(f"[DEVICES] {device_id}: the {driver_id} driver was not tended: {err}")
     except Exception as err:
         logger.error(f"[DEVICES] {device_id}: {driver_id}.tend failed: {err}", exc_info=True)
     finally:
         with _lock:
             if leaving:
                 _told.pop(key, None)             # said once, whatever came of it
+                _untended.pop(key, None)
             _busy.pop(key, None)
             more = key in _again
             _again.discard(key)

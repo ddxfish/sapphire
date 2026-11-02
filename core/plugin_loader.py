@@ -469,15 +469,18 @@ class PluginLoader:
                     blocked.append(name)
                     # Surface it: the reload path publishes on a block, the boot path
                     # only logged — the user saw a toggle that was simply off
-                    # (Discord hunt 2.13.0, row 84).
-                    err_data = {"plugin": name,
-                                "error": f"Blocked at boot: {info.get('verify_msg') or 'load failure'}"}
-                    self._load_errors.append(err_data)
-                    try:
-                        from core.event_bus import publish, Events
-                        publish(Events.PLUGIN_LOAD_ERROR, err_data)
-                    except Exception:
-                        pass
+                    # (Discord hunt 2.13.0, row 84). When _load_plugin already said
+                    # why (a tool-name refusal, a failed load), that row stands: the
+                    # generic one read "Blocked at boot: verified" beside it.
+                    if not any(e.get("plugin") == name for e in self._load_errors):
+                        err_data = {"plugin": name,
+                                    "error": f"Blocked at boot: {info.get('verify_msg') or 'load failure'}"}
+                        self._load_errors.append(err_data)
+                        try:
+                            from core.event_bus import publish, Events
+                            publish(Events.PLUGIN_LOAD_ERROR, err_data)
+                        except Exception:
+                            pass
 
         if blocked:
             logger.warning(f"[PLUGINS] Enabled but blocked (intent preserved, retry next restart): {blocked}")

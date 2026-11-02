@@ -302,6 +302,7 @@
       "gcal_scope": "none",
       "telegram_scope": "none",
       "discord_scope": "none",
+      "social_scope": "none",
       "trim_color": "#888888"
     }
   }

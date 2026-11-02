@@ -128,58 +128,6 @@ def test_maintenance_rejects_bad_input(palace):
     assert code == 400 and 'Unknown' in out['error']
 
 
-# ─── import_v1 ───────────────────────────────────────────────────────────────
-
-def _fake_v1(tmp_path):
-    """Minimal classic-system fixture: <root>/user/memory.db + a config module
-    stand-in whose __file__ anchors _source_path there."""
-    import sqlite3
-    root = tmp_path / 'v1root'
-    (root / 'user').mkdir(parents=True)
-    db = root / 'user' / 'memory.db'
-    conn = sqlite3.connect(db)
-    conn.execute('CREATE TABLE memories (id INTEGER PRIMARY KEY, content TEXT, '
-                 'timestamp TEXT, scope TEXT, label TEXT, private_key TEXT)')
-    conn.execute("INSERT INTO memories (content, timestamp, scope) VALUES "
-                 "('the first classic memory', '2025-01-02 03:04:05', 'default')")
-    conn.execute("INSERT INTO memories (content, timestamp, scope) VALUES "
-                 "('a memory from another scope', '2025-02-03 04:05:06', 'imported-scope')")
-    conn.commit()
-    conn.close()
-
-    class _Cfg:
-        __file__ = str(root / 'config.py')
-    return db, _Cfg
-
-
-def _sha(path):
-    import hashlib
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def test_import_v1_copies_and_never_touches_source(palace, tmp_path, monkeypatch):
-    db, cfg = _fake_v1(tmp_path)
-    monkeypatch.setattr(browse, '_config', lambda: cfg)
-    before = _sha(db)
-
-    out = browse.maintenance(body={'action': 'import_v1', 'scope': 'default'})
-    assert out['success'] and 'memories: 2 copied' in out['summary']
-    assert 'NOT modified' in out['summary']
-    assert _sha(db) == before                      # v1 byte-identical
-
-    with pt._get_connection() as conn:
-        rows = conn.execute(
-            "SELECT scope, content FROM chunks WHERE layer='events' "
-            "AND source='memory v2' ORDER BY id").fetchall()
-    assert rows == [('default', 'the first classic memory'),
-                    ('imported-scope', 'a memory from another scope')]
-
-    # Idempotent: second run copies zero, still read-only.
-    out = browse.maintenance(body={'action': 'import_v1', 'scope': 'default'})
-    assert '0 copied, 2 already imported' in out['summary']
-    assert _sha(db) == before
-
-
 # ─── generate_metadata ───────────────────────────────────────────────────────
 
 def test_generate_metadata_stamps_and_reseeds_edges(palace):

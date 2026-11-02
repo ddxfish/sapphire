@@ -100,7 +100,7 @@ def rig():
             if box.hold is not None:
                 box.hold.set()
             presence.stop()
-            for held in (presence._told, presence._busy, presence._watchers):
+            for held in (presence._told, presence._busy, presence._watchers, presence._untended):
                 held.clear()
             presence._pending.clear()
             presence._again.clear()
@@ -335,6 +335,43 @@ def test_a_failing_driver_never_stops_the_keeper(rig):
     presence.poke()
     time.sleep(0.2)
     assert len(rig.tends) == count and presence._keeper.is_alive()    # it could not look: nothing is told
+
+
+def test_a_refusal_is_said_once_per_reason(rig, caplog):
+    """A driver that refuses the same way on every heartbeat is logged once,
+    again only when the reason changes, and once more when it is tended again
+    (a 15 s warning filled dev's log, 2026-11-02)."""
+    import logging
+    _add()
+    refuse = ['set up with another plugin\'s driver']
+
+    def tend(device, config, secrets, present, leaving):
+        rig.tends.append((device['id'], [t['name'] for t in present], leaving))
+        if refuse and not leaving:
+            raise core.DeviceError(refuse[0])
+    rig.mod.tend = tend
+
+    def said(text):
+        return [r for r in caplog.records if text in r.getMessage()]
+
+    with caplog.at_level(logging.INFO, logger='core.devices.presence'):
+        presence.start()
+        assert _until(lambda: len(rig.tends) >= 1)
+        for _ in range(3):
+            presence.poke()
+            time.sleep(0.1)
+        assert _until(lambda: len(rig.tends) >= 4)
+        assert len(said('was not tended')) == 1
+        refuse[0] = 'a different refusal'
+        presence.poke()
+        assert _until(lambda: len(rig.tends) >= 5)
+        assert len(said('was not tended')) == 2 and 'different' in said('was not tended')[1].getMessage()
+        refuse.clear()
+        presence.poke()
+        assert _until(lambda: len(said('tended again')) == 1)
+        presence.poke()
+        assert _until(lambda: len(rig.tends) >= 7)
+        assert len(said('tended again')) == 1
 
 
 def test_a_driver_without_a_watcher_lives_on_the_heartbeat(rig):

@@ -6,7 +6,7 @@
     "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
     "hooks/ready.py": "sha256:1a1379c1ff05c86fd6347c4bb9d0cd86775c7a105668e01d4bac22cea1c11519",
     "plugin.json": "sha256:b91de4ff68ba6ba49eff74ffc8685cd563b25fa2c733bd4628f23c29cc1be66a",
-    "routes/browse.py": "sha256:a3e4e18d30807d0433c7cf09dfe9bec2813494e34f191aa54a6baaebbd8deb94",
+    "routes/browse.py": "sha256:1e7a800bf395affdfdcb8ffcac9ec7a9c0f465af724abc1d5c357788adb0c33a",
     "routes/goals_routes.py": "sha256:bfe3efe7bbe3795aec4dd89b966888c84d4a17ddacbae5a3352f4ee19c2d3a9d",
     "routes/import_routes.py": "sha256:2b665a4324060a9b9f4c48e47e9b92dc11235d0fd0c82e7bd36d584ae96abf17",
     "routes/library_routes.py": "sha256:be93fc914fb528118dcbd4ab29ef80f0112f15e0518dd7a1131e82d3eeee2549",
@@ -40,7 +40,7 @@
     "tests/test_mindpalace_layers.py": "sha256:ff7a5bf036ab8e7404ad90b3d7f11c752ac7dfdcba76d80fc47194c9cb4dd9c1",
     "tests/test_mindpalace_ledger.py": "sha256:34e5a216ae91b0be1d4f46a0bbb1d49c5f484b77e6c0ee33e74dbd39efeae5b8",
     "tests/test_mindpalace_librarian.py": "sha256:882f7bd90bf14016a703c7114412f6358ba0d269d2d41dc6dc4a77b2c56f34bc",
-    "tests/test_mindpalace_maintenance.py": "sha256:9c168d96ea1f37ad39fd98a9aaf842d89e162f13185ba5b88efc54b55fc01778",
+    "tests/test_mindpalace_maintenance.py": "sha256:56fe444a49456f9b6eaeea6ca55e0ab9ba2122315d59ba9aa18f39e48f49f9a6",
     "tests/test_mindpalace_metadata.py": "sha256:8c7dd81b8da6a72e162414d04c4ba409ce085aed5f8816cf59bf1fa249b19363",
     "tests/test_mindpalace_self.py": "sha256:aa4e979b4d99129a3f10a3fa5fed7211c45dc83d1ab13bb05dfc0b96925a0c8c",
     "tests/test_mindpalace_spider.py": "sha256:cefb232eee5f5299e0de065250a68b81ed87c2c19703d5e7de1465e49a05cb05",
@@ -75,5 +75,5 @@
     "tools/temporal.py": "sha256:c68e63a2b23914fc594009ad5ffdf4c74e077ba89a440628ee86968dce535d6d",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "VgkPc9o+eft9t2/6ZhDikG/TrMLvBnNPe4PzKSNHms19kQ7hEAiKMJiTPw6PuOXp8FpenG/IP4Tngk8YiUUhDg=="
+  "signature": "dSDb6nLVHquG4OH/ocA82O7MQ1XETkpYsKk1+kK2Oq8BOuDkAP5Xd4OOm154jIve8JzNhGuLj3GDYMkGpGQkCQ=="
 }

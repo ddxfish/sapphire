@@ -13,7 +13,7 @@ import { PALACE_TABS, refreshPalaceTabs, palaceGet, palaceSend } from './common.
 const STORES = [
     ['memories', '\u{1F9E0} Memories', 'memory.db', 'Memories tab (events layer)'],
     ['people', '\u{1F465} People', 'knowledge.db', 'Entities tab (person cards)'],
-    ['knowledge', '\u{1F4DA} Knowledge', 'knowledge.db', 'Knowledge tab; Admin › Copy knowledge into the Library makes documents of them'],
+    ['knowledge', '\u{1F4DA} Knowledge', 'knowledge.db', 'Knowledge tab; they also become Library documents by themselves'],
     ['goals', '\u{1F3AF} Goals', 'goals.db', 'Goals tab (subtasks and journal notes kept)'],
 ];
 const FILES = ['memory.db', 'knowledge.db', 'goals.db'];
@@ -65,6 +65,13 @@ function fmtBytes(n) {
 }
 
 const num = n => `<td style="text-align:right;padding:4px 10px">${n}</td>`;
+const arrow = '<td class="ui-meta-text" style="padding:4px 2px">\u2192</td>';
+// One Change cell: what comes across, and only when there are any, the rows
+// that stay out (imported once, deleted from the palace since). Four number
+// columns read as a spreadsheet to a new user (walk 2026-11-02).
+const change = (pending, removed) => num(
+    (pending ? `<b>+${pending}</b>` : `<span class="ui-meta-text">0</span>`)
+    + (removed ? ` <span class="ui-meta-text" title="Imported once and deleted from the palace since; they stay out unless you bring them back below">\u00b7 ${removed} skipped</span>` : ''));
 
 function paint(p) {
     const el = content();
@@ -96,9 +103,7 @@ function paint(p) {
     }
     const scopeRows = Object.entries(byScope).sort(([a], [b]) => a.localeCompare(b)).map(([scope, v]) => `<tr>
             <td style="padding:4px 10px"><b>${escHtml(scope)}</b>${(p.muted || []).includes(scope) ? ' <span class="ui-meta-text" title="You deleted this scope from the palace, so the boot reminder leaves it out until you import it again">(deleted from the palace; not nagged)</span>' : ''}<div class="ui-meta-text">${escHtml(v.stores.join(' · '))}</div></td>
-            ${num(v.total)}${num(v.imported)}
-            ${num(v.pending ? `<b>${v.pending}</b>` : `<span class="ui-meta-text">0</span>`)}
-            ${num(v.removed ? `<span style="color:var(--warning,#e0a030)">${v.removed}</span>` : `<span class="ui-meta-text">0</span>`)}
+            ${num(v.total)}${arrow}${num(v.imported)}${change(v.pending, v.removed)}
             <td style="padding:4px 10px">${v.pending ? `<button class="mind-btn-sm pal-import-scope" data-scope="${escHtml(scope)}" ${p.running ? 'disabled' : ''}>Import ${v.pending}</button>` : ''}</td>
         </tr>`);
     const pending = p.pending || 0, removed = p.removed || 0;
@@ -106,29 +111,29 @@ function paint(p) {
         <table style="border-collapse:collapse;width:100%;max-width:820px">
             <thead><tr class="ui-meta-text">
                 <th style="text-align:left;padding:4px 10px">Scope</th>
-                <th style="text-align:right;padding:4px 10px">In Memory (legacy)</th>
-                <th style="text-align:right;padding:4px 10px">In the palace</th>
-                <th style="text-align:right;padding:4px 10px">New</th>
-                <th style="text-align:right;padding:4px 10px">Removed before</th>
+                <th style="text-align:right;padding:4px 10px">Memory (legacy)</th>
+                <th style="padding:4px 2px">\u2192</th>
+                <th style="text-align:right;padding:4px 10px">Mind Palace</th>
+                <th style="text-align:right;padding:4px 10px">Change</th>
                 <th></th>
             </tr></thead>
             <tbody>${scopeRows.join('')}
-            <tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px"><b>Total</b></td>${num(total)}${num(imported)}${num(pending ? `<b>${pending}</b>` : '0')}${num(removed || '0')}<td></td></tr>
+            <tr style="border-top:1px solid var(--border)"><td style="padding:6px 10px"><b>Total</b></td>${num(total)}${arrow}${num(imported)}${change(pending, removed)}<td></td></tr>
             </tbody>
         </table>` : `<div class="ui-empty">${anyStore ? 'The classic databases are empty.' : 'No Memory (legacy) databases found — nothing to import. A fresh install starts in the palace.'}</div>`;
 
     const notes = [];
     if (p.pending_muted) notes.push(`<b>${p.pending_muted}</b> more sit in scopes you deleted from the palace: Import all and the reminder leave them out; a scope's own Import button brings it back.`);
-    notes.push('<b>New</b> = never imported. <b>Removed before</b> = imported once and since deleted from the palace; those stay out unless you bring them back below. Deleting a palace memory now keeps its key as a tombstone, so it never comes back.');
+    notes.push('<b>+N</b> = rows coming across. <b>Skipped</b> = imported once and deleted from the palace since; those stay out unless you bring them back below. Deleting a palace memory now keeps its key as a tombstone, so it never comes back.');
     if (p.rag_rows) notes.push(`${p.rag_rows} row${p.rag_rows === 1 ? '' : 's'} in per-chat attachment tabs stay with their chats — core keeps those under either engine.`);
-    notes.push('Knowledge entries also become Library documents in a second step: Admin › Migration › Copy knowledge into the Library.');
+    notes.push('Knowledge entries also become Library documents on their own, a few seconds after boot; Admin › Migration re-runs that copy.');
     notes.push('Re-running copies zero duplicates; switching back to Memory (legacy) is the same plugin toggle in reverse.');
     notes.push('Scopes keep their names. The palace reads every layer from a chat\'s <b>memory</b> scope, so goals or knowledge a chat kept in a different scope than its memories land under that other name: point the chat\'s memory scope there to see them.');
 
     const removedBox = removed ? `
         <div class="ui-box" style="border-color:var(--warning-border,var(--border))">
             <div class="ui-box-head">
-                <span class="ui-box-title">\u{1F5D1} Removed before</span>
+                <span class="ui-box-title">\u{1F5D1} Skipped: removed before</span>
                 <span class="ui-box-desc">${removed} row${removed === 1 ? '' : 's'} you deleted from the palace after an earlier import — still in the old database</span>
             </div>
             <div class="ui-box-body">

@@ -1287,25 +1287,6 @@ def maintenance(body=None, **_):
         _publish('events', scope, 'update')
         return {'success': True, 'restored': restored, 'skipped': skipped}
 
-    if action == 'import_v1':
-        # Bulk copy from the classic system (all stores, ALL scopes, additive,
-        # idempotent — re-runs copy zero duplicates). The v1 databases are
-        # opened READ-ONLY and never modified: they stay the pristine import
-        # source and switch-back path. Metadata backfill runs inside.
-        # Through start(): one door, so the Import tab's status, the lock
-        # and the scrub guard see this run too (migration hunt C7).
-        from plugins.mindpalace.tools import import_tools
-        msg, ok = import_tools.start(_config(), 'all', sync=True)
-        if not ok:
-            return {'error': msg}, 409                       # a refusal is not "done" (hunt H11)
-        with import_tools._state_lock:
-            summary, err = import_tools._run_state.get('result'), import_tools._run_state.get('error')
-        if err:
-            return {'error': summary or err}, 500
-        _publish('events', scope, 'update')
-        _publish('entities', scope, 'update')
-        return {'success': True, 'summary': summary}
-
     if action == 'generate_metadata':
         # Re-derive mechanical metadata outside create-time: stats/temporal/
         # noun stamps + entity-mention edges on every chunk missing its md_v

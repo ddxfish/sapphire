@@ -9327,6 +9327,19 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
 }
 .plib-tile-busy { position: absolute; top: 6px; right: 8px; color: var(--trim, #7aa2f7); }
 .plib-missing { opacity: 0.45; }
+
+/* Mind › Memories, empty palace with classic rows waiting: a card with the
+   trim-colored door, not a footnote (migration walk 2026-11-02) */
+.pal-waiting {
+    margin: 16px auto 0; max-width: 560px; padding: 18px 22px; text-align: center;
+    border: 1px solid var(--trim, #7aa2f7); border-radius: 10px;
+    background: var(--trim-light, rgba(122, 162, 247, 0.08));
+}
+.pal-waiting-title { font-size: 1.0625rem; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.pal-waiting .pal-waiting-btn {
+    margin-top: 14px; font-size: 1rem; padding: 10px 24px;
+    background: var(--trim, #7aa2f7); border-color: var(--trim, #7aa2f7); color: #fff;
+}
 .plib-folders {
     display: flex; flex-direction: column; gap: 6px; margin: 10px 0;
     padding: 10px 14px; border: 1px dashed var(--border, #2a2b3e);
