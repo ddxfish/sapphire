@@ -84,24 +84,47 @@ def _shipped_outside_git():
     return out
 
 
-def _owner_needles():
-    """Owner-defined beacon strings — user/megashark_needles.txt, one per
-    line, '#' comments allowed. The file lives in gitignored user/ so the
-    shipped test never carries the strings themselves (same principle as the
-    derived-at-runtime needles: the beacon must not be the shark). Matched
-    case-insensitively on word boundaries."""
-    path = REPO / 'user' / 'megashark_needles.txt'
+def _parse_needles(text):
+    """One beacon per line, '#' comments allowed. A plain line matches
+    case-insensitively on word boundaries. A line starting with "re:" is a
+    Python regex matched as written (add (?i) for case-insensitive): phone
+    shapes, a LAN host range, a name only when capitalized."""
     out = []
-    if not path.exists():
-        return out
-    for line in path.read_text(encoding='utf-8', errors='ignore').splitlines():
+    for line in text.splitlines():
         s = line.strip()
         if not s or s.startswith('#'):
+            continue
+        if s.startswith('re:'):
+            pat = s[3:].strip()
+            out.append((pat, f'owner beacon /{pat}/', re.compile(pat)))
             continue
         out.append((s, f'owner beacon "{s}"',
                     re.compile(rf'(?<![A-Za-z0-9_]){re.escape(s)}'
                                rf'(?![A-Za-z0-9_])', re.IGNORECASE)))
     return out
+
+
+def _owner_needles():
+    """Owner-defined beacons — user/megashark_needles.txt. The file lives in
+    gitignored user/ so the shipped test never carries the strings themselves
+    (same principle as the derived-at-runtime needles: the beacon must not be
+    the shark)."""
+    path = REPO / 'user' / 'megashark_needles.txt'
+    if not path.exists():
+        return []
+    return _parse_needles(path.read_text(encoding='utf-8', errors='ignore'))
+
+
+def test_owner_needles_parse_plain_and_regex_lines():
+    """Plain lines: whole words, any case. "re:" lines: the regex as written,
+    so a shape (a phone number) or a capitalized-only name can be a beacon
+    without flagging every lowercase command that shares the letters."""
+    needles = _parse_needles("# comment\n\nzebrabeacon\nre:\\bZ\\d{4}\\b\nre:\\bWalrus\\b\n")
+    assert [n[0] for n in needles] == ['zebrabeacon', '\\bZ\\d{4}\\b', '\\bWalrus\\b']
+    plain, shape, cased = (n[2] for n in needles)
+    assert plain.search('a ZebraBeacon here') and not plain.search('zebrabeacons')
+    assert shape.search('box Z1234 ok') and not shape.search('Z12345')
+    assert cased.search('Walrus the dog') and not cased.search('walrus command')
 
 
 def test_no_developer_environment_leaks():

@@ -125,7 +125,7 @@ def test_same_knows_one_utterance_from_two(a, b, one):
 @pytest.fixture
 def two(home):
     engine.add('esp', 'Desk', 'satellite',
-               {'url': 'http://192.168.0.4:80', 'token': 'board-key-abcdefgh', 'voice_key': 'voice-key-esp32-11'})
+               {'url': 'http://10.0.0.4:80', 'token': 'board-key-abcdefgh', 'voice_key': 'voice-key-esp32-11'})
     return home
 
 
@@ -271,7 +271,7 @@ def test_all_appears_once_two_devices_can_speak(two):
 
 def test_no_device_may_be_named_all(home):
     with pytest.raises(engine.DeviceError):
-        engine.add('all', 'Everyone', 'satellite', {'url': 'http://192.168.0.9:80', 'token': 'k' * 12})
+        engine.add('all', 'Everyone', 'satellite', {'url': 'http://192.168.1.9:80', 'token': 'k' * 12})
 
 
 def test_all_only_speaks(two):
@@ -294,7 +294,7 @@ def test_say_on_all_renders_once_and_plays_on_every_device_at_once(two):
     assert text.splitlines() == ['Said on 2 device(s): "Dinner is ready"', 'esp: said', 'pi2: said']
     two.system.tts.render.assert_called_once()
     posts = [url for m, url, kw in sent if url.endswith('/audio/speak')]
-    assert sorted(posts) == ['http://192.168.0.4:80/audio/speak', 'http://192.168.1.100:8090/audio/speak']
+    assert sorted(posts) == ['http://10.0.0.4:80/audio/speak', 'http://192.168.1.100:8090/audio/speak']
 
 
 def test_say_on_all_skips_a_device_believed_offline_but_tries_one_never_asked(two):
@@ -322,7 +322,7 @@ def test_a_button_stop_on_one_device_stops_the_others(two):
     with patch.object(sat.net, 'request', request):
         text, ok = engine.run('all', 'speaker', 'say', 'One. Two. Three.')
     assert ok and 'pi2: stopped there, so stopped everywhere' in text
-    assert ('POST', 'http://192.168.0.4:80/audio/stop') in sent   # the other was told to cut it
+    assert ('POST', 'http://10.0.0.4:80/audio/stop') in sent   # the other was told to cut it
     assert ('POST', 'http://192.168.1.100:8090/audio/stop') not in sent   # not the one whose button it was
 
 
@@ -365,7 +365,7 @@ def test_stop_on_all_reaches_every_speaker(two):
         text, ok = engine.run('all', 'speaker', 'stop')
     assert ok
     assert sorted(url for m, url, kw in sent if url.endswith('/audio/stop')) == [
-        'http://192.168.0.4:80/audio/stop', 'http://192.168.1.100:8090/audio/stop']
+        'http://10.0.0.4:80/audio/stop', 'http://192.168.1.100:8090/audio/stop']
     assert set(text.splitlines()) <= {'esp: Stopped.', 'pi2: Stopped.', 'esp: Nothing was playing there.',
                                       'pi2: Nothing was playing there.'}
 

@@ -14,7 +14,7 @@ from core.routes import devices as routes
 
 PAGE = (Path(__file__).absolute().parent.parent / 'docs' / 'SATELLITE-PROTOCOL.md').read_text(encoding='utf-8')
 DEV = {'id': 'den', 'label': 'Den', 'location': ''}
-CFG = {'url': 'http://192.168.0.50', 'camera': True, 'chat': ''}
+CFG = {'url': 'http://192.168.1.50', 'camera': True, 'chat': ''}
 
 
 class Secrets(dict):

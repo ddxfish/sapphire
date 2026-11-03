@@ -109,7 +109,7 @@ def test_validate():
     assert ok('')[1] == '' and ok('')[0]['url'] == ''        # learned when it calls in (engine.learned)
     assert 'own network' in ok('http://8.8.8.8:8090')[1]
     assert 'own network' in ok('http://pi.example.com')[1]
-    assert 'not a usable address' in ok('ftp://192.168.0.2')[1]
+    assert 'not a usable address' in ok('ftp://192.168.1.2')[1]
 
 
 # --- every request carries the key, and nothing else does ----------------------

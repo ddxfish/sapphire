@@ -106,7 +106,7 @@ def oauth_env(tmp_path, monkeypatch, creds_manager):
         return resp
 
     monkeypatch.setattr(mod.net, 'post', fake_post)
-    req = SimpleNamespace(base_url='http://192.168.0.5:8073/')
+    req = SimpleNamespace(base_url='http://192.168.1.5:8073/')
     return SimpleNamespace(mod=mod, posts=posts, req=req, csrf=tmp_path / 'csrf.json')
 
 
@@ -119,7 +119,7 @@ def test_start_auth_easy_uses_relay_with_pkce(oauth_env):
     start = oauth_env.posts[0]
     assert start['url'] == 'https://oauth.sapphireblue.dev/start'
     assert start['json']['return_url'].startswith(
-        'http://192.168.0.5:8073/api/plugin/google-calendar/callback?state=')
+        'http://192.168.1.5:8073/api/plugin/google-calendar/callback?state=')
 
     # challenge must be S256 of the verifier persisted in the CSRF entry
     entry = list(json.loads(oauth_env.csrf.read_text()).values())[0]

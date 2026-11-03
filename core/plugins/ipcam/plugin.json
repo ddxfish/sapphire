@@ -26,7 +26,7 @@
             "key": "host",
             "type": "string",
             "label": "Address",
-            "placeholder": "192.168.0.60",
+            "placeholder": "192.0.2.60",
             "help": "The camera's address on your network. ONVIF has to be switched on in the camera's own settings.",
             "tab": "Status",
             "setup": true

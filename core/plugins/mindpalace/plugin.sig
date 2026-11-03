@@ -31,18 +31,18 @@
     "tests/test_library_export.py": "sha256:cf972e1355fa5e748f9a3d9133dc4d29aaeff18994571d85283e85c6d88a62a5",
     "tests/test_library_path_fallback.py": "sha256:59ba6c815030cbc4dcab8b15acf3f105e19fca18b237ab53d22ffe451524cc06",
     "tests/test_memory_dates.py": "sha256:dbf705c9aeb658ce603889d25af9173d238406c06564e47d645c48863aa5c56f",
-    "tests/test_memory_save_image.py": "sha256:bd6690af5225c8c128fae1dc4df2eba4d524f17874e41cbd6879b2806757382a",
-    "tests/test_mindpalace.py": "sha256:123702ec2a3a2217b835cc9958a5f703446efffe4dcdbfb6e748af0362bafd32",
+    "tests/test_memory_save_image.py": "sha256:3b212025f54162dad763484b8efa6d079bcd4848d618fc7f6e1cdc0eb9b25f7f",
+    "tests/test_mindpalace.py": "sha256:d1de00c7ede53284ee52570c014b5089bdb19e16b84300c9583efede1b4f54a6",
     "tests/test_mindpalace_dedup_human.py": "sha256:86e2ca4d32df1775e324363452a7b4115a792d719a08211d416c4e81cadb4976",
     "tests/test_mindpalace_goals.py": "sha256:51dfb3a499a83fc66d116fdf33cff3d57d8a8e688f3831cfb0d8b6d2e9e87e3a",
     "tests/test_mindpalace_import.py": "sha256:b7347b5e081d59d82154ddad330a9443a31ef1c55265ca64aa6399831a9bd4be",
     "tests/test_mindpalace_knowledge.py": "sha256:d1c95405ee4e45484049f89a7b4dae0463596e34d0ffebaa658858dfed727467",
     "tests/test_mindpalace_layers.py": "sha256:ff7a5bf036ab8e7404ad90b3d7f11c752ac7dfdcba76d80fc47194c9cb4dd9c1",
     "tests/test_mindpalace_ledger.py": "sha256:34e5a216ae91b0be1d4f46a0bbb1d49c5f484b77e6c0ee33e74dbd39efeae5b8",
-    "tests/test_mindpalace_librarian.py": "sha256:5fe47883cdd92fc0d742512978c9c575391a547d9e6042135f9c76263a4285a5",
+    "tests/test_mindpalace_librarian.py": "sha256:b09f7abf915025d75aba25d35464edce37885e24899eeabd3537f66a22ccaa09",
     "tests/test_mindpalace_maintenance.py": "sha256:58e7b9f40791f7ffa84c0aa76a996dd365595d02d9cc2d6a9dc15a5e48d60a98",
     "tests/test_mindpalace_metadata.py": "sha256:8c7dd81b8da6a72e162414d04c4ba409ce085aed5f8816cf59bf1fa249b19363",
-    "tests/test_mindpalace_self.py": "sha256:aa4e979b4d99129a3f10a3fa5fed7211c45dc83d1ab13bb05dfc0b96925a0c8c",
+    "tests/test_mindpalace_self.py": "sha256:c0c952c033a11dee14d5bab2a82456d0689cc7c9e818adc5fd2d7e02aefc0513",
     "tests/test_mindpalace_spider.py": "sha256:cefb232eee5f5299e0de065250a68b81ed87c2c19703d5e7de1465e49a05cb05",
     "tests/test_mindpalace_templates.py": "sha256:3feb501e85e16b5b784803dde6a7d729ad7bbe29076091c1911db9ac3fbd62e1",
     "tests/test_mindpalace_transfer.py": "sha256:abc9db187e83ef57650ac2d4660008b937e3fed7cd5643216cc4292976bca6a0",
@@ -75,5 +75,5 @@
     "tools/temporal.py": "sha256:c68e63a2b23914fc594009ad5ffdf4c74e077ba89a440628ee86968dce535d6d",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "IqYrsFn5OQiIag0YFaSkAOse//EXK15il0TZpKXrpFOUOyZ3CQev8P2MuWwvcM257/ELTsy18UsKBnTiuwhYDA=="
+  "signature": "MMzWVMHNoSXpmavJEj39VT3sIHTc/0/MlCdlzC0aIUMxJXUf1xz+ylRbiDdHLFmmfRqZ8C1hrlrqoH1VdnHdCQ=="
 }

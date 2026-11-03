@@ -577,8 +577,8 @@ def test_the_user_may_say_where_sapphire_is(rig):
     cfg = types.SimpleNamespace(WEB_UI_SSL_ADHOC=True, WEB_UI_PORT=8073)
     with patch.dict(sys.modules, {'config': cfg}), patch('core.net.local_ips', lambda: ['10.131.93.212']), \
          patch('core.ssl_utils.cert_pem', lambda: ''):
-        out = routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': '192.168.0.69:8073/'})
-        assert out['sapphire'] == 'https://192.168.0.69:8073'
+        out = routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': '192.168.1.69:8073/'})
+        assert out['sapphire'] == 'https://192.168.1.69:8073'
         with pytest.raises(core.DeviceError, match=core.REPLACE_NEEDED):            # the name is taken, no proof
             routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': 'http://sapphire-box:8073'})
         out = routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': 'http://sapphire-box:8073',
@@ -596,17 +596,17 @@ def test_local_ips_skips_tunnels_bridges_and_loopback():
     from core import net
     A = lambda ip, mask: types.SimpleNamespace(family=socket.AF_INET, address=ip, netmask=mask)
     six = types.SimpleNamespace(family=socket.AF_INET6, address='fe80::1', netmask=None)
-    table = {'lo': [A('127.0.0.1', '255.0.0.0')], 'eno1': [A('192.168.0.69', '255.255.255.0'), six],
+    table = {'lo': [A('127.0.0.1', '255.0.0.0')], 'eno1': [A('192.168.1.69', '255.255.255.0'), six],
              'virbr0': [A('192.168.122.1', '255.255.255.0')], 'docker0': [A('172.17.0.1', '255.255.0.0')],
              'br-4357': [A('172.19.0.1', '255.255.0.0')], 'wg0-mullvad': [A('10.131.93.212', '255.255.255.255')],
              'eth1': [A('10.1.2.3', '255.255.0.0')], 'wlan0': [A('8.8.8.8', '255.255.255.0')]}
     fake = types.SimpleNamespace(net_if_addrs=lambda: table)
     with patch.dict(sys.modules, {'psutil': fake}), patch.object(net, '_route_out', lambda: '10.131.93.212'):
-        assert net.local_ips() == ['192.168.0.69', '10.1.2.3']
-        assert net.local_ip() == '192.168.0.69'
+        assert net.local_ips() == ['192.168.1.69', '10.1.2.3']
+        assert net.local_ip() == '192.168.1.69'
     # no VPN: the route out is the house, and it comes first
     with patch.dict(sys.modules, {'psutil': fake}), patch.object(net, '_route_out', lambda: '10.1.2.3'):
-        assert net.local_ips() == ['10.1.2.3', '192.168.0.69']
+        assert net.local_ips() == ['10.1.2.3', '192.168.1.69']
     # no interfaces known: the route out, if it is private at all
     with patch.dict(sys.modules, {'psutil': types.SimpleNamespace(net_if_addrs=lambda: {})}), \
          patch.object(net, '_route_out', lambda: '10.131.93.212'):
@@ -649,7 +649,7 @@ def test_a_board_keeps_its_name_and_a_name_keeps_its_board(rig):
 def test_satellite_status_shows_the_board_id():
     from core.devices.drivers import satellite as sat
     with patch.object(sat, '_health', lambda *a, **k: {'ok': True, 'firmware': '0.2.1', 'mac': 'aa:bb:cc:dd:ee:01'}):
-        st = sat.status({'id': 'pocket'}, {'url': 'http://192.168.0.5'}, types.SimpleNamespace(get=lambda k: 'key'))
+        st = sat.status({'id': 'pocket'}, {'url': 'http://192.168.1.5'}, types.SimpleNamespace(get=lambda k: 'key'))
     assert st['readings']['board id'] == 'aa:bb:cc:dd:ee:01'
 
 
@@ -787,7 +787,7 @@ class FakeSerial:
         line = data.decode().strip()
         self.sent.append(line)
         if line == 'show':
-            self.lines = [b'I (12) wifi: joined\r\n', b'>> {"name": "pocket", "ip": "192.168.0.5"}\r\n']
+            self.lines = [b'I (12) wifi: joined\r\n', b'>> {"name": "pocket", "ip": "192.168.1.5"}\r\n']
         elif line.startswith('setup '):
             self.lines = [b'>> {"ok": true}\r\n']
         elif line == 'mute':
@@ -806,7 +806,7 @@ def test_the_console_boots_the_program_and_stays_open(lane, monkeypatch):
     FakeSerial.opened.clear()
     flasher._consoles.clear()
     got = flasher.ask(lane.port, 'show', 5)
-    assert got['answer'] == {'name': 'pocket', 'ip': '192.168.0.5'} and got['said'] == ['I (12) wifi: joined']
+    assert got['answer'] == {'name': 'pocket', 'ip': '192.168.1.5'} and got['said'] == ['I (12) wifi: joined']
     con = flasher._consoles[lane.port]
     assert con.s.signals[:4] == [('dtr', False), ('rts', False), ('rts', True), ('rts', False)]   # run mode, never the loader
     assert flasher.ask(lane.port, 'setup {}', 5)['answer'] == {'ok': True}
@@ -854,7 +854,7 @@ def test_update_sends_the_program_with_its_sha_and_says_what_happens(fw):
         sent.append((method, path, timeout, headers, body))
         return types.SimpleNamespace(json=lambda: {'ok': True, 'restarting': True, 'slot': 'ota_1'})
 
-    dev, cfg, sec = {'id': 'pocket'}, {'url': 'http://192.168.0.5'}, types.SimpleNamespace(get=lambda k: 'key')
+    dev, cfg, sec = {'id': 'pocket'}, {'url': 'http://192.168.1.5'}, types.SimpleNamespace(get=lambda k: 'key')
     health = {'ok': True, 'firmware': '0.1.0', 'model': 'pocket', 'slot': 'ota_0', 'mac': 'aa:bb:cc:dd:ee:01'}
     with patch.object(firmware, 'sources', lambda: [str(fw / 'src')]), \
          patch.object(sat, '_health', lambda *a, **k: health), patch.object(sat, '_call', call):

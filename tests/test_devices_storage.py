@@ -411,7 +411,7 @@ def test_a_backup_is_not_sent_to_a_card_without_room(tmp_path):
     from core.devices.drivers import satellite as sat
     f = tmp_path / 'sapphire_2026-10-11_030000_daily.sapphirebak'
     f.write_bytes(b'SAPPHIREBAK\x01' + b'x' * 4096)
-    target = sat.SatelliteTarget({'id': 'esp'}, {'url': 'http://192.168.0.9'}, {'token': 'k' * 16})
+    target = sat.SatelliteTarget({'id': 'esp'}, {'url': 'http://192.168.1.9'}, {'token': 'k' * 16})
     sent = []
     with patch.object(sat.SatelliteTarget, 'info', return_value={'free_bytes': 1024}), \
          patch.object(sat.SatelliteTarget, 'check', return_value=None), \

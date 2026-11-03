@@ -103,13 +103,13 @@ def test_the_guides_manifest_is_a_whole_plugin(lamp):
 
 
 def test_the_guides_driver_works_through_the_real_engine(lamp):
-    row, failed = engine.add('desk', 'Desk lamp', 'lamp', {'host': ' 192.168.0.20 ', 'token': 'lamp-token-12345'})
-    assert failed == [] and row['parts'][0]['config'] == {'host': '192.168.0.20'}      # validate() ran
+    row, failed = engine.add('desk', 'Desk lamp', 'lamp', {'host': ' 192.168.1.20 ', 'token': 'lamp-token-12345'})
+    assert failed == [] and row['parts'][0]['config'] == {'host': '192.168.1.20'}      # validate() ran
     assert 'lamp-token-12345' not in json.dumps(row)                                   # the secret is not in the row
 
     assert engine.run('desk', 'light', 'on') == ('Desk lamp is on.', True)
     assert engine.run('desk', 'light', 'dim', '40') == ('Desk lamp is at 40%.', True)
-    assert lamp.sent[-1] == ('192.168.0.20', 'lamp-token-12345', '/dim?to=40')         # and it reached the driver
+    assert lamp.sent[-1] == ('192.168.1.20', 'lamp-token-12345', '/dim?to=40')         # and it reached the driver
     assert engine.run('desk', 'light', 'dim', 'bright') == \
         ("dim takes a number from 0 to 100, not 'bright'.", False)
 
@@ -131,7 +131,7 @@ def test_the_guides_driver_says_plainly_what_is_wrong(lamp):
 
 
 def test_every_example_in_the_guides_help_really_runs(lamp):
-    engine.add('desk', 'Desk lamp', 'lamp', {'host': '192.168.0.20', 'token': 'lamp-token-12345'})
+    engine.add('desk', 'Desk lamp', 'lamp', {'host': '192.168.1.20', 'token': 'lamp-token-12345'})
     for cap in engine.describe(engine.get('desk')):
         for action, a in cap['actions'].items():
             text, ok = engine.run('desk', cap['capability'], action, a['example'])

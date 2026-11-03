@@ -28,10 +28,10 @@ def _docs(scope='default'):
 def test_save_from_path_creates_the_topic(tmp_path):
     p = tmp_path / 'cat photo.png'
     p.write_bytes(_png())
-    text, ok = lib.save_image('default', str(p), 'Pets', caption='Sudo on the porch')
+    text, ok = lib.save_image('default', str(p), 'Pets', caption='Marlow on the porch')
     assert ok and 'Saved [doc ' in text and '▸ Pets' in text and 'memory_view_image(document_id=' in text
     (did, title, cid, pk, meta), = _docs()
-    assert title == 'Sudo on the porch' and pk is None
+    assert title == 'Marlow on the porch' and pk is None
     with lib.get_connection() as conn:
         name, parent = conn.execute('SELECT name, parent_id FROM collections WHERE id = ?', (cid,)).fetchone()
     assert name == 'Pets' and parent is None

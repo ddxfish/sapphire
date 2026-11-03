@@ -57,7 +57,7 @@ def validate(config):
     if not host:
         return config, "The camera's address is needed."
     if not _HOST.match(host):
-        return config, f"'{host}' is not a usable address. Use an IP like 192.168.0.60."
+        return config, f"'{host}' is not a usable address. Use an IP like 192.0.2.60."
     if net.classify(host) != 'lan':
         return config, ("A camera has to be on your own network. Its login travels with little "
                         "protection, so an internet address is refused.")

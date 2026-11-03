@@ -57,7 +57,7 @@ my-lamp/
         "module": "device_driver.py",
         "capabilities": ["light"],
         "config_schema": [
-          {"key": "host", "type": "string", "label": "Address", "placeholder": "192.168.0.20"},
+          {"key": "host", "type": "string", "label": "Address", "placeholder": "192.168.1.20"},
           {"key": "token", "type": "string", "widget": "password", "secret": true, "label": "Token"}
         ]
       }
@@ -256,7 +256,7 @@ from unittest.mock import patch
 import device_driver as lamp
 
 DEVICE = {"id": "desk", "label": "Desk lamp", "location": "Office"}
-CONFIG = {"host": "192.168.0.20"}
+CONFIG = {"host": "192.168.1.20"}
 
 def test_dim():
     with patch.object(lamp, "_send", lambda config, secrets, path: {"ok": True}):

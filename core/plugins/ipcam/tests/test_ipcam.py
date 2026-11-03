@@ -23,7 +23,7 @@ class Secrets(dict):
 
 
 def cfg(**over):
-    base = {'host': '192.168.0.60', 'user': 'admin', 'port': 8999,
+    base = {'host': '192.0.2.60', 'user': 'admin', 'port': 8999,
             'places': [{'name': 'door', 'slot': '3'}]}
     base.update(over)
     return base
@@ -111,15 +111,15 @@ def test_the_password_is_sent_as_a_digest_never_itself(cam):
 def test_addresses_the_camera_names_are_held_to_the_host_the_user_entered(cam):
     drv.status(DEVICE, cfg(), Secrets(password=PASSWORD))
     held = drv._cams['dome'][1]
-    assert held.ptz == 'http://192.168.0.60:8999/onvif/ptz_service'
-    assert held.profiles[0]['snapshot'] == 'http://192.168.0.60/jpgimage/1/image.jpg'
-    assert held.profiles[0]['stream'] == 'rtsp://192.168.0.60:554/1/h264major'
+    assert held.ptz == 'http://192.0.2.60:8999/onvif/ptz_service'
+    assert held.profiles[0]['snapshot'] == 'http://192.0.2.60/jpgimage/1/image.jpg'
+    assert held.profiles[0]['stream'] == 'rtsp://192.0.2.60:554/1/h264major'
     assert '10.9.9.9' not in repr(vars(held))
 
 
 def test_the_stream_address_quotes_the_login():
-    c = onvif.Camera('192.168.0.60', 80, 'ad min', 'p@ss/word')
-    assert c.stream_url({'stream': 'rtsp://192.168.0.60:554/1/x'}) == 'rtsp://ad%20min:p%40ss%2Fword@192.168.0.60:554/1/x'
+    c = onvif.Camera('192.0.2.60', 80, 'ad min', 'p@ss/word')
+    assert c.stream_url({'stream': 'rtsp://192.0.2.60:554/1/x'}) == 'rtsp://ad%20min:p%40ss%2Fword@192.0.2.60:554/1/x'
 
 
 def test_an_answer_with_a_doctype_is_not_parsed():
@@ -131,7 +131,7 @@ def test_an_answer_with_a_doctype_is_not_parsed():
 def test_status_says_what_the_camera_has(cam):
     st = drv.status(DEVICE, cfg(), Secrets(password=PASSWORD))
     assert st['online'] and st['has'] == ['camera', 'ptz']
-    assert st['detail'] == 'IPD-1 at 192.168.0.60'
+    assert st['detail'] == 'IPD-1 at 192.0.2.60'
     assert st['readings']['picture'] == '2592x1944'        # the sharpest profile, whatever order they came in
     assert 'Stop' in cam.sent                              # first contact ends a move left running
 
@@ -323,10 +323,10 @@ def test_goto_is_offered_only_when_places_are_named(cam):
 
 def test_validate_finds_the_port_and_cleans_the_rest(monkeypatch):
     monkeypatch.setattr(onvif, 'find', lambda host: 8999)
-    config, error = drv.validate({'host': 'http://192.168.0.60:80/', 'user': '', 'port': 0,
+    config, error = drv.validate({'host': 'http://192.0.2.60:80/', 'user': '', 'port': 0,
                                   'places': [{'name': 'Front Door', 'slot': '03'}]})
     assert error == ''
-    assert config == {'host': '192.168.0.60', 'user': 'admin', 'port': 8999,
+    assert config == {'host': '192.0.2.60', 'user': 'admin', 'port': 8999,
                       'places': [{'name': 'front-door', 'slot': '3'}]}
 
 
@@ -338,10 +338,10 @@ def test_validate_keeps_a_port_that_was_entered(monkeypatch):
 @pytest.mark.parametrize('config, word', [
     ({'host': ''}, 'address is needed'),
     ({'host': 'camera.example.com'}, 'your own network'),
-    ({'host': '192.168.0.60', 'places': [{'name': 'left', 'slot': '1'}]}, 'name of its own'),
-    ({'host': '192.168.0.60', 'places': [{'name': 'door', 'slot': '300'}]}, '1 to 255'),
-    ({'host': '192.168.0.60', 'places': [{'name': 'a', 'slot': '1'}, {'name': 'a', 'slot': '2'}]}, 'name of its own'),
-    ({'host': '192.168.0.60', 'port': 0}, 'No ONVIF camera answered'),
+    ({'host': '192.0.2.60', 'places': [{'name': 'left', 'slot': '1'}]}, 'name of its own'),
+    ({'host': '192.0.2.60', 'places': [{'name': 'door', 'slot': '300'}]}, '1 to 255'),
+    ({'host': '192.0.2.60', 'places': [{'name': 'a', 'slot': '1'}, {'name': 'a', 'slot': '2'}]}, 'name of its own'),
+    ({'host': '192.0.2.60', 'port': 0}, 'No ONVIF camera answered'),
 ])
 def test_validate_refuses_in_words(monkeypatch, config, word):
     monkeypatch.setattr(onvif, 'find', lambda host: None)
@@ -351,9 +351,9 @@ def test_validate_refuses_in_words(monkeypatch, config, word):
 def test_find_asks_the_camera_then_tries_the_usual_ports(monkeypatch):
     monkeypatch.setattr(onvif, '_announced', lambda host, wait: 8999)
     monkeypatch.setattr(onvif, '_speaks_onvif', lambda host, port: port == 8999)
-    assert onvif.find('192.168.0.60') == 8999
+    assert onvif.find('192.0.2.60') == 8999
     monkeypatch.setattr(onvif, '_announced', lambda host, wait: None)
     monkeypatch.setattr(onvif, '_speaks_onvif', lambda host, port: port == 8080)
-    assert onvif.find('192.168.0.60') == 8080
+    assert onvif.find('192.0.2.60') == 8080
     monkeypatch.setattr(onvif, '_speaks_onvif', lambda host, port: False)
-    assert onvif.find('192.168.0.60') is None
+    assert onvif.find('192.0.2.60') is None

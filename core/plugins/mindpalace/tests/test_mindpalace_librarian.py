@@ -183,21 +183,21 @@ def test_promote_kind_categorizes_new_entity_only(palace):
     """kind= (Krem 2026-07-19, after the sort drain minted 9 'uncategorized'
     cards): a NEW entity takes the kind; an existing entity keeps its own;
     an unknown kind files unsorted instead of failing the verb."""
-    cid = _save("Sudo is a 14 year old dog with calm energy")
+    cid = _save("Marlow is a 14 year old dog with calm energy")
     lt.open_pass('default', [cid])
     msg, ok = _run('promote_memory', {'memory_id': cid, 'layer': 'entities',
-                                      'entity': 'Sudo', 'kind': 'person'})
+                                      'entity': 'Marlow', 'kind': 'person'})
     assert ok
     with pt._get_connection() as conn:
-        assert conn.execute("SELECT kind FROM entities WHERE name='Sudo'").fetchone()[0] == 'person'
+        assert conn.execute("SELECT kind FROM entities WHERE name='Marlow'").fetchone()[0] == 'person'
         # Existing entity keeps its kind — a later promote can't re-categorize.
-        cid2 = _save("Sudo loves the lake in summer")
+        cid2 = _save("Marlow loves the lake in summer")
     lt.open_pass('default', [cid2])
     msg, ok = _run('promote_memory', {'memory_id': cid2, 'layer': 'entities',
-                                      'entity': 'Sudo', 'kind': 'place'})
+                                      'entity': 'Marlow', 'kind': 'place'})
     assert ok
     with pt._get_connection() as conn:
-        assert conn.execute("SELECT kind FROM entities WHERE name='Sudo'").fetchone()[0] == 'person'
+        assert conn.execute("SELECT kind FROM entities WHERE name='Marlow'").fetchone()[0] == 'person'
     # Unknown kind → unsorted, verb still files.
     cid3 = _save("The garage is where the work happens")
     lt.open_pass('default', [cid3])

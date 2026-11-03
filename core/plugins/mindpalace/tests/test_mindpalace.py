@@ -837,8 +837,8 @@ def test_partial_overlap_creates_but_asks_did_you_mean(palace):
 
 def test_unrelated_name_gets_no_suggestion(palace):
     _make_person(palace, "Samantha", nicknames="sam")
-    msg, ok = palace._save_memory("Sudo is the dog.", scope="default",
-                                  layer="entities", entity="Sudo")
+    msg, ok = palace._save_memory("Marlow is the dog.", scope="default",
+                                  layer="entities", entity="Marlow")
     assert ok and "Did you mean" not in msg
 
 

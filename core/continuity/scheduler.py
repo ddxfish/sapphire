@@ -74,8 +74,8 @@ def _phone_key(s):
 def _value_matches(ev_val, filter_val):
     """Filter equality with two tolerances the caller allowlist needs:
     a comma-separated filter value is an allowlist (match ANY of the entries),
-    and phone numbers compare on their digit tail so +1-240-555-1234,
-    (240) 555-1234 and 2405551234 all match the same incoming E.164 caller."""
+    and phone numbers compare on their digit tail so +1-555-010-1234,
+    (555) 010-1234 and 5550101234 all match the same incoming E.164 caller."""
     ev = str(ev_val)
     ev_lower = ev.lower()
     ev_phone = _phone_key(ev)

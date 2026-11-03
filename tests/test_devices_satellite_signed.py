@@ -12,7 +12,7 @@ import pytest
 
 from core.devices.drivers import satellite as sat
 
-CFG = {'url': 'http://192.168.0.4'}
+CFG = {'url': 'http://192.168.1.4'}
 KEY = 'board-key-abcdefgh'
 
 

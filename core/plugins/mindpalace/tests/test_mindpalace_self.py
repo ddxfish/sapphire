@@ -107,18 +107,18 @@ def test_important_mark_tolerant_parse_and_canonical_render():
     text = ("Krem (important) — the one who builds me\n"
             "Falcon — holds the line (IMPORTANT)\n"
             "Marisol — market friend\n"
-            "betelgeuse (important)")
+            "stargazing (important)")
     rows = st.text_to_rows(text, fields, ' — ')
     assert rows == [
         {'name': 'Krem', 'why': 'the one who builds me', 'important': True},
         {'name': 'Falcon', 'why': 'holds the line', 'important': True},
         {'name': 'Marisol', 'why': 'market friend'},
-        {'name': 'betelgeuse', 'why': '', 'important': True}]
+        {'name': 'stargazing', 'why': '', 'important': True}]
     canon = st.rows_to_text(rows, fields, ' — ')
     assert canon == ("Krem — the one who builds me (important)\n"
                      "Falcon — holds the line (important)\n"
                      "Marisol — market friend\n"
-                     "betelgeuse (important)")
+                     "stargazing (important)")
     assert st.text_to_rows(canon, fields, ' — ') == rows   # stable round-trip
 
 
