@@ -26,6 +26,7 @@ import { getInitData } from './shared/init-data.js';
 // New architecture
 import { registerView, initRouter, getCurrentView, switchView } from './core/router.js';
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
+import { discoverPluginApps } from './core/plugin-apps.js';
 import { renderSurface } from './surface/surface.js';
 import { chatMode } from './surface/chat-mode.js';
 import { escapeHtml } from './shared/modal.js';
@@ -244,163 +245,9 @@ async function init() {
                     })
                     .catch(() => {});
             }
-            // Discover plugin apps — promote nav apps, show Apps grid if others exist
-            try {
-                const appsRes = await fetch('/api/apps', { signal: AbortSignal.timeout(15000) });
-                if (appsRes.ok) {
-                    const appsData = await appsRes.json();
-                    const allApps = (appsData.apps || []).filter(a => (a.places || ['apps']).includes('apps'));   // stage-only: no rail slot, no tile
-                    const navApps = allApps.filter(a => a.nav);
-                    const gridApps = allApps.filter(a => !a.nav);
-
-                    // nav: true → own rail slot (capped). nav: "<group>" → item
-                    // in that group's flyout (no rail cost, uncapped) — same
-                    // mechanism the Mind flyout uses for plugin memory layers.
-                    // Unknown/malformed group falls back to a rail slot.
-                    const flyoutFor = a => (typeof a.nav === 'string' && /^[a-z][a-z0-9-]*$/.test(a.nav))
-                        ? document.querySelector(`.nav-item.nav-group-parent[data-view="${a.nav}"] .nav-flyout`)
-                        : null;
-                    const flyoutApps = navApps.filter(a => flyoutFor(a));
-                    const railApps = navApps.filter(a => !flyoutFor(a));
-
-                    // View container + router registration — shared by both paths.
-                    // Returns the view module so nav items can "reset to app
-                    // home": clicking the app's nav entry while already inside
-                    // one of its sub-routes (#app-x/...) re-renders at the base.
-                    const promoteAppView = (app, group) => {
-                        const appContent = document.getElementById('app-content');
-                        if (appContent) {
-                            const viewDiv = document.createElement('div');
-                            viewDiv.id = `view-app-${app.name}`;
-                            viewDiv.className = 'view';
-                            viewDiv.style.display = 'none';
-                            appContent.appendChild(viewDiv);
-                        }
-                        const appName = app.name;
-                        // Visibility epoch: an app's render is async, so a
-                        // click-away can land between show() starting and the
-                        // module resolving. Without this, hide() found no
-                        // _appCleanup yet and no-oped, then render finished
-                        // into a display:none view — and apps that claim
-                        // shared DOM (the Game Room's rail + composer) left
-                        // Chat with no rail, no composer, and no error.
-                        // Every app inherits this contract.
-                        let epoch = 0;
-                        const mod = {
-                            init(el) {},
-                            async show() {
-                                const el = document.getElementById(`view-app-${appName}`);
-                                if (!el) return;
-                                if (el.dataset.loaded) return;
-                                const mine = ++epoch;
-                                const v = document.querySelector('meta[name="boot-version"]')?.content || '';
-                                let imported = null;
-                                try {
-                                    imported = await import(`/plugin-web/${appName}/app/index.js?v=${v}`);
-                                    if (mine !== epoch) return;         // hidden while importing
-                                    // Per-RENDER cleanup: render() may return its own
-                                    // teardown closure. The module-level cleanup export
-                                    // is only a fallback — the module is memoized, so on
-                                    // a superseded render that export acts on state the
-                                    // NEWER render now owns (post-fix review 2026-08-05:
-                                    // the loser's teardown killed the winner).
-                                    let ret = null;
-                                    if (imported.render) ret = await imported.render(el);
-                                    const fin = (typeof ret === 'function') ? ret : (imported.cleanup || null);
-                                    if (mine !== epoch) {
-                                        // Hidden mid-render: the app may have
-                                        // claimed shared DOM by now. Tear THIS
-                                        // render down instead of stranding it.
-                                        try { fin?.(); } catch {}
-                                        el.dataset.loaded = '';
-                                        return;
-                                    }
-                                    if (fin) el._appCleanup = fin;
-                                    el.dataset.loaded = 'true';
-                                } catch (e) {
-                                    if (mine !== epoch) return;
-                                    // Render threw after possibly claiming shared DOM
-                                    // (rail/composer/#chatbg) — release it before
-                                    // painting the error, or Chat is left with no rail.
-                                    try { imported?.cleanup?.(); } catch {}
-                                    el.innerHTML = `<div class="view-placeholder"><h2>Failed to load ${appName}</h2><p style="color:var(--text-muted)">${escapeHtml(e.message)}</p></div>`;
-                                }
-                            },
-                            hide() {
-                                epoch++;                                 // cancels any in-flight show()
-                                const el = document.getElementById(`view-app-${appName}`);
-                                if (el?._appCleanup) {
-                                    try { el._appCleanup(); } catch {}
-                                    el._appCleanup = null;
-                                    el.dataset.loaded = '';
-                                }
-                            }
-                        };
-                        registerView(`app-${appName}`, mod, group ? { group } : {});
-                        return mod;
-                    };
-
-                    // Clicking an app's nav entry while already deep inside it
-                    // (#app-x/<sub>) returns to the app's home. switchView
-                    // no-ops on same-view clicks, so this is the only way back
-                    // to an app's landing page from the rail.
-                    const resetToAppHome = (appName, mod) => {
-                        if (getCurrentView() !== `app-${appName}`) return;
-                        if (!location.hash.startsWith(`#app-${appName}/`)) return;
-                        mod.hide();
-                        history.replaceState(null, '', `#app-${appName}`);
-                        mod.show();
-                    };
-
-                    // Inject nav-promoted plugin apps into the navrail
-                    const MAX_NAV_APPS = 3;
-                    const rail = document.getElementById('nav-rail');
-                    const navAppsBtn = document.getElementById('nav-apps');
-                    for (const app of railApps.slice(0, MAX_NAV_APPS)) {
-                        // Create nav item — use DOM API for icon/label since
-                        // they originate from plugin manifest data which is
-                        // user-supplied and shouldn't reach innerHTML.
-                        // Day-ruiner scout 2026-05-07 #A.
-                        const btn = document.createElement('button');
-                        btn.className = 'nav-item';
-                        btn.dataset.view = `app-${app.name}`;
-                        const iconSpan = document.createElement('span');
-                        iconSpan.className = 'nav-icon';
-                        iconSpan.textContent = app.icon || '📦';
-                        const labelSpan = document.createElement('span');
-                        labelSpan.className = 'nav-label';
-                        labelSpan.textContent = app.label || '';
-                        btn.appendChild(iconSpan);
-                        btn.appendChild(labelSpan);
-                        if (navAppsBtn) rail.insertBefore(btn, navAppsBtn);
-                        else {
-                            const spacer = rail.querySelector('.nav-spacer');
-                            if (spacer) rail.insertBefore(btn, spacer);
-                            else rail.appendChild(btn);
-                        }
-                        const mod = promoteAppView(app);
-                        btn.addEventListener('click', () => resetToAppHome(app.name, mod));
-                    }
-
-                    // Flyout-promoted apps: item inside the group's flyout
-                    for (const app of flyoutApps) {
-                        const item = document.createElement('div');
-                        item.className = 'nav-flyout-item';
-                        item.dataset.view = `app-${app.name}`;
-                        item.setAttribute('role', 'button');
-                        item.setAttribute('tabindex', '0');
-                        item.textContent = `${app.icon || '📦'} ${app.label || app.name}`;
-                        flyoutFor(app).appendChild(item);
-                        const mod = promoteAppView(app, app.nav);
-                        item.addEventListener('click', () => resetToAppHome(app.name, mod));
-                    }
-
-                    // Show Apps grid nav if there are non-nav apps (or overflow nav apps)
-                    const appsNavBtn = document.getElementById('nav-apps');
-                    const hasGridApps = gridApps.length > 0 || railApps.length > MAX_NAV_APPS;
-                    if (appsNavBtn && hasGridApps) appsNavBtn.style.display = '';
-                }
-            } catch {}
+            // Plugin apps: rail slots, group flyouts and the Apps menu —
+            // core/plugin-apps.js (moved out of here 2026-11-02 so the Apps page can redraw the menu).
+            await discoverPluginApps().catch(() => {});
         } catch (e) {
             console.warn('[Init] Could not fetch init data:', e);
             bootDegraded(e?.message || 'init data unavailable');

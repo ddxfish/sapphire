@@ -221,7 +221,7 @@ def test_redate_model_requires_librarian_and_requeues(palace, monkeypatch):
 
     monkeypatch.setattr(librarian, '_enabled', lambda: False)
     out, code = browse.maintenance(body={'action': 'redate_model', 'scope': 'default'})
-    assert code == 400 and 'disabled' in out['error']
+    assert code == 400 and 'off' in out['error']
     assert json.loads(_row(ruled)[2]).get('temporal_at')   # nothing reopened
 
     monkeypatch.setattr(librarian, '_enabled', lambda: True)

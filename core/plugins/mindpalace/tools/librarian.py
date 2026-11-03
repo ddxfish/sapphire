@@ -1039,12 +1039,12 @@ def _task(message, scope, toolset=SORT_TOOLSET, name='Librarian pass'):
     }
 
 
-DISABLED_MSG = ("The librarian is disabled — alpha feature, off by default. "
-                "Enable it in Settings → Plugins → Mind Palace → Librarian.")
+DISABLED_MSG = ("The librarian is off (its default). "
+                "Enable it under Mind → Settings → Librarian.")
 
 
 def _enabled():
-    """Alpha master toggle (`librarian_enabled`, default off). Every pass —
+    """Master toggle (`librarian_enabled`, default off; beta since 2026-11-02). Every pass —
     Admin cards, the run_librarian tool, the nightly round — funnels through
     start()/run_blocking(), so this is the one gate. Fails toward OFF
     (silent-default invariant)."""

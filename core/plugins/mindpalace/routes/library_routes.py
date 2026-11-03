@@ -167,7 +167,7 @@ async def import_zip(request=None, **_):
 
 
 def peek(body=None, **_):
-    """The Admin tool console: run her READ-ONLY tools with explicit params
+    """The Settings › Debug tool console: run her READ-ONLY tools with explicit params
     and return the raw text she would see. Zero fingerprints by construction:
     search passes boost=False (no recall bumps), read_self passes stamp=False
     (ledger watermark untouched) and extra_tools=False (nothing executes).
@@ -217,7 +217,7 @@ def peek(body=None, **_):
 
 
 def migrate(body=None, **_):
-    """Admin's re-migrate button. Copies v1 + v2 knowledge into the library
+    """On-demand re-migrate (the boot sweep, callable; no button since 2026-11-02). Copies v1 + v2 knowledge into the library
     (idempotent — already-imported groups skip). Embedding continues in the
     background queue after this returns. Polish rides along: broken-title
     tidy + exact-duplicate merge among migrated docs."""

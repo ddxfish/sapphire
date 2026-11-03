@@ -3,13 +3,14 @@
   "tool_expires": "never",
   "short_display_name": "Mind Palace",
   "short_name": "Mind Palace",
-  "version": "0.21.0",
+  "version": "1.0.0",
   "description": "Mind Palace, Sapphire's memory engine: memories, people, knowledge and goals in layers behind one tool surface, tended by a librarian. One of two engines with Memory (legacy); only one runs at a time. The palace's Import tab copies the old data and never changes it.",
   "author": "sapphire",
   "icon": "🏛️",
   "priority": 1,
   "default_enabled": true,
   "privacy_aware": true,
+  "settingsUI": null,
   "capabilities": {
     "hooks": {
       "chat_vaulted": "hooks/chat_vaulted.py",
@@ -27,22 +28,22 @@
       {
         "key": "librarian_enabled",
         "type": "boolean",
-        "label": "Librarian (ALPHA)",
+        "label": "Librarian (BETA)",
         "default": false,
-        "help": "Master switch for the librarian: single-purpose passes that date, link, dedup, and sort memories. Off = the core memory system runs alone. Configure passes, schedules, and maintenance in Mind → Admin. Alpha — testing cohort only.",
+        "help": "Master switch for the librarian: single-purpose passes that date, link, dedup, and sort memories. Off = the core memory system runs alone. The passes, their caps and the nightly schedule live on this page. Beta: months of nightly use on two installs; off by default until you turn it on.",
         "tab": "Librarian",
         "confirm": {
           "values": [
             "true"
           ],
-          "title": "Enable the Librarian — Alpha Feature",
+          "title": "Enable the Librarian (Beta)",
           "warnings": [
-            "Alpha testing — not ready for production use",
+            "Beta: months of nightly use on two installs. A new model may judge differently — watch the Ledger for the first nights",
             "The AI reviews and reorganizes its own memories: dating, linking, merging, splitting, promoting, and retiring entries",
             "Nothing is ever hard-deleted — retired memories stay visible in the Memories view and restore with one click",
-            "Mind → Admin can undo librarian retirements in bulk"
+            "Mind → Settings → Maintenance can undo librarian retirements in bulk"
           ],
-          "buttonLabel": "Enable Librarian (Alpha)",
+          "buttonLabel": "Enable Librarian (Beta)",
           "allow_managed": true
         }
       },
@@ -51,35 +52,40 @@
         "type": "boolean",
         "label": "Nightly pass: dates",
         "default": true,
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_pass_link",
         "type": "boolean",
         "label": "Nightly pass: link",
         "default": true,
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_pass_dedup",
         "type": "boolean",
         "label": "Nightly pass: dedup",
         "default": true,
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_pass_sort",
         "type": "boolean",
         "label": "Nightly pass: sort",
         "default": true,
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_pass_self",
         "type": "boolean",
         "label": "Nightly pass: self",
         "default": true,
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_context_tokens",
@@ -87,7 +93,8 @@
         "label": "Context limit (tokens)",
         "default": 131072,
         "help": "Context window for librarian sessions — the night chat grows across passes and the normal chat default trims it far too early. 131072 (128K) suits most models; raise to 262144 only if the librarian model supports it.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_batch_size",
@@ -95,7 +102,8 @@
         "label": "Memories per pass",
         "default": 20,
         "help": "How many unprocessed memories one librarian pass takes on. The rest wait for the next pass.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_items_per_message",
@@ -103,7 +111,8 @@
         "label": "Memories per message",
         "default": 10,
         "help": "How many memories are presented per chat message during a pass. Smaller = more careful, more tokens.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_max_passes_per_day",
@@ -111,7 +120,8 @@
         "label": "Max passes per day (per kind)",
         "default": 3,
         "help": "Safety cap per scope and pass kind across all triggers (button, tool, schedule).",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_merge_threshold",
@@ -119,7 +129,8 @@
         "label": "Duplicate threshold",
         "default": 0.9,
         "help": "Similarity (0.5-0.99) two memories must measure before merge_memories will fold them — enforced in code, not prompt. Higher = only near-identical entries merge.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_retire_ratio",
@@ -127,7 +138,8 @@
         "label": "Retire at most (share of a pass)",
         "default": 0.25,
         "help": "The share of the memories one pass was shown that it may retire — prunes, splits and the losers of merges together (0.05-1). Enforced in code; past it the librarian is told to mark the rest. 0.25 = a quarter.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_retire_per_night",
@@ -135,7 +147,8 @@
         "label": "Retire at most (per night, per scope)",
         "default": 30,
         "help": "Retirements per scope per day across every pass and Run ALL, counted from the ledger. Enforced in code. Raise it for a deliberate clean-up, then put it back.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_merge_rewrite",
@@ -143,7 +156,8 @@
         "label": "Allow rewrite on merge",
         "default": false,
         "help": "Let merge_memories write a distilled replacement text. Off (default): the longest original survives verbatim — the similarity gate proves two entries are duplicates, but nothing validates a rewrite, so a bad model could fabricate the surviving text.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_drain_batches_per_chat",
@@ -151,7 +165,8 @@
         "label": "Drain: batches per chat",
         "default": 3,
         "help": "Run ALL groups this many batches into one rolling chat before resetting — accumulated context helps judgment passes (sort) calibrate; 1 = fresh chat every batch.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_fresh_chat",
@@ -159,7 +174,8 @@
         "label": "Fresh chat per session",
         "default": true,
         "help": "Each librarian session gets its own chat (librarian-YYYYMMDD-HHMM): a per-session audit trail that keeps old pass transcripts out of new passes' context. Off: everything lands in the single shared 'librarian' chat.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_nightly_enabled",
@@ -167,7 +183,8 @@
         "label": "Nightly tending schedule",
         "default": false,
         "help": "Run the nightly round: an importance decay tick (when Importance is enabled), then librarian passes over every scope that opted in on its Self page (Resident strip — per-scope pass pills, default off). Manual runs are unaffected.",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_nightly_time",
@@ -176,7 +193,8 @@
         "default": "03:30",
         "placeholder": "HH:MM",
         "help": "Local time for the nightly run (24h HH:MM).",
-        "hidden": true
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "librarian_note_global",
@@ -184,15 +202,17 @@
         "label": "Standing note (all passes)",
         "default": "",
         "placeholder": "One instruction injected into every pass, every scope",
-        "help": "Injected verbatim into EVERY librarian pass of every scope, right after the message header, as '— Standing note from your user —'. The cross-cutting lever: per-pass wording lives in each pass card's gear (charter modal); this is for the thing you want said everywhere. Empty = absent.",
-        "hidden": true
+        "help": "Injected verbatim into EVERY librarian pass of every scope, right after the message header, as '— Standing note from your user —'. The cross-cutting lever: per-pass wording lives in each pass card's 📜 Charter; this is for the thing you want said everywhere. Empty = absent.",
+        "hidden": true,
+        "tab": "Librarian"
       },
       {
         "key": "importance_enabled",
+        "experimental": true,
         "type": "boolean",
         "label": "Importance (ALPHA)",
         "default": false,
-        "help": "Master switch for the importance system: librarian ratings, spider pricing by salience, nightly decay, and recall boost. Off = flat, neutral memory — no lurking variables. Alpha — testing cohort only.",
+        "help": "Master switch for the importance system: librarian ratings, spider pricing by salience, nightly decay, and recall boost. Off = flat, neutral memory — no lurking variables. Alpha, untested: no UI door until the decay has been exercised (2026-11-02); the setting still reads from user/webui/plugins/mindpalace.json.",
         "tab": "Importance",
         "confirm": {
           "values": [
@@ -203,7 +223,7 @@
             "Alpha testing — not ready for production use",
             "Memories gain salience ratings that shape which connections surface in search",
             "With the nightly schedule on, ratings drift down over time (decay) and direct recalls nudge them up",
-            "Memory content is never changed or deleted — Mind → Admin resets all ratings in one click"
+            "Memory content is never changed or deleted — Mind → Settings → Maintenance resets all ratings in one click"
           ],
           "buttonLabel": "Enable Importance (Alpha)",
           "allow_managed": true
@@ -211,6 +231,7 @@
       },
       {
         "key": "importance_decay_per_night",
+        "experimental": true,
         "type": "number",
         "label": "Importance: decay per night",
         "default": 0.005,
@@ -219,6 +240,7 @@
       },
       {
         "key": "importance_boost_per_recall",
+        "experimental": true,
         "type": "number",
         "label": "Importance: boost per recall",
         "default": 0.02,
@@ -262,7 +284,7 @@
         "type": "boolean",
         "label": "Strip her date stamp from memories",
         "default": true,
-        "help": "A memory that opens with a date within two weeks of its save day ('March 3 2026: …', 'Core memory — March 3 2026: …') is her writing the day she last saw — chats span days, and the save time already carries the real day. On: the leading date comes off at save, edit and import, and the receipt says so. Off: text is stored as written. Memories already here: Mind → Admin → Dates → Strip date stamps (previewed, ledgered, the ↶ on the run row undoes it).",
+        "help": "A memory that opens with a date within two weeks of its save day ('March 3 2026: …', 'Core memory — March 3 2026: …') is her writing the day she last saw — chats span days, and the save time already carries the real day. On: the leading date comes off at save, edit and import, and the receipt says so. Off: text is stored as written. Memories already here: Mind → Settings → Librarian → Dates → Strip date stamps (previewed, ledgered, the ↶ on the run row undoes it).",
         "tab": "Memories"
       },
       {
@@ -272,6 +294,14 @@
         "default": 2,
         "help": "A big document (a whole book) is hundreds of sub-chunks — in an all-layer search, each knowledge document surfaces at most this many (1-10). search_memory with layer='knowledge' ignores the cap for deep dives.",
         "tab": "Search"
+      },
+      {
+        "key": "import_finished",
+        "type": "boolean",
+        "label": "Import finished: hide the Import tab",
+        "default": false,
+        "help": "Memory (legacy) is all brought across. The Import tab leaves the Mind strip and menu and the boot reminder stops. The page stays reachable from Settings → Maintenance; turning this off brings the tab back.",
+        "tab": "Import"
       }
     ],
     "schedule": [

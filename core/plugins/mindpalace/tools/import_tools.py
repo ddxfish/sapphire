@@ -1014,14 +1014,29 @@ def scrub_removed(config, scope=None):
     return {'scrubbed': len(scrubbed), **counts}
 
 
+def import_finished():
+    """The human's "I'm done with Import" switch (plugin setting
+    import_finished, 2026-11-02): the Import tab leaves the strip and the
+    Mind menu and the boot reminder stays quiet, whatever is still pending.
+    The page itself stays routable, so turning it back on is one click."""
+    try:
+        from core.plugin_loader import plugin_loader
+        return bool(plugin_loader.get_plugin_settings('mindpalace').get('import_finished'))
+    except Exception:
+        return False
+
+
 def nudge_if_pending(config):
     """Boot (plugins_ready): classic rows not yet in the palace → a row in
     the notification center, re-fired every boot while any remain (Krem's
     ruling 2026-10-30: fire on each boot if they need to migrate). Nothing
-    pending → the row goes away."""
+    pending, or the human said done → the row goes away."""
     try:
         from core import notify
     except Exception:
+        return None
+    if import_finished():
+        _dismiss_nudge(notify)
         return None
     try:
         p = preview(config)

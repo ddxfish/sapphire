@@ -210,7 +210,8 @@ def _send(conn, text, images=(), link='', reply_to=''):
     except SocialError as e:
         outbox.add(conn.profile, conn.name, text, files, link, status='failed',
                    result={'error': str(e), **({'reply_to': reply_to} if reply_to else {})})
-        return f"{conn.display()}: {e}", False
+        outbox.notify_failed(conn.display(), str(e))
+        return f"{conn.display()}: {e} (kept in the Outbox for a retry)", False
     outbox.add(conn.profile, conn.name, text, files, link, status='posted',
                result={**result, **({'reply_to': reply_to} if reply_to else {})})
     url = result.get('url') or ''
@@ -249,11 +250,11 @@ def reply(profile, name, item_id, text):
 
 
 def approve(rid):
-    """Post a draft now. (ok, url-or-reason)."""
+    """Post a draft now, or retry a failed row. (ok, url-or-reason)."""
     row = outbox.get(rid)
     if not row:
         return False, f"No draft {rid}."
-    if row.get('status') != 'draft':
+    if row.get('status') not in ('draft', 'failed'):
         return False, f"Draft {rid} is already {row['status']}."
     conn = store.get_connection(row['profile'], row['connection'])
     if not conn:
@@ -274,7 +275,7 @@ def reject(rid):
     row = outbox.get(rid)
     if not row:
         return False, f"No draft {rid}."
-    if row.get('status') != 'draft':
+    if row.get('status') not in ('draft', 'failed'):
         return False, f"Draft {rid} is already {row['status']}."
     outbox.update(rid, status='rejected', decided=time.time())
     return True, 'rejected'

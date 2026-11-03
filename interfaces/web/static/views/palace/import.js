@@ -8,7 +8,7 @@ import { renderSectionHeader, bindSectionHeader } from '../../shared/section-hea
 import { helpPills } from '../../features/video-link.js';
 import { escHtml } from '../../shared/mind-common.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, palaceGet, palaceSend } from './common.js';
+import { refreshPalaceTabs, tabsWithImport, importFinished, setImportFinished, savePalaceSettings, palaceGet, palaceSend } from './common.js';
 
 const STORES = [
     ['memories', '\u{1F9E0} Memories', 'memory.db', 'Memories tab (events layer)'],
@@ -36,10 +36,36 @@ function content() { return container?.querySelector('#pal-import-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'import', help: helpPills('Import', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F4E6} Mind Palace — bring Memory (legacy) across. The old databases are opened read-only; the import is additive and safe to re-run. Scrub, below, is the one thing here that writes to them.' })}
+        ${renderSectionHeader({ tabs: tabsWithImport(), active: 'import', help: helpPills('Import', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F4E6} Mind Palace — bring Memory (legacy) across. The old databases are opened read-only; the import is additive and safe to re-run. Scrub, below, is the one thing here that writes to them.', rows: [{ cls: 'pal-done', html: doneBar() }] })}
         <div class="view-body view-scroll" id="pal-import-content"><div class="ui-empty">Counting…</div></div>`;
     bindSectionHeader(container);
+    container.querySelector('#pal-import-done')?.addEventListener('click', toggleDone);
     load();
+}
+
+// The bar at the very top: the human's word that Import is over (Krem
+// 2026-11-02). Hides the tab from the strip and the Mind menu (plugin
+// setting import_finished); the page stays reachable from Settings ›
+// Maintenance, where the same bar brings the tab back.
+let _pending = 0;
+function doneBar() {
+    return importFinished()
+        ? `<span>The Import tab is hidden from the strip and the Mind menu. This page stays reachable from Settings › Maintenance.</span>
+           <button class="mind-btn" id="pal-import-done">Show the Import tab again</button>`
+        : `<span>Finished bringing Memory (legacy) across? Hide this tab from the strip and the Mind menu; Settings › General brings it back.</span>
+           <button class="mind-btn mind-btn-trim" id="pal-import-done">\u2713 I'm done with Import</button>`;
+}
+
+async function toggleDone() {
+    const hide = !importFinished();
+    if (hide && _pending && !confirm(`${_pending} row${_pending === 1 ? ' is' : 's are'} still waiting in Memory (legacy). Hide the Import tab anyway? Settings › General brings it back.`)) return;
+    try { await savePalaceSettings({ import_finished: hide }); }
+    catch (e) { ui.showToast(`Save failed: ${e.message}`, 'error'); return; }
+    setImportFinished(hide);
+    if (!hide) { ui.showToast('The Import tab is back', 'success'); render(); return; }
+    ui.showToast('Import tab hidden. Settings › General brings it back.', 'success');
+    const router = await import('../../core/router.js');
+    router.switchView('memories');
 }
 
 async function load() {
@@ -107,6 +133,7 @@ function paint(p) {
             <td style="padding:4px 10px">${v.pending ? `<button class="mind-btn-sm pal-import-scope" data-scope="${escHtml(scope)}" ${p.running ? 'disabled' : ''}>Import ${v.pending}</button>` : ''}</td>
         </tr>`);
     const pending = p.pending || 0, removed = p.removed || 0;
+    _pending = pending;
     const table = scopeRows.length ? `
         <table style="border-collapse:collapse;width:100%;max-width:820px">
             <thead><tr class="ui-meta-text">
@@ -126,7 +153,7 @@ function paint(p) {
     if (p.pending_muted) notes.push(`<b>${p.pending_muted}</b> more sit in scopes you deleted from the palace: Import all and the reminder leave them out; a scope's own Import button brings it back.`);
     notes.push('<b>+N</b> = rows coming across. <b>Skipped</b> = imported once and deleted from the palace since; those stay out unless you bring them back below. Deleting a palace memory now keeps its key as a tombstone, so it never comes back.');
     if (p.rag_rows) notes.push(`${p.rag_rows} row${p.rag_rows === 1 ? '' : 's'} in per-chat attachment tabs stay with their chats — core keeps those under either engine.`);
-    notes.push('Knowledge entries also become Library documents on their own, a few seconds after boot; Admin › Migration re-runs that copy.');
+    notes.push('Knowledge entries also become Library documents on their own, a few seconds after boot.');
     notes.push('Re-running copies zero duplicates; switching back to Memory (legacy) is the same plugin toggle in reverse.');
     notes.push('Scopes keep their names. The palace reads every layer from a chat\'s <b>memory</b> scope, so goals or knowledge a chat kept in a different scope than its memories land under that other name: point the chat\'s memory scope there to see them.');
 

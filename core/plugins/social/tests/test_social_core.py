@@ -140,6 +140,13 @@ def test_draft_mode_queues_then_approve_posts(social, monkeypatch):
     after = social.outbox.get(row['id'])
     assert after['status'] == 'posted' and after['result']['url'] == 'https://example.com/p1'
     assert social.engine.approve(row['id']) == (False, f"Draft {row['id']} is already posted.")
+    failed = social.outbox.add('anita', 'main', 'again', status='failed', result={'error': 'credits'})
+    assert [r['id'] for r in social.outbox.pending()] == [failed['id']]    # a failure waits in the queue
+    assert social.outbox.clear_done() == 1 and social.outbox.get(failed['id'])  # history cleared, failure kept
+    assert social.engine.approve(failed['id'])[0] is True                 # a failed row can be retried
+    assert social.outbox.get(failed['id'])['status'] == 'posted'
+    failed2 = social.outbox.add('anita', 'main', 'nope', status='failed', result={'error': 'credits'})
+    assert social.engine.reject(failed2['id']) == (True, 'rejected')      # or dismissed
     assert social.engine.reject('nope')[0] is False
 
 
@@ -156,15 +163,18 @@ def test_auto_mode_posts_now_and_logs(social):
         social.engine.post('anita', '', '')
 
 
-def test_failed_auto_post_is_logged_not_raised(social):
+def test_failed_auto_post_is_logged_not_raised(social, monkeypatch):
     _wire(social, 'auto')
 
     def boom(conn, text, images, link, disclose):
         raise social.engine.SocialError('platform said no')
     social.fake.post = boom
+    told = []
+    monkeypatch.setattr(social.outbox, 'notify_failed', lambda who, err: told.append((who, err)))
     out = social.engine.post('anita', '', 'hi')
-    assert out == 'main [fake]: platform said no'
+    assert out == 'main [fake]: platform said no (kept in the Outbox for a retry)'
     assert social.outbox.rows('failed')[0]['result']['error'] == 'platform said no'
+    assert told == [('main [fake]', 'platform said no')]
 
 
 def test_reads_and_reply(social):

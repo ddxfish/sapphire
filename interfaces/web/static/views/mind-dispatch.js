@@ -36,7 +36,7 @@ const PALACE = {
 const PALACE_ONLY = {
     self: ['\u{1F4A0} Self', 'The self sheet, who she is in her own words, lives in Mind Palace.'],
     import: ['\u{1F4E6} Import', 'Import brings Memory (legacy) data into Mind Palace; the old databases are opened read-only and never changed.'],
-    admin: ['\u{1F6E0}️ Admin', 'The Admin console (librarian, migration, rescue) belongs to Mind Palace.'],
+    admin: ['\u2699\uFE0F Settings', 'Mind Palace settings and its operator console (librarian, maintenance, debug) belong to Mind Palace.'],
 };
 const SWITCH_NOTE = 'Mind Palace is off. In Settings › Plugins turn off Memory (legacy), then turn on Mind Palace: the two take turns, and the switch is live.';
 

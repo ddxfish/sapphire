@@ -3,7 +3,11 @@
 - Make profiles like "sapphire" with associated accounts
 - Add your own social media plugin that works with Social 
 - One toolset for all social media accounts
+- Social media outbox for approval, or automatic
 - Mind palace import simplified and tested 
+- Mind palace settings page created
+- Apps can be pinned to flyout
+- Raven AI added to Videos
 # 2.16.0 - Documents
 - Document uploads show in docs bar now, no sidebar
 - Choose RAG injection strength

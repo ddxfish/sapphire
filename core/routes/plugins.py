@@ -669,10 +669,35 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
         lock.release()
 
 
-@router.get("/api/apps")
-async def list_apps(_=Depends(require_login)):
-    """List available plugin apps (plugins with an app/ directory)."""
+# The Apps menu (the rail's Apps flyout, 2026-11-02): the person pins apps
+# to it from the Apps page. A SHIPPED plugin may start pinned with
+# `nav: "apps"`; a user-band plugin saying the same lands on the grid like any
+# other, or the menu would fill with every install. The file holds only the
+# person's own choices, name -> pinned, so a shipped default still applies to
+# an app they never touched.
+APPS_PINS_FILE = USER_WEBUI_DIR / 'apps_pins.json'
+
+
+def _read_pins():
+    try:
+        with open(APPS_PINS_FILE, encoding='utf-8') as f:
+            raw = json.load(f)
+        return {k: bool(v) for k, v in raw.items() if isinstance(k, str)} if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_pins(pins):
+    APPS_PINS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = APPS_PINS_FILE.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(pins, f, indent=2)
+    replace_with_retry(tmp, APPS_PINS_FILE)
+
+
+def _list_apps():
     from core.plugin_loader import plugin_loader
+    pins = _read_pins()
     apps = []
     for name, info in list(plugin_loader._plugins.items()):
         if not info.get("loaded"):
@@ -685,17 +710,47 @@ async def list_apps(_=Depends(require_login)):
             if not app_dir.exists():
                 continue
             app_config = {}
+        nav = app_config.get("nav", False)
+        wants_menu = nav == "apps"
+        if wants_menu:
+            nav = False            # the menu is reached through `pinned`, never the flyout path
+        default_pin = wants_menu and info.get("band") == "system"
         apps.append({
             "name": name,
             "label": app_config.get("label", manifest.get("display_name", name)),
             "icon": _safe_emoji_icon(app_config.get("icon", manifest.get("emoji", ""))),
             "description": app_config.get("description", manifest.get("description", "")),
-            "nav": app_config.get("nav", False),
+            "nav": nav,
             # Where the app may appear: the Apps page and/or the Chat page's
             # stage, beside the conversation (surface/stage.js, 2026-10-25).
             "places": _app_places(app_config),
+            # In the Apps menu? An app with a nav home of its own is never pinned.
+            "pinned": (not nav) and pins.get(name, default_pin),
         })
-    return {"apps": apps}
+    return apps
+
+
+@router.get("/api/apps")
+async def list_apps(_=Depends(require_login)):
+    """List available plugin apps (plugins with an app/ directory)."""
+    return {"apps": _list_apps()}
+
+
+@router.put("/api/apps/pins")
+async def set_app_pin(request: Request, _=Depends(require_login)):
+    """Pin or unpin one app on the Apps menu: {"name": ..., "pinned": bool}.
+    Answers like GET /api/apps so the page repaints from one truth."""
+    body = await request.json()
+    name = body.get("name") if isinstance(body, dict) else None
+    app = next((a for a in _list_apps() if a["name"] == name), None)
+    if not app:
+        raise HTTPException(status_code=404, detail=f"No app named {name!r}")
+    if app["nav"]:
+        raise HTTPException(status_code=400, detail=f"{app['label']} already has a place in the rail")
+    pins = _read_pins()
+    pins[name] = bool(body.get("pinned"))
+    _write_pins(pins)
+    return {"apps": _list_apps()}
 
 
 def _app_places(app_config):

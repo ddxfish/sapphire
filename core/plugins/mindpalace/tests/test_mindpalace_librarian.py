@@ -764,9 +764,9 @@ def test_librarian_disabled_gate(monkeypatch):
     Tidy buttons, run_librarian tool, nightly — refuses at the one gate."""
     monkeypatch.setattr(eng, '_enabled', lambda: False)
     msg, ok = eng.start('default')
-    assert not ok and 'disabled' in msg.lower() and 'alpha' in msg.lower()
+    assert not ok and 'off' in msg.lower() and 'settings' in msg.lower()
     msg, ok = eng.run_blocking('default')
-    assert not ok and 'disabled' in msg.lower()
+    assert not ok and 'off' in msg.lower()
     # Enabled → the gate opens (next check is the scope guard).
     monkeypatch.setattr(eng, '_enabled', lambda: True)
     msg, ok = eng.start('')

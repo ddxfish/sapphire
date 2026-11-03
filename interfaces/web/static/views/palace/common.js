@@ -14,15 +14,38 @@ export const SCOPE_ENDPOINT = `${API}/scopes`;
 // the strip — it's the palace-only layer and the identity root of the graph.
 // ONE Knowledge tab (2026-07-11): human and AI knowledge are the same layer;
 // who wrote it is metadata (meta.added_by), filterable inside the tab.
+// Settings keeps the view id `admin` (bookmarks, the flyout and the
+// dispatcher all route by it); only its face changed (2026-11-02).
+const IMPORT_TAB = { id: 'import', label: 'Import', icon: '\u{1F4E6}' };
 export const PALACE_TABS = [
     { id: 'self', label: 'Self', icon: '\u{1F4A0}' },
     { id: 'memories', label: 'Memories', icon: '\u{1F9E0}' },
     { id: 'people', label: 'Entities', icon: '\u{1F465}' },
     { id: 'knowledge', label: 'Knowledge', icon: '\u{1F4DA}' },
     { id: 'goals', label: 'Goals', icon: '\u{1F3AF}' },
-    { id: 'import', label: 'Import', icon: '\u{1F4E6}' },
-    { id: 'admin', label: 'Admin', icon: '\u{1F6E0}️' },
+    IMPORT_TAB,
+    { id: 'admin', label: 'Settings', icon: '\u2699\uFE0F' },
 ];
+
+// The Import tab retires on the user's word (plugin setting import_finished:
+// the bar at the top of the Import page, or Settings › General). It leaves
+// the strip and the Mind menu; the view stays routable (#import, Settings ›
+// Maintenance). The status probe carries the flag, one read per Mind visit.
+let _importFinished = false;
+export function importFinished() { return _importFinished; }
+export function setImportFinished(v) {
+    _importFinished = !!v;
+    const i = PALACE_TABS.findIndex(t => t.id === 'import');
+    if (_importFinished && i >= 0) PALACE_TABS.splice(i, 1);
+    if (!_importFinished && i < 0) PALACE_TABS.splice(PALACE_TABS.findIndex(t => t.id === 'admin'), 0, IMPORT_TAB);
+    const item = document.querySelector('.nav-flyout-item[data-view="import"]');
+    if (item) item.style.display = _importFinished ? 'none' : '';
+}
+// The strip as the Import page itself draws it: its own tab stays visible there.
+export function tabsWithImport() {
+    return PALACE_TABS.some(t => t.id === 'import') ? PALACE_TABS
+        : PALACE_TABS.flatMap(t => t.id === 'admin' ? [IMPORT_TAB, t] : [t]);
+}
 
 // Plugin layers (v1.1): registered layers get their own tabs after the core
 // five. Splices PALACE_TABS in place so every view's next render sees them;
@@ -32,15 +55,16 @@ let _layersTs = 0;
 export async function refreshPalaceTabs() {
     if (Date.now() - _layersTs < 10_000) return PALACE_TABS;
     _layersTs = Date.now();
-    try {
-        PLUGIN_LAYERS = (await palaceGet('layers')).layers || [];
-    } catch {
-        PLUGIN_LAYERS = [];
-    }
+    const [layers, status] = await Promise.all([
+        palaceGet('layers').catch(() => ({})),
+        palaceGet('status').catch(() => null),
+    ]);
+    PLUGIN_LAYERS = layers.layers || [];
+    if (status) setImportFinished(status.import_finished);
     for (let i = PALACE_TABS.length - 1; i >= 0; i--) {
         if (PALACE_TABS[i].id.startsWith('layer-')) PALACE_TABS.splice(i, 1);
     }
-    // Layer tabs slot in BEFORE Admin — the operator console stays last.
+    // Layer tabs slot in BEFORE Settings — the operator console stays last.
     for (const l of PLUGIN_LAYERS) {
         PALACE_TABS.splice(PALACE_TABS.findIndex(t => t.id === 'admin'), 0,
             { id: `layer-${l.key}`, label: l.label, icon: l.icon || '\u{1F9E9}' });
@@ -83,6 +107,21 @@ export async function palaceSend(path, method, body) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(wordsOf(data, r.status));
     return data;
+}
+
+// Install-wide plugin settings (user/webui/plugins/mindpalace.json). PUT is
+// a per-key merge server-side, so every surface sends only the keys it owns
+// and none can clobber another's.
+export async function savePalaceSettings(patch) {
+    const r = await fetch('/api/webui/plugins/mindpalace/settings', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ settings: patch }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(wordsOf(data, r.status));
+    return data.settings || patch;
 }
 
 // Concrete-stakes line for the scope-delete confirm (Krem's fork-B ruling,

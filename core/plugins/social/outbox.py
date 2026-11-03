@@ -92,7 +92,8 @@ def update(rid, **fields):
 
 
 def pending(profile=None):
-    return rows('draft', profile)
+    """What still needs the person: drafts to approve and failures to retry or dismiss."""
+    return [r for r in rows(profile=profile) if r.get('status') in ('draft', 'failed')]
 
 
 def image_path(row, n):
@@ -131,13 +132,13 @@ def remove(rid):
 
 
 def clear_done():
-    """Drop every decided row (posted, failed, rejected); drafts stay."""
+    """Drop the history (posted, rejected); drafts and failures stay in the queue."""
     gone = []
 
     def fn(cur):
         keep = []
         for r in (cur or []):
-            (keep if r.get('status') == 'draft' else gone).append(r)
+            (keep if r.get('status') in ('draft', 'failed') else gone).append(r)
         return keep
     _st().update_with_lock('outbox', fn, default=[])
     for r in gone:
@@ -145,15 +146,29 @@ def clear_done():
     return len(gone)
 
 
+_GO = {'hash': '#apps/social'}   # the Social page, pinned or not
+
+
 def notify_pending():
-    """One notification row (re-fired, never piled up) while drafts wait."""
+    """One notification row (re-fired, never piled up) while the queue is not empty."""
     n = len(pending())
     if not n:
         return
     try:
         from core import notify
-        notify.notify(f"Social: {n} draft{'s' if n != 1 else ''} waiting for your approval",
-                      level='warning', body='Settings › Plugins › Social › Outbox',
-                      source='social', go={'view': 'settings', 'tab': 'plugins'}, key='social-outbox')
+        notify.notify(f"Social: {n} post{'s' if n != 1 else ''} waiting for you",
+                      level='warning', body='Apps › Social › Outbox',
+                      source='social', go=_GO, key='social-outbox')
     except Exception as e:
         logger.debug(f"[SOCIAL] outbox notification skipped: {e}")
+
+
+def notify_failed(who, error):
+    """A post she tried to send did not go: say so, and where to retry it."""
+    try:
+        from core import notify
+        notify.notify(f"Social: post on {who} failed", level='error',
+                      body=f"{error} — Retry or Reject it in Apps › Social › Outbox",
+                      source='social', go=_GO, key='social-failed')
+    except Exception as e:
+        logger.debug(f"[SOCIAL] failure notification skipped: {e}")

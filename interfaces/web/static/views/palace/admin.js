@@ -1,12 +1,13 @@
-// views/palace/admin.js - Mind › Admin: the Mind Palace operator console.
-// Librarian pass cards (one per pipeline step, each with a nightly toggle +
-// an Actions dropdown in the Settings›Dashboard widget style), then the
-// Maintenance & Migration / Rescue / Danger grid boxes. Operator surfaces
-// live HERE — Self keeps only the resident's surfaces (status line,
-// Upcoming card). Scope-aware like every palace tab; the per-pass toggles
-// and the ⚙ settings modal write install-wide plugin settings (hidden from
-// Settings → Plugins — this page is their only home, saves are per-key
-// merges so the two surfaces can't clobber each other).
+// views/palace/admin.js - Mind › Settings (view id `admin`): every Mind
+// Palace knob and the operator console, on sub-tabs — General · Librarian ·
+// Recall · Maintenance · Debug (one Settings tab with tabs inside; Krem
+// 2026-11-02: the knobs used to sit split between a modal here and a page
+// under System › Settings that nobody found). The forms render plugin.json
+// fields through the shared renderer; the manifest's settingsUI is null, so
+// this page is their only home. Operator surfaces live HERE — Self keeps
+// only the resident's surfaces (status line, Upcoming card). Scope-aware
+// like every palace tab; the knobs are install-wide and every save is a
+// per-key merge, so no surface clobbers another.
 import { renderSectionHeader, bindSectionHeader } from '../../shared/section-header.js';
 import { helpPills } from '../../features/video-link.js';
 import { renderScopeSidebar, bindScopeSidebar } from '../../shared/scope-sidebar.js';
@@ -18,6 +19,24 @@ import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, 
 import { wordsOf } from '../../shared/fetch.js';
 
 const SCOPE_KEY = 'memory_scope';
+
+// Sub-tabs, Librarian first (the page people come here for). A form draws
+// the plugin.json fields whose manifest `tab` it claims; the five pass
+// toggles stay on the Librarian cards (their home); `experimental` fields
+// (importance, untested) have no UI door at all.
+const SUBS = [
+    { key: 'librarian', label: '\u{1F9F9} Librarian', tabs: ['Librarian'] },
+    { key: 'general', label: '\u2699\uFE0F General', tabs: ['General', 'Memories', 'Import'] },
+    { key: 'recall', label: '\u{1F50E} Recall', tabs: ['Search', 'Importance'] },
+    { key: 'maintenance', label: '\u{1F6E0} Maintenance' },
+    { key: 'debug', label: '\u{1F52C} Debug' },
+];
+const SUB_KEY = 'palace_settings_sub';
+const FORM_HEADS = {
+    general: ['\u2699\uFE0F General', 'install-wide · her date stamps, the Import tab'],
+    librarian: ['\u2699\uFE0F Librarian settings', 'install-wide · caps, nightly schedule, drain, standing note'],
+    recall: ['\u{1F50E} Recall', 'install-wide · what waking and search pull in'],
+};
 
 // The librarian pipeline, in nightly order. Toggle = "part of the nightly
 // recipe"; a Run click is explicit human intent and always works (Krem
@@ -116,7 +135,7 @@ const OPS = [
           { label: 'Generate missing metadata', maint: 'generate_metadata' },
       ] },
     { key: 'rescue', icon: '\u{1F6DF}', title: 'Rescue',
-      blurb: 'Undo what the alpha features wrote. Content untouched, reversible by design.',
+      blurb: 'Undo what the librarian wrote. Content untouched, reversible by design.',
       actions: [
           { label: 'Reset importance ratings', maint: 'reset_importance' },
           { label: 'Restore retired memories', maint: 'restore_retired' },
@@ -190,7 +209,7 @@ const MAINT = {
         confirm: s => `Re-date scope '${s}' with the librarian model?\n\n` +
             'All date verdicts reopen and a dates pass starts now (batch and ' +
             'daily caps apply — re-run or let the nightly drain the rest). ' +
-            'Requires the Librarian alpha toggle. Memory content is never touched.',
+            'Requires the Librarian toggle. Memory content is never touched.',
     },
     wipe_scope: {
         prompt: s => `⚠ PERMANENTLY DELETE all Mind Palace data in scope '${s}' — ` +
@@ -214,6 +233,8 @@ let container = null;
 let scope = 'default';
 let scopes = [];
 let settings = {};
+let schema = [];
+let sub = 'librarian';
 let _libTimer = null;
 let _libGen = 0;
 
@@ -228,18 +249,32 @@ export default {
         if (scope !== 'default' && !scopes.some(x => x.name === scope)) scope = 'default';
         rememberMindScope(scope);
         await loadSettings();
+        // #admin/<sub> deep links (Self's Settings button) win; else the last page.
+        const want = location.hash.split('/')[1] || _rememberedSub();
+        sub = SUBS.some(s => s.key === want) ? want : 'librarian';
         render();
     },
     hide() { clearTimeout(_libTimer); }
 };
 
+function _rememberedSub() {
+    try { return localStorage.getItem(SUB_KEY) || ''; } catch { return ''; }
+}
+
 function content() { return container?.querySelector('#pal-admin-content'); }
 
 async function loadSettings() {
+    // Values and the schema together: the forms render plugin.json fields
+    // (every one of them — the manifest's settingsUI is null, this page is
+    // their only home).
     try {
-        const r = await fetch('/api/webui/plugins/mindpalace/settings', { credentials: 'same-origin' });
-        settings = (await r.json()).settings || {};
-    } catch { settings = {}; }
+        const [s, p] = await Promise.all([
+            fetch('/api/webui/plugins/mindpalace/settings', { credentials: 'same-origin' }).then(r => r.json()),
+            fetch('/api/webui/plugins', { credentials: 'same-origin' }).then(r => r.json()),
+        ]);
+        settings = s.settings || {};
+        schema = (p.plugins || []).find(x => x.name === 'mindpalace')?.settings_schema || [];
+    } catch { settings = settings || {}; }
 }
 
 async function savePluginSettings(patch) {
@@ -259,7 +294,9 @@ async function savePluginSettings(patch) {
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Admin', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F6E0}️ Mind Palace — the operator console. Librarian pipeline, migration, rescue. Nothing here edits memory content except ✂ Strip date stamps (previewed, undoable from the Ledger); only the Danger box deletes.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Settings', { doc: 'MIND-PALACE.md', inline: true }),
+            status: '\u2699\uFE0F Mind Palace — settings and the operator console. The knobs are install-wide; Librarian, Maintenance and Debug work the scope on the left. Nothing here edits memory content except ✂ Strip date stamps (previewed, undoable from the Ledger); only the Danger box deletes.',
+            rows: [{ cls: 'pal-subtabs', html: SUBS.map(s => `<button class="ui-pill${s.key === sub ? ' ui-pill-on' : ''}" data-sub="${s.key}">${s.label}</button>`).join('') }] })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">
@@ -267,6 +304,13 @@ function render() {
             </div>
         </div>`;
     bindSectionHeader(container);
+    container.querySelectorAll('[data-sub]').forEach(b => b.addEventListener('click', () => {
+        if (b.dataset.sub === sub) return;
+        sub = b.dataset.sub;
+        try { localStorage.setItem(SUB_KEY, sub); } catch {}
+        history.replaceState(null, '', `#admin/${sub}`);
+        render();
+    }));
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
         onScopeChange: (s) => { scope = s; rememberMindScope(s); render(); },
@@ -294,7 +338,7 @@ function actionsDropdown(spec, libDisabled) {
             <div class="dash-action-dropdown-menu">
                 ${spec.actions.map((a, i) => `
                     <button data-card="${escAttr(spec.key)}" data-idx="${i}"
-                        ${a.run && libDisabled ? 'disabled title="Enable the Librarian alpha in Settings → Plugins → Mind Palace"' : ''}
+                        ${a.run && libDisabled ? 'disabled title="Turn on Librarian (BETA) in the settings below"' : ''}
                         ${a.danger ? 'style="color:var(--error,#f44)"' : ''}>${escHtml(a.label)}</button>`).join('')}
             </div>
         </details>`;
@@ -500,7 +544,7 @@ function passCard(p, st, libEnabled) {
         <div class="ui-card" data-card="${escAttr(p.key)}" style="${on ? '' : 'opacity:.6'}">
             <div class="ui-row">
                 <span class="ui-card-title" style="padding-right:0">${p.icon} ${escHtml(p.title)}</span>
-                <button class="mind-btn-sm" data-pass-gear="${escAttr(p.key)}" title="Charter — her instructions, live preview, test run" style="margin-left:auto">⚙</button>
+                <button class="mind-btn-sm" data-pass-gear="${escAttr(p.key)}" title="Charter — her instructions, live preview, test run" style="margin-left:auto">\u{1F4DC} Charter</button>
                 <label class="ui-toggle" title="Include this pass in the nightly round. Off = the nightly skips it; ▶ Run always works.">
                     <input type="checkbox" data-pass-toggle="${escAttr(p.key)}" ${on ? 'checked' : ''}>
                     <span class="ui-toggle-slider"></span>
@@ -508,7 +552,7 @@ function passCard(p, st, libEnabled) {
             </div>
             <div class="ui-card-body">${escHtml(p.blurb)}</div>
             <div class="ui-card-meta">
-                <span class="ui-chip" data-pass-status="${escAttr(p.key)}">${escHtml(libEnabled ? statusLine : 'alpha off')}</span>
+                <span class="ui-chip" data-pass-status="${escAttr(p.key)}">${escHtml(libEnabled ? statusLine : 'off')}</span>
                 <span class="ui-meta-text" data-caps="${escAttr(p.key)}" style="cursor:pointer;white-space:normal" title="The caps governing this pass — click to adjust">${escHtml(capsLine(p.key))}</span>
             </div>
             ${actionsDropdown(p, !libEnabled)}
@@ -530,6 +574,63 @@ function opsCard(o) {
 async function renderConsole() {
     const el = content();
     if (!el) return;
+    _libGen++;                   // leaving a page ends its poll chain
+    clearTimeout(_libTimer);
+    if (sub === 'librarian') return paintLibrarian(el);
+    if (sub === 'maintenance') return paintMaintenance(el);
+    if (sub === 'debug') return paintDebug(el);
+    paintForm(el, sub);
+}
+
+// ─── Settings forms: plugin.json fields through the shared renderer ─────────
+// Save sends only that form's keys — a per-key merge server-side.
+
+function formFields(key) {
+    const tabs = SUBS.find(s => s.key === key)?.tabs || [];
+    return schema
+        .filter(f => tabs.includes(String(f.tab || 'General')) && !f.key.startsWith('librarian_pass_') && !f.experimental)
+        .map(f => ({ ...f, hidden: false, tab: undefined }));
+}
+
+function formBoxHtml(key) {
+    const [title, desc] = FORM_HEADS[key];
+    return `
+        <div class="ui-box">
+            <div class="ui-box-head">
+                <span class="ui-box-title">${title}</span>
+                <span class="ui-box-desc">${desc}</span>
+                <div class="ui-box-actions">
+                    <button class="mind-btn mind-btn-trim" data-form-save="${key}">Save</button>
+                </div>
+            </div>
+            <div class="ui-box-body" data-form="${key}"></div>
+        </div>`;
+}
+
+async function bindForm(el, key) {
+    const box = el.querySelector(`[data-form="${key}"]`);
+    if (!box) return;
+    const fields = formFields(key);
+    if (!fields.length) { box.innerHTML = '<div class="ui-empty">Settings schema unavailable</div>'; return; }
+    const { renderSettingsForm, readSettingsForm } =
+        await import('../../shared/plugin-settings-renderer.js');
+    if (!box.isConnected) return;
+    renderSettingsForm(box, fields, settings);
+    el.querySelector(`[data-form-save="${key}"]`)?.addEventListener('click', async () => {
+        try {
+            await savePluginSettings(readSettingsForm(box, fields));
+            ui.showToast('Settings saved', 'success');
+            if (key === 'librarian') renderConsole();   // the cards, caps and nightly line read them
+        } catch (e) { ui.showToast(`Save failed: ${e.message}`, 'error'); }
+    });
+}
+
+function paintForm(el, key) {
+    el.innerHTML = formBoxHtml(key);
+    bindForm(el, key);
+}
+
+async function paintLibrarian(el) {
     let st;
     try {
         st = await palaceGet(`librarian/status?scope=${encodeURIComponent(scope)}`);
@@ -537,17 +638,15 @@ async function renderConsole() {
         el.innerHTML = `<div class="ui-empty">Failed to load: ${escHtml(e.message)}</div>`;
         return;
     }
+    if (sub !== 'librarian' || !el.isConnected) return;
     const libEnabled = st.enabled !== false;
     el.innerHTML = `
         <div class="ui-box">
             <div class="ui-box-head">
-                <span class="ui-dot ${libEnabled ? 'ui-dot-ok' : ''}" title="${libEnabled ? 'Librarian alpha: on' : 'Librarian alpha: off'}"></span>
+                <span class="ui-dot ${libEnabled ? 'ui-dot-ok' : ''}" title="${libEnabled ? 'Librarian: on' : 'Librarian: off'}"></span>
                 <span class="ui-box-title">\u{1F9F9} Librarian</span>
                 <span class="ui-box-desc" id="pal-adm-nightly">${escHtml(nightlySummary())}</span>
-                ${libEnabled ? '' : '<span class="ui-chip ui-chip-warn" title="Enable in Settings → Plugins → Mind Palace">alpha off</span>'}
-                <div class="ui-box-actions">
-                    <button class="mind-btn-sm" id="pal-adm-settings">⚙ Settings</button>
-                </div>
+                ${libEnabled ? '' : '<span class="ui-chip ui-chip-warn" title="Turn on Librarian (BETA) in the settings below">off</span>'}
             </div>
             <div class="ui-box-body">
                 <div class="ui-card-body" id="pal-adm-running" style="margin:0 0 8px"></div>
@@ -556,6 +655,14 @@ async function renderConsole() {
                 </div>
             </div>
         </div>
+        ${formBoxHtml('librarian')}`;
+    bindConsole(el);
+    bindForm(el, 'librarian');
+    refreshRunning(el, st);
+}
+
+function paintMaintenance(el) {
+    el.innerHTML = `
         <div class="ui-box">
             <div class="ui-box-head">
                 <span class="ui-box-title">\u{1F6E0} Maintenance & Migration</span>
@@ -592,7 +699,13 @@ async function renderConsole() {
                     <span class="ui-meta-text" style="white-space:normal">The old sort pass copied memories onto the self layer; the retirement moved the copies back. One shot: word-for-word copies are deleted; her reworded copies are retired and their originals re-queued for her sort pass, so she re-judges them herself. Favorites are never touched.</span>
                 </div>
             </div>
-        </div>
+        </div>`;
+    bindConsole(el);
+    bindHumanDedup(el);
+}
+
+function paintDebug(el) {
+    el.innerHTML = `
         <div class="ui-box">
             <div class="ui-box-head">
                 <span class="ui-box-title">\u{1F52C} Tool console</span>
@@ -611,10 +724,7 @@ async function renderConsole() {
                 <pre id="pal-peek-out" class="pal-peek-out" hidden></pre>
             </div>
         </div>`;
-    bindConsole(el);
     bindPeek(el);
-    bindHumanDedup(el);
-    refreshRunning(el, st);
 }
 
 // ─── Human dedup (2026-07-26): mechanical scan, human verdict per pair ──────
@@ -839,26 +949,23 @@ function bindConsole(el) {
         });
     });
 
-    el.querySelector('#pal-adm-settings')?.addEventListener('click', () => settingsModal('general'));
-
-    // Per-card gear → the charter modal (v2.1): per-scope instructions,
+    // Per-card 📜 Charter → the charter modal (v2.1): per-scope instructions,
     // live preview, test run. The old ? help prose lives inside it now.
     el.querySelectorAll('[data-pass-gear]').forEach(b =>
         b.addEventListener('click', () => {
             const p = PASSES.find(x => x.key === b.dataset.passGear);
             if (p) charterModal(p);
         }));
-    // The caps line still opens install-wide settings on the right tab.
+    // The caps line scrolls to the settings form below the cards and lands
+    // on the knob it names.
     el.querySelectorAll('[data-caps]').forEach(b =>
         b.addEventListener('click', () => {
-            settingsModal(b.dataset.caps === 'dedup' ? 'dedup' : 'general');
+            const box = el.querySelector('[data-form="librarian"]');
+            if (!box) return;
+            box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            const key = b.dataset.caps === 'dedup' ? 'librarian_merge_threshold' : 'librarian_batch_size';
+            box.querySelector('#' + CSS.escape('ps-' + key))?.focus({ preventScroll: true });
         }));
-}
-
-function refreshCapsLines(el) {
-    el?.querySelectorAll('[data-caps]').forEach(s => {
-        s.textContent = capsLine(s.dataset.caps);
-    });
 }
 
 function setResult(el, key, text) {
@@ -964,7 +1071,7 @@ async function runAction(el, spec, action) {
 }
 
 // Live pass indicator: poll while a pass runs, refresh the per-pass status
-// lines when it finishes. Pull-only — Admin has no SSE surface of its own.
+// lines when it finishes. Pull-only — this page has no SSE surface of its own.
 async function refreshRunning(el, preloaded) {
     const line = el.querySelector('#pal-adm-running');
     if (!line) return;
@@ -1017,100 +1124,11 @@ async function refreshRunning(el, preloaded) {
         const box = el.querySelector(`[data-pass-status="${p.key}"]`);
         if (!box) continue;
         const mine = (st.scopes || []).find(s => s.scope === scope && s.pass === p.key);
-        if (st.enabled === false) { box.textContent = 'alpha off'; continue; }
+        if (st.enabled === false) { box.textContent = 'off'; continue; }
         box.textContent = mine
             ? `last ${timeAgo(mine.last_pass)} · ${mine.passes_today} today`
             : 'never run in this scope';
         const depth = st.queues?.[p.key];
         if (depth !== undefined) box.textContent += ` · ${depth} waiting`;
     }
-}
-
-// ⚙ Librarian settings — the hidden manifest fields, rendered by the SAME
-// shared renderer the Settings page uses (schema lives in plugin.json only).
-// The 4 pass toggles are excluded — the cards are their home.
-// Tab → the settings keys that belong to it. Passes without unique settings
-// share General; future per-pass settings slot into new tabs here.
-const SETTINGS_TABS = [
-    { key: 'general', label: 'General', match: () => true },
-    { key: 'dedup', label: '\u{1F46F} Dedup',
-      keys: ['librarian_merge_threshold', 'librarian_merge_rewrite'] },
-];
-
-async function settingsModal(initialTab = 'general') {
-    let schema = [];
-    try {
-        const r = await fetch('/api/webui/plugins', { credentials: 'same-origin' });
-        schema = ((await r.json()).plugins || [])
-            .find(p => p.name === 'mindpalace')?.settings_schema || [];
-    } catch {}
-    const fields = schema
-        .filter(f => (f.hidden || f.key === 'librarian_enabled')
-            && !f.key.startsWith('librarian_pass_'))
-        .map(f => ({ ...f, hidden: false }));
-    if (!fields.length) { ui.showToast('Settings schema unavailable', 'error'); return; }
-    const claimed = new Set(SETTINGS_TABS.flatMap(t => t.keys || []));
-    const groups = {};
-    for (const t of SETTINGS_TABS) {
-        groups[t.key] = t.keys
-            ? fields.filter(f => t.keys.includes(f.key))
-            : fields.filter(f => !claimed.has(f.key));
-    }
-    const { renderSettingsForm, readSettingsForm } =
-        await import('../../shared/plugin-settings-renderer.js');
-
-    document.querySelector('.mind-modal-overlay')?.remove();
-    const overlay = document.createElement('div');
-    overlay.className = 'pr-modal-overlay mind-modal-overlay';
-    overlay.innerHTML = `
-        <div class="pr-modal palace-ent-modal">
-            <div class="pr-modal-header">
-                <h3>⚙ Librarian settings</h3>
-                <span style="display:flex;gap:8px;align-items:center">
-                    <button class="mind-btn" id="pal-adm-settings-save"
-                        style="background:var(--trim);border-color:var(--trim);color:var(--bg)">Save</button>
-                    <button class="mind-btn-sm mind-modal-close">✕</button>
-                </span>
-            </div>
-            <div class="pr-modal-body view-scroll">
-                <div class="ui-row" style="margin-bottom:10px">
-                    ${SETTINGS_TABS.map(t => `<button class="ui-pill" data-tab="${t.key}">${t.label}</button>`).join('')}
-                </div>
-                ${SETTINGS_TABS.map(t => `<div data-pane="${t.key}" style="display:none"></div>`).join('')}
-            </div>
-        </div>`;
-    document.body.appendChild(overlay);
-    const close = () => overlay.remove();
-    overlay.querySelector('.mind-modal-close').addEventListener('click', close);
-    setupModalClose(overlay, close);
-    // Both panes render once and stay live — tab switches only toggle
-    // display, so half-edited values survive tab hops and Save reads both.
-    for (const t of SETTINGS_TABS) {
-        renderSettingsForm(overlay.querySelector(`[data-pane="${t.key}"]`),
-                           groups[t.key], settings);
-    }
-    const selectTab = (key) => {
-        overlay.querySelectorAll('[data-tab]').forEach(b =>
-            b.classList.toggle('ui-pill-on', b.dataset.tab === key));
-        overlay.querySelectorAll('[data-pane]').forEach(p =>
-            p.style.display = p.dataset.pane === key ? '' : 'none');
-    };
-    overlay.querySelectorAll('[data-tab]').forEach(b =>
-        b.addEventListener('click', () => selectTab(b.dataset.tab)));
-    selectTab(SETTINGS_TABS.some(t => t.key === initialTab) ? initialTab : 'general');
-    overlay.querySelector('#pal-adm-settings-save').addEventListener('click', async () => {
-        try {
-            const patch = {};
-            for (const t of SETTINGS_TABS) {
-                Object.assign(patch, readSettingsForm(
-                    overlay.querySelector(`[data-pane="${t.key}"]`), groups[t.key]));
-            }
-            await savePluginSettings(patch);
-            ui.showToast('Librarian settings saved', 'success');
-            close();
-            const nl = content()?.querySelector('#pal-adm-nightly');
-            if (nl) nl.textContent = nightlySummary();
-            refreshCapsLines(content());
-        } catch (e) { ui.showToast(`Save failed: ${e.message}`, 'error'); }
-    });
 }

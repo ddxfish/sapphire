@@ -91,7 +91,11 @@ def status(query=None, **_):
             rows = cur.execute('SELECT layer, COUNT(*) FROM chunks GROUP BY layer').fetchall()
             ents = cur.execute('SELECT COUNT(*) FROM entities').fetchone()[0]
         edges = cur.execute('SELECT COUNT(*) FROM edges').fetchone()[0]
-    return {'active': True, 'layers': dict(rows), 'entities': ents, 'edges': edges}
+    # The strip and the Mind menu learn from this one probe whether the
+    # Import tab has retired (import_finished) — one read per Mind visit.
+    from plugins.mindpalace.tools import import_tools
+    return {'active': True, 'layers': dict(rows), 'entities': ents, 'edges': edges,
+            'import_finished': import_tools.import_finished()}
 
 
 def list_layers(query=None, **_):
@@ -575,10 +579,10 @@ def list_templates(**_):
 
 
 def librarian_run(body=None, **_):
-    """Kick a librarian pass (the Admin-card Run buttons). body: scope, what,
+    """Kick a librarian pass (the Run buttons on the Settings › Librarian cards). body: scope, what,
     pass ('sort' default | 'dates' | 'link' | 'dedup'; legacy names resolve),
     batch (optional int = gear-modal TEST run: small batch, no daily-cap
-    spend). Run is explicit human intent — the per-pass Admin toggles only
+    spend). Run is explicit human intent — the per-pass Librarian toggles only
     shape the nightly recipe, never this. Returns the session chat name so
     the caller can fetch the transcript/report."""
     from plugins.mindpalace.tools import librarian
@@ -711,7 +715,7 @@ def librarian_report(query=None, **_):
 def librarian_status(query=None, **_):
     from plugins.mindpalace.tools import librarian
     out = librarian.get_status((query or {}).get('scope'))
-    out['enabled'] = librarian._enabled()   # alpha toggle → UI hides the buttons
+    out['enabled'] = librarian._enabled()   # master toggle → UI hides the buttons
     return out
 
 
@@ -856,7 +860,7 @@ def librarian_dedup_preview(query=None, **_):
                 for cl in clusters]}
 
 
-# ─── Human Dedup (Mind → Admin, 2026-07-26) ─────────────────────────────────
+# ─── Human Dedup (Mind → Settings → Maintenance, 2026-07-26) ─────────────────────────────────
 # Mechanical candidate scans + a human-only entity fold. The librarian's
 # dedup pass stays the AI's lane (memories, similarity-gated merges); this
 # is the trusted-surface twin: the human sees each pair and decides.
@@ -1109,11 +1113,11 @@ def merge_entities(body=None, **_):
 
 
 def maintenance(body=None, **_):
-    """Self-serve rescue actions (Mind → Admin). Every action is
+    """Self-serve rescue actions (Mind → Settings → Maintenance). Every action is
     an UPDATE on metadata columns/keys — memory content is never touched and
     nothing is deleted, by construction — with one named exception:
-    strip_stamps edits text, previewed, ledgered and revertable. Alpha-
-    feature support: undo what importance or the librarian wrote, per scope."""
+    strip_stamps edits text, previewed, ledgered and revertable. Rescue:
+    undo what importance or the librarian wrote, per scope."""
     pt = _pt()
     if not pt._ensure_db():
         return {'error': 'mind database unavailable'}, 500
@@ -1529,8 +1533,8 @@ def maintenance(body=None, **_):
         # or let the nightly drain the rest.
         from plugins.mindpalace.tools import librarian
         if not librarian._enabled():
-            return {'error': 'The librarian is disabled (alpha) — enable it in '
-                             'Settings → Plugins → Mind Palace first.'}, 400
+            return {'error': 'The librarian is off — enable it in '
+                             'Mind → Settings → Librarian first.'}, 400
         requeued = 0
         with pt._get_connection() as conn:
             cur = conn.cursor()

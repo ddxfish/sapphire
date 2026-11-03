@@ -38,6 +38,8 @@ CHANNELS = [
      "playlist_id": PLAYLIST_ID},
     {"key": "cisco", "name": "Cisco (DZebra)", "kind": "community",
      "channel_id": "UCa1LIkxIMjcEJ7mS-GnvePQ", "handle": "@ciscocomputertech"},
+    {"key": "raven", "name": "Raven", "kind": "community",
+     "channel_id": "UCbMXqU7Vj63vhscBq4Bc8qA", "handle": "@Raven_AI_31Sapphire"},
 ]
 
 # Crash Course seed — used as fallback if the playlist scrape ever breaks so

@@ -128,6 +128,7 @@ Mind view
 Chat manager
 Notification center
 Stage beside chat
+Apps menu pins
 ### System
 Settings hot reload
 Auto-updater

@@ -1,6 +1,9 @@
-// views/apps.js — Plugin apps grid + app host
+// views/apps.js — Plugin apps grid + app host. Each tile's 📌 pins the app on
+// the Apps menu (the rail's Apps flyout, core/plugin-apps.js); the server
+// keeps the choice (PUT /api/apps/pins) and answers with the fresh list.
 import { fetchWithTimeout } from '../shared/fetch.js';
 import { registerView, switchView } from '../core/router.js';
+import { syncAppsMenu } from '../core/plugin-apps.js';
 
 let appsData = [];
 let activeApp = null;
@@ -37,11 +40,14 @@ function renderGrid(container) {
             </div>
             <div class="apps-grid">
                 ${appsData.map(app => `
-                    <button class="app-tile" data-app="${_esc(app.name)}">
-                        <span class="app-tile-icon">${_esc(app.icon || '📦')}</span>
-                        <span class="app-tile-label">${_esc(app.label)}</span>
-                        ${app.description ? `<span class="app-tile-desc">${_esc(app.description)}</span>` : ''}
-                    </button>
+                    <div class="app-tile-wrap">
+                        <button class="app-tile" data-app="${_esc(app.name)}">
+                            <span class="app-tile-icon">${_esc(app.icon || '📦')}</span>
+                            <span class="app-tile-label">${_esc(app.label)}</span>
+                            ${app.description ? `<span class="app-tile-desc">${_esc(app.description)}</span>` : ''}
+                        </button>
+                        ${app.nav ? '' : `<button class="app-tile-pin${app.pinned ? ' pinned' : ''}" data-pin="${_esc(app.name)}" aria-pressed="${app.pinned ? 'true' : 'false'}" title="${app.pinned ? 'Unpin from the Apps menu' : 'Pin to the Apps menu'}">📌</button>`}
+                    </div>
                 `).join('')}
                 ${ghostTile}
             </div>
@@ -52,6 +58,30 @@ function renderGrid(container) {
     });
 
     container.querySelector('[data-action="get-more"]')?.addEventListener('click', () => switchView('store'));
+
+    // An app with a rail or flyout home of its own has no pin (the server says so too).
+    container.querySelectorAll('.app-tile-pin[data-pin]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const name = btn.dataset.pin;
+            const app = appsData.find(a => a.name === name);
+            btn.disabled = true;
+            try {
+                const r = await fetch('/api/apps/pins', {
+                    method: 'PUT', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+                    body: JSON.stringify({ name, pinned: !app?.pinned }),
+                });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const data = await r.json();
+                appsData = (data.apps || []).filter(a => (a.places || ['apps']).includes('apps'));
+                syncAppsMenu(appsData);
+                renderGrid(container);
+            } catch (e) {
+                console.warn('[Apps] Pin failed:', e);
+                btn.disabled = false;
+            }
+        });
+    });
 }
 
 async function openApp(appName, container) {

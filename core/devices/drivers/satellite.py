@@ -118,7 +118,7 @@ SPEC = {
          'help': '0 = never. The backlight goes out to save power; a touch or her stirring brings it back.'},
         # the pendant (firmware/pendant): left alone this long it sleeps, screen, camera, mic and WiFi off; its BOOT key wakes it
         {'key': 'sleep_after_min', 'takes': 'screen.sleep_after_min', 'type': 'number', 'label': 'Sleeps after (minutes)', 'capability': 'screen',
-         'default': 10, 'min': 0, 'max': 1440,
+         'default': 60, 'min': 0, 'max': 1440,
          'help': '0 = never. A board on a battery: everything off but its brain, and it goes offline here. Its BOOT key wakes it.'},
         {'key': 'rotation', 'takes': 'screen.rotation', 'type': 'select', 'label': 'Rotation', 'capability': 'screen', 'default': '0',
          'options': [{'value': '0', 'label': 'landscape'}, {'value': '90', 'label': 'portrait'},
@@ -689,6 +689,11 @@ def describe(device, config):
             'look': {'help': 'take one picture and see it. The ring warns the room first',
                      'example': '', 'wait': LOOK_WAIT},
         }}
+        if 'camera.flash' in (device.get('takes') or []):     # a light beside its lens (the pendant, firmware 0.1.9)
+            told['camera']['actions']['look'] = {
+                'help': "take one picture and see it. The ring warns the room first. 'flash' = with the light "
+                        "beside its lens on for the shot, for a dark room; leave it out by default",
+                'example': 'flash', 'values': '<empty> | flash', 'wait': LOOK_WAIT}
     told['storage'] = {'label': 'Backup', 'help': 'sealed copies of her memory on its card', 'actions': {
         'backup': {'help': 'back everything up onto its card now, sealed with the backup password',
                    'example': ''},
@@ -996,6 +1001,9 @@ def _takes(h):
         takes.append('mic.max_s')
     if 'volume_step' in h:
         takes.append('volume.step')
+    cam = h.get('camera') if isinstance(h.get('camera'), dict) else {}
+    if cam.get('flash') is True:
+        takes.append('camera.flash')               # a light beside its lens (the pendant): look takes 'flash'
     ww = h.get('wakeword') if isinstance(h.get('wakeword'), dict) else {}
     if str(ww.get('format') or '').lower() in ('tflite', 'onnx'):
         takes.append('wake.model')                 # it states its model family: the program with the model door
@@ -1760,13 +1768,15 @@ def run(device, capability, action, value, config, secrets, call_tool):
         if capability == 'camera' and action == 'look':
             if not config.get('camera', True):
                 return "This satellite has no camera.", False
-            shot = _json(_call('GET', '/camera/snap?b64=true', config, secrets, timeout=LOOK_WAIT))
+            flash = str(value or '').strip().lower() in ('flash', 'light', 'with flash', 'on')   # only a board stating camera.flash has the light; another ignores the query
+            shot = _json(_call('GET', '/camera/snap?b64=true' + ('&flash=1' if flash else ''), config, secrets, timeout=LOOK_WAIT))
             if not shot.get('data_b64'):
                 return "The camera gave no picture.", False
             where = f" in {device['location']}" if device.get('location') else ''
             data, w, h = _upright(shot['data_b64'], config.get('camera_turn'), shot.get('width'), shot.get('height'))
             size = f", {w}x{h}" if w and h else ''
-            return {'text': f"A picture from the camera of {device['id']}{where}{size}.",
+            lit = ', with its light on' if flash else ''
+            return {'text': f"A picture from the camera of {device['id']}{where}{size}{lit}.",
                     'images': [{'data': data, 'media_type': 'image/jpeg'}]}, True
     except Problem as e:
         return str(e), False

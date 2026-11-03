@@ -245,6 +245,16 @@ def palace_env(tmp_path, monkeypatch):
     # the dev box's classic database (2026-10-30). Never again.
     from plugins.mindpalace.routes import import_routes
     monkeypatch.setattr(import_routes, "_config", lambda: fake_config)
+    # Plugin settings otherwise come from the dev box's LIVE file: the
+    # 'done with Import' switch flipped there failed the nudge test
+    # (2026-11-02). Manifest defaults only; a test that needs a knob sets it.
+    import json as _json
+    import pathlib as _pathlib
+    from core.plugin_loader import plugin_loader as _pl
+    _schema = _json.loads((_pathlib.Path(__file__).parent.parent / "plugin.json")
+                          .read_text(encoding="utf-8"))["capabilities"]["settings"]
+    _defaults = {f["key"]: f["default"] for f in _schema if "default" in f}
+    monkeypatch.setattr(_pl, "get_plugin_settings", lambda name: dict(_defaults))
 
     # Build synthetic source DBs.
     _build_memory_db(user_dir / "memory.db")
@@ -502,6 +512,30 @@ def test_nudge_fires_while_pending_and_dismisses_after(palace_env, monkeypatch):
     assert 'old' in dismissed                       # the import clears it
     assert env.import_tools.nudge_if_pending(env.config) is None
     assert len(calls) == 1
+
+
+def test_import_finished_silences_the_nudge_and_rides_the_status_probe(palace_env, monkeypatch):
+    """The human's 'done with Import' switch (2026-11-02): rows may still be
+    pending, yet the boot reminder stays quiet and any old row comes down;
+    the palace status probe carries the flag so the strip can hide the tab.
+    Off again, both behave as before."""
+    env = palace_env
+    import core.notify as notify
+    from core.plugin_loader import plugin_loader
+    from plugins.mindpalace.routes import browse
+    calls, dismissed = [], []
+    monkeypatch.setattr(notify, 'notify', lambda *a, **k: calls.append(1) or 'rid')
+    monkeypatch.setattr(notify, 'rows',
+                        lambda **k: [{'id': 'old', 'key': env.import_tools.NUDGE_KEY}])
+    monkeypatch.setattr(notify, 'dismiss', lambda rid, **k: dismissed.append(rid))
+    monkeypatch.setattr(plugin_loader, 'get_plugin_settings',
+                        lambda n: {'import_finished': True})
+    assert env.import_tools.nudge_if_pending(env.config) is None
+    assert calls == [] and dismissed == ['old']
+    assert browse.status()['import_finished'] is True
+    monkeypatch.setattr(plugin_loader, 'get_plugin_settings', lambda n: {})
+    assert browse.status()['import_finished'] is False
+    assert env.import_tools.nudge_if_pending(env.config) == 'rid'
 
 
 def _classes(env):

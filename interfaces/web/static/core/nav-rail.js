@@ -38,7 +38,7 @@ export function initNavRail() {
 
         // Group parent: on mobile, first tap opens flyout; second tap (or desktop click) navigates
         if (item.classList.contains('nav-group-parent')) {
-            if (isMobile() && !item.classList.contains('flyout-open')) {
+            if (isMobile() && !item.classList.contains('flyout-open') && item.querySelector('.nav-flyout-item')) {
                 e.stopPropagation();
                 // Close other flyouts
                 rail.querySelectorAll('.nav-group-parent').forEach(p => p.classList.remove('flyout-open'));
@@ -68,7 +68,7 @@ export function initNavRail() {
     rail.querySelectorAll('.nav-group-parent').forEach(parent => {
         let hoverTimer = null;
         parent.addEventListener('mouseenter', () => {
-            if (isMobile()) return;
+            if (isMobile() || !parent.querySelector('.nav-flyout-item')) return;   // an empty flyout is no menu
             clearTimeout(hoverTimer);
             // Position the flyout vertically to match the parent button;
             // clear any mobile inline left so the CSS left:68px applies.

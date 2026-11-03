@@ -6,7 +6,8 @@ each holds **connections** to the platforms. A chat or persona picks its profile
 
 ## Setup
 
-1. Settings › Plugins › Social › **+ Add Profile**. Start with one (e.g. `sapphire`): a profile
+1. Apps › Social (the Apps menu in the rail; the gear on Settings › Plugins › Social opens the
+   same page) › **+ Add Profile**. Start with one (e.g. `sapphire`): a profile
    holds every platform connection at once, one Facebook Page, one X account, one Instagram and
    so on. A second profile is for a second persona (Anita) with her own accounts.
 2. In the profile, **+ Add connection** → pick the platform, fill the form, Save.

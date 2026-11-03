@@ -21,7 +21,7 @@ Sapphire ships two memory engines. **Mind Palace** (the `mindpalace` plugin) is 
 
 From **Mind → Import** (all scopes at once):
 
-1. **The Import tab shows what will come across before anything runs**: each classic store (memories, people, knowledge, goals) per scope, what the palace already holds, and the pending difference. One button imports it all in the background with a progress row in the notification center. The import is additive and idempotent (re-runs skip what's already there) and never writes to the old databases. A chat's attached documents stay with the chat — core keeps those under either engine. While classic rows are pending, a notification reminds you at every boot and right after the switch, and the empty Memories tab points at Import. Rows you delete from the palace after importing are **tombstoned** (their key is kept, never their text) and never come back; rows you removed before tombstones existed show as **removed before** — listed apart, imported only on an explicit *Bring back*, or deleted from the old database by **Scrub**, the one write to a classic database anywhere in the palace, and only ever yours (type the scope name to confirm).
+1. **The Import tab shows what will come across before anything runs**: each classic store (memories, people, knowledge, goals) per scope, what the palace already holds, and the pending difference. One button imports it all in the background with a progress row in the notification center. The import is additive and idempotent (re-runs skip what's already there) and never writes to the old databases. A chat's attached documents stay with the chat — core keeps those under either engine. While classic rows are pending, a notification reminds you at every boot and right after the switch, and the empty Memories tab points at Import. Rows you delete from the palace after importing are **tombstoned** (their key is kept, never their text) and never come back; rows you removed before tombstones existed show as **removed before** — listed apart, imported only on an explicit *Bring back*, or deleted from the old database by **Scrub**, the one write to a classic database anywhere in the palace, and only ever yours (type the scope name to confirm). When you are done, the bar at the top of the Import tab hides it from the strip and the Mind menu; the page stays reachable from Settings → Maintenance, and the `import_finished` setting (Mind → Settings → General) brings the tab back.
 2. **Wait for embeddings** before anything else — the log reports when the backfill completes. No embedder configured means search degrades to keyword-only and dedup can't see duplicates; fix the embedder first.
 3. **Pruning before you import** (optional): `bash tools/memory-remove.sh PHRASE` (Windows: `python tools\memory_remove.py PHRASE`) walks every classic row that mentions the phrase and asks yes/no per row, so what you never wanted kept doesn't come across. `--count` only counts, `--yes` skips the asking, `--scope NAME` stays inside one scope. It writes to the classic databases only; the palace is untouched.
 4. Knowledge entries also become Library documents by themselves, a few seconds after boot; no second button. Per-scope export/import zips live on the Knowledge tab. Watch-folder definitions come across as entries you re-add by hand — a zip never auto-scans your disk.
@@ -33,7 +33,7 @@ From **Mind → Import** (all scopes at once):
 - **Entities** — people, places, projects, things. Each has a card: kind, facts, nicknames, connections, mention counts, recurring dates (birthdays show with ↻ and return every year). Kinds come with templates; drop your own JSON kind templates in `user/mind_palace/templates/` and they win over the built-ins.
 - **Knowledge** — the Library: documents, annotations, search.
 - **Goals** — goals live as first-class chunks in the same graph; permanence rides importance rather than a separate database.
-- **Admin** — the librarian's cards, import tools, and the danger zone.
+- **Settings** — every palace knob and the operator console, on sub-tabs: General, Librarian (pass cards, caps, nightly schedule), Recall, Maintenance (migration, rescue, human dedup, the danger zone) and Debug (the tool console).
 
 ### The Self page and waking up
 
@@ -42,12 +42,12 @@ The **self-sheet** is who she says she is — short sections she writes and tend
 - **`read_self` is the wake-up call.** It serves the sheet, her wake tools, and recent ledger lines; a `depth` argument pulls more history. Chats and rituals typically open with it.
 - **`(important)` marks** — append `(important)` to any sheet line and waking pulls the top memories behind that item along with the sheet. The per-item count is the `self_important_per_item` setting (0–10; 0 turns the feature off).
 - **Wake tools** — structured boxes edited on the Self page: standing notes and instructions she receives every time she wakes, separate from the sheet itself.
-- **The ledger** is the librarian's journal — every pass verdict, every merge, every sheet revision. Readable from the Admin/Self surfaces or via `read_ledger`.
+- **The ledger** is the librarian's journal — every pass verdict, every merge, every sheet revision. Readable from the Self page or via `read_ledger`.
 - **Resident strip** — per scope: which prompt/provider/model tends this mind at night, and per-pass nightly toggles (default **off**).
 
 ### The librarian — what each pass does
 
-Five passes, run per scope from the Admin cards. Each works a queue of untended chunks in batches:
+Five passes, run per scope from the cards on Mind → Settings → Librarian. Each works a queue of untended chunks in batches:
 
 - **Dates** — stamps when things happened. Powers the Self page's *Upcoming / Just happened* strips and recurring-date reminders. Every date anchors to the save time, so her own date stamps at the head of a memory ("March 3 2026: …" — the day she last saw in a chat that spanned days) come off at save, edit and import (`strip_head_stamp`, default on); **✂ Strip date stamps** on the Dates card heals the memories already there, previewed, ledgered, and undone with ↶ on the run row.
 - **Link** — wires connections: memory↔memory, memory↔entity. Junk gets ruled connection-free rather than force-linked.
@@ -63,7 +63,7 @@ During a pass she works with librarian verbs (`atomize_memory`, `merge_memories`
 
 Every pass she runs is assembled from three parts: the **standing note** + the stage's **charter** + the data payload.
 
-- **Charters** are the instruction prose for each of seven stages — Dates, Link, Dedup, Sort, and the three Self stages — editable **per scope**. The ⚙ gear on each Admin card opens the charter editor: edit the text freely; data slots are guaranteed (a charter can't lose its payload), a live preview shows the assembled result, and a **test run** executes the stage on a handful of items cap-free and reports to the ledger so you can judge the new charter before trusting it with a full night. An empty charter restores the shipped default.
+- **Charters** are the instruction prose for each of seven stages — Dates, Link, Dedup, Sort, and the three Self stages — editable **per scope**. The 📜 Charter button on each pass card opens the charter editor: edit the text freely; data slots are guaranteed (a charter can't lose its payload), a live preview shows the assembled result, and a **test run** executes the stage on a handful of items cap-free and reports to the ledger so you can judge the new charter before trusting it with a full night. An empty charter restores the shipped default.
 - **The standing note** is one global note injected into every pass, whatever the stage — the place for "always sign the ledger"-grade instructions.
 - **She can edit her own charters awake** via the `librarian_instructions` tool — deliberately absent from the pass toolsets, so instructions change between rituals, never mid-ritual.
 
@@ -85,7 +85,7 @@ Memories saved under a private key are **never tended**: the librarian excludes 
 
 ### Reset
 
-Wipes and layer clears live in **Admin → Danger**, each gated by typing the scope name. Palace deletions never touch the classic databases — a bad experiment is always recoverable by wiping the palace scope and re-importing.
+Wipes and layer clears live in **Mind → Settings → Maintenance → Danger zone**, each gated by typing the scope name. Palace deletions never touch the classic databases — a bad experiment is always recoverable by wiping the palace scope and re-importing.
 
 ## Settings
 
@@ -93,8 +93,9 @@ Wipes and layer clears live in **Admin → Danger**, each gated by typing the sc
 |---|---|---|
 | Memory scope (per chat) | Chat sidebar → Mind | Which mind this chat reads and writes |
 | Resident (per scope) | Mind → Self → resident strip | Prompt/provider/model for nightly tending + per-pass nightly toggles (default off) |
-| `self_important_per_item` | Settings → Plugins → Mind Palace | Memories pulled per `(important)` sheet item at wake (0–10, 0 = off) |
-| Charters + standing note | Admin cards → ⚙ | Per-scope pass instructions (see Charters) |
+| `self_important_per_item` | Mind → Settings → Recall | Memories pulled per `(important)` sheet item at wake (0–10, 0 = off) |
+| Charters + standing note | Mind → Settings → Librarian: 📜 Charter on each card; the note sits with the caps below the cards | Per-scope pass instructions (see Charters) |
+| Everything else: caps, nightly time, search budgets, date stamps, the Import tab | Mind → Settings → General · Librarian · Recall | Install-wide; each page saves only its own keys |
 
 ## Quick Troubleshooting
 

@@ -270,7 +270,7 @@ def test_nightly_halves_gate_independently(palace, monkeypatch):
     # Both off → one honest line, nothing runs.
     monkeypatch.setattr(plugin_loader, 'get_plugin_settings', lambda n: dict(base))
     out = nightly.run({'plugin_state': _FakeState()})
-    assert len(passes) == 5 and 'both disabled' in out
+    assert len(passes) == 5 and 'both off' in out
 
 
 def test_nightly_pass_toggles_shape_the_recipe(palace, monkeypatch):

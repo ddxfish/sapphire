@@ -134,6 +134,18 @@ body {
     color: var(--text);
 }
 .app-tile-ghost .app-tile-icon { opacity: 0.7; }
+/* The pin on a tile: on the Apps menu (the rail's Apps flyout) or not */
+.app-tile-wrap { position: relative; display: grid; }
+.app-tile-wrap > .app-tile { width: 100%; }
+.app-tile-pin {
+    position: absolute; top: 8px; right: 8px;
+    background: none; border: none; cursor: pointer;
+    padding: 4px 6px; border-radius: 4px; font-size: 1rem; line-height: 1;
+    opacity: 0.25; transition: opacity 0.15s;
+}
+.app-tile-wrap:hover .app-tile-pin, .app-tile-pin:focus-visible { opacity: 0.7; }
+.app-tile-pin.pinned { opacity: 1; }
+.app-tile-pin:hover { background: var(--bg-hover); }
 
 /* =============================================================================
    NAV RAIL ITEMS
@@ -9340,6 +9352,21 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
     margin-top: 14px; font-size: 1rem; padding: 10px 24px;
     background: var(--trim, #7aa2f7); border-color: var(--trim, #7aa2f7); color: #fff;
 }
+/* Trim-colored call to action — the one button a page wants pressed. */
+.mind-btn-trim, .mind-btn-trim:hover {
+    background: var(--trim, #7aa2f7); border-color: var(--trim, #7aa2f7); color: #fff;
+}
+/* The Import page's "done" bar (a section-header row). */
+.section-row.pal-done {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin: 8px 0 4px; padding: 10px 14px;
+    border: 1px solid var(--trim, #7aa2f7); border-radius: 8px;
+    background: var(--trim-light, rgba(122, 162, 247, 0.08));
+}
+.section-row.pal-done > span { flex: 1 1 320px; }
+.section-row.pal-done .mind-btn-trim { font-size: 1rem; padding: 10px 20px; }
+/* Mind › Settings sub-tabs (a section-header row of pills). */
+.section-row.pal-subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 8px; }
 .plib-folders {
     display: flex; flex-direction: column; gap: 6px; margin: 10px 0;
     padding: 10px 14px; border: 1px dashed var(--border, #2a2b3e);

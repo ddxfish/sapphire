@@ -115,15 +115,20 @@ on her relationships sheet reach her at wake without a search. Flat per-card
 cap (`people_card_chars`, default 1500); fields are otherwise UI/contacts
 only.
 
-## Alpha toggles (Librarian & Importance)
+## Master toggles (Librarian & Importance)
 
-Two masters in Settings → Plugins → Mind Palace, **both off by default** —
-the core system (save/search/spider/entities/self/goals) is designed to run
-without them, with no lurking variables:
+Two masters, **both off by default** — the core system
+(save/search/spider/entities/self/goals) is designed to run without them,
+with no lurking variables:
 
-- **Librarian (ALPHA)** — gates every pass: Tidy buttons, `run_librarian`,
-  the nightly round. Off = the sorting verbs refuse (blast shield stays shut).
-- **Importance (ALPHA)** — gates the whole salience system as one unit:
+- **Librarian (BETA)** — Mind → Settings → Librarian. Gates every pass: the
+  Run buttons, `run_librarian`, the nightly round. Off = the sorting verbs
+  refuse (blast shield stays shut). Beta since 2026-11-02: months of nightly
+  use on two installs; a new model may judge differently, so watch the
+  Ledger for the first nights.
+- **Importance (ALPHA, hidden)** — `importance_enabled`; no UI door until the
+  decay has been exercised (nobody has tested it, 2026-11-02; the manifest
+  marks the three fields `experimental`). Gates the whole salience system as one unit:
   the `mark_processed` rating parameter, spider pricing `f(importance)` and
   its ordering tiebreak, nightly decay, and recall boost. Off = flat, neutral
   pricing everywhere (favorites included). The `importance` column keeps its
@@ -132,7 +137,7 @@ without them, with no lurking variables:
   never the pricing. The identity self-sheet pin (0.95) and the ≥0.9
   prune-refusal are structural and ignore the toggle.
 
-Enabling either pops an alpha warning (works in managed mode too —
+Enabling the librarian pops a confirm (works in managed mode too —
 `allow_managed`). The nightly schedule runs whichever halves are enabled:
 decay rides Importance, review passes ride Librarian.
 
@@ -181,12 +186,13 @@ transcript.
 | 🧹 **Sort** | never-reviewed chunks, oldest first (`librarian_at`) | one verb per memory: `mark_processed` (default, optional 0–1 rating; `favorite=true` is grant-only — never clears), `atomize_memory` (split), `promote_memory` (copy to self layer or an entity card, `kind=` categorizes a new entity), `prune_memory` (soft-retire, reasoned, reversible) |
 | 🪞 **Self** | the sheet itself (no queue) | tend who-she-is: two messages, tend → verify. An EMPTY sheet's first tending serves her whole self shelf + user bio in-message (the feast); later tendings get just what sort promoted since last time (the delta) |
 
-**Where to drive it:** Mind → **Admin** — one card per pass with ▶ Run now
+**Where to drive it:** Mind → **Settings → Librarian** — one card per pass with ▶ Run now
 (one batch), **⚠ Run ALL** (drain the entire queue: live depth + token
 estimate on confirm, batch-by-batch progress, ■ Stop between batches,
 bypasses the daily cap because your confirm IS the authorization), queue
-counts (`N waiting`), the caps line, ⚙ settings, and a ? help modal per
-pass. Dedup also has a 🔍 dry-run (mechanical scan, no LLM, no stamps).
+counts (`N waiting`), the caps line, 📜 Charter (her instructions, the help
+prose, a test run), and the settings form below the cards. Dedup also has
+a 🔍 dry-run (mechanical scan, no LLM, no stamps).
 
 **Residency (per scope):** the Self page's Resident strip sets which
 prompt/provider/model tends each scope's mind, plus five per-pass nightly
@@ -210,7 +216,7 @@ hold the full reasoning. Her identity snapshot rides each session's system
 prompt (minted once per chat — cache-stable), so the librarian always knows
 who is doing the tending.
 
-**Caps** (⚙ on any Admin card): memories per pass (20), per message (10),
+**Caps** (Settings → Librarian, the form below the cards): memories per pass (20), per message (10),
 passes per day per scope+kind (3), duplicate threshold (0.9), context
 tokens, drain batches per chat.
 
@@ -221,7 +227,7 @@ days, so on a real mind half of those stamps ran one to seven days early.
 The save time is the real day, and every date rule (the regex floor, the
 librarian's dates pass, "today is my anniversary") anchors to it. The
 leading date comes off at save, edit and import, with a note on the
-receipt. Memories already here: Admin → Dates → **✂ Strip date stamps** —
+receipt. Memories already here: Settings → Librarian → Dates → **✂ Strip date stamps** —
 previews the counts first (nothing shown, nothing written), then one
 ledger run with the old and new text per row; ↶ on the run row puts every
 word back. Dates outside the window (a birth date, a plan ahead) are

@@ -8,7 +8,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, importFinished, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
 import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 
 const SCOPE_KEY = 'memory_scope';
@@ -71,6 +71,7 @@ function render() {
 // this is the one moment a migrating user must not miss (walk 2026-11-02).
 let _waiting = null;
 async function _paintWaiting(el) {
+    if (importFinished()) return;              // the human said done: no card, no preview
     if (!_waiting || Date.now() - _waiting.ts > 60000) {
         try { _waiting = { ts: Date.now(), p: await palaceGet('import/preview') }; }
         catch { _waiting = { ts: Date.now(), p: null }; }

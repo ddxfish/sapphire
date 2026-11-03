@@ -3,7 +3,7 @@
 # 2026-07-19). Fired by the continuity scheduler (settings-linked:
 # librarian_nightly_time / librarian_nightly_enabled).
 #
-# Two independent halves, each behind its own alpha master toggle:
+# Two independent halves, each behind its own master toggle:
 #   decay tick — importance_enabled  (dynamics are importance physiology)
 #   passes     — librarian_enabled   (the groundskeeper's own switch)
 # Order matters: the decay tick runs FIRST and is day-guarded via plugin
@@ -14,7 +14,7 @@
 # WHICH scopes get tended DERIVES from per-scope residency (the Self page
 # Resident strip, default OFF — librarian_nightly_scopes retired
 # 2026-07-19): effective(pass, scope) = master AND global pass gate
-# (Admin card) AND the scope's own pass pill. Each tended scope gets its
+# (Settings › Librarian card) AND the scope's own pass pill. Each tended scope gets its
 # OWN session chat under its OWN resident prompt/model — Anita's memories
 # never share a transcript (or a voice) with Sapphire's.
 
@@ -35,7 +35,7 @@ def run(event):
     lib_on = bool(s.get('librarian_enabled'))
     imp_on = bool(s.get('importance_enabled'))
     if not lib_on and not imp_on:
-        return "Nightly tending: librarian and importance both disabled (alpha toggles)."
+        return "Nightly tending: librarian and importance both off."
 
     all_scopes = [x['name'] for x in pt.get_scopes()]
     # Tend-list = scopes with ANY pass pill on (Self page, default off).

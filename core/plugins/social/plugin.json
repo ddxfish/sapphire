@@ -11,6 +11,12 @@
   "default_enabled": false,
   "settingsUI": "plugin",
   "capabilities": {
+    "app": {
+      "label": "Social",
+      "icon": "📣",
+      "description": "Profiles, platform connections, and the Outbox",
+      "nav": "apps"
+    },
     "tools": ["tools/social.py"],
     "hooks": {"plugins_ready": "hooks/ready.py"},
     "scopes": [

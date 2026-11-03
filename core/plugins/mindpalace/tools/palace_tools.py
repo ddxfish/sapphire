@@ -2475,7 +2475,7 @@ def _rewrite_content(cursor, memory_id, new_content, created, old_meta, scope, n
 
 
 def strip_stamps(scope, dry=True):
-    """Mind → Admin → Strip date stamps: her today-stamps come off the
+    """Mind → Settings → Librarian → Dates → Strip date stamps: her today-stamps come off the
     memories already here (chats spanned days; she wrote the date she last
     saw, 2026-10-31). Events only. Keyed rows are left alone — their text
     never enters the ledger. A stamp an anniversary depends on stays when

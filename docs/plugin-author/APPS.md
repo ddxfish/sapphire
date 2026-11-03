@@ -37,7 +37,7 @@ The `capabilities.app` fields:
 - `label` — display name on the app tile (falls back to plugin display_name)
 - `icon` — emoji shown on the tile (falls back to plugin emoji)
 - `description` — short description shown below the tile
-- `nav` — promotes the app out of the Apps grid: `true` gives it its own navrail icon (max 3), or a nav group name like `"chat"` makes it an entry in that group's flyout (no rail slot, uncapped)
+- `nav` — promotes the app out of the Apps grid: `true` gives it its own navrail icon (max 3), or a nav group name like `"chat"` makes it an entry in that group's flyout (no rail slot, uncapped); `"apps"` asks to start pinned on the Apps menu (shipped plugins only, see below)
 
 ### app/index.js
 
@@ -161,6 +161,24 @@ Instead of `true`, name a nav group and your app becomes an entry inside that gr
 
 Groups: `chat`, `personas`, `triggers`, `mind`, `settings`. An unrecognized group falls back to a rail slot. Flyout apps behave exactly like rail apps otherwise — same view container, same `#app-{plugin-name}` hash, same `render()`/`cleanup()` contract. Clicking the entry while you're already deep in one of the app's sub-routes (`#app-{name}/…`) returns you to the app's home view. The bundled **Game Room** rides in the Chat flyout this way.
 
+### The Apps menu
+
+The Apps item has a flyout of its own: the **Apps menu**, the apps the person
+pinned there. Every tile on the Apps page carries a 📌; a pinned app opens in
+one hover from any page, at `#app-{plugin-name}` like a rail app.
+
+A plugin **shipped with Sapphire** (`core/plugins/`) may start pinned:
+
+```json
+"app": {"label": "Social", "icon": "📣", "nav": "apps"}
+```
+
+A user-installed plugin saying the same lands on the grid like any other, and
+the person pins it if they want it: the menu is theirs, or every install would
+fill it. Their pins and unpins win over the default either way, and live in
+`user/webui/apps_pins.json`. An app with a rail or flyout home of its own is
+never pinned.
+
 **Important:** Do NOT inject nav items via DOM manipulation (`document.createElement`, `insertBefore`, etc.). Use `"nav": true` in your manifest. Sapphire handles nav item creation, view container setup, and router registration automatically.
 
 ## The Stage (beside the chat)
@@ -213,7 +231,7 @@ conversation, so the user sees it while they talk to her. Opt in with `places`:
 PLUGIN APPS:
 - Manifest: `capabilities.app` = {label (falls back to display_name), icon (falls back to plugin emoji), description, nav?}. Files: `app/index.js` (required) exporting `render(container)` and optional `cleanup()`; assets served at `/plugin-web/{name}/app/`.
 - `render(container)` receives a DOM element; may RETURN a teardown function — that closure wins over the module-level `cleanup()` export (prefer it when claiming shared DOM; the module is memoized across renders). `cleanup()` is called on navigate-away.
-- nav: absent = Apps grid tile; `true` = own navrail icon (max 3 promoted — overflow falls back to the grid); a group name string = entry in that group's flyout (no rail slot, uncapped). Valid groups: chat, personas, triggers, mind, settings — unknown/malformed falls back to a rail slot. URL hash: `#app-{plugin-name}` (bookmarkable); clicking the nav entry while inside a sub-route (#app-{name}/...) returns to the app home.
+- nav: absent = Apps grid tile; `true` = own navrail icon (max 3 promoted — overflow falls back to the grid); a group name string = entry in that group's flyout (no rail slot, uncapped). Valid groups: chat, personas, triggers, mind, settings — unknown/malformed falls back to a rail slot. `"apps"` = start pinned on the Apps menu (the Apps item's own flyout): honored for SHIPPED plugins (core/plugins/) only; a user-band plugin lands on the grid and the person pins it from the 📌 on its tile. Pins live in `user/webui/apps_pins.json` (`PUT /api/apps/pins {name, pinned}`; `/api/apps` answers `pinned` per app; an app with its own nav home is never pinned). URL hash: `#app-{plugin-name}` (bookmarkable); clicking the nav entry while inside a sub-route (#app-{name}/...) returns to the app home.
 - Apps run inline (not iframed) with full access to Sapphire modules: `/api/*` with session auth; `import { fetchWithTimeout } from '/static/shared/fetch.js'` (ABSOLUTE path — apps load from /plugin-web/, relative ../../ misses); `import * as eventBus from '/static/core/event-bus.js'` for SSE events; `import * as ui from '/static/ui.js'` for toasts; plugin settings via GET/PUT `/api/webui/plugins/{name}/settings` (PUT needs X-CSRF-Token from meta[name="csrf-token"]).
 - Rules: never inject nav items via DOM manipulation (use `nav` in the manifest); clean up intervals/sockets/listeners; use theme CSS variables; keep the app self-contained.
 - places: `["apps"]` default; `"stage"` = may open on the Chat page's stage beside the conversation (surface/stage.js): `render(el, ctx)` with `ctx.chat {name, private}` + `ctx.onChange(fn)`; core tears it down in private chats and when the Chat view hides; open via the 🖥 picker or the core `open_stage` tool (STAGE card marker, core/ui_markers.py). Never activate a chat or claim organs from a stage app.

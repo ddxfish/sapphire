@@ -35,7 +35,7 @@ const psSel = key => '#' + CSS.escape('ps-' + key);
  */
 export function renderSettingsForm(container, schema, values = {}, { onChange, managed, slots = [] } = {}) {
     // hidden:true fields never render here — they belong to a dedicated UI
-    // (e.g. Mind → Admin) and are skipped by readSettingsForm too, so a
+    // (e.g. Mind → Settings) and are skipped by readSettingsForm too, so a
     // Settings-page save can't clobber them with defaults.
     schema = (schema || []).filter(f => !f.hidden);
     if (!schema?.length && !slots.length) {

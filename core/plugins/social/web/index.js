@@ -51,6 +51,8 @@ function injectStyles() {
         .so-banner.ok { background: var(--success-light, rgba(76,175,80,.12)); border: 1px solid var(--success); }
         .so-banner.bad { background: var(--error-light, rgba(239,83,80,.12)); border: 1px solid var(--error); }
         code.so-uri { user-select: all; font-size: var(--font-sm); }
+        .so-page { padding: 24px; max-width: 980px; }
+        .so-page > h2 { margin: 0 0 16px; }
     `;
     document.head.appendChild(st);
 }
@@ -90,27 +92,27 @@ const manager = createAccountManager({
 async function paintOutbox(el) {
     const d = await call('GET', 'outbox');
     const rows = d.rows || [];
-    const drafts = rows.filter(r => r.status === 'draft');
-    const history = rows.filter(r => r.status !== 'draft').slice(0, 12);
+    const queue = rows.filter(r => r.status === 'draft' || r.status === 'failed');
+    const history = rows.filter(r => r.status === 'posted' || r.status === 'rejected').slice(0, 12);
     const lc = d.last_connect;
     const banner = lc && (Date.now() / 1000 - (lc.ts || 0)) < 900
         ? `<div class="so-banner ${lc.ok ? 'ok' : 'bad'}">Connect ${esc(lc.connection)}: ${esc(lc.message)}</div>` : '';
-    const row = (r, draft) => `
+    const row = (r, inQueue) => `
         <div class="so-row" data-id="${esc(r.id)}">
             ${r.image_count ? `<img class="so-thumb" src="${API}/outbox/${esc(r.id)}/image/0" alt="">` : ''}
             <div class="so-body">
-                <div class="so-muted">${esc(r.profile)}/${esc(r.connection)} · ${when(r.created)}${r.result?.reply_to ? ' · reply' : ''}${draft ? '' : ` · <span class="so-${esc(r.status)}">${esc(r.status)}</span>`}${r.result?.url ? ` · <a href="${esc(r.result.url)}" target="_blank" rel="noopener">open</a>` : ''}${r.result?.error ? ` · <span class="so-failed">${esc(r.result.error)}</span>` : ''}</div>
+                <div class="so-muted">${esc(r.profile)}/${esc(r.connection)} · ${when(r.created)}${r.result?.reply_to ? ' · reply' : ''}${r.status === 'draft' ? '' : ` · <span class="so-${esc(r.status)}">${esc(r.status)}</span>`}${r.result?.url ? ` · <a href="${esc(r.result.url)}" target="_blank" rel="noopener">open</a>` : ''}${r.result?.error ? ` · <span class="so-failed">${esc(r.result.error)}</span>` : ''}</div>
                 <div class="so-text">${esc(r.text)}</div>
                 ${r.link ? `<div class="so-muted">${esc(r.link)}</div>` : ''}
             </div>
-            ${draft ? '<div class="so-actions"><button type="button" class="am-action-btn so-approve">Post</button><button type="button" class="am-action-btn so-reject">Reject</button></div>' : ''}
+            ${inQueue ? `<div class="so-actions"><button type="button" class="am-action-btn so-approve">${r.status === 'failed' ? 'Retry' : 'Post'}</button><button type="button" class="am-action-btn so-reject">Reject</button></div>` : ''}
         </div>`;
     el.innerHTML = `
         <div class="so-section">
             ${banner}
-            <div class="so-head"><b>Outbox</b><span class="so-muted">${drafts.length ? `${drafts.length} waiting for you` : 'nothing waiting'}</span>
+            <div class="so-head"><b>Outbox</b><span class="so-muted">${queue.length ? `${queue.length} waiting for you` : 'nothing waiting'}</span>
                 ${history.length ? '<button type="button" class="am-action-btn so-clear" style="margin-left:auto">Clear history</button>' : ''}</div>
-            ${drafts.map(r => row(r, true)).join('')}
+            ${queue.map(r => row(r, true)).join('')}
             ${history.length ? `<details><summary class="so-muted">Recent (${history.length})</summary>${history.map(r => row(r, false)).join('')}</details>` : ''}
         </div>`;
     el.querySelectorAll('.so-approve').forEach(b => b.addEventListener('click', async () => {
@@ -295,6 +297,18 @@ async function renderProfileEditor(body, name, item, helpers) {
     }
 
     paintConns();
+}
+
+// The Social page (Apps menu › Social, or the Social tile on the Apps page):
+// the same manager the Settings card draws, full width. app/index.js calls this.
+export async function mount(el) {
+    injectStyles();
+    const inHost = !!el.closest('.app-host');   // the Apps page's host already shows the title
+    el.innerHTML = `<div class="so-page">${inHost ? '' : '<h2>📣 Social</h2>'}<div class="so-page-body"></div></div>`;
+    await loadProviders();
+    await manager.loadItems();
+    manager.renderList(el.querySelector('.so-page-body'));
+    return () => {};
 }
 
 export default {

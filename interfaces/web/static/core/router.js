@@ -10,7 +10,8 @@ const VIEW_GROUPS = {
     personas: ['personas', 'prompts', 'toolsets', 'spices'],
     triggers: ['heartbeat', 'scheduled', 'daemons', 'realtime', 'webhooks'],
     mind: ['self', 'memories', 'people', 'knowledge', 'ai-knowledge', 'goals'],
-    settings: ['settings', 'help', 'video-guide']
+    settings: ['settings', 'help', 'video-guide'],
+    apps: ['apps']
 };
 
 // Legacy id redirects: old #schedule bookmarks and the Triggers group parent

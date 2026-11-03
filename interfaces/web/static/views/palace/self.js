@@ -140,9 +140,9 @@ async function renderSheet() {
 
 // ─── Resident rows — who tends this scope (2026-07-19) ──────────────────────
 // Lives INSIDE the Dashboard card (replacing the old Librarian status line;
-// the Admin button stays). Row 1: prompt + provider/model, chat-sidebar
+// the Settings button stays). Row 1: prompt + provider/model, chat-sidebar
 // style. Row 2: one labeled slide toggle per librarian pass — per-scope
-// nightly opt-ins, DEFAULT OFF, gated on top by the global Admin toggles.
+// nightly opt-ins, DEFAULT OFF, gated on top by the global toggles on Settings → Librarian.
 // Blank prompt/provider = the classic fallbacks (librarian chat persona /
 // auto provider). Provider + model are ONE value here (shared/llm-picker.js
 // renders them; the store keeps the pair coherent — no model rides auto).
@@ -223,7 +223,7 @@ async function renderResident(el) {
 
     const passes = res.passes || {};
     passRow.innerHTML = `
-        <span class="palace-lib-title" title="Nightly librarian passes THIS scope opts into. Default off — the global Admin toggles gate these on top. Manual ▶ Run in Admin always works.">\u{1F9F9} Librarian</span>
+        <span class="palace-lib-title" title="Nightly librarian passes THIS scope opts into. Default off — the global toggles on Settings → Librarian gate these on top. Manual ▶ Run there always works.">\u{1F9F9} Librarian</span>
         ${RESIDENT_PASSES.map(p => `
             <span style="display:inline-flex;align-items:center;gap:6px" title="${escAttr(p.title)} — nightly opt-in for this scope">
                 <span class="ui-meta-text">${p.label}</span>
@@ -546,7 +546,7 @@ function dashboardCard(d) {
             <div class="palace-librarian-row" id="pal-resident">
                 <span class="palace-lib-title">\u{1FAAA} Resident</span>
                 <span class="palace-lib-status">loading…</span>
-                <button class="mind-btn-sm" id="pal-lib-admin" title="Run passes, migration, and rescue tools — the operator console">\u{1F6E0}️ Admin</button>
+                <button class="mind-btn-sm" id="pal-lib-admin" title="Settings, pass cards, maintenance and rescue tools">\u2699\uFE0F Settings</button>
             </div>
             <div class="palace-librarian-row" id="pal-res-passes"></div>
             <div class="palace-librarian-row" id="pal-res-ledger"></div>
@@ -564,7 +564,7 @@ async function refreshLibStatus(el, { poll = false } = {}) {
     } catch (e) { box.textContent = 'status unavailable'; return; }
     clearTimeout(_libTimer);
     if (st.enabled === false) {
-        box.textContent = 'disabled (alpha — enable in Settings → Plugins → Mind Palace)';
+        box.textContent = 'off — turn it on under Mind → Settings → Librarian';
         return;
     }
     if (st.running) {
@@ -579,7 +579,7 @@ async function refreshLibStatus(el, { poll = false } = {}) {
         softSheet();
     } else {
         // Resident's summary line — the most recent of the per-pass rows.
-        // Operating the passes lives in Mind → Admin.
+        // Operating the passes lives in Mind → Settings → Librarian.
         const mine = (st.scopes || [])
             .filter(s => s.scope === scope && s.last_pass)
             .sort((a, b) => (b.last_pass || '').localeCompare(a.last_pass || ''))[0];
@@ -592,7 +592,8 @@ async function refreshLibStatus(el, { poll = false } = {}) {
 function bindLibrarian(el) {
     el.querySelector('#pal-lib-admin')?.addEventListener('click', async () => {
         const { switchView } = await import('../../core/router.js');
-        window._mindScope = scope;   // Admin opens on the scope being viewed
+        window._mindScope = scope;   // Settings opens on the scope being viewed
+        location.hash = 'admin/librarian';
         switchView('admin');
     });
     refreshLibStatus(el);
