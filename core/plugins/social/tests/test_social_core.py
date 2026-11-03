@@ -202,8 +202,8 @@ def test_resolve_profile_follows_the_scope(social):
         assert e.resolve_profile() == ('sapphire', None)
         scope_social.set(None)
         assert 'off for this chat' in e.resolve_profile()[1]
-        assert e.resolve_profile('Anita') == ('anita', None)
-        assert 'No profile' in e.resolve_profile('ghost')[1]
+        scope_social.set('none')
+        assert 'off for this chat' in e.resolve_profile()[1]
     finally:
         scope_social.reset(tok)
     assert 'anita' in e.list_text() and 'sapphire' in e.list_text()
@@ -237,8 +237,7 @@ def test_tools_post_and_meme(social, monkeypatch):
     assert ok and 'posted' in msg and social.fake.calls[-1][3] == ['image/png']
     out = tools.execute('social_meme', {'image': 'img:abc', 'top': 'one does not', 'bottom': 'simply post'}, None, {}, None)
     assert isinstance(out, dict) and out['images'][0]['media_type'] == 'image/jpeg'
-    msg, ok = tools.execute('social_post', {'text': 'x', 'profile': 'ghost'}, None, {}, None)
-    assert not ok and 'No profile' in msg
+    assert not any('profile' in t['function']['parameters']['properties'] for t in tools.get_tools())
     names = {t['function']['name'] for t in tools.get_tools()}
     assert names == set(tools.AVAILABLE_FUNCTIONS)
     assert 'anita' in next(t for t in tools.get_tools() if t['function']['name'] == 'social_post')['function']['description']
@@ -313,3 +312,114 @@ def test_oauth_round_trip(social, monkeypatch):
     assert social.state.get('last_connect')['ok'] is True
     assert oa.connect('fake', 'anita', 'ghost', request=req)[1] == 404
     assert oa.callback('fake', request=req, query={'state': state, 'code': 'again'}).headers['location'] != '/#settings'
+
+
+# ── the chat's profile decides (bug report 2026-11-03, finding 2) ──────────
+
+def test_model_cannot_post_past_social_none(social):
+    """Social = none means off: a `profile` the model invents changes nothing."""
+    import plugins.social.tools.social as tools
+    from core.chat.function_manager import scope_social
+    _wire(social, 'auto')
+    social.store.put_profile('sapphire')
+    for scope in ('none', None):
+        tok = scope_social.set(scope)
+        try:
+            for fn, args in (('social_post', {'text': 'x'}), ('social_inbox', {}), ('social_stats', {}),
+                             ('social_reply', {'connection': 'main', 'item_id': 'c1', 'text': 'x'}),
+                             ('social_delete', {'connection': 'main', 'post_id': 'p1'})):
+                msg, ok = tools.execute(fn, {**args, 'profile': 'anita'}, None, {}, None)
+                assert not ok and 'off for this chat' in msg, (fn, scope, msg)
+        finally:
+            scope_social.reset(tok)
+    assert social.fake.calls == []
+
+
+def test_model_cannot_post_as_another_profile(social):
+    import plugins.social.tools.social as tools
+    from core.chat.function_manager import scope_social
+    _wire(social, 'auto')
+    social.store.put_profile('sapphire')                    # no connections: posting there would fail loudly
+    tok = scope_social.set('anita')
+    try:
+        msg, ok = tools.execute('social_post', {'text': 'hi', 'profile': 'sapphire'}, None, {}, None)
+    finally:
+        scope_social.reset(tok)
+    assert ok and 'posted' in msg and social.fake.calls[-1][1] == 'main'
+
+
+def test_unreadable_scope_is_off(social, monkeypatch):
+    import core.chat.function_manager as fm
+    _wire(social)
+    monkeypatch.delitem(fm.SCOPE_REGISTRY, 'social')     # the scope never registered
+    assert social.engine.current_profile_name() is None
+    assert 'off for this chat' in social.engine.resolve_profile()[1]
+
+
+# ── no token in an error (bug report 2026-11-03, finding 1) ────────────────
+
+SECRET = 'EAABsecretPageToken123'
+
+
+def _net_error():
+    import requests
+    req = requests.Request('GET', f'https://graph.facebook.com/v26.0/me/accounts?limit=100&access_token={SECRET}').prepare()
+    return requests.ConnectionError(
+        f"HTTPSConnectionPool(host='graph.facebook.com', port=443): Max retries exceeded with url: "
+        f"/v26.0/me/accounts?limit=100&access_token={SECRET}", request=req)
+
+
+def test_network_error_never_carries_the_token(social, caplog):
+    import plugins.social.tools.social as tools
+    _wire(social, 'auto')
+
+    def boom(*a, **k):
+        raise _net_error()
+    social.fake.inbox = social.fake.stats = social.fake.post = boom
+    with caplog.at_level('DEBUG'):
+        outs = [tools.execute('social_inbox', {}, None, {}, None)[0],
+                tools.execute('social_stats', {}, None, {}, None)[0],
+                tools.execute('social_post', {'text': 'hi'}, None, {}, None)[0]]
+    assert all('graph.facebook.com' in o and SECRET not in o for o in outs), outs
+    assert SECRET not in caplog.text
+    failed = social.outbox.rows('failed')
+    assert failed and SECRET not in str(failed)
+
+
+def _boom(*a, **k):
+    raise _net_error()
+
+
+def test_test_route_never_carries_the_token(social):
+    import plugins.social.routes.manage as mg
+    _wire(social)
+    social.fake.validate = _boom
+    out = mg.test_connection('anita', 'main')
+    assert not out['success'] and 'graph.facebook.com' in out['detail'] and SECRET not in str(out)
+
+
+def test_callback_never_carries_the_token(social, monkeypatch):
+    import plugins.social.routes.oauth as oa
+    monkeypatch.setattr(oa, 'CSRF_PATH', social.tmp / 'csrf.json')
+    boom = _boom
+    social.fake.auth_start = lambda conn, redirect_uri, state: f"https://vendor/auth?state={state}"
+    social.fake.auth_finish = boom
+    social.registry.reset()
+    social.registry.register_provider('fake', {**social.spec, 'auth': 'oauth'}, 'social')
+    _wire(social)
+    req = SimpleNamespace(base_url='https://localhost:8073/')
+    state = oa.connect('fake', 'anita', 'main', request=req).headers['location'].split('state=')[1]
+    back = oa.callback('fake', request=req, query={'state': state, 'code': 'c'})
+    assert 'social_error' in back.headers['location'] and SECRET not in back.headers['location']
+    assert SECRET not in str(social.state.get('last_connect'))
+
+
+def test_saved_errors_are_scrubbed_at_ready(social):
+    from plugins.social.hooks import ready
+    leak = f"Facebook refused: ConnectionError: Max retries exceeded with url: /v26.0/x?access_token={SECRET}"
+    social.state.save('last_connect', {'ok': False, 'connection': 'a/b', 'message': leak, 'ts': 1})
+    social.outbox.add('anita', 'main', 'hi', status='failed', result={'error': leak})
+    social.outbox.add('anita', 'main', 'ok', status='failed', result={'error': 'platform said no'})
+    ready._scrub_saved()
+    assert SECRET not in str(social.state.get('last_connect')) and SECRET not in str(social.outbox.rows())
+    assert any(r['result']['error'] == 'platform said no' for r in social.outbox.rows())

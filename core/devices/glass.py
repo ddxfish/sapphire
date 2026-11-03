@@ -12,6 +12,7 @@
 import io
 import logging
 import re
+import collections
 import threading
 import time
 
@@ -265,7 +266,6 @@ class _Stream:
 
     def _run(self):
         from core.devices.drivers import satellite
-        period = 1.0 / self.fps
         due = time.monotonic()
         while True:
             with self.cv:
@@ -279,13 +279,21 @@ class _Stream:
                 time.sleep(wait)                        # a frame arriving meanwhile replaces the one waiting
             with self.cv:
                 jpeg, self.next = self.next, None
-            due = time.monotonic() + period
+            try:
+                k = _lookup(self.device_id)                    # the board's beat, asked of it at most once a minute: a setting or a program update changes it
+            except Exception:
+                k = self.known
+            fps = max(1, min(30, int(k['fps'] or STREAM_FPS)))
+            if fps != self.fps:
+                logger.info(f"[DEVICES] {self.device_id}: its glass paints at {fps} fps now (was {self.fps})")
+                self.fps = fps
+            due = time.monotonic() + 1.0 / self.fps
             with _lock:
                 own = _owners.get(self.device_id)
             path = f'/screen/picture?format=jpeg&seconds={own.hold if own else STREAM_SECONDS}' + ('&taps=1' if own else '')
             try:
-                r = satellite._call('POST', path, self.known['config'], self.known['secrets'],
-                                    timeout=5, data=jpeg, headers={'Content-Type': 'image/jpeg'})
+                r = satellite._call('POST', path, k['config'], k['secrets'], timeout=5, data=jpeg,
+                                    headers={'Content-Type': 'image/jpeg'}, keep=True, port=k.get('door') or None)   # one socket, on the board's glass door when it has one
                 self.sent += 1
             except Exception as e:
                 self.failed += 1
@@ -337,7 +345,9 @@ def _learn(row, config, secrets, screen):
     if not (screen.get('jpeg') and screen.get('on', True) and min(w, h) >= 64):
         return None
     zones = _zones(screen.get('zones'))
-    known = {'config': config, 'secrets': secrets, 'w': w, 'h': h, 'fps': int(screen.get('fps') or STREAM_FPS),
+    known = {'config': config, 'secrets': secrets, 'w': w, 'h': h, 'fps': int(screen.get('fps') or STREAM_FPS), 'at': time.monotonic(),
+             'door': int(screen.get('door') or 0),       # a second port the board takes frames on, in its own task (the pendant from 0.1.45)
+             'av': bool(screen.get('av')),               # takes her voice and her face as ONE stream: POST /face/packet (the pendant from 0.2.0)
              'taps': bool(screen.get('taps')) and bool(zones), 'zones': zones}
     with _lock:
         _known[row['id']] = known
@@ -350,14 +360,14 @@ def _lookup(device_id):
     from core.devices.drivers import satellite
     with _lock:
         known = _known.get(device_id)
-    if known:
+    if known and (known.get('at') is None or time.monotonic() - known['at'] < 60):   # the minute the docstring promised (2026-11-03); an entry without an age was put there by hand (tests) and stands
         return known
     row = engine.rows().get(device_id)
     part = engine._part(row, 'satellite') if row else None
     if not part or not row.get('enabled', True):
         raise LookupError(f"{device_id} is not a satellite with a screen")
     config, secrets = part.get('config') or {}, engine._part_secrets(row['id'], 'satellite')
-    known = _learn(row, config, secrets, satellite._health(row, config, secrets).get('screen') or {})
+    known = _learn(row, config, secrets, satellite._health(row, config, secrets, fresh=known is not None).get('screen') or {})   # re-asking: a fresh answer, not the health cache's (else the minute is two)
     if not known:
         raise LookupError(f"{device_id} has no glass that takes frames (firmware 0.7.7+, its screen on)")
     return known
@@ -500,3 +510,143 @@ def face_boards():
 def face_frame(device_id, jpeg, seconds=3):
     """stream_frame(). The board's page comes back STREAM_SECONDS after the last frame."""
     stream_frame(device_id, jpeg)
+
+
+# --- her voice and her face as one stream --------------------------------------------------
+# An avatar plugin hands core packets (audio + the frames due within it, on one clock, see
+# firmware/pendant/main/avatar.h); one sender per board posts them to its glass door, kept
+# socket, and HOLDS when the board's queue is full (429): audio is never dropped. While a
+# stream is live for a board, core's own sentences to it are skipped (satellite.play): her
+# voice is in the packets. (2026-11-03: two clocks drifted however they were glued.)
+
+AV_HOLD_S = 0.25                   # a full queue: ask again this soon
+AV_LIVE_S = 3.0                    # a packet this recent = a stream is live
+_av = {}
+_av_last = {}
+
+
+class _AvSender:
+    def __init__(self, device_id, known):
+        self.device_id, self.known = device_id, known
+        self.items = collections.deque()
+        self.cv = threading.Condition()
+        self.alive = True
+        self.sent = self.held = self.failed = 0
+        self.last_error = ''
+        self.shown = True                       # the board's last answer: her tile is up on a lit screen
+        self.thread = threading.Thread(target=self._run, daemon=True, name=f'glass-av-{device_id}')
+        self.thread.start()
+
+    def put(self, packet):
+        with self.cv:
+            while len(self.items) > 4:              # four seconds ahead is plenty: the oldest goes
+                self.items.popleft()
+            self.items.append(packet)
+            self.cv.notify()
+
+    def status(self):
+        return {'sent': self.sent, 'held': self.held, 'failed': self.failed, 'queued': len(self.items), 'shown': self.shown, 'last_error': self.last_error}
+
+    def _run(self):
+        from core.devices.drivers import satellite
+        while True:
+            with self.cv:
+                while not self.items and self.alive:
+                    if not self.cv.wait(timeout=STREAM_IDLE_S):
+                        self.alive = False
+                if not self.alive:
+                    break
+                packet = self.items[0]
+            try:
+                k = _lookup(self.device_id)
+            except Exception:
+                k = self.known
+            try:
+                r = satellite._call('POST', '/face/packet', k['config'], k['secrets'], timeout=5, data=packet,
+                                    headers={'Content-Type': 'application/octet-stream'}, keep=True, port=k.get('door') or None)
+            except satellite.Problem as e:
+                if '429' in str(e) or 'full' in str(e).lower():
+                    self.held += 1
+                    time.sleep(AV_HOLD_S)
+                    continue                            # the same packet, again
+                self.failed += 1
+                self.last_error = str(e)[:160]
+                with self.cv:
+                    if self.items and self.items[0] is packet:
+                        self.items.popleft()
+                time.sleep(0.2)
+                continue
+            except Exception as e:
+                self.failed += 1
+                self.last_error = str(e)[:160]
+                with self.cv:
+                    if self.items and self.items[0] is packet:
+                        self.items.popleft()
+                time.sleep(0.2)
+                continue
+            self.sent += 1
+            try:
+                self.shown = bool(r.json().get('shown', True))
+            except Exception:
+                self.shown = True                   # an older board does not say: treat her as shown
+            with self.cv:
+                if self.items and self.items[0] is packet:
+                    self.items.popleft()
+        with _lock:
+            if _av.get(self.device_id) is self:
+                del _av[self.device_id]
+
+
+def av_boards():
+    """[(device id, side)] of the boards that take her voice and face as one stream, asked of each
+    (once a minute): in a fresh process nothing is learned yet, and a list read off the cache was
+    empty until something else asked, so the plugin took the old frame path after every restart (2026-11-03)."""
+    out = []
+    for d, w, h, fps in stream_boards():
+        try:
+            if _lookup(d).get('av'):
+                out.append((d, min(w, h) // 16 * 16))
+        except Exception:
+            pass
+    return out
+
+
+def av_packet(device_id, packet, voice=True):
+    """One packet (bytes, the format in avatar.h) for that board's stream. Returns the sender's counts.
+    `voice`: the packet carries her voice; only those make the stream live (her idle never silences core's own sentences)."""
+    k = _lookup(device_id)
+    if not k.get('av'):
+        raise LookupError(f"{device_id} does not take her voice and face as one stream")
+    with _lock:
+        s = _av.get(device_id)
+        if s is None or not s.alive:
+            s = _av[device_id] = _AvSender(device_id, k)
+        if voice:
+            _av_last[device_id] = time.monotonic()
+    s.put(packet)
+    return s.status()
+
+
+def av_shown(device_id):
+    """Her tile is up on that board's lit screen, as its last answer said (True until a board says otherwise)."""
+    with _lock:
+        s = _av.get(device_id)
+        return s.shown if s else True
+
+
+def av_mark(device_id):
+    """A stream is about to start for that board (a reply began): core's sentences to it are skipped from the first."""
+    with _lock:
+        _av_last[device_id] = time.monotonic()
+
+
+def av_live(device_id):
+    """A stream of hers is live on that board: a packet in the last AV_LIVE_S."""
+    with _lock:
+        return time.monotonic() - _av_last.get(device_id, 0) < AV_LIVE_S
+
+
+def av_status(device_id):
+    with _lock:
+        s = _av.get(device_id)
+        return s.status() if s else None

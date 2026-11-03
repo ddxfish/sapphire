@@ -1,6 +1,7 @@
 # core/plugins/social/providers/_common.py - what every built-in provider shares
 from datetime import datetime, timezone
 
+from core.redact import scrub
 from plugins.social.errors import SocialError
 
 
@@ -29,7 +30,7 @@ def check(resp, what):
     except ValueError:
         data = {}
     if resp.status_code >= 400:
-        msg = _message(data) or (resp.text or '').strip()[:200]
+        msg = scrub(_message(data) or (resp.text or '').strip()[:200])
         raise SocialError(f"{what}: HTTP {resp.status_code}{(' ' + msg) if msg else ''}")
     return data if isinstance(data, dict) else {'data': data}
 

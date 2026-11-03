@@ -7,6 +7,7 @@ import logging
 import re
 import time
 
+from core.redact import describe, is_network
 from plugins.social import engine, outbox, registry, store
 from plugins.social.errors import SocialError
 
@@ -82,8 +83,9 @@ def test_connection(profile, conn, **_):
     except SocialError as e:
         return {'success': False, 'detail': str(e)}
     except Exception as e:
-        logger.error(f"[SOCIAL] test {c.key}: {e}", exc_info=True)
-        return {'success': False, 'detail': f"{type(e).__name__}: {e}"}
+        why = describe(e, c.secrets.values())
+        logger.error(f"[SOCIAL] test {c.key}: {why}", exc_info=not is_network(e))
+        return {'success': False, 'detail': why}
     fresh = store.get_connection(c.profile, c.name)
     return {'success': bool(ok), 'detail': str(msg or ''), 'connection': fresh.summary() if fresh else None}
 

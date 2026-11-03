@@ -11,6 +11,8 @@ import sys
 import threading
 import time
 
+from core.redact import describe, is_network
+
 from . import outbox, registry, store
 from .errors import SocialError
 
@@ -25,21 +27,19 @@ INBOX_MAX = 50
 # ── profile and connections ─────────────────────────────────────────────────
 
 def current_profile_name():
+    """The chat's `social` scope; None (off) when it cannot be read."""
     try:
         from core.chat.function_manager import scope_social
         return scope_social.get()
-    except Exception:
-        return 'default'
+    except Exception as e:
+        logger.warning(f"[SOCIAL] social scope unreadable, treating as off: {e}")
+        return None
 
 
-def resolve_profile(name=None):
-    """(profile, None) or (None, why not)."""
+def resolve_profile():
+    """(profile, None) or (None, why not). Only the chat's Social setting
+    decides - the person picks a profile, the model never names one."""
     table = store.profiles()
-    if name:
-        name = store.clean_name(name)
-        if name in table:
-            return name, None
-        return None, f"No profile '{name}'. Profiles: {', '.join(sorted(table)) or 'none yet'}."
     if not table:
         return None, "No social profiles yet: make one in Settings > Plugins > Social."
     v = current_profile_name()
@@ -49,7 +49,7 @@ def resolve_profile(name=None):
         return v, None
     if len(table) == 1:
         return next(iter(table)), None
-    return None, f"Pick a profile in Mind > Social ({', '.join(sorted(table))}), or name one in `profile`."
+    return None, f"No profile chosen for this chat: the person picks one in Mind > Social ({', '.join(sorted(table))})."
 
 
 def pick(profile, names=''):
@@ -110,8 +110,9 @@ def module_for(conn):
             try:
                 mod = importlib.import_module(f"plugins.{plugin}.{dotted}")
             except Exception as e:
-                logger.error(f"[SOCIAL] provider '{spec['provider']}' failed to import: {e}", exc_info=True)
-                raise SocialError(f"the {conn.provider} provider failed to load: {e}")
+                why = describe(e)
+                logger.error(f"[SOCIAL] provider '{spec['provider']}' failed to import: {why}", exc_info=True)
+                raise SocialError(f"the {conn.provider} provider failed to load: {why}")
             _modules[spec['provider']] = mod
     return mod, spec
 
@@ -144,7 +145,7 @@ def _ready(conn, mod, spec):
     except SocialError:
         raise
     except Exception as e:
-        raise SocialError(f"'{conn.name}': token refresh failed: {e}")
+        raise SocialError(f"'{conn.name}': token refresh failed: {describe(e, conn.secrets.values())}")
 
 
 def _images_for(spec, images):
@@ -184,8 +185,9 @@ def publish(conn, text, images=(), link='', reply_to=''):
     except SocialError:
         raise
     except Exception as e:
-        logger.error(f"[SOCIAL] {conn.key} {cap} failed: {e}", exc_info=True)
-        raise SocialError(f"{spec['label']} refused: {type(e).__name__}: {e}")
+        why = describe(e, conn.secrets.values())
+        logger.error(f"[SOCIAL] {conn.key} {cap} failed: {why}", exc_info=not is_network(e))
+        raise SocialError(f"{spec['label']} refused: {why}")
     return dict(result or {})
 
 
@@ -309,8 +311,9 @@ def inbox(profile, names='', since_hours=24):
             lines.append(f"{conn.display()}: {e}")
             continue
         except Exception as e:
-            logger.error(f"[SOCIAL] {conn.key} inbox failed: {e}", exc_info=True)
-            lines.append(f"{conn.display()}: {type(e).__name__}: {e}")
+            why = describe(e, conn.secrets.values())
+            logger.error(f"[SOCIAL] {conn.key} inbox failed: {why}", exc_info=not is_network(e))
+            lines.append(f"{conn.display()}: {why}")
             continue
         if not items:
             lines.append(f"{conn.display()}: nothing new in the last {hours:g} h.")
@@ -340,7 +343,7 @@ def delete(profile, name, post_id):
     except SocialError:
         raise
     except Exception as e:
-        raise SocialError(f"{spec['label']} refused: {type(e).__name__}: {e}")
+        raise SocialError(f"{spec['label']} refused: {describe(e, conn.secrets.values())}")
     return f"{conn.display()}: {'deleted' if ok else 'not deleted'} {post_id}."
 
 
@@ -357,17 +360,17 @@ def stats(profile, names=''):
             lines.append(f"{conn.display()}: {e}")
             continue
         except Exception as e:
-            lines.append(f"{conn.display()}: {type(e).__name__}: {e}")
+            lines.append(f"{conn.display()}: {describe(e, conn.secrets.values())}")
             continue
         lines.append(f"{conn.display()}: " + (', '.join(f"{k} {v}" for k, v in d.items()) or 'no numbers'))
     return '\n'.join(lines) or "No connection in this profile reports numbers."
 
 
-def list_text(profile=None):
+def list_text():
     table = store.list_profiles()
     if not table:
         return "No social profiles yet. Make one in Settings > Plugins > Social."
-    cur, _ = resolve_profile(profile)
+    cur, _ = resolve_profile()
     lines = []
     for p in table:
         mark = ' ← this chat' if p['name'] == cur else ''

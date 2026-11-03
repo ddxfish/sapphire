@@ -37,10 +37,11 @@ served at.
 
 ## Tools
 
-`social_list` · `social_post(text, connections?, image?, link?, profile?)` ·
+`social_list` · `social_post(text, connections?, image?, link?)` ·
 `social_inbox(hours?, connections?)` · `social_reply(connection, item_id, text)` ·
 `social_stats` · `social_delete(connection, post_id)` · `social_meme(image, top, bottom)`.
 `connections` takes names or platforms (`facebook, x`); blank = every connection.
+Every tool posts as the chat's profile (Mind › Social); none of them can name another.
 
 ## Where things live
 

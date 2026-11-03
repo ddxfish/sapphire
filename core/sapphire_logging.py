@@ -168,6 +168,12 @@ root_logger.setLevel(logging.INFO)
 for handler in root_logger.handlers[:]:
     root_logger.removeHandler(handler)
 
+# No secret query value or Bearer token reaches a log line (core/redact.py).
+from core.redact import LogFilter
+for _h in (file_handler, console_handler):
+    if _h is not None:
+        _h.addFilter(LogFilter())
+
 # Add both handlers (file only outside pytest — see _UNDER_PYTEST above)
 if file_handler is not None:
     root_logger.addHandler(file_handler)

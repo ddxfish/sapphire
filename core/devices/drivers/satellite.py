@@ -120,6 +120,16 @@ SPEC = {
         {'key': 'sleep_after_min', 'takes': 'screen.sleep_after_min', 'type': 'number', 'label': 'Sleeps after (minutes)', 'capability': 'screen',
          'default': 60, 'min': 0, 'max': 1440,
          'help': '0 = never. A board on a battery: everything off but its brain, and it goes offline here. Its BOOT key wakes it.'},
+        # the pendant from 0.1.43: the beat her face is painted on is a setting (the sender paces to it within a minute)
+        {'key': 'beat', 'takes': 'screen.beat', 'type': 'number', 'label': 'Face frames a second', 'capability': 'screen',
+         'default': 25, 'min': 1, 'max': 25,
+         'help': 'The beat her face is painted on. A board that takes her as one stream paints only what changed, so 12 or more holds; a board taking frames alone sustains about 7. The face server renders 25.'},
+        {'key': 'av_buffer', 'takes': 'screen.av_buffer', 'type': 'number', 'label': 'Stream slack (packets)', 'capability': 'screen',
+         'default': 2, 'min': 1, 'max': 3,
+         'help': 'Packets of her voice and face held before her stream plays, about a second each. 1 starts sooner but any late packet is a hole in her voice; 2 is smooth.'},
+        {'key': 'face_lag_ms', 'takes': 'screen.face_lag_ms', 'type': 'number', 'label': 'Face sync delay (ms)', 'capability': 'screen',
+         'default': 700, 'min': 0, 'max': 2000,
+         'help': 'While her face streams to this board, her voice waits this long at the start of a reply so the two meet (her face takes the face server\'s render time). Tune by ear; 0 = no wait.'},
         {'key': 'rotation', 'takes': 'screen.rotation', 'type': 'select', 'label': 'Rotation', 'capability': 'screen', 'default': '0',
          'options': [{'value': '0', 'label': 'landscape'}, {'value': '90', 'label': 'portrait'},
                      {'value': '180', 'label': 'landscape, upside down'}, {'value': '270', 'label': 'portrait, the other way up'}],
@@ -163,7 +173,7 @@ SPEC = {
     ],
 }
 
-SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min', 'sleep_after_min')
+SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min', 'sleep_after_min', 'beat', 'face_lag_ms', 'av_buffer')
 LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
 INBOUND = ('keyboard', 'buttons', 'picker')   # the board sends, Sapphire asks nothing of it: core/devices/voice.py typed(), pressed(), chats()/pick_chat()
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
@@ -389,13 +399,16 @@ def _again(kw):
     return False
 
 
-def _call(method, path, config, secrets, timeout=QUICK, headers=None, **kw):
+def _call(method, path, config, secrets, timeout=QUICK, headers=None, keep=False, port=None, **kw):
     key = secrets.get('token')
     if not key:
         raise Problem("No key is stored for this satellite. Enter it in Settings > Devices.")
     base = str(config.get('url') or '')
     if not base:
         raise Problem(WAITING)
+    if port:                                       # another door of the same board (the pendant's glass door for frames, screen.door)
+        u = urlsplit(base)
+        base = f"{u.scheme}://{u.hostname}:{int(port)}"
     where = urlsplit(base).netloc or base
     kid = _key_id(key)
     known = kid in _signed_ids()
@@ -404,8 +417,11 @@ def _call(method, path, config, secrets, timeout=QUICK, headers=None, **kw):
     def send(auth):
         # Connection: close. A small board has a handful of sockets; kept open, ours were held on
         # it for good, and after it restarted or lost WiFi the next call met a dead one (scouts, 2026-10-11).
+        # `keep`: a stream of frames keeps its one socket (the pooled LAN session reuses it): a new
+        # connection per frame cost the board a handshake, an accept and a teardown each, 20-40 ms
+        # of a 212 ms frame (2026-11-02). A dead one costs that stream one frame; the next reopens.
         return net.request(method, base + path, timeout=timeout,
-                           headers=dict(headers or {}, Authorization=auth, Connection='close'), **kw)
+                           headers=dict(headers or {}, Authorization=auth, **({} if keep else {'Connection': 'close'})), **kw)
 
     def signed():
         return send(_signature(method, base + path, key, base, headers, kw.get('params')))
@@ -1175,7 +1191,9 @@ def play(audio, kind, device, config, secrets):
     as it was made. Raises Unfit when the sound cannot be made to fit, Problem
     when the satellite could not play it. Core's voice lane calls this once
     per sentence as her reply is made."""
-    from core.devices import voice
+    from core.devices import glass, voice
+    if glass.av_live(device['id']):                 # her voice is in her face stream (one clock): not sent twice
+        return {'ok': True, 'skipped': 'her voice is in her face stream'}
     plays = _health(device, config, secrets).get('plays')
     seconds = None
     if plays is not None:

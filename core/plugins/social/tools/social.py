@@ -3,7 +3,7 @@
 Thin doors into plugins/social/engine.py.
 
 The profile a chat posts as is its `social` scope (Mind > Social, or the
-persona's). Every tool takes an optional `profile` to say otherwise. Images
+persona's). The person picks it; no tool can name another one. Images
 travel as handles: img:<id> from this chat, doc:N from the library, a path,
 or an https URL. A connection set to `draft` queues for the person's
 approval in the Outbox; one set to `auto` posts at once.
@@ -19,7 +19,6 @@ TOOL_CATEGORY = 'comms'
 AVAILABLE_FUNCTIONS = ['social_list', 'social_post', 'social_inbox', 'social_reply',
                        'social_stats', 'social_delete', 'social_meme']
 
-_PROFILE = {"type": "string", "description": "Post as this profile instead of the chat's (from social_list)."}
 _CONNS = {"type": "string", "description": "Connection names or platforms, comma-separated (facebook, x, youtube, instagram, linkedin, ...). Blank = every connection of the profile."}
 
 TOOLS = [
@@ -37,15 +36,14 @@ TOOLS = [
                                  "properties": {"text": {"type": "string", "description": "The post"},
                                                 "connections": _CONNS,
                                                 "image": {"type": "string", "description": "img:<id>, doc:N, path or https URL; several comma-separated"},
-                                                "link": {"type": "string", "description": "A URL to share with the post"},
-                                                "profile": _PROFILE},
+                                                "link": {"type": "string", "description": "A URL to share with the post"}},
                                  "required": ["text"]}}},
     {"type": "function", "is_local": "endpoint",
      "function": {"name": "social_inbox",
                   "description": "New comments, mentions and replies on your connections in the last N hours (default 24). Each item has an id for social_reply.",
                   "parameters": {"type": "object",
                                  "properties": {"hours": {"type": "number", "description": "How far back (default 24)"},
-                                                "connections": _CONNS, "profile": _PROFILE},
+                                                "connections": _CONNS},
                                  "required": []}}},
     {"type": "function", "is_local": "endpoint", "writes": True,
      "function": {"name": "social_reply",
@@ -53,18 +51,18 @@ TOOLS = [
                   "parameters": {"type": "object",
                                  "properties": {"connection": {"type": "string", "description": "One connection name or platform"},
                                                 "item_id": {"type": "string", "description": "The [id] from social_inbox"},
-                                                "text": {"type": "string"}, "profile": _PROFILE},
+                                                "text": {"type": "string"}},
                                  "required": ["connection", "item_id", "text"]}}},
     {"type": "function", "is_local": "endpoint",
      "function": {"name": "social_stats",
                   "description": "Followers and other numbers for your connections.",
-                  "parameters": {"type": "object", "properties": {"connections": _CONNS, "profile": _PROFILE}, "required": []}}},
+                  "parameters": {"type": "object", "properties": {"connections": _CONNS}, "required": []}}},
     {"type": "function", "is_local": "endpoint", "writes": True,
      "function": {"name": "social_delete",
                   "description": "Delete one of your own posts or comments by its platform id (from the post result or the inbox).",
                   "parameters": {"type": "object",
                                  "properties": {"connection": {"type": "string", "description": "One connection name or platform"},
-                                                "post_id": {"type": "string"}, "profile": _PROFILE},
+                                                "post_id": {"type": "string"}},
                                  "required": ["connection", "post_id"]}}},
     {"type": "function", "is_local": True,
      "function": {"name": "social_meme",
@@ -181,7 +179,7 @@ def execute(function_name, arguments, config, plugin_settings=None, credentials=
                 return ci.result("Meme ready — post it with social_post(image=...).", [raw])
             if function_name == 'social_list':
                 return engine.list_text(), True
-            profile, why = engine.resolve_profile(a.get('profile'))
+            profile, why = engine.resolve_profile()
             if not profile:
                 return why, False
             if function_name == 'social_post':
@@ -199,5 +197,7 @@ def execute(function_name, arguments, config, plugin_settings=None, credentials=
         except (SocialError, ci.ImageError) as e:
             return str(e), False
     except Exception as e:
-        logger.error(f"[SOCIAL] {function_name} failed: {e}", exc_info=True)
-        return f"{function_name} failed: {type(e).__name__}: {e}", False
+        from core.redact import describe, is_network
+        why = describe(e)
+        logger.error(f"[SOCIAL] {function_name} failed: {why}", exc_info=not is_network(e))
+        return f"{function_name} failed: {why}", False

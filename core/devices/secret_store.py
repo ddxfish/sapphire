@@ -57,12 +57,8 @@ class Secrets:
 
     def scrub(self, text):
         """The text with every secret value (and each of its lines) replaced."""
-        text = str(text)
-        for value in self._values.values():
-            for part in [value] + [ln.strip() for ln in value.splitlines()]:
-                if len(part) >= 4:
-                    text = text.replace(part, '[secret]')
-        return text
+        from core.redact import scrub
+        return scrub(text, self._values.values())
 
     def __repr__(self):
         return f"<Secrets {self._device_id} fields={self.fields()} redacted>"

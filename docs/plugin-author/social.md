@@ -90,6 +90,10 @@ has one (Instagram's `is_ai_generated`), ignore it otherwise.
 Printing a Connection never shows a secret. The engine checks `conn.connected` and
 runs `refresh()` before every call, so your functions can assume a usable token;
 raise `SocialError` with the platform's own words when it refuses.
+Never put a token or secret into a `SocialError` message. Anything else you raise
+(a network error, a bug) reaches the model, the log and the UI only through
+`core.redact.describe()`: kind and host for network errors, and every value in
+`conn.secrets` blanked. Send tokens in a header when the platform allows it.
 
 ### OAuth
 

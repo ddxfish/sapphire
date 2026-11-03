@@ -20,6 +20,7 @@ from urllib.parse import quote
 from fastapi.responses import RedirectResponse
 
 from core.paths import PLUGIN_STATE_DIR
+from core.redact import describe, is_network, scrub
 from plugins.social import engine, store
 from plugins.social.errors import SocialError
 
@@ -67,6 +68,7 @@ def _remember(ok, key, message):
 
 
 def _back(key, message):
+    message = scrub(message)          # it lands in the log, plugin_state and the browser's history
     _remember(False, key, message)
     logger.warning(f"[SOCIAL] connect {key}: {message}")
     return RedirectResponse(url=f"/#settings?social_error={quote(message)}", status_code=302)
@@ -88,8 +90,9 @@ def connect(provider, profile, conn, request=None, **_):
     except SocialError as e:
         return {'error': str(e)}, 400
     except Exception as e:
-        logger.error(f"[SOCIAL] auth_start {c.key}: {e}", exc_info=True)
-        return {'error': f"{spec['label']}: {type(e).__name__}: {e}"}, 500
+        why = describe(e, c.secrets.values())
+        logger.error(f"[SOCIAL] auth_start {c.key}: {why}", exc_info=not is_network(e))
+        return {'error': f"{spec['label']}: {why}"}, 500
     url, stash = (started, {}) if isinstance(started, str) else (started[0], dict(started[1] or {}))
     with _csrf_lock:
         now = time.time()
@@ -120,8 +123,9 @@ def callback(provider, request=None, query=None, **_):
     except SocialError as e:
         return _back(key, str(e))
     except Exception as e:
-        logger.error(f"[SOCIAL] auth_finish {key}: {e}", exc_info=True)
-        return _back(key, f"{provider}: {type(e).__name__}: {e}")
+        why = describe(e, c.secrets.values())
+        logger.error(f"[SOCIAL] auth_finish {key}: {why}", exc_info=not is_network(e))
+        return _back(key, f"{provider}: {why}")
     if got.get('secrets'):
         if not c.save_secrets(got['secrets']):
             return _back(key, 'The tokens could not be stored.')
