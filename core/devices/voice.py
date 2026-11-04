@@ -866,7 +866,13 @@ def _ask_stop(row):
         threading.Thread(target=stop_all, kwargs={'but': row['id']}, daemon=True, name='stop-all-asked').start()
         interrupt(row['id'])
         return True, 'Stopped everywhere'
-    return True, ('Stopped' if interrupt(row['id']) else 'Nothing to stop')
+    was = interrupt(row['id'])
+    try:                                 # her voice may be in a face stream whose source holds the rest of the reply (glass.av_on_stop)
+        from core.devices import glass
+        was = glass.av_clear(row['id']) or was   # cheap when no stream of hers goes there
+    except Exception as e:
+        logger.info(f"[DEVICES] {row['id']}: her stream not stopped ({e})")
+    return True, ('Stopped' if was else 'Nothing to stop')
 
 
 # Work a board asks of Sapphire, with no chat turn: POST /api/devices/{id}/ask {"job": ...}

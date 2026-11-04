@@ -85,7 +85,8 @@ class StreamingTTSPump:
                  disabled: bool = False,
                  chat_settings: Optional[dict] = None,
                  force: bool = False,
-                 plays_here: bool = True):
+                 plays_here: bool = True,
+                 device: str = ''):
         self.system = system
         self.tts = getattr(system, "tts", None)
         # plays_here=True: this pump's chunks play on this computer or in its
@@ -94,6 +95,7 @@ class StreamingTTSPump:
         # still fire, no audio is emitted. False = a satellite's or a phone's
         # pump, elsewhere, never muted by that switch. 2026-10-17.
         self._plays_here = bool(plays_here)
+        self._device = str(device or '')   # a satellite's own pump names it: a face stream carries her voice to that board alone (2026-11-03)
         # force=True: the owner wants speech as it is made whatever the
         # Settings > TTS streaming switch says (a satellite's turn: the only
         # way its speaker gets the first sentence early). A provider without
@@ -226,6 +228,7 @@ class StreamingTTSPump:
                     "speed": getattr(self.tts, "speed", None),
                     "stream_id": self._stream_id,
                     "plays_here": self._plays_here,
+                    "device": self._device,
                     "system": self.system,
                 },
             )
@@ -702,6 +705,7 @@ class StreamingTTSPump:
                 "pause_after_ms": meta["pause_after_ms"],
                 "audio": carrier,
                 "plays_here": self._plays_here,
+                "device": self._device,
                 "system": self.system,
             },
         )

@@ -367,7 +367,14 @@ def _lookup(device_id):
     if not part or not row.get('enabled', True):
         raise LookupError(f"{device_id} is not a satellite with a screen")
     config, secrets = part.get('config') or {}, engine._part_secrets(row['id'], 'satellite')
-    known = _learn(row, config, secrets, satellite._health(row, config, secrets, fresh=known is not None).get('screen') or {})   # re-asking: a fresh answer, not the health cache's (else the minute is two)
+    try:
+        health = satellite._health(row, config, secrets, fresh=known is not None)   # re-asking: a fresh answer, not the health cache's (else the minute is two)
+    except Exception as e:
+        if known:                            # a board rebooting or asleep: what it said last stands until it answers again
+            logger.info(f"[DEVICES] {device_id}: not answering ({e}); its glass as last known")
+            return known
+        raise
+    known = _learn(row, config, secrets, health.get('screen') or {})
     if not known:
         raise LookupError(f"{device_id} has no glass that takes frames (firmware 0.7.7+, its screen on)")
     return known
@@ -544,6 +551,11 @@ class _AvSender:
             self.items.append(packet)
             self.cv.notify()
 
+    def drop(self):
+        """Everything not yet sent goes: she was stopped."""
+        with self.cv:
+            self.items.clear()
+
     def status(self):
         return {'sent': self.sent, 'held': self.held, 'failed': self.failed, 'queued': len(self.items), 'shown': self.shown, 'last_error': self.last_error}
 
@@ -625,6 +637,50 @@ def av_packet(device_id, packet, voice=True):
             _av_last[device_id] = time.monotonic()
     s.put(packet)
     return s.status()
+
+
+_av_stoppers = {}                  # device id -> callable: whoever feeds that board's stream, told to stop at its source
+
+
+def av_on_stop(device_id, fn):
+    """Whoever feeds a board's stream registers how to stop it at the source (the face server's
+    queue holds her reply long after core's turn is over: a stop that only cleared the board
+    paused her a second and she resumed, Krem 2026-11-03). None unregisters."""
+    with _lock:
+        if fn is None:
+            _av_stoppers.pop(device_id, None)
+        else:
+            _av_stoppers[device_id] = fn
+
+
+def av_clear(device_id, upstream=True):
+    """She was stopped: what core still holds for that board goes, and the board drops what it queued
+    (POST /face/packet?clear=1). `upstream`: the source is told too (av_on_stop); the source's own
+    flush handler passes False, or the two would call each other forever. Without this the seconds
+    already in flight played on after a stop (the board's button, 2026-11-03)."""
+    with _lock:
+        s = _av.get(device_id)
+        _av_last.pop(device_id, None)
+        stopper = _av_stoppers.get(device_id) if upstream else None
+        known = s.known if s else None
+    if not s and not stopper:
+        return False                            # no stream of hers to that board: nothing to clear, no board to call
+    if stopper:
+        try:
+            stopper()
+        except Exception as e:
+            logger.info(f"[DEVICES] {device_id}: her stream's source not stopped ({e})")
+    if s:
+        s.drop()
+    try:
+        k = known or _lookup(device_id)        # what the sender knows: a stop never waits on a health call
+        from core.devices.drivers import satellite
+        satellite._call('POST', '/face/packet?clear=1', k['config'], k['secrets'], timeout=3, data=b'',
+                        headers={'Content-Type': 'application/octet-stream'}, port=k.get('door') or None)
+        return True
+    except Exception as e:
+        logger.info(f"[DEVICES] {device_id}: her stream not cleared ({e})")
+        return False
 
 
 def av_shown(device_id):

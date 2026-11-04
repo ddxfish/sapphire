@@ -174,20 +174,9 @@ def test_stopping_a_later_turn_keeps_a_clean_turns_cut(sm):
     assert _users(sm) == ['u1']
 
 
-def test_her_cap_refuses_without_naming_a_number(sm, monkeypatch):
-    monkeypatch.setattr('config.AI_REMOVE_MAX_TURNS', 1, raising=False)
-    out = commands.run('/remove 2', 'c', by='ai')
-    assert not out['ok'] and not any(ch.isdigit() for ch in out['say']) and not commands._pending
-    out = commands.run('/remove 999', 'c', by='ai')
-    assert not out['ok'] and not any(ch.isdigit() for ch in out['say'])
-    monkeypatch.setattr('config.AI_REMOVE_MAX_TURNS', 5, raising=False)
-    out = commands.run('/remove 99', 'c', by='ai')          # under no cap: still no count leaks
-    assert not out['ok'] and not any(ch.isdigit() for ch in out['say'])
-
-
-def test_the_cap_is_hers_alone(sm, monkeypatch):
-    monkeypatch.setattr('config.AI_REMOVE_MAX_TURNS', 1, raising=False)
-    assert commands.run('/remove 3', 'c')['ok']
+def test_her_remove_has_no_cap(sm, monkeypatch):
+    monkeypatch.setattr('config.AI_REMOVE_MAX_TURNS', 1, raising=False)   # a stale retired value
+    assert commands.run('/remove 2', 'c', by='ai')['ok']
 
 
 def _her_cut(sm, n=1):
@@ -267,17 +256,60 @@ def test_a_sealed_chats_row_stays_out_of_the_notification_center(monkeypatch):
     assert seen['private'] is True
 
 
-def test_slash_command_is_hidden_until_turned_on():
+def test_the_toolset_is_the_permission():
     from functions import slash_command
-    assert slash_command.SETTINGS_GATED == {'slash_command': 'AI_SLASH_COMMANDS_ENABLED'}
+    assert not hasattr(slash_command, 'SETTINGS_GATED')
     d = json.loads((ROOT / 'core/settings_defaults.json').read_text(encoding='utf-8'))
-    assert d['tools']['AI_SLASH_COMMANDS_ENABLED'] is False and d['tools']['AI_REMOVE_MAX_TURNS'] == 5
+    assert 'AI_SLASH_COMMANDS_ENABLED' not in d['tools'] and 'AI_REMOVE_MAX_TURNS' not in d['tools']
+    sets = json.loads((ROOT / 'core/toolsets/toolsets.json').read_text(encoding='utf-8'))
+    assert 'slash_command' not in sets['limited_web']['functions']   # the web toolset: a page could steer her
+    assert 'compact-daily' in commands.ai_commands()
 
 
-def test_slash_command_refuses_when_off(monkeypatch):
-    from functions import slash_command
-    monkeypatch.setattr('config.AI_SLASH_COMMANDS_ENABLED', False, raising=False)
-    assert slash_command.execute('slash_command', {'command': '/remove 1'})[1] is False
+@pytest.fixture
+def jobs(sm, monkeypatch):
+    seen = []
+    monkeypatch.setattr('core.chat.compress.start_compress_job',
+                        lambda sm_, chat, **k: seen.append(k) or (True, ''))
+    return seen
+
+
+def test_compact_daily_starts_with_the_chats_own_model(sm, jobs):
+    assert commands.run('/compact-daily', 'c')['ok']
+    k = jobs[0]
+    assert (k['mode'], k['target_tokens'], k['keep_last_turns'], k['provider_key'], k['backup']) == \
+        ('daily', 3000, 1, 'auto', True)
+
+
+@pytest.mark.parametrize('arg,tokens', [('4K', 4000), ('4k', 4000), ('2500', 2500), ('20K', 20000)])
+def test_compact_daily_takes_a_size(sm, jobs, arg, tokens):
+    assert commands.run(f'/compact-daily {arg}', 'c')['ok'] and jobs[0]['target_tokens'] == tokens
+
+
+@pytest.mark.parametrize('arg', ['lots', '100', '21K', '4M'])
+def test_compact_daily_refuses_a_bad_size(sm, jobs, arg):
+    assert not commands.run(f'/compact-daily {arg}', 'c')['ok'] and not jobs
+
+
+def test_compact_daily_refuses_mid_reply(sm, jobs):
+    sm.streaming = True
+    assert not commands.run('/compact-daily', 'c')['ok'] and not jobs
+
+
+def test_her_compact_daily_waits_for_her_turn(sm, jobs):
+    out = commands.run('/compact-daily 4K', 'c', by='ai')
+    assert out['ok'] and not jobs and commands.has_deferred('c')
+    assert not commands.run('/remove 1', 'c', by='ai')['ok']     # one waiting command at a time
+    commands.finish_turn(sm, 'c')
+    assert jobs[0]['target_tokens'] == 4000
+
+
+def test_her_stopped_turn_drops_the_compact(sm, jobs, monkeypatch):
+    monkeypatch.setattr(commands, '_asking_streams', lambda chat: [SimpleNamespace(cancel_flag=False)])
+    commands.run('/compact-daily', 'c', by='ai')
+    commands._pending['c'][0][1][0].cancel_flag = True
+    commands.finish_turn(sm, 'c')
+    assert not jobs
 
 
 def test_odd_tool_call_shapes_do_not_kill_a_turn():
@@ -340,8 +372,8 @@ def test_page_actions_leave_the_history_alone_and_she_cannot_call_them(sm, name)
     assert sm.rows == before
 
 
-def test_she_still_only_has_remove():
-    assert set(commands.ai_commands()) == {'remove'}
+def test_she_has_remove_and_compact_daily_only():
+    assert set(commands.ai_commands()) == {'remove', 'compact-daily'}
 
 
 def test_a_command_with_no_args_refuses_them(sm):

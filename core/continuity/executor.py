@@ -747,10 +747,19 @@ class ContinuityExecutor:
                                              target_chat, session_manager, ExecutionContext)
         finally:
             if hold_sid is not None:
+                if result.get("cancelled"):
+                    _held[0].cancel_flag = True    # a stopped run drops what it asked for
                 try:
                     self.system.llm_chat.end_stream(hold_sid, hold_name)
                 except Exception as e:
                     logger.debug(f"[Continuity] chat hold release failed: {e}")
+            # What her slash_command deferred in this run lands now its rows are
+            # written: a task turn never passes chat_streaming's finish_turn.
+            try:
+                from core import commands
+                commands.finish_turn(session_manager, target_chat)
+            except Exception as e:
+                logger.error(f"[Continuity] Waiting commands failed: {e!r}")
 
     def _run_foreground_held(self, task, result, progress_cb, response_cb, cancel_event,
                              target_chat, session_manager, ExecutionContext) -> Dict[str, Any]:

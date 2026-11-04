@@ -16,8 +16,9 @@
 #
 # The store refuses history edits on a streaming chat, so what her own turn asks
 # for waits: defer() holds it with the stream that asked, finish_turn() runs it
-# once the chat's streams are done, or drops it if that stream was stopped. What
-# she removes is limited by AI_REMOVE_MAX_TURNS, and /undo puts it back.
+# once the chat's streams are done, or drops it if that stream was stopped. The
+# toolset is her permission: slash_command in it means she may. /undo puts back
+# what she removed.
 
 import logging
 import re
@@ -156,14 +157,6 @@ def _cut_refused(sm, chat, name):
     return None
 
 
-def _her_cap():
-    import config
-    try:
-        return max(1, int(getattr(config, 'AI_REMOVE_MAX_TURNS', 5)))
-    except (TypeError, ValueError):
-        return 5
-
-
 def _remove(chat, args, by):
     from core.chat.history import turn_spans
     sm = _sm()
@@ -195,10 +188,7 @@ def _remove(chat, args, by):
     # N turns before her own, and her own turn with them when it ends. Planned now
     # so the answer is honest about the count.
     if has_deferred(chat):
-        return {'ok': False, 'say': 'A removal is already waiting. Ask for one at a time.'}
-    # Neither refusal names a number: a page she read could be steering her.
-    if count > _her_cap():
-        return {'ok': False, 'say': "That's more turns than you can remove at once. The person can do it with /remove."}
+        return {'ok': False, 'say': 'A command is already waiting for this turn to end. Ask for one at a time.'}
     ok, plan = sm.plan_turn_cut(chat, count, keep_last=1)
     if not ok:
         return {'ok': False, 'say': "This chat doesn't have that many turns to remove."}
@@ -220,6 +210,59 @@ def _undo(chat, args, by):
         return {'ok': False, 'say': refused}
     turns, err = sm.undo_turn_cut(chat)
     return {'ok': not err, 'say': err or f'Put back {turns} turn(s).'}
+
+
+DAILY_TOKENS = 3000
+_TOKENS_RE = re.compile(r'(\d{1,5})(k?)')
+
+
+def _compact_daily(chat, args, by):
+    """One labelled summary per day, the last COMPACT_DAILY_DAYS days, in the
+    background with the chat's own model. Hers waits for her turn to end, so
+    her request is in the history it summarizes."""
+    from core.chat import compress
+    from core.personas import persona_manager
+    sm = _sm()
+    refused = _cut_refused(sm, chat, 'compact-daily')
+    if refused:
+        return {'ok': False, 'say': refused}
+    tokens = DAILY_TOKENS
+    if args:
+        m = _TOKENS_RE.fullmatch(args.lower().replace(' ', ''))
+        tokens = int(m[1]) * (1000 if m[2] else 1) if m else 0
+        if not 500 <= tokens <= 20000:
+            return {'ok': False, 'say': f"/compact-daily takes a size per day from 500 to 20K tokens, like 4K, not '{args}'."}
+    settings = sm.read_chat_settings(chat)
+    if settings is None:
+        return {'ok': False, 'say': f"Chat '{chat}' not found."}
+    persona = settings.get('persona') or ''
+    if persona and not persona_manager.exists(persona):
+        persona = ''
+
+    def _start():
+        return compress.start_compress_job(
+            sm, chat, mode='daily', provider_key=settings.get('llm_primary') or 'auto',
+            model=settings.get('llm_model') or '', target_tokens=tokens, keep_last_turns=1,
+            backup=not settings.get('private_chat'), persona=persona)
+
+    if by == 'user':
+        if sm.is_streaming(chat):
+            return {'ok': False, 'say': 'Wait for the reply to finish, then /compact-daily.'}
+        ok, err = _start()
+        return {'ok': ok, 'say': 'Compacting by day in the background.' if ok else err}
+
+    if has_deferred(chat):
+        return {'ok': False, 'say': 'A command is already waiting for this turn to end.'}
+
+    def _apply():
+        ok, err = _start()
+        logger.info(f"[COMMANDS] AI /compact-daily: {'started' if ok else err}")
+        if not ok:
+            _tell(chat, 'AI could not start the daily compact', 'error')
+
+    defer(chat, _apply)
+    return {'ok': True, 'say': f'When this turn ends, the chat will be compacted into one summary '
+                               f'per day (about {tokens} tokens each), this turn kept as it is.'}
 
 
 def _dialog(name, games=True):
@@ -275,6 +318,8 @@ def _context(chat, args, by):
 
 
 register('compact', _dialog('compact', games=False), description='summarize older history (opens the compress dialog)')
+register('compact-daily', _compact_daily, args='[tokens]', ai=True,
+         description='summarize history into one labelled summary per day for the last few days (default 3K tokens a day, e.g. /compact-daily 4K)')
 register('context', _context, description="what's taking up this chat's context, biggest first")
 register('continue', _action('continue'), description='keep writing the last reply')
 register('help', _help, args='[command]', description='list the slash commands')

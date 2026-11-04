@@ -884,7 +884,7 @@ class SettingsManager:
             # function_manager settings-gate and the meta tools
             'AI_TOOLSET_SWITCH_ENABLED', 'AI_MODEL_SWITCH_ENABLED',
             'AI_MODEL_SWITCH_ROSTER', 'AI_MODEL_SWITCH_RATCHET',
-            'AI_SLASH_COMMANDS_ENABLED', 'AI_REMOVE_MAX_TURNS',
+            'COMPACT_DAILY_DAYS', 'DAY_START_HOUR',   # read when a /compact-daily job starts
             # Backup settings - read per-request by backup scheduler
             'BACKUPS_ENABLED', 'BACKUPS_KEEP_DAILY', 'BACKUPS_KEEP_WEEKLY',
             'BACKUPS_KEEP_MONTHLY', 'BACKUPS_KEEP_MANUAL', 'BACKUPS_ENCRYPT_LOCAL', 'BACKUPS_DIR',

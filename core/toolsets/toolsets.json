@@ -4,7 +4,6 @@
     "emoji": "🌐",
     "functions": [
       "ask_user",
-      "slash_command",
       "web_search",
       "get_website",
       "web_view_images",

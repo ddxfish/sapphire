@@ -3,11 +3,12 @@ import { updateSettingsBatch } from '../../shared/settings-api.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { showToast } from '../../shared/toast.js';
 
+const DAILY_KEYS = ['COMPACT_DAILY_DAYS', 'DAY_START_HOUR'];
+
 // Local mirror of the self-management settings, kept in sync on save.
 // NOTE: these inputs intentionally have NO data-key attribute — they save
 // immediately via updateSettingsBatch, not through the generic
 // pendingChanges flow (data-key would double-handle them).
-const SLASH_KEYS = ['AI_SLASH_COMMANDS_ENABLED', 'AI_REMOVE_MAX_TURNS'];
 
 const state = {
     toolsetEnabled: false,
@@ -145,8 +146,8 @@ export default {
 
         return ctx.renderFields(this.essentialKeys) +
                `<details style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);" open>
-                    <summary style="cursor: pointer; padding: 0.25rem 0;"><strong>AI Slash Commands</strong></summary>
-                    ${ctx.renderFields(SLASH_KEYS)}
+                    <summary style="cursor: pointer; padding: 0.25rem 0;"><strong>Daily Compact</strong></summary>
+                    ${ctx.renderFields(DAILY_KEYS)}
                 </details>` +
                `<div id="ai-selfmgmt">${selfMgmtHtml()}</div>` +
                ctx.renderAccordion('tools-adv', this.advancedKeys);

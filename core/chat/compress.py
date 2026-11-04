@@ -5,8 +5,11 @@
 #             Internally map-reduce: chunk → partial summaries → merge.
 #   chunked — each ~CHUNK_INPUT_TOKENS span of history becomes one summary
 #             pair IN PLACE, chronological chain preserved.
-# target_tokens means the same thing in both modes: the approximate total
-# size of the compressed output.
+#   daily   — /compact-daily: one labelled pair per day for the last
+#             COMPACT_DAILY_DAYS calendar days (days start at DAY_START_HOUR);
+#             earlier runs' pairs pass through, older days roll off.
+# target_tokens is the approximate total size of the compressed output
+# (whole, chunked) or of each day's summary (daily).
 #
 # One job at a time, module-level state, thread-run: a local model chewing a
 # big chat takes minutes and must not hold an HTTP worker. Routes 409 while
@@ -17,7 +20,7 @@ import logging
 import os
 import re
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -109,12 +112,18 @@ def chunk_by_turns(msgs: List[Dict[str, Any]],
     return chunks
 
 
+def day_label(day: date) -> str:
+    """Monday, November 2, 2026 (no %-d: Windows strftime has no such flag)."""
+    return f"{day:%A, %B} {day.day}, {day.year}"
+
+
 def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]],
-                  persona: str = "") -> List[Dict[str, Any]]:
+                  persona: str = "", day: Optional[date] = None) -> List[Dict[str, Any]]:
     """Build the synthetic user/assistant pair that replaces source_msgs.
     Timestamp inherits from the newest compressed message so the visual
     chronology holds; `compressed` flags let the UI badge the seam; `persona`
-    gives the summary the face of whoever it speaks as."""
+    gives the summary the face of whoever it speaks as. `day` makes it one
+    day's summary: the date she reads, and compressed_day for the next run."""
     ts = next((m.get("timestamp") for m in reversed(source_msgs)
                if m.get("timestamp")), None) or datetime.now().isoformat()
     stamp = {"timestamp": ts, "compressed": True,
@@ -123,6 +132,9 @@ def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]],
                      if m.get("timestamp")), "?")
     marker = (f"[Compressed history: {len(source_msgs)} messages "
               f"({str(first_ts)[:10]} to {str(ts)[:10]}) summarized below]")
+    if day:
+        stamp["compressed_day"] = day.isoformat()
+        marker = f"[Day summary: {day_label(day)} ({len(source_msgs)} messages)]"
     reply = {"role": "assistant", "content": summary, **stamp}
     if persona:
         reply["persona"] = persona
@@ -131,15 +143,17 @@ def _summary_pair(summary: str, source_msgs: List[Dict[str, Any]],
 
 # ── LLM plumbing ───────────────────────────────────────────────────────────
 
-def make_provider(provider_key: str, model: str = "", conversation: str = None):
+def make_provider(provider_key: str, model: str = "", conversation: str = None,
+                  private: bool = False):
     """One-shot provider for summarize calls via the ONE resolver (2026-09-21):
-    no health probe (the summary call is the signal), the route already
-    refused auto/none and applied the private→local rule. Raises ValueError
-    on unknown/unbuildable provider."""
+    no health probe (the summary call is the signal). The route refuses
+    auto/none; /compact-daily rides the chat's own pin, auto included, and
+    private holds that to local providers. Raises ValueError on an unknown,
+    unbuildable or refused provider."""
     from core.chat.llm_providers.resolve import resolve, ProviderRefused
     try:
-        return resolve(provider_key, model, timeout=REQUEST_TIMEOUT, health='skip',
-                       conversation=conversation).provider
+        return resolve(provider_key, model, private=private, timeout=REQUEST_TIMEOUT,
+                       health='skip', conversation=conversation).provider
     except ProviderRefused as e:
         raise ValueError(str(e)) from e
 
@@ -291,13 +305,16 @@ def _merge_partials(provider, partials: List[str], target_tokens: int,
 def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
                       target_tokens: int, on_progress=None,
                       instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
-                      room: bool = False) -> List[Dict[str, Any]]:
+                      room: bool = False, day: Optional[date] = None) -> List[Dict[str, Any]]:
     """Compress `head` into synthetic summary pairs. Pure of storage —
-    testable with a mock provider. on_progress(str) narrates for job status."""
+    testable with a mock provider. on_progress(str) narrates for job status.
+    day (whole mode): the pair is that day's summary."""
     chunks = chunk_by_turns(head, CHUNK_INPUT_TOKENS)  # module global: patchable
     if not chunks:
         return []
     guide = _guide(instructions, persona)
+    if day:
+        guide["voice"] += f" The conversation took place on {day_label(day)}."
     if mode == "chunked":
         per = max(MIN_PAIR_TOKENS, target_tokens // len(chunks))
         pairs = []
@@ -323,7 +340,80 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
                                        render_transcript(c, persona, room),
                                        min(PARTIAL_SUMMARY_TOKENS, target_tokens), guide))
         summary = _merge_partials(provider, partials, target_tokens, on_progress, guide)
-    return _summary_pair(summary, head, persona)
+    return _summary_pair(summary, head, persona, day)
+
+
+# ── daily: one labelled pair per day, the last N days ──────────────────────
+
+def day_of(ts, start_hour: int = 0) -> Optional[date]:
+    """The day a timestamp belongs to when days begin at start_hour (a 2 am
+    turn is still last night). Unreadable → None."""
+    try:
+        t = datetime.fromisoformat(str(ts))
+    except (TypeError, ValueError):
+        return None
+    if t.tzinfo:
+        t = t.astimezone().replace(tzinfo=None)
+    return (t - timedelta(hours=start_hour)).date()
+
+
+def _stamped_day(rows) -> Optional[date]:
+    """A daily pair from an earlier run: exactly its two rows carry the day."""
+    try:
+        return date.fromisoformat(rows[0]["compressed_day"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def daily_plan(head: List[Dict[str, Any]], days: int, start_hour: int,
+               now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Sort head into what a daily compact keeps and what it summarizes. Pure.
+
+    The window is the last `days` calendar days, today included. Pairs an
+    earlier run wrote pass through untouched while their day is inside it.
+    Every other turn (an old whole/chunked summary too) is raw and lands on
+    its day by its first timestamp, else the turn before's day. Anything
+    older than the window rolls off, raw or summarized.
+    kept: [(day, index, rows)]  raw: {day: (index, rows)}  dropped: turns."""
+    today = day_of((now or datetime.now()).isoformat(), start_hour)
+    first = today - timedelta(days=max(1, days) - 1)
+    kept, raw, dropped, last = [], {}, 0, None
+    for start, end in turn_spans(head):
+        rows = head[start:end]
+        day = _stamped_day(rows)
+        if day is not None:
+            if day >= first:
+                kept.append((day, start, rows[:2]))
+            else:
+                dropped += 1
+            last, rows, start = day, rows[2:], start + 2   # rows glued after a pair are raw
+            if not rows:
+                continue
+        day = next((d for d in (day_of(m.get("timestamp"), start_hour) for m in rows) if d),
+                   None) or last or today
+        last = day
+        if day < first:
+            dropped += 1
+            continue
+        raw.setdefault(day, (start, []))[1].extend(rows)
+    return {"kept": kept, "raw": raw, "dropped": dropped}
+
+
+def daily_pairs(plan: Dict[str, Any], provider, target_tokens: int, on_progress=None,
+                instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
+                room: bool = False) -> List[Dict[str, Any]]:
+    """One new pair per day of raw turns, merged with the kept pairs in day
+    order. A second run on the same day adds a second pair for that day."""
+    items = list(plan["kept"])
+    days = sorted(plan["raw"].items())
+    for i, (day, (start, rows)) in enumerate(days):
+        if on_progress:
+            on_progress(f"day {i + 1}/{len(days)}")
+        items.append((day, start, compress_messages(
+            rows, "whole", provider, target_tokens, instructions=instructions,
+            persona=persona, room=room, day=day)))
+    items.sort(key=lambda it: (it[0], it[1]))
+    return [m for _, _, rows in items for m in rows]
 
 
 # ── the job ────────────────────────────────────────────────────────────────
@@ -335,6 +425,13 @@ def _write_backup(session_manager, chat_name: str, exported: Dict[str, Any]) -> 
     path = exports_dir / f"{chat_name}_{stamp}.json"
     path.write_text(json.dumps(exported, indent=2), encoding="utf-8")
     return str(path)
+
+
+def _int_setting(config, key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(getattr(config, key, default))))
+    except (TypeError, ValueError):
+        return default
 
 
 def _compress_chat(session_manager, chat_name: str, mode: str,
@@ -364,13 +461,25 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
         chat_settings, _private = {}, True
     room = chat_settings.get("mode") == "room"
     instructions = ROOM_INSTRUCTIONS if room else load_instructions()
+    plan = None
+    if mode == "daily":
+        import config
+        plan = daily_plan(head, _int_setting(config, "COMPACT_DAILY_DAYS", 5, 1, 365),
+                          _int_setting(config, "DAY_START_HOUR", 4, 0, 23))
+        if not plan["raw"] and not plan["dropped"]:
+            raise ValueError("Nothing new to compact since the last run")
     if backup and _private:
         logger.info(f"[COMPRESS] Skipping plaintext backup for private chat '{chat_name}'")
     backup_path = _write_backup(session_manager, chat_name, exported) if (backup and not _private) else None
-    provider = make_provider(provider_key, model, conversation=chat_name)  # fail BEFORE any LLM spend
-    pairs = compress_messages(head, mode, provider, int(target_tokens),
-                              on_progress=on_progress, instructions=instructions,
-                              persona="" if room else persona, room=room)
+    provider = make_provider(provider_key, model, conversation=chat_name,
+                             private=_private)  # fail BEFORE any LLM spend
+    if plan is not None:
+        pairs = daily_pairs(plan, provider, int(target_tokens), on_progress=on_progress,
+                            instructions=instructions, persona="" if room else persona, room=room)
+    else:
+        pairs = compress_messages(head, mode, provider, int(target_tokens),
+                                  on_progress=on_progress, instructions=instructions,
+                                  persona="" if room else persona, room=room)
 
     # Fork 4A (2026-07-16): "compression" that grows the chat is refused —
     # chatty local models can summarize a small head into MORE tokens than

@@ -444,13 +444,13 @@
     "short": "Let the AI switch its own LLM",
     "long": "Adds a switch_model tool so the AI can switch between the models you list below. When disabled the tool is completely hidden from the AI. The model list doubles as scope control: only listed models are switchable."
   },
-  "AI_SLASH_COMMANDS_ENABLED": {
-    "short": "Adds slash_command. Off hides it from the AI completely.",
-    "long": "Adds a slash_command tool so the AI can run the slash commands marked for it, today /remove, without a click. When disabled the tool is completely hidden from the AI. A web page or message it reads could talk it into using this, so it is off by default. /undo brings back its last removal."
+  "COMPACT_DAILY_DAYS": {
+    "short": "Days of summaries /compact-daily keeps, today included",
+    "long": "/compact-daily turns a chat's history into one labelled summary per day. It keeps this many calendar days, today included; anything older rolls off (the JSON backup in user/history/exports/ still has it, except for private chats). A day with no messages has no summary."
   },
-  "AI_REMOVE_MAX_TURNS": {
-    "short": "The AI isn't told this number. Your own /remove has no limit.",
-    "long": "The AI's /remove refuses a bigger number, and it isn't told what this number is. Your own /remove has no such limit."
+  "DAY_START_HOUR": {
+    "short": "The hour a new day begins (4 = a 2 am chat is still last night)",
+    "long": "Where one day ends and the next begins, 0-23. /compact-daily files each turn under the day it belongs to by this hour: at 4, a conversation at 2 am counts as the night before."
   },
   "AI_MODEL_SWITCH_ROSTER": {
     "short": "Models the AI may switch between (top = least private)",

@@ -76,8 +76,9 @@ Composer /help /status
 /context token breakdown
 /retry /continue /replay
 /remove /trim /compact
+/compact-daily day summaries
 /undo her last /remove
-slash_command: Settings Tools
+slash_command: toolset only
 /prompt /repair
 schedule_task
 set_scene set_motion

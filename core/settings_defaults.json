@@ -321,8 +321,8 @@
     "AI_MODEL_SWITCH_ENABLED": false,
     "AI_MODEL_SWITCH_ROSTER": [],
     "AI_MODEL_SWITCH_RATCHET": false,
-    "AI_SLASH_COMMANDS_ENABLED": false,
-    "AI_REMOVE_MAX_TURNS": 5
+    "COMPACT_DAILY_DAYS": 5,
+    "DAY_START_HOUR": 4
   },
   
   "rag": {
