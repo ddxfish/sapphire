@@ -8,6 +8,8 @@
 - Mind palace settings page created
 - Apps can be pinned to flyout
 - Raven AI added to Videos
+- Chat Room TTS cadence and UI fixes
+- Added /compact-daily slash command to chunk by days
 # 2.16.0 - Documents
 - Document uploads show in docs bar now, no sidebar
 - Choose RAG injection strength

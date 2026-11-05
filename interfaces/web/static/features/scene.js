@@ -17,7 +17,8 @@ function _loadProviderMeta() {
         .then(data => {
             _providerMeta = {};
             for (const p of (data?.providers || [])) _providerMeta[p.key] = p;
-            if (_lastBadge) updateSendButtonLLM(_lastBadge[0], _lastBadge[1]);
+            if (_roomBadge) _paintRoomBadge();
+            else if (_lastBadge) updateSendButtonLLM(_lastBadge[0], _lastBadge[1]);
         })
         .catch(() => { _providerMetaPending = null; });
 }
@@ -34,12 +35,47 @@ export function setProviderMeta(list) {
     for (const p of (list || [])) _providerMeta[p.key] = p;
 }
 
-// Call this when chat's primary LLM is known (from chat-manager, chat-settings)
-export function updateSendButtonLLM(primary, model = '') {
+// A chat room holding the composer (views/rooms.js): the badge is its SEATS' brains,
+// not the chat the Chat view had open (Krem 2026-11-04: "Claude" under Send while every
+// seat ran on LM Studio). [[primary, model], ...] or null; null = the chat's badge again.
+let _roomBadge = null;
+export function setRoomBadge(pairs) {
+    _roomBadge = Array.isArray(pairs) && pairs.length ? pairs : null;
+    if (_roomBadge) _paintRoomBadge();
+    else if (_lastBadge) updateSendButtonLLM(_lastBadge[0], _lastBadge[1]);
+}
+
+function _paintRoomBadge() {
+    const keys = [...new Set(_roomBadge.map(p => p[0]))];
+    if (keys.length === 1) {                               // every seat on one provider: that one
+        const models = new Set(_roomBadge.map(p => p[1]));
+        return _paintBadge(keys[0], models.size === 1 ? _roomBadge[0][1] : '');
+    }
     const sendBtn = document.getElementById('send-btn');
     const indicator = document.getElementById('llm-indicator');
     if (!sendBtn) return;
+    if (!_providerMeta) _loadProviderMeta();
+    // mixed: the auto gradient when any seat may leave the machine (the privacy tint
+    // stays honest), the local glow when every seat is local
+    const local = keys.every(k => k === 'none' || !!(_providerMeta && _providerMeta[k]?.is_local));
+    sendBtn.classList.remove('llm-local', 'llm-cloud', 'llm-auto');
+    sendBtn.classList.add(local ? 'llm-local' : 'llm-auto');
+    const names = keys.map(k => (_providerMeta && _providerMeta[k]?.display_name) || k);
+    sendBtn.title = `Send - the seats run on: ${names.join(', ')}`;
+    if (indicator) { indicator.classList.toggle('cloud', !local); indicator.textContent = 'Mixed'; }
+}
+
+// Call this when chat's primary LLM is known (from chat-manager, chat-settings)
+export function updateSendButtonLLM(primary, model = '') {
     _lastBadge = [primary, model];
+    if (_roomBadge) return _paintRoomBadge();             // the room holds it; the chat's is kept for after
+    _paintBadge(primary, model);
+}
+
+function _paintBadge(primary, model = '') {
+    const sendBtn = document.getElementById('send-btn');
+    const indicator = document.getElementById('llm-indicator');
+    if (!sendBtn) return;
     if (!_providerMeta && primary && primary !== 'auto' && primary !== 'none') _loadProviderMeta();
 
     // Remove all mode classes first

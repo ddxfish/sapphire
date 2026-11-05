@@ -26,7 +26,7 @@ import * as ui from '../ui.js';
 import * as eventBus from '../core/event-bus.js';
 import { refresh, getTtsEnabled } from '../core/state.js';
 import * as audio from '../audio.js';
-import { updateScene } from '../features/scene.js';
+import { updateScene, setRoomBadge } from '../features/scene.js';
 import { populateChatDropdown } from '../features/chat-manager.js';
 import * as Images from '../ui-images.js';
 import { updateImagePreviewArea } from '../handlers/send-handlers.js';
@@ -261,6 +261,7 @@ function claim() {
 
 function leave() {
     if (!R) return;
+    setRoomBadge(null);                                    // the Chat view's chat wears its own badge again
     mentionObs?.disconnect();
     mentionObs = null;
     hush();
@@ -499,6 +500,18 @@ function paintAll() {
     paintGuests();
     fillPersonas();
     paintMentions();
+    paintBadge();
+}
+
+// The badge under Send is the seats' brains while the room holds the composer: one
+// provider = that one, several = "Mixed" (Krem 2026-11-04). Another Sapphire and a door
+// seat run elsewhere: they count as their own kind (and never as local).
+function paintBadge() {
+    if (!R) return;
+    const pairs = (R.info.seats || []).filter(x => x.enabled !== false).map(x =>
+        x.kind === 'sapphire' ? ['another-sapphire', ''] : x.kind === 'door' ? ['mcp-door', '']
+            : [x.settings?.llm_primary || 'auto', x.settings?.llm_model || '']);
+    setRoomBadge(pairs.length ? pairs : null);
 }
 
 // ------------------------------------------------------------------ @mentions in the seat's colour
@@ -760,6 +773,7 @@ async function saveSeat(id, patch) {
         const cur = seatOf(id);
         if (cur) Object.assign(cur, fresh);
         paintSeatHead(id);
+        paintBadge();                                      // a seat's brain changed: the badge follows
     } catch (e) { ui.showToast(e.message, 'error'); }
 }
 

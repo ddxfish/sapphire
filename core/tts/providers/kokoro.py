@@ -224,6 +224,12 @@ class KokoroTTSProvider(BaseTTSProvider):
             if sent:                    # part of it was spoken: saying it all again would repeat her
                 logger.warning(f"Kokoro /tts/stream broke after {sent} pieces: {type(e).__name__}")
                 return
+            if isinstance(e, requests.exceptions.ReadTimeout):
+                # Up but busy (one synth at a time): the whole-blob route is the same
+                # queue, and its retries piled more onto it until nothing got through
+                # (Prime, 2026-11-04). A server that is down still falls back below.
+                logger.warning("Kokoro /tts/stream timed out: the server is busy, no fallback onto the same queue")
+                return
             logger.warning(f"Kokoro /tts/stream failed: {type(e).__name__} — falling back to non-streaming")
             audio = self.generate(text, voice, speed, **kwargs)
             if audio:

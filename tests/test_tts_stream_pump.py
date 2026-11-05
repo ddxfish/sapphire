@@ -893,3 +893,27 @@ def test_a_forced_pump_still_needs_a_voice_engine(monkeypatch):
     import config
     monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", False, raising=False)
     assert StreamingTTSPump(system=_make_system(tts_attr=False), force=True).enabled is False
+
+
+def test_a_chunk_past_the_hard_timeout_abandons_the_stream(enable_streaming, monkeypatch):
+    """Prime 2026-11-04: Kokoro synthesizes one at a time. A chunk past the flush
+    hard timeout was abandoned by the pump but its worker kept going AND queued its
+    retries, and the chunks behind it started too - a backlog no later line got
+    through ("4 chunks couldn't be voiced" on every line). Now a timeout abandons
+    the stream: no retries, no queued chunk asks the engine, and the notice says
+    the engine fell behind, not that the words were odd."""
+    import config
+    import core.tts.stream_pump as sp
+    monkeypatch.setattr(config, "TTS_STREAMING_SPLIT_MODE", "sentence", raising=False)
+    monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.3)
+    fp = _FakeProvider(audio_bytes=None, delay=1.0)          # busy: slow, then nothing
+    pump = StreamingTTSPump(system=_make_system(provider=fp))
+    for words in ("One here. ", "Two here. ", "Three here. ", "Four here."):
+        pump.push(words)
+    t0 = time.monotonic()
+    out = list(pump.flush_and_close())
+    assert time.monotonic() - t0 < 3.0
+    time.sleep(1.2)                                          # let any straggler worker run
+    assert len(fp.calls) == 2                                # the two in flight; no retry, chunks 2-3 never asked
+    notice = [e for e in out if e.get("type") == "notice"]
+    assert notice and "fell behind" in notice[0]["message"] and "4 TTS chunks" in notice[0]["message"]

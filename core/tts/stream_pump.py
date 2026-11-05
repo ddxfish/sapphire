@@ -164,6 +164,12 @@ class StreamingTTSPump:
         self.executor = None
         self._stream_started = False
         self._closed = False
+        # Set when the pump gives up on the engine (a chunk past the flush hard
+        # timeout) or closes: workers neither start nor retry after it. An
+        # abandoned worker used to keep its place in Kokoro's one-at-a-time queue
+        # AND queue its retries and the queued chunks behind it, so one slow
+        # chunk grew a backlog no later line could get through (Prime, 2026-11-04).
+        self._abandoned = threading.Event()
         # Stable id for this turn — plugins correlate events across hooks.
         self._stream_id = uuid.uuid4().hex
         self._chunk_count = 0
@@ -308,8 +314,10 @@ class StreamingTTSPump:
                         break
                     if time.monotonic() > deadline:
                         logger.warning(
-                            f"[TTS-STREAM] flush hard-timeout for chunk {chunk_idx}"
+                            f"[TTS-STREAM] flush hard-timeout for chunk {chunk_idx} — "
+                            f"the engine is behind: this stream asks it for nothing more"
                         )
+                        self._abandoned.set()
                         self._dropped_chunks.append(chunk_idx)
                         break
                     continue
@@ -337,7 +345,7 @@ class StreamingTTSPump:
             # If this chunk yielded zero playable segments, count it as
             # dropped (Kokoro 400 / network / decode failure all land here)
             total = meta["segments_emitted"]
-            if total == 0:
+            if total == 0 and chunk_idx not in self._dropped_chunks:   # a hard-timeout already counted it
                 self._dropped_chunks.append(chunk_idx)
                 logger.warning(
                     f"[TTS-STREAM] chunk {chunk_idx} dropped: zero playable segments emitted"
@@ -386,6 +394,11 @@ class StreamingTTSPump:
                 "type": "notice",
                 "severity": "warning",
                 "message": (
+                    # a timeout is the engine falling behind, never the words: the old
+                    # wording sent a slow GPU hunting for odd characters (2026-11-04)
+                    f"{n} TTS {chunk_word} couldn't be voiced — the voice engine fell behind "
+                    f"(busy GPU or CPU). Text is unaffected."
+                    if self._abandoned.is_set() else
                     f"{n} TTS {chunk_word} couldn't be voiced — likely contains "
                     f"characters or symbols the current voice doesn't support. "
                     f"Text is unaffected."
@@ -599,6 +612,8 @@ class StreamingTTSPump:
                     total_bytes += len(audio)
 
         try:
+            if self._abandoned.is_set():
+                return                       # given up on (or closed): never ask the engine
             try:
                 _run(voice)
             except Exception as e:
@@ -608,7 +623,7 @@ class StreamingTTSPump:
             # Transient failure ≠ bad voice: retry the stream's OWN voice once
             # before degrading, so a hiccup doesn't swap the speaker for one
             # chunk mid-reply (2026-08-08 — "retries being weird").
-            if n_segments == 0:
+            if n_segments == 0 and not self._abandoned.is_set():
                 try:
                     _run(voice)
                 except Exception as e:
@@ -620,7 +635,7 @@ class StreamingTTSPump:
             # call reads as a dead line (2026-07-03: 'Eric' vs 'am_eric').
             # Default from the stream snapshot, not live state.
             default_voice = self._default_voice
-            if n_segments == 0 and voice != default_voice:
+            if n_segments == 0 and voice != default_voice and not self._abandoned.is_set():
                 logger.warning(
                     f"[TTS-STREAM] chunk {chunk_index} produced nothing with "
                     f"'{voice}' — retrying with default '{default_voice}'"
@@ -672,7 +687,7 @@ class StreamingTTSPump:
                 # 2026-05-20 — mid-stream drops were silently invisible.
                 idx = meta.get("index")
                 total = meta["segments_emitted"]
-                if total == 0:
+                if total == 0 and idx not in self._dropped_chunks:
                     self._dropped_chunks.append(idx)
                     logger.warning(
                         f"[TTS-STREAM] chunk {idx} dropped: zero playable segments emitted"
@@ -752,6 +767,7 @@ class StreamingTTSPump:
         return ev
 
     def _close(self):
+        self._abandoned.set()                # its workers retry nothing past this
         if self._closed:
             return
         self._closed = True
