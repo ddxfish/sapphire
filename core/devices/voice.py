@@ -598,7 +598,7 @@ class Speech:
             return
         if not audio:
             return
-        self.queue.put((audio, str(event.get('content_type') or 'audio/ogg')))
+        self.queue.put((audio, str(event.get('content_type') or 'audio/ogg'), str(event.get('stream_id') or '')))
         if self._thread is None:
             with _lock:
                 _live.setdefault(self.device_id, []).append(self)
@@ -636,10 +636,10 @@ class Speech:
                 return self._forget()
             if self.stopped:
                 continue                             # drain what is left, play nothing
-            audio, kind = item
+            audio, kind, sid = item
             t0 = time.monotonic()
             try:
-                said = mod.play(audio, kind, device, config, secrets)
+                said = mod.play(audio, kind, device, config, secrets, sid=sid)   # the reply's stream id: a board whose face stream claimed this reply skips it (glass.av_carried)
             except Exception as e:
                 self.problem, self.stopped = str(e), True
                 logger.warning(f"[DEVICES] {self.device_id}: a sentence could not be played: {e}")
@@ -674,14 +674,23 @@ def say(device_id, text, chat_settings=None, voice=None, speed=None, pitch=None)
 
 
 def halt(device_id):
-    """Her sentences still to be sent to this device are dropped. True when
-    a reply was being spoken there. What the device is playing this moment
-    is the driver's to cut."""
+    """Her sentences still to be sent to this device are dropped, and her face
+    stream to it with them (glass.av_clear: its source holds the rest of the reply).
+    True when a reply was being spoken there. What the device is playing this
+    moment is the driver's to cut. Every door that stops her passes here (the
+    wake word said over her, the stop tool, a room, the board's own button), so
+    every one clears the stream: only the button did (scouts 2026-11-05)."""
     with _lock:
         live = list(_live.get(device_id, ()))
     for speech in live:
         speech.stopped = True
-    return bool(live)
+    cleared = False
+    try:
+        from core.devices import glass
+        cleared = glass.av_clear(device_id)  # cheap when no stream of hers goes there
+    except Exception as e:
+        logger.info(f"[DEVICES] {device_id}: her stream not stopped ({e})")
+    return bool(live) or cleared
 
 
 _running = {}        # device id -> (its turn's box, chat): the turn she is answering that device with, while it runs
@@ -866,12 +875,7 @@ def _ask_stop(row):
         threading.Thread(target=stop_all, kwargs={'but': row['id']}, daemon=True, name='stop-all-asked').start()
         interrupt(row['id'])
         return True, 'Stopped everywhere'
-    was = interrupt(row['id'])
-    try:                                 # her voice may be in a face stream whose source holds the rest of the reply (glass.av_on_stop)
-        from core.devices import glass
-        was = glass.av_clear(row['id']) or was   # cheap when no stream of hers goes there
-    except Exception as e:
-        logger.info(f"[DEVICES] {row['id']}: her stream not stopped ({e})")
+    was = interrupt(row['id'])           # halt() inside clears her face stream too (glass.av_clear)
     return True, ('Stopped' if was else 'Nothing to stop')
 
 

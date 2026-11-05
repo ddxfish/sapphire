@@ -527,9 +527,12 @@ def face_frame(device_id, jpeg, seconds=3):
 # voice is in the packets. (2026-11-03: two clocks drifted however they were glued.)
 
 AV_HOLD_S = 0.25                   # a full queue: ask again this soon
-AV_LIVE_S = 3.0                    # a packet this recent = a stream is live
+AV_LIVE_S = 3.0                    # a voice packet this recent: something of hers was going (av_clear's honest "Stopped"); never ownership
 _av = {}
 _av_last = {}
+_av_claim = {}                     # device id -> core's stream id: that board's one-stream carries THAT reply's voice, so core's sentence
+                                   # door skips it there and only it. Set by the feeder at the reply's start, ended at its end or a stop
+                                   # (3 s of recency stood in for this, and a pause in her reply handed a sentence to both doors, scouts 2026-11-05)
 
 
 class _AvSender:
@@ -598,7 +601,10 @@ class _AvSender:
                 continue
             self.sent += 1
             try:
-                self.shown = bool(r.json().get('shown', True))
+                ans = r.json()
+                self.shown = bool(ans.get('shown', True))
+                if ans.get('stopped'):              # the board is stopped, or hears a question: it dropped her voice, and what waits here goes too (0.5.0)
+                    self.drop()
             except Exception:
                 self.shown = True                   # an older board does not say: treat her as shown
             with self.cv:
@@ -614,7 +620,7 @@ def av_boards():
     (once a minute): in a fresh process nothing is learned yet, and a list read off the cache was
     empty until something else asked, so the plugin took the old frame path after every restart (2026-11-03)."""
     out = []
-    for d, w, h, fps in stream_boards():
+    for d, w, h, fps in stream_boards(online_only=True):   # a board the health keeper knows is down is not asked: each one cost a full timeout, on the hook's thread before her first word (scouts 2026-11-05)
         try:
             if _lookup(d).get('av'):
                 out.append((d, min(w, h) // 16 * 16))
@@ -642,13 +648,16 @@ def av_packet(device_id, packet, voice=True):
 _av_stoppers = {}                  # device id -> callable: whoever feeds that board's stream, told to stop at its source
 
 
-def av_on_stop(device_id, fn):
+def av_on_stop(device_id, fn, was=None):
     """Whoever feeds a board's stream registers how to stop it at the source (the face server's
     queue holds her reply long after core's turn is over: a stop that only cleared the board
-    paused her a second and she resumed, Krem 2026-11-03). None unregisters."""
+    paused her a second and she resumed, Krem 2026-11-03). None unregisters; with `was`, only
+    when that is the one registered (a feeder's late close after a reload took the new feeder's
+    stopper with it, scouts 2026-11-05)."""
     with _lock:
         if fn is None:
-            _av_stoppers.pop(device_id, None)
+            if was is None or _av_stoppers.get(device_id) == was:
+                _av_stoppers.pop(device_id, None)
         else:
             _av_stoppers[device_id] = fn
 
@@ -660,14 +669,17 @@ def av_clear(device_id, upstream=True):
     already in flight played on after a stop (the board's button, 2026-11-03)."""
     with _lock:
         s = _av.get(device_id)
+        live = time.monotonic() - _av_last.get(device_id, 0) < AV_LIVE_S   # her voice was going there this moment
         _av_last.pop(device_id, None)
+        live = bool(_av_claim.pop(device_id, None)) or live               # a reply claimed for that board was on its way too; the stop ends the claim
         stopper = _av_stoppers.get(device_id) if upstream else None
-        known = s.known if s else None
-    if not s and not stopper:
-        return False                            # no stream of hers to that board: nothing to clear, no board to call
+        known = _known.get(device_id) or (s.known if s else None)   # the board as last learned, not as the sender was born knowing it: a re-keyed or re-addressed board was cleared at its old door (scouts 2026-11-05)
+    if not s and not stopper and not live:
+        return False                            # no stream of hers to that board, none claimed or recent: nothing to clear, no board to call
+    was = live or bool(s and s.items)
     if stopper:
         try:
-            stopper()
+            was = bool(stopper()) or was
         except Exception as e:
             logger.info(f"[DEVICES] {device_id}: her stream's source not stopped ({e})")
     if s:
@@ -677,10 +689,9 @@ def av_clear(device_id, upstream=True):
         from core.devices.drivers import satellite
         satellite._call('POST', '/face/packet?clear=1', k['config'], k['secrets'], timeout=3, data=b'',
                         headers={'Content-Type': 'application/octet-stream'}, port=k.get('door') or None)
-        return True
     except Exception as e:
         logger.info(f"[DEVICES] {device_id}: her stream not cleared ({e})")
-        return False
+    return was                                  # only when something of hers was going: a stop with nothing playing is "Nothing to stop" (scouts 2026-11-05)
 
 
 def av_shown(device_id):
@@ -690,16 +701,28 @@ def av_shown(device_id):
         return s.shown if s else True
 
 
-def av_mark(device_id):
-    """A stream is about to start for that board (a reply began): core's sentences to it are skipped from the first."""
+def av_claim(device_id, sid):
+    """The feeder of that board's stream is connected and will carry this reply's voice (core's stream id):
+    core's sentence door skips that reply there, from its first sentence. One reply at a time per board."""
     with _lock:
-        _av_last[device_id] = time.monotonic()
+        _av_claim[device_id] = str(sid or '')
 
 
-def av_live(device_id):
-    """A stream of hers is live on that board: a packet in the last AV_LIVE_S."""
+def av_release(sid=None, device_id=None):
+    """The claim ends: the reply is over or flushed (`sid`: wherever it is held), or the feeder of that
+    board is gone (`device_id`: whatever it held). Core's sentence door carries what is left of a reply."""
     with _lock:
-        return time.monotonic() - _av_last.get(device_id, 0) < AV_LIVE_S
+        if device_id is not None:
+            _av_claim.pop(device_id, None)
+        if sid:
+            for d in [d for d, s in _av_claim.items() if s == str(sid)]:
+                _av_claim.pop(d, None)
+
+
+def av_carried(device_id, sid):
+    """That reply's voice goes to that board in her stream: core's own sentence of it is not sent (one door per reply)."""
+    with _lock:
+        return bool(sid) and _av_claim.get(device_id) == str(sid)
 
 
 def av_status(device_id):

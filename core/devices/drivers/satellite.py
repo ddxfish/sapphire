@@ -1183,7 +1183,7 @@ def status(device, config, secrets):
     return out
 
 
-def play(audio, kind, device, config, secrets):
+def play(audio, kind, device, config, secrets, sid=None):
     """Sound on the satellite: what it said back ({'ok', 'stopped'?}). Older
     boards answer when it has played; 0.7.7+ once it is taken into the board's
     play queue. A board that states the format
@@ -1192,7 +1192,7 @@ def play(audio, kind, device, config, secrets):
     when the satellite could not play it. Core's voice lane calls this once
     per sentence as her reply is made."""
     from core.devices import glass, voice
-    if glass.av_live(device['id']):                 # her voice is in her face stream (one clock): not sent twice
+    if glass.av_carried(device['id'], sid):         # this reply's voice rides to that board in her face stream (one clock): not sent twice. A sound with no stream id (say, a reminder) always goes
         return {'ok': True, 'skipped': 'her voice is in her face stream'}
     plays = _health(device, config, secrets).get('plays')
     seconds = None

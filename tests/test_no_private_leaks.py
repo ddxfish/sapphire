@@ -16,7 +16,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 SCAN_EXT = {'.py', '.js', '.json', '.md', '.html', '.css', '.sh', '.txt',
-            '.yml', '.yaml', '.toml', '.cfg', '.ini', '.service', '.sql'}
+            '.yml', '.yaml', '.toml', '.cfg', '.ini', '.service', '.sql',
+            '.c', '.h'}                                   # the firmware ships too (scouts 2026-11-05)
 ALWAYS_SKIP = {'.git', '__pycache__', 'node_modules', '.pytest_cache',
                '.claude'}
 # Usernames too generic to be a meaningful beacon (CI boxes, containers).
@@ -28,12 +29,13 @@ GENERIC_PATH_PLACEHOLDERS = {'you', 'yourname', 'your-name', 'your_name', 'usern
 MAX_BYTES = 2_000_000
 
 
-def _gitignored_dirs():
+def _gitignored_dirs(base=None):
     """Top-level directory names from .gitignore — the simple subset only
     (plain names, optionally with a trailing '/' or '/*'). Wildcard and
-    nested patterns are file-level noise for this sweep's purposes."""
+    nested patterns are file-level noise for this sweep's purposes.
+    `base`: another root with a .gitignore of its own (the firmware repo)."""
     out = set()
-    gi = REPO / '.gitignore'
+    gi = (base or REPO) / '.gitignore'
     if not gi.exists():
         return out
     for line in gi.read_text(encoding='utf-8', errors='ignore').splitlines():
@@ -81,6 +83,9 @@ def _shipped_outside_git():
                 continue
             if child.is_dir() and (child / 'plugin.json').exists():
                 out.append(child)
+    fw = REPO / 'firmware'                   # its own public repo (gitignored here): the boards' sources ship from it, their build/ and vendor dirs by its own .gitignore
+    if fw.is_dir():
+        out.append(fw)
     return out
 
 
@@ -163,6 +168,7 @@ def test_no_developer_environment_leaks():
     roots = [REPO] + _shipped_outside_git()
     seen = set()
     for root in roots:
+        root_skip = ALWAYS_SKIP | (_gitignored_dirs(root) if root is not REPO else set())
         for path in sorted(root.rglob('*')):
             rel = path.relative_to(REPO)
             # Plugins under a gitignored dir ship on their OWN (their own git
@@ -170,6 +176,8 @@ def test_no_developer_environment_leaks():
             # very much public, so they get scanned explicitly.
             if root is REPO and any(part in skip for part in rel.parts):
                 continue
+            if root is not REPO and any(part in root_skip for part in path.relative_to(root).parts):
+                continue                     # an extra root keeps its own ignores (the firmware's build/, managed_components/, backups/)
             if not path.is_file() or path.suffix.lower() not in SCAN_EXT:
                 continue
             if any(part in ALWAYS_SKIP for part in rel.parts):
