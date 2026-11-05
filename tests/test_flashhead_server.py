@@ -49,8 +49,8 @@ def test_a_chunk_rendered_before_a_stop_is_never_sent_after_it(server):
     threading.Thread(target=server._packer, daemon=True).start()
     gen = s.gen
     server._flush(s)                                       # she was stopped while it rendered
-    server._out.put((s, gen, "speech", None, None, b"old words"))
-    server._out.put((s, s.gen, "speech", None, None, b"new words"))
+    server._out.put((s, gen, "speech", None, None, b"old words", None))
+    server._out.put((s, s.gen, "speech", None, None, b"new words", None))
     got = [q.get(timeout=2), q.get(timeout=2)]
     assert b"flush" in got[0] and got[1] == b"new words"
 
@@ -91,7 +91,7 @@ def test_a_face_still_coming_takes_her_words(server, tmp_path, monkeypatch):
     s.face, s.want = None, str(face)
     server._state["status"] = "ready"
     server.BEAT[0] = server.time.monotonic()
-    monkeypatch.setattr(server, "_queue_speech", lambda s, data, mute=False: None)
+    monkeypatch.setattr(server, "_queue_speech", lambda s, data, **kw: None)
     assert _speak(server) == {"taken": True, "why": ""}
     assert s.open
 
@@ -136,13 +136,32 @@ def test_only_the_newest_browser_plays_her_voice(server):
 
 
 def test_words_played_elsewhere_are_mouthed_in_silence(server, monkeypatch):
+    """A device plays her voice: the queue keeps it whole (a board stream carries it to the
+    device named), and the browser that plays her voice gets its audio zeroed at pack time."""
+    import json
+    import struct
+    import threading
     np = server.np
-    server.P.update(n16=4, n24=6)
+    server.P.update(n16=4, n24=6, fps=25)
     s = server._session("local")
     monkeypatch.setattr(server, "_decode", lambda data: (np.ones(4, np.float32), np.ones(6, np.int16)))
-    server._queue_speech(s, b"x", mute=True)
-    a16, a24 = s.speech.get_nowait()
-    assert a16.any() and not a24.any()
+    server._queue_speech(s, b"x", mute=True, device="pendant")
+    a16, a24, tag = s.speech.get_nowait()
+    assert a16.any() and a24.any() and tag == {"mute": True, "device": "pendant", "taken": False, "sid": ""}
+    browser, board = queue.Queue(), queue.Queue()
+    s.viewers.update({browser: True, board: False})
+    s.boards.add(board)
+    s.voice = browser
+    threading.Thread(target=server._packer, daemon=True).start()
+    server._out.put((s, s.gen, "speech", [np.zeros((2, 2, 3), np.uint8)], a24, None, tag))
+    got = {}
+    for name, q in (("browser", browser), ("board", board)):
+        pkt = q.get(timeout=2)
+        hl = struct.unpack(">I", pkt[:4])[0]
+        head = json.loads(pkt[4:4 + hl])
+        got[name] = (head, np.frombuffer(pkt[4 + hl:4 + hl + head["audio"]], np.int16))
+    assert got["browser"][0]["mute"] and len(got["browser"][1]) == 6 and not got["browser"][1].any()
+    assert got["board"][0]["device"] == "pendant" and got["board"][1].all()
 
 
 def test_a_viewers_numbers_make_one_line(server, caplog):
@@ -154,3 +173,32 @@ def test_a_viewers_numbers_make_one_line(server, caplog):
         server._viewer_log(s, b"not json")
     line = [r.message for r in caplog.records if r.message.startswith("viewer")]
     assert len(line) == 1 and "late frames 30" in line[0] and "gaps 2 (0.40s)" in line[0]
+
+
+def test_a_tap_on_her_face_names_the_stream_and_is_logged(server, monkeypatch, caplog):
+    """Every speech packet carries core's stream id (a viewer stops that pump through
+    /api/tts/stop); a flush by a viewer says so in the log."""
+    import io
+    import json
+    import struct
+    np = server.np
+    server.P.update(n16=4, n24=6, fps=25)
+    s = server._session("local")
+    monkeypatch.setattr(server, "_decode", lambda data: (np.ones(4, np.float32), np.ones(6, np.int16)))
+    server._queue_speech(s, b"x", taken=True, sid="pump-7")
+    _, a24, tag = s.speech.get_nowait()
+    pkt = server._packet("speech", [], a24, tag)
+    head = json.loads(pkt[4:4 + struct.unpack(">I", pkt[:4])[0]])
+    assert (head["kind"], head["sid"], head["taken"]) == ("speech", "pump-7", True)
+    server._queue_speech(s, b"x", taken=True, sid="pump-8")       # waiting when the tap comes
+    h = server.Handler.__new__(server.Handler)
+    h.server = type("Local", (), {})()
+    h.path = "/flush?by=viewer"
+    h.headers = {"Host": "127.0.0.1:5017", "X-FlashHead": "1", "Content-Length": "0"}
+    h.rfile = io.BytesIO(b"")
+    replies = []
+    h._json = lambda obj, code=200: replies.append(obj)
+    with caplog.at_level("INFO"):
+        h.do_POST()
+    assert replies == [{"ok": True}] and s.speech.empty() and not s.open
+    assert any(r.message == "Stopped from the viewer (local)" for r in caplog.records)

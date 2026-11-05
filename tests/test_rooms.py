@@ -239,10 +239,15 @@ def test_seat_brain_scopes_tools_context_privacy(world):
     assert names == {'search_memory', 'read_self', 'web_search'}   # writers, meta_danger, agents and the card are gone
     assert brain['system_prompt'].startswith('PROMPT[sapphire]\n\n[Chat room "salon"]')
     assert 'What this room is for: Talk about the boat.' in brain['system_prompt']
-    assert ("House rules: the bots take a round after each of Krem's lines; no round cap; round robin; name a seat as "
-            "@Name and it answers next, whoever wrote the line, and a chain of mentions stops after 3 mentioned turns "
-            "since Krem's last line; nothing to add = (pass) or <<PASS>>.") in brain['system_prompt']   # every seat sees the rules (2026-10-13)
-    assert 'You are Sapphire. Also here: Krem, Sapphire 2 (sapphire).' in brain['system_prompt']
+    # every seat sees the rules (2026-10-13), in plain words: the norm before the mechanism (2026-11-04)
+    assert ("House rules: After each of Krem's lines, every seat speaks once, in turn, then the room waits for Krem. "
+            "Talk to people by name. Writing @Name is a summons: that seat answers next, out of turn, and it uses one "
+            "of the room's 3 summons until Krem speaks again. Use it only when you need one particular seat's answer "
+            "right now. Nothing to add this turn: answer exactly (pass), or put <<PASS>> in your line.") in brain['system_prompt']
+    # the person is named as the person; the others' personas no longer ride as a surname (2026-11-04)
+    assert ('You are Sapphire, one of the seats. The other seats: Sapphire 2. Krem is the person here, '
+            'the human the room is for.') in brain['system_prompt']
+    assert 'Answer them in ONE message' in brain['system_prompt']
     assert 'This is your first turn here: read your self-sheet (read_self)' in brain['system_prompt']
     assert brain['history'] == [] and cue.startswith('(Nobody has spoken yet.)')
     # her second turn: her chat has her rows, the first-turn line is gone
@@ -564,7 +569,12 @@ def test_import_transcript_and_whole_room(world):
     assert d['purpose'] == 'Elsewhere' and d['seats'] == []
     d = rooms.import_room(other, exported)                                       # the whole room
     assert d['purpose'] == 'Imported purpose' and d['human_every'] == 3 and d['shuffle'] is True
-    assert [s['id'] for s in d['seats']] == ['zz1'] and d['seats'][0]['settings'] == {'toolset': 'none'}
+    # a fresh id, never the file's (two rooms shared seat chats, hunt 2026-11-04); the rows follow it
+    assert len(d['seats']) == 1 and d['seats'][0]['id'] != 'zz1' and d['seats'][0]['name'] == 'Cobalt'
+    assert d['seats'][0]['settings'] == {'toolset': 'none'}
+    again = rooms.import_room(other, {**exported, 'messages': [
+        {'role': 'assistant', 'content': 'mine', 'speaker': 'zz1', 'name': 'Cobalt'}]})
+    assert world.llm_chat.session_manager.chats[other]['rows'][0]['speaker'] == again['seats'][0]['id'] != d['seats'][0]['id']
     assert [s['id'] for s in rooms.describe(chat)['seats']] == [a['id'], b['id']]  # the salon untouched
     with pytest.raises(rooms.RoomError):
         rooms.import_room('nope', exported)
@@ -1215,7 +1225,7 @@ def test_a_room_change_reaches_a_guests_box_and_a_seat_can_be_muted(world, monke
     static = Path(__file__).resolve().parent.parent / 'interfaces' / 'web' / 'static'
     js = (static / 'views' / 'rooms.js').read_text(encoding='utf-8')
     assert js.count('data-f="tts"') == 3 and "SEAT_SECTIONS = ['prompt', 'toolset', 'brain', 'voice', 'mind']" in js
-    assert 'speakLine(seatOf(d.speaker), d.text, d.heard);' in js and 'audio.isTtsPlaying()' in js and 'hush();' in js
+    assert 'speakLine(seatOf(d.speaker), d.text, d.heard, d.message_id);' in js and 'audio.isTtsPlaying()' in js and 'hush();' in js
     assert 'R = { chat, info, placeholder: null, mute: 0, voiceGen: 0 };' in js     # undefined === 0 kept every line silent (2026-10-13)
     assert "audio.playTextStreaming(text, voice, me.chat, { speed: st.speed, pitch: st.pitch })" in js
     assert '<textarea data-f="context" rows="3" placeholder="Goes to her box' in js     # a guest\'s brief is editable now
@@ -1355,7 +1365,7 @@ def test_a_satellites_line_is_read_back_there_and_the_chat_view_never_moves(worl
     js = (static / 'views' / 'rooms.js').read_text(encoding='utf-8')
     assert 'await api.setLanding(chat, true);' in js and 'api.setLanding(was, false)' in js
     assert 'pointerBefore' not in js and 'api.activateChat(' not in js
-    assert 'speakLine(seatOf(d.speaker), d.text, d.heard);' in js and 'if (heard) return;' in js
+    assert 'speakLine(seatOf(d.speaker), d.text, d.heard, d.message_id);' in js and 'if (heard) return;' in js
     assert "export const setLanding = (name, on = true)" in (static / 'api.js').read_text(encoding='utf-8')
     route = (Path(__file__).resolve().parent.parent / 'core' / 'routes' / 'chat.py').read_text(encoding='utf-8')
     assert '@router.post("/api/chats/{chat_name}/landing")' in route and '_bound_belt' not in route
@@ -1388,7 +1398,7 @@ def test_a_door_seat_has_no_chat_and_is_found_by_its_persona(world):
         rooms.door_read('cobalt', 'nowhere')
     names = rooms._names(room)
     pre = rooms._preamble(chat, room, next(s for s in room['seats'] if s['id'] == a['id']), names)
-    assert 'Also here: Krem, Cobalt.' in pre and 'answer exactly (pass), or put <<PASS>> in your line' in pre
+    assert 'The other seats: Cobalt. Krem is the person here' in pre and 'answer exactly (pass), or put <<PASS>> in your line' in pre
     for words in ('(pass)', ' (Pass). ', 'Nothing to add here. <<PASS>>', 'I <<pass>> this one'):
         assert rooms._passed(words), words
     for words in ('', 'I pass on the boat talk.', 'pass the salt', None):
@@ -1582,7 +1592,10 @@ def test_mentions_cue_only_the_seats_named_and_chain_to_the_cap(world, monkeypat
     rooms.update_room(chat, {'mention_max': 1})
     rooms.say(chat, 'a plain line: the usual round, whose lines name each other')
     assert _wait(lambda: len(order) == 6 and rooms.state(chat)['waiting'])
-    assert order[3:] == ['Sapphire', 'Sapphire 2', 'Sapphire 2']                   # the round, then one mentioned turn
+    # the round, then one mentioned turn: Sapphire named Sapphire 2, who answered in the
+    # round right after (it used to give her a second turn in a row - Marcus twice,
+    # 2026-11-04); Sapphire 2 named Sapphire, who had spoken before it: she goes again
+    assert order[3:] == ['Sapphire', 'Sapphire 2', 'Sapphire']
     rooms.say(chat, '@all speak up')                                                # @all: the usual round
     assert _wait(lambda: len(order) == 9 and rooms.state(chat)['waiting'])
     assert order[6:8] == ['Sapphire', 'Sapphire 2']
@@ -1662,3 +1675,136 @@ def test_a_seat_chat_is_as_private_as_its_room(world, monkeypatch):
     s_room, _room = rooms._room(chat)
     rooms.seat_chat(chat, s_room, rooms._room(chat)[1]['seats'][0])
     assert sm.chats[own]['settings']['private_chat'] is True
+
+
+def test_edit_and_trash_of_one_seat_never_touch_the_next_seat():
+    """Data scout 2026-11-04: in a room back-to-back assistant rows are different
+    seats; the turn walk ran to the last assistant row before a user row, so editing
+    (or trashing) seat A's bubble rewrote (or removed) seat B's line. A chat's own
+    rows carry no speaker and walk as before."""
+    from core.chat.history import ChatSessionManager as S
+    rows = lambda: [{'role': 'user', 'content': 'go', 'timestamp': 't0'},
+                    {'role': 'assistant', 'content': 'A says', 'speaker': 'a', 'timestamp': 't1'},
+                    {'role': 'assistant', 'content': 'B says', 'speaker': 'b', 'timestamp': 't2'}]
+    m = rows()
+    assert S._rows_edit_by_timestamp(m, 'assistant', 't1', 'A, fixed')
+    assert [r['content'] for r in m] == ['go', 'A, fixed', 'B says']
+    m = rows()
+    assert S._rows_remove_last_assistant(m, 't1')
+    assert [r['content'] for r in m] == ['go', 'B says']
+    plain = [{'role': 'user', 'content': 'hi', 'timestamp': 't0'},
+             {'role': 'assistant', 'content': 'step', 'timestamp': 't1'},
+             {'role': 'assistant', 'content': 'final', 'timestamp': 't2'}]
+    assert S._rows_edit_by_timestamp(plain, 'assistant', 't1', 'final, fixed')
+    assert [r['content'] for r in plain] == ['hi', 'step', 'final, fixed']   # one turn, its last row
+
+
+def test_a_seats_view_follows_edits_rebuilds_when_lost_and_sweep_spares_sealed(world):
+    """Data scout 2026-11-04. (1) An edit of the room reaches her view: the key was the
+    row's `k` alone, so an edited line - a secret taken back out - stayed in every seat
+    chat, and a rebuild put her own edited line back from `turn`. (2) A seat chat never
+    synced (an import) or emptied by hand is rebuilt from the room, not left blank.
+    (3) The sweep deletes the seat chats of a room that is GONE, never of one it cannot
+    read right now (sealed in the vault): those seats are still there."""
+    chat, a, b = _salon()
+    sm = world.llm_chat.session_manager
+    own = f"seat-{a['id']}"
+    s_room, room = rooms._room(chat)
+    seat = next(x for x in room['seats'] if x['id'] == a['id'])
+    rooms.append_line(chat, 'user', 'my password is hunter2', 'user', 'Krem')
+    rooms.append_line(chat, 'assistant', 'Noted.', a['id'], 'Sapphire', seen=1,
+                      turn=[{'role': 'assistant', 'content': 'Noted.'}])
+    rows = sm.chats[chat]['rows']
+    sm.chats[own]['rows'] = []
+    sm.chats[own]['settings'].pop('room_sync', None)
+    rooms._sync(chat, s_room, room, seat, rows)                               # never synced: rebuilt
+    assert 'hunter2' in str(sm.chats[own]['rows']) and sm.chats[own]['rows'][-1]['content'] == 'Noted.'
+    rows[0]['content'] = 'my password is [gone]'                              # Krem edits the secret out...
+    rows[1]['content'] = 'Noted, safely.'                                     # ...and her line
+    rooms._sync(chat, s_room, room, seat, rows)
+    assert 'hunter2' not in str(sm.chats[own]['rows']) and sm.chats[own]['rows'][-1]['content'] == 'Noted, safely.'
+    sm.chats[own]['rows'] = []                                                # emptied by hand
+    rooms._sync(chat, s_room, room, seat, rows)
+    assert sm.chats[own]['rows'][-1]['content'] == 'Noted, safely.'
+    # the sweep: a room it cannot read (exists, not readable as a room) keeps its seat chats
+    sm.chats['vaulted'] = {'settings': {}, 'rows': []}
+    sm.chats['seat-v1'] = {'settings': {'mode': 'seat', 'room': 'vaulted', 'seat': 'v1'}, 'rows': []}
+    sm.chats['seat-g1'] = {'settings': {'mode': 'seat', 'room': 'gone-room', 'seat': 'g1'}, 'rows': []}
+    assert rooms.sweep() == ['seat-g1'] and 'seat-v1' in sm.chats
+
+
+def test_a_line_a_skipped_seat_never_read_is_answered_next(world, monkeypatch):
+    """Engine scout 2026-11-04: a line typed mid-round counted as read when the next
+    seat's turn came up, even when that seat was skipped before any cue (a door nobody
+    is at): the round ended, the room said "your turn", and nobody ever answered it."""
+    chat, a, b = _salon()
+    rt = rooms._rt(chat)
+    rt.said, rt.read = 2, 1                       # the person's second line landed before b's turn
+
+    def away(chat_, seat, rt_, prep=None):
+        rooms._uncued(rt_)                        # what a door nobody is at does
+        return ''
+    monkeypatch.setattr(rooms, '_seat_turn', away)
+    rooms._turn(chat, rooms._room(chat)[1]['seats'][1], rt)
+    assert rt.read == 1                           # still unanswered: the next seat (or round) takes it
+    monkeypatch.setattr(rooms, '_seat_turn', lambda c, s, r, prep=None: 'spoke')
+    rooms._turn(chat, rooms._room(chat)[1]['seats'][0], rt)
+    assert rt.read == 2
+
+
+def test_the_rounds_keep_pace_with_the_reading(world):
+    """Krem's vote 2026-11-04: a 6-minute room was read aloud for 15+ minutes after.
+    A room tab reading aloud pings; each line it is handed is waited for, one line
+    ahead, before the next seat goes. Stop, a quiet tab, or a line past its time end it."""
+    chat, a, b = _salon()
+    rt = rooms._rt(chat)
+    seat = rooms._room(chat)[1]['seats'][0]
+    rooms._read_aloud(rt, seat, 'nobody reads this', 'm0')
+    assert rt.reading == []                       # no tab reading aloud: nothing to wait for
+    rooms.voice(chat, on=True)
+    rooms._read_aloud(rt, seat, 'one', 'm1')
+    rooms._read_aloud(rt, seat, 'two', 'm2')
+    assert [r[0] for r in rt.reading] == ['m1', 'm2']
+    done = threading.Event()
+    th = threading.Thread(target=lambda: (rooms._await_reading(rt), done.set()), daemon=True)
+    th.start()
+    assert not done.wait(0.7)                     # two unread: the next seat waits
+    assert rooms.voice(chat, mid='m1') == {'reading': 1}
+    assert done.wait(2)                           # one line ahead is fine
+    rooms._read_aloud(rt, seat, 'three', 'm3')
+    assert rooms.voice(chat, mid='m3') == {'reading': 0}   # read in order: m3 read means m2 too
+    rooms._read_aloud(rt, seat, 'four', 'm4'); rooms._read_aloud(rt, seat, 'five', 'm5')
+    rooms.stop(chat)
+    assert rt.reading == []                       # Stop: nothing left to wait for
+    rt.stop_flag.clear()
+    rooms._read_aloud(rt, seat, 'six', 'm6'); rooms._read_aloud(rt, seat, 'seven', 'm7')
+    rt.voice_seen -= rooms.VOICE_TAB_S + 1        # the tab went quiet (closed)
+    rooms._await_reading(rt)
+    assert rt.reading == []
+
+
+def test_mentions_switch_off_and_a_hyphen_continues_a_name(world):
+    """Krem 2026-11-04: mentions are a per-room switch (on by default, as before);
+    off, @Name is just words and the seats are not taught it. Cues scout: `-` was a
+    word boundary, so @Sapph-Blue summoned the seat named Sapph."""
+    chat, a, b = _salon()
+    rooms.update_seat(chat, b['id'], {'name': 'Sapph'})
+    _, room = rooms._room(chat)
+    assert room['mentions'] is True and rooms._mentions(room, 'hey @Sapph') == [b['id']]
+    assert rooms._mentions(room, 'hey @Sapph-Blue, and @sapph_x') == []
+    room = rooms.update_room(chat, {'mentions': False})
+    assert rooms._mentions(room, 'hey @Sapph') == [] and '@Name' not in rooms._rules_text(room)
+
+
+def test_rules_have_ceilings_and_a_colour_is_only_a_colour(world):
+    """Fable scout 2026-11-04: a pause past threading's ceiling killed the run thread
+    and an Infinity broke the chat list's JSON; a seat colour is inline CSS, and an
+    imported room's `red;background:url(...)` pinged out on every paint."""
+    chat, a, b = _salon()
+    room = rooms.update_room(chat, {'pause_s': 1e12, 'max_rounds': float('inf'), 'mention_max': 'x'})
+    assert room['pause_s'] == 3600.0 and room['max_rounds'] == 0 and room['mention_max'] == 3
+    assert rooms.update_room(chat, {'pause_s': float('nan')})['pause_s'] == 0.0
+    for ok in ('#39f', '#4a9eff', 'rgb(1, 2, 3)', 'teal'):
+        assert rooms.update_seat(chat, a['id'], {'color': ok})['color'] == ok
+    for bad in ('red;background:url(https://x/p.png)', 'url(x)', 'expression(alert(1))'):
+        assert rooms.update_seat(chat, a['id'], {'color': bad})['color'] == ''

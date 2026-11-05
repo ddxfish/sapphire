@@ -598,6 +598,9 @@ export const renderHistory = (hist) => {
         chat.appendChild(clone);
     }
     for (const el of inflight) chat.appendChild(el);   // the queued sends, still in line
+    // the status line ("X is generating...") is NOW: it follows the rows, never sits above them
+    const status = document.getElementById('status-message');
+    if (status) chat.appendChild(status);
     lockAnsweredAskCards(chat);     // only a card nothing was said after stays live
 
     updateToolbars();   // re-derives index / Continue / trash counts on the kept rows too
@@ -809,9 +812,14 @@ export const finishStreaming = async (ephemeral = false, keep = false) => {
                     // its error row) is not one bubble: swapping in the last row
                     // dropped the step and left the buttons one row off (Delete
                     // took two). Redraw it all, when no next turn has begun (hunt 20).
+                    // Never while a newer turn is live: a chat room starts the next
+                    // seat within the 500 ms, and the redraw deleted her live bubble
+                    // and stranded her status line mid-transcript (Krem 2026-11-04).
+                    // In a room, back-to-back assistant rows are different seats, not
+                    // one turn; the held refresh (chat.js) reconciles at her end.
                     let first = li;
                     while (first > 0 && hist[first - 1]?.role === 'assistant') first--;
-                    if (first < li && li === hist.length - 1) {
+                    if (first < li && li === hist.length - 1 && !document.getElementById('streaming-message')) {
                         streamingMsg.remove();
                         renderHistory(hist);
                     } else {

@@ -1875,6 +1875,38 @@ class PluginLoader:
                 self._reload_locks[name] = threading.Lock()
             return self._reload_locks[name]
 
+    def refresh_from_disk(self, name: str):
+        """The plugin's record brought up to date with its folder before any load
+        that isn't boot's (a reload, a toggle on): the manifest re-read, so a route,
+        setting or hook added while it was disabled comes up (the toggle loaded the
+        boot-time copy and a new route answered 404, 2026-11-04); its mtime restamped,
+        or rescan() re-queues a reload forever after any manifest edit (negspace N14,
+        2026-08-31); and the signature checked again (files may have changed since
+        the scan). Reading and hashing happen off self._lock: get_route_handler waits
+        on it, and a verify hashes every file of the plugin."""
+        with self._lock:
+            info = self._plugins.get(name)
+            plugin_path = Path(info["path"]) if info else None
+        if plugin_path is None:
+            return
+        manifest = mtime = None
+        manifest_path = plugin_path / "plugin.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+                mtime = manifest_path.stat().st_mtime
+            except Exception as e:
+                logger.warning(f"[PLUGINS] Failed to re-read manifest for {name}: {e}")
+        verified, verify_msg, verify_meta = verify_plugin(plugin_path)
+        with self._lock:
+            info = self._plugins.get(name)
+            if not info:
+                return
+            if manifest is not None:
+                info["manifest"], info["_manifest_mtime"] = manifest, mtime
+            info.update(verified=verified, verify_msg=verify_msg,
+                        verify_tier=verify_meta.get("tier", "unsigned"), verified_author=verify_meta.get("author"))
+
     def reload_plugin(self, name: str):
         """Unload and reload a plugin. Safe — if reload fails, plugin stays unloaded.
 
@@ -1887,25 +1919,7 @@ class PluginLoader:
             self.unload_plugin(name)
             with self._lock:
                 should_load = name in self._plugins and self._plugins[name]["enabled"]
-                if name in self._plugins:
-                    plugin_path = self._plugins[name]["path"]
-                    # Re-read manifest from disk (tool code or settings may have changed)
-                    manifest_path = plugin_path / "plugin.json"
-                    if manifest_path.exists():
-                        try:
-                            self._plugins[name]["manifest"] = json.loads(
-                                manifest_path.read_text(encoding="utf-8-sig")
-                            )
-                            # Restamp, or rescan() re-queues this reload FOREVER
-                            # after any manifest edit (negspace N14, 2026-08-31).
-                            self._plugins[name]["_manifest_mtime"] = manifest_path.stat().st_mtime
-                        except Exception as e:
-                            logger.warning(f"[PLUGINS] Failed to re-read manifest for {name}: {e}")
-                    # Re-verify signature (code may have been tampered with since scan)
-                    verified, verify_msg, verify_meta = verify_plugin(plugin_path)
-                    self._plugins[name]["verified"] = verified
-                    self._plugins[name]["verify_msg"] = verify_msg
-                    self._plugins[name]["verified_author"] = verify_meta.get("author")
+            self.refresh_from_disk(name)
             if should_load:
                 try:
                     if not self._load_plugin(name):

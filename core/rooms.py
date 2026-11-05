@@ -80,6 +80,8 @@ WAIT_MAX = 120                  # the longest one room_wait parks
 PASS_MARK = '<<PASS>>'          # anywhere in a line: she passes (Krem 2026-10-13, after the phone's <<HANG UP>>)
 SEAT = 'seat'                   # the mode of a local seat's own chat: her tools, her memory, her rows
 TOOL_NOTE_CAP = 8000            # characters of one tool result on a room line's footnote
+VOICE_TAB_S = 45.0              # a room tab reading aloud pings every 20 s; quiet this long = nobody is reading
+READ_MAX_S = 300.0              # one line's reading is waited for at most this long (15 s + ~12 chars a second)
 CUE_CAP = 7000                  # characters of a guest's cue (her door takes 8000 with the header)
 CUE_IMAGES = 6                  # the newest pictures a cue carries (the rest are still on the rows)
 # The rules, with their defaults. human_every: the seats go this many rounds
@@ -98,8 +100,10 @@ CUE_IMAGES = 6                  # the newest pictures a cue carries (the rest ar
 # wrote it; a seat's answer naming another chains; this many mentioned turns
 # since the person's last line is the brake (0 = no cap). Krem 2026-10-13:
 # 3 while we get used to it, 50 for a coding session.
+# mentions: the switch for all of it (Krem 2026-11-04: a toggle per room, the
+# @Name shown in the seat's colour while it is on). Off, @Name is just words.
 RULES = {'human_every': 1, 'pause_s': 0.0, 'max_rounds': 0, 'bots_enabled': True, 'shuffle': False,
-         'blind': False, 'mention_max': 3}
+         'blind': False, 'mention_max': 3, 'mentions': True}
 from core.idle import PERSON_SOURCES       # inbox sources that are the person speaking (one list: core/idle.py)
 
 _lock = threading.RLock()
@@ -145,10 +149,13 @@ def _rules(r):
             if isinstance(d, bool):
                 out[k] = bool(v)
             elif isinstance(d, float):
-                out[k] = max(0.0, float(v))
+                f = float(v)
+                out[k] = d if f != f else min(3600.0, max(0.0, f))      # NaN is the default; an hour at most
             else:
-                out[k] = max(0, int(v))
-        except (TypeError, ValueError):
+                out[k] = min(1_000_000, max(0, int(v)))
+        except (TypeError, ValueError, OverflowError):
+            # a pause past threading's ceiling killed the run thread, and an Infinity
+            # stored here broke every chat list's JSON (hunt 2026-11-04)
             out[k] = d
     return out
 
@@ -285,7 +292,7 @@ def add_seat(chat, persona, name=None, door=False):
         s, room = _room(chat)
         seat = {'id': uuid.uuid4().hex[:8], 'name': _unique_name(room, str(name or '').strip() or shown),
                 'persona': str(persona), 'context': '', 'memory_write': False, 'enabled': True, 'tts': True,
-                'color': str(seed.get('trim_color') or ''), 'avatar': p.get('avatar'), 'settings': seed}
+                'color': _color(seed.get('trim_color')), 'avatar': p.get('avatar'), 'settings': seed}
         if door:
             if s.get('private_chat'):
                 # Her key's holder is a client over MCP (Claude Code: a cloud
@@ -357,6 +364,16 @@ def invite_sapphire(chat, device_id, name=None, instructions=''):
     return {'joined': True, 'said': said, 'seat': _public(seat)}
 
 
+_COLOR = re.compile(r'#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgba?\([0-9.,%\s]+\)|[a-zA-Z]{3,20}')   # hex, rgb(), a name: never url()
+
+
+def _color(v):
+    """A seat's colour or '': painted as inline CSS, so an imported room's
+    `red;background:url(https://...)` pinged out on every paint (hunt 2026-11-04)."""
+    v = str(v or '').strip()
+    return v if _COLOR.fullmatch(v) else ''
+
+
 def update_seat(chat, seat_id, patch):
     patch = patch if isinstance(patch, dict) else {}
     with _lock:
@@ -366,6 +383,8 @@ def update_seat(chat, seat_id, patch):
         for k in SEAT_FIELDS:
             if k in patch:
                 seat[k] = bool(patch[k]) if k in ('memory_write', 'enabled', 'tts') else str(patch[k] or '')[:4000]
+        if 'color' in patch:
+            seat['color'] = _color(patch['color'])
         if isinstance(patch.get('settings'), dict) and seat.get('kind') != GUEST:      # a guest's brain is hers
             from core.chat.history import normalize_llm_pin
             cur = dict(seat.get('settings') or {})
@@ -494,6 +513,8 @@ def _brief_guests(chat, room, seats=None):
     guest's box (or the given seats') swaps the room block in her room chat
     for the new words (her door's room_update; J15/J16 closed 2026-10-13).
     Not waited for; a door that fails is a notice here and a line in the log."""
+    if (settings_of(chat) or {}).get('private_chat'):
+        return                  # a private room's words stay on this machine: her turns are skipped, so are briefs (hunt 2026-11-04)
     names = _names(room)
     people = [names[USER]] + [names[x['id']] for x in room['seats'] if x.get('enabled', True)]
     for seat in [x for x in (room['seats'] if seats is None else seats) if x.get('kind') == GUEST and x.get('chat')]:
@@ -538,8 +559,14 @@ def sweep():
             try:
                 seats_of[room] = {x['id'] for x in _room(room)[1]['seats'] if _local(x)} if room else set()
             except RoomError:
-                seats_of[room] = set()
-        if s.get('seat') not in seats_of[room]:
+                # unreadable is not gone: a room sealed in the vault (or a database
+                # that cannot answer now) kept its seats, and the sweep at boot
+                # deleted their chats (hunt 2026-11-04). Only a room with no row goes.
+                try:
+                    seats_of[room] = None if _sm().chat_exists(room) else set()
+                except Exception:
+                    seats_of[room] = None
+        if seats_of[room] is not None and s.get('seat') not in seats_of[room]:
             gone.append(c['name'])
     for name in gone:
         _delete_chat(name)
@@ -588,15 +615,29 @@ def import_room(chat, data):
     data = data if isinstance(data, dict) else {}
     _room(chat)
     msgs = data.get('messages')
+    rec = data.get('room')
+    seats, fresh = [], {}
+    if isinstance(rec, dict):
+        # fresh seat ids, the transcript's speakers moved with them: the file's ids
+        # named seat chats, so a room imported into a second room shared them - each
+        # rebuilt the other's, and removing a seat in one deleted the other's (hunt
+        # 2026-11-04). Her chat here is rebuilt from the room at her first turn.
+        for x in (rec.get('seats') or []):
+            if _is_seat(x):
+                seat = dict(x)
+                fresh[seat['id']] = seat['id'] = uuid.uuid4().hex[:8]
+                seat['color'] = _color(seat.get('color'))
+                seats.append(seat)
+        if isinstance(msgs, list):
+            msgs = [dict(m, speaker=fresh[m['speaker']]) if isinstance(m, dict) and m.get('speaker') in fresh else m
+                    for m in msgs]
     if isinstance(msgs, list):                      # the transcript first: it can refuse (a seat still streaming)
         _settle(chat)
         ok, err = _sm().replace_messages(chat, [m for m in msgs if isinstance(m, dict)])
         if not ok:
             raise RoomError(f"The transcript could not be imported: {err}")
         _reset(chat)
-    rec = data.get('room')
     if isinstance(rec, dict):
-        seats = [dict(x) for x in (rec.get('seats') or []) if _is_seat(x)]
         with _lock:
             _room(chat)
             _write(chat, {'purpose': str(rec.get('purpose') or '')[:2000], 'seats': seats, **_rules(rec)})
@@ -622,12 +663,12 @@ def _mentions(room, text):
     only, case-insensitive, the longest name first (so `@Sapphire 2` is not also
     `@Sapphire`). `@all` / `@everyone` names nobody in particular: the usual round."""
     text = str(text or '')
-    if '@' not in text or _AT_ALL.search(text):
+    if not room.get('mentions', True) or '@' not in text or _AT_ALL.search(text):
         return []
     found = []
     for seat in sorted((x for x in room['seats'] if x.get('enabled', True)), key=lambda x: -len(x.get('name') or '')):
         name = seat.get('name') or ''
-        m = re.search(r'(?<!\w)@' + re.escape(name) + r'(?!\w)', text, re.I) if name else None
+        m = re.search(r'(?<![\w-])@' + re.escape(name) + r'(?![\w-])', text, re.I) if name else None
         if m:
             found.append((m.start(), seat['id']))
             text = text[:m.start()] + ' ' * (m.end() - m.start()) + text[m.end():]
@@ -638,20 +679,27 @@ def _rules_text(room):
     """The rules in words, in every seat's cue and preamble and on a guest's
     card: a seat that cannot see them proposes them as new ideas (Sapphire-
     purple, opening night 2026-10-13: a fuel limit, quiet presence)."""
+    # Plain sentences, the norm before the mechanism (hunt 2026-11-04: "name a seat as
+    # @Name and it answers next" read to a 9B model as HOW to address anyone, and the
+    # cap as a budget: every line @'d every seat and each line of Krem's ran 6 turns).
     person = _names(room)[USER]
     he = room['human_every']
-    turns = (f"the bots take a round after each of {person}'s lines" if he == 1
-             else f"the bots keep going without waiting for {person}" if he == 0
-             else f"the bots take {he} rounds, then wait for {person}")
-    cap = f"a run stops after {room['max_rounds']} rounds" if room['max_rounds'] else 'no round cap'
-    order = ('blind rounds (every cue is read before anyone speaks)' if room['blind']
-             else 'shuffled order' if room['shuffle'] else 'round robin')
-    pause = f"; {room['pause_s']:g} s between bots" if room['pause_s'] else ''
-    mm = room['mention_max']
-    chain = (f"a chain of mentions stops after {mm} mentioned turn{'s' if mm != 1 else ''} since {person}'s last line"
-             if mm else 'chains of mentions have no cap')
-    return (f"House rules: {turns}; {cap}; {order}{pause}; name a seat as @Name and it answers next, whoever wrote "
-            f"the line, and {chain}; nothing to add = (pass) or {PASS_MARK}.")
+    out = [(f"After each of {person}'s lines, every seat speaks once, in turn, then the room waits for {person}." if he == 1
+            else f"The seats keep taking turns without waiting for {person}." if he == 0
+            else f"After each of {person}'s lines, the seats take {he} rounds, then wait for {person}.")]
+    if room['blind']:
+        out.append("Each round, every seat answers before seeing the others' answers; you read them next round.")
+    elif room['shuffle']:
+        out.append('The speaking order is shuffled every round.')
+    if room['max_rounds']:
+        out.append(f"A run stops after {room['max_rounds']} rounds.")
+    if room.get('mentions', True):
+        mm = room['mention_max']
+        spends = (f", and it uses one of the room's {mm} summons until {person} speaks again" if mm else '')
+        out.append(f"Talk to people by name. Writing @Name is a summons: that seat answers next, out of turn{spends}. "
+                   "Use it only when you need one particular seat's answer right now.")
+    out.append(f"Nothing to add this turn: answer exactly {PASS}, or put {PASS_MARK} in your line.")
+    return 'House rules: ' + ' '.join(out)
 
 
 def _text(content):
@@ -727,17 +775,20 @@ def projection(rows, seat, names):
 
 
 def _preamble(chat, room, seat, names, first=False):
-    others = [s for s in room['seats'] if s.get('id') != seat['id'] and s.get('enabled', True)]
-    who = ', '.join(f"{names[s['id']]} ({s['persona']})"
-                    if s.get('persona') and str(s['persona']).lower() != str(names[s['id']]).lower()
-                    else names[s['id']] for s in others)
+    # Hunt 2026-11-04 (what the seats see): the person was listed like one more seat
+    # (seats @'d him), the persona rode in brackets like a surname (seats invented
+    # "Sapph-Purple"), and a seat was never told what her cue is.
+    others = [names[s['id']] for s in room['seats'] if s.get('id') != seat['id'] and s.get('enabled', True)]
+    me = names[seat['id']]
     lines = [f'[Chat room "{chat}"]', 'Several speakers share this conversation and take turns.']
     if room['purpose']:
         lines.append(f"What this room is for: {room['purpose']}")
-    lines.append(f"You are {names[seat['id']]}. Also here: {names[USER]}" + (f", {who}" if who else '') + '.')
-    lines.append('Other speakers\' lines reach you as "Name: text". Speak only as yourself, in your own words; '
-                 'never write lines for anyone else, and do not start your line with your own name. '
-                 f'If you have nothing to add this turn, answer exactly {PASS}, or put {PASS_MARK} in your line.')
+    lines.append(f"You are {me}, one of the seats." + (f" The other seats: {', '.join(others)}." if others else '')
+                 + f" {names[USER]} is the person here, the human the room is for.")
+    lines.append('Each of your turns starts with the lines spoken since your last one, as "Name: text". Answer them '
+                 'in ONE message: that message is your line in the room. The others answer after you, and you '
+                 'see their replies on your next turn. Speak only as yourself, in your own words; never write '
+                 'lines for anyone else, and do not start your line with your own name.')
     lines.append(_rules_text(room))
     if first:
         lines.append('This is your first turn here: read your self-sheet (read_self) before your line, so you '
@@ -870,11 +921,19 @@ def _pixels(part):
         return None
 
 
+def _said(content):
+    """A short hash of a row's words, as written (`ck` on her room row)."""
+    import hashlib, json
+    return hashlib.blake2b(json.dumps(content, sort_keys=True, default=str).encode('utf-8'), digest_size=6).hexdigest()
+
+
 def _key(r):
-    """A room row's identity for the seats' view: its own key, else its words."""
-    import hashlib
+    """A room row's identity for the seats' view: its own key and its words.
+    The words are in it so an EDIT is a change her view follows: with the key
+    alone an edited line (a secret taken back out) stayed in every seat's chat
+    (hunt 2026-11-04)."""
     k = r.get('k')
-    return str(k) if k else hashlib.blake2b(f"{r.get('speaker')}|{r.get('content')}".encode('utf-8'), digest_size=6).hexdigest()
+    return f"{k}:{_said(r.get('content'))}" if k else _said(f"{r.get('speaker')}|{r.get('content')}")
 
 
 def _view(rows, seat, names):
@@ -910,6 +969,8 @@ def _view(rows, seat, names):
         parts = [x for p in handed for x in p[2]]
         out.append({'role': 'user', 'content': ([{'type': 'text', 'text': words}] + parts) if parts else words})
         turn = r.get('turn')
+        if r.get('ck') and r['ck'] != _said(content):
+            turn = None                                # her line was edited: the edit is what she said now
         if isinstance(turn, list) and turn:
             out.extend(dict(m) for m in turn if isinstance(m, dict))
         else:
@@ -929,8 +990,12 @@ def _sync(chat, s_room, room, seat, rows):
     own = seat_chat(chat, s_room, seat)
     keys = [_key(r) for r in rows]
     st = _sm().read_chat_settings(own) or {}
-    synced = st.get('room_sync') if isinstance(st.get('room_sync'), list) else []
-    if keys[:len(synced)] != synced:
+    synced = st.get('room_sync') if isinstance(st.get('room_sync'), list) else None
+    # never synced (an imported seat, a chat made again) or emptied by hand while she
+    # has lines in the room: her chat is rebuilt, or she forgets the room (hunt 2026-11-04)
+    lost = synced is None or (not _rows(own) and any(r.get('speaker') == seat['id'] for r in rows))
+    synced = synced or []
+    if lost or keys[:len(synced)] != synced:
         view = _view(rows, seat, _names(room))
         ok, err = _sm().replace_messages(own, view)
         if not ok:
@@ -965,6 +1030,7 @@ def append_line(chat, role, text, speaker, name, persona=None, kind=None, tools=
     row = {'role': role, 'content': content, 'speaker': speaker, 'name': name, 'k': uuid.uuid4().hex[:8]}
     if turn:
         row['turn'] = [dict(m) for m in turn if isinstance(m, dict)]
+        row['ck'] = _said(content)                   # her words as written: an edit later is told from them (_view)
     if persona:
         row['persona'] = persona
     if kind:
@@ -1067,8 +1133,8 @@ def _door_line(chat, seat, text, images=None):
     publish(Events.VOICE_TURN_START, {'message_id': mid, **tag})
     append_line(chat, 'assistant', text, seat['id'], seat.get('name'), persona=seat.get('persona'), kind=DOOR,
                 images=images)
-    _read_aloud(rt, seat, text)
-    publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign']})
+    _read_aloud(rt, seat, text, mid)
+    publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign'], 'source': SOURCE})
     publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text,
                                     'why': '', 'heard': rt.heard, 'tools': [], **tag})
 
@@ -1132,6 +1198,7 @@ class _Runtime:
         self.since_human = 0      # rounds since the person's last line (the human_every count)
         self.said = 0             # the person's lines landed this runtime ...
         self.read = 0             # ... and how many of them the latest cue had read: said > read = one nobody has answered
+        self.read_was = 0         # `read` before the seat in hand: a seat skipped before any cue gives it back (_uncued)
         self.stopped_at = 0       # `said` when Stop was pressed: a line from before it is not a reason to run on
         self.rounds_run = 0       # rounds this run (the max_rounds count)
         self.mentions = []        # seat ids named `@Name` and not yet answered, in order (the mention lane)
@@ -1142,6 +1209,9 @@ class _Runtime:
         self.voice = queue.Queue()   # (device id, text, voice, speed, pitch): lines waiting to be read on that satellite
         self.reader = None       # the thread reading them, one line at a time, in order
         self.doors = {}          # door seat id -> _Door: the cue parked for her key's holder, her line back
+        self.voice_seen = 0.0    # when a room tab reading aloud last pinged (monotonic): the rounds keep pace with it
+        self.reading = []        # [mid, seconds it may take, since] lines handed to that tab, not yet read
+        self.read_evt = threading.Event()
 
 
 def _rt(chat):
@@ -1203,6 +1273,9 @@ def stop(chat):
     rt.stop_flag.set()
     rt.skip = 0
     rt.mentions.clear()
+    with _lock:
+        rt.reading.clear()                           # the tab hushes its queue too: nothing left to wait for
+    rt.read_evt.set()
     _cut_all(rt)
     rt.user_turn.set()
     return state(chat)
@@ -1226,14 +1299,21 @@ def _cut_all(rt):
             logger.debug(f"[ROOM] '{rt.chat}': halt on {rt.heard}: {e}")
 
 
-def _read_aloud(rt, seat, text):
+def _read_aloud(rt, seat, text, mid=None):
     """Her line read on the satellite the person last spoke from (rt.heard),
     in the seat's own voice, lines in order, the round never waiting: one
     reader thread per room, voice.say one line at a time. The browser's queue
     stays quiet meanwhile (her END carries `heard`). Krem 2026-10-13: 'so I
     can talk to you and Sapph in that chat from my satellite in my room'."""
     dev = rt.heard
-    if not dev or not text or seat.get('tts', True) is False:
+    if not text or seat.get('tts', True) is False:
+        return
+    if not dev:
+        # the room tab reads it (rooms.js speakLine): the rounds keep pace with that reading
+        # (Krem 2026-11-04: a 6-minute room was read for 15+ minutes after)
+        if mid and time.monotonic() - rt.voice_seen < VOICE_TAB_S:
+            with _lock:
+                rt.reading.append([mid, min(READ_MAX_S, 15.0 + len(text) / 12.0), None])
         return
     st = seat.get('settings') or {}
     rt.voice.put((dev[len('device:'):], text, st.get('voice'), st.get('speed'), st.get('pitch')))
@@ -1256,6 +1336,54 @@ def _reader(rt):
                 logger.warning(f"[ROOM] '{rt.chat}': a line was not read on {dev}: {said}")
         except Exception as e:
             logger.warning(f"[ROOM] '{rt.chat}': reading a line on {dev} failed: {e}")
+
+
+def voice(chat, on=True, mid=None, flush=False):
+    """The room tab reading the lines aloud: a ping while it reads (`on`), the
+    line it just finished (`mid`: that line and every one before it are read,
+    in order), or quiet (`flush`: Stop, the mic's stop - nothing left to wait for)."""
+    rt = _rt(chat)
+    with _lock:
+        rt.voice_seen = time.monotonic() if on else 0.0
+        if flush or not on:
+            rt.reading.clear()
+        elif mid:
+            i = next((n for n, r in enumerate(rt.reading) if r[0] == mid), None)
+            if i is not None:
+                del rt.reading[:i + 1]
+        left = len(rt.reading)
+    rt.read_evt.set()
+    return {'reading': left}
+
+
+def _await_reading(rt, ahead=1):
+    """Before a seat's turn: wait until at most `ahead` line is still to be read in
+    the room tab, so the next seat writes while the last is read and the voices
+    never fall minutes behind (Krem's vote, 2026-11-04). Stop, a tab gone quiet,
+    or a line read past its time ends the wait."""
+    while not rt.stop_flag.is_set():
+        with _lock:
+            now = time.monotonic()
+            if now - rt.voice_seen > VOICE_TAB_S:
+                rt.reading.clear()                   # nobody is reading any more
+            if len(rt.reading) <= ahead:
+                return
+            head = rt.reading[0]
+            if head[2] is None:
+                head[2] = now                        # it is being read now (they go in order)
+            elif now - head[2] > head[1]:
+                rt.reading.pop(0)                    # read past its time: given up, never wedged
+                continue
+        rt.read_evt.wait(0.5)
+        rt.read_evt.clear()
+
+
+def _uncued(rt):
+    """A seat skipped before her cue was built (a door nobody is at, a guest who
+    could not be reached or is busy) never read the line: it stays unanswered for
+    the next seat or round. It used to count as read, and nobody ever answered it
+    (hunt 2026-11-04)."""
+    rt.read = min(rt.read, rt.read_was)
 
 
 def _person_turn(rt):
@@ -1317,6 +1445,9 @@ def _loop(rt):
                     if not fresh and room['pause_s'] and rt.stop_flag.wait(room['pause_s']):
                         break
                     fresh = False
+                    _await_reading(rt)
+                    if rt.stop_flag.is_set():
+                        break
                     rt.turn, rt.waiting = seat['id'], False
                     _publish_state(rt)
                     if _item(rt, lambda s=seat: _turn(chat, s, rt), seat.get('name')):
@@ -1330,6 +1461,7 @@ def _loop(rt):
                 # every seat passed, failed or was skipped: nothing to answer, so the
                 # run ends instead of asking the same question forever (human every 0
                 # used to spin here, one full-context call per seat, all night)
+                rt.read = max(rt.read, rt.said)        # given up on, as the notice says: no restart spin
                 _notice(chat, 'Nobody spoke this round, so the room stopped. Say something to start it again.')
                 break
             rt.since_human += 1
@@ -1383,11 +1515,27 @@ def _item(rt, fn, who):
 def _turn(chat, seat, rt, prep=None):
     """One seat's turn (_seat_turn) and, after it, the seats her line names:
     on the mention lane (the chain), never herself. Returns her line."""
+    try:
+        now = _room(rt.chat)[1]['seats']
+    except RoomError:
+        return ''
+    if not any(x.get('id') == seat['id'] and x.get('enabled', True) for x in now):
+        # removed or switched off since the round read its seats: her chat was already
+        # gone and her turn made it again, or a guest's line landed after (hunt 2026-11-04)
+        return ''
     if prep is None:
-        rt.read = rt.said                 # her cue is read now (a line lands only between inbox items)
+        rt.read_was, rt.read = rt.read, rt.said   # her cue is read now (a line lands only between inbox items)
+        # her cue holds every mention of her made so far: her turn answers them. Named,
+        # then reached by the round anyway, she used to speak again on the lane (Marcus
+        # twice, 2026-11-04). A blind round's cue was read before the round: it keeps them.
+        while seat['id'] in rt.mentions:          # in place: a rebuilt list could undo Stop's clear()
+            try:
+                rt.mentions.remove(seat['id'])
+            except ValueError:
+                break
     text = _seat_turn(chat, seat, rt) if prep is None else _seat_turn(chat, seat, rt, prep)
     if text:
-        _, room = _room(chat)
+        _, room = _room(rt.chat)              # the room may have been renamed during her turn
         for sid in _mentions(room, text):
             if sid != seat['id'] and sid not in rt.mentions:
                 rt.mentions.append(sid)
@@ -1410,6 +1558,9 @@ def _mention_run(chat, rt, room):
         if seat is None:
             continue
         rt.mention_turns += 1
+        _await_reading(rt)
+        if rt.stop_flag.is_set():
+            break
         rt.turn, rt.waiting = sid, False
         _publish_state(rt)
         if _item(rt, lambda x=seat: _turn(chat, x, rt), seat.get('name')):
@@ -1447,7 +1598,7 @@ def _blind_round(chat, seats, rt, pause_s=0.0):
     first, then the turns run one after another as ever; the next round is
     where they read each other (`seen` on her row). One seat's trouble is her
     notice, not the round's. True if anyone spoke."""
-    rt.read = rt.said                     # every cue of the round is read now
+    rt.read = rt.read_was = rt.said       # every cue of the round is read now (the others read it: _uncued keeps it)
     preps = []
     for seat in seats:
         try:
@@ -1458,6 +1609,9 @@ def _blind_round(chat, seats, rt, pause_s=0.0):
     spoke = False
     for i, (seat, prep) in enumerate(preps):
         if rt.stop_flag.is_set() or (i and pause_s and rt.stop_flag.wait(pause_s)):
+            break
+        _await_reading(rt)
+        if rt.stop_flag.is_set():
             break
         rt.turn, rt.waiting = seat['id'], False
         _publish_state(rt)
@@ -1517,7 +1671,7 @@ def _seat_turn(chat, seat, rt, prep=None):
         et = ev.get('type') if isinstance(ev, dict) else None
         if et == 'content':
             publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': ev.get('text', ''),
-                                              'chat': chat, 'foreign': tag['foreign']})
+                                              'chat': chat, 'foreign': tag['foreign'], 'source': SOURCE})
         elif et == 'tool_start':
             publish(Events.VOICE_TURN_TOOL, {'message_id': mid, 'chat': chat, 'foreign': tag['foreign'],
                                              'phase': 'start', 'id': ev.get('id'), 'name': ev.get('name'),
@@ -1550,10 +1704,11 @@ def _seat_turn(chat, seat, rt, prep=None):
         # her row is in BEFORE her END goes out: the browser swaps the live bubble for the
         # saved row 500 ms after END, which used to be a race it mostly won
         thought = _thinking_of(own, before)
-        append_line(chat, 'assistant', f"{thought}\n\n{text}" if thought else text, seat['id'], seat.get('name'),
+        # rt.chat, as the guest and door paths: a rename during her turn lost her line (hunt 2026-11-04)
+        append_line(rt.chat, 'assistant', f"{thought}\n\n{text}" if thought else text, seat['id'], seat.get('name'),
                     persona=seat.get('persona'), tools=_tools_of(own, before), seen=prep['seen'],
                     turn=_rows(own)[before + 1:])              # past the cue: what her turn saved, for her view
-        _read_aloud(rt, seat, text)
+        _read_aloud(rt, seat, text, mid)
     if started:
         publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': '' if passed else text, 'speak': None,
                                         'dropped': passed or not text, 'why': why, 'heard': rt.heard,
@@ -1561,7 +1716,7 @@ def _seat_turn(chat, seat, rt, prep=None):
     if failed is not None:
         raise failed
     if cut:
-        _notice(chat, f"{seat.get('name')} ran out of time and was skipped.")
+        _notice(rt.chat, f"{seat.get('name')} ran out of time and was skipped.")
         return ''
     if why:
         # a silent turn is nothing in the room (Krem's rule) but a line in the log: three
@@ -1594,15 +1749,18 @@ def _guest_turn(chat, seat, rt, prep=None):
     name = seat.get('name')
     if s_room.get('private_chat'):
         _notice(chat, f"{name} was skipped: this room is private, and her box is across the network.")
+        _uncued(rt)
         return ''
     try:
         mod, brief, cfg, secrets = _door(seat.get('device'))
     except RoomError as e:
         _notice(chat, f"{name} was skipped: {e}")
+        _uncued(rt)
         return ''
     last = rt.guests.get(seat['id'])
     if last is not None and last.is_alive():
         _notice(chat, f"{name} is still answering the last cue, so this round skipped her.")
+        _uncued(rt)
         return ''
     prep = prep or _prep(chat, seat)
     cue = prep['cue']
@@ -1642,8 +1800,8 @@ def _guest_turn(chat, seat, rt, prep=None):
     if text:
         append_line(rt.chat, 'assistant', text, seat['id'], name, kind=GUEST,      # rt.chat: the room may have been renamed meanwhile
                     tools=[{'name': n} for n in shared], seen=prep['seen'])        # her row is in before her END (see _seat_turn)
-        _read_aloud(rt, seat, text)
-        publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign']})
+        _read_aloud(rt, seat, text, mid)
+        publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign'], 'source': SOURCE})
     publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text, 'heard': rt.heard,
                                     'why': why, 'tools': shared, **tag})
     if 'error' in box:
@@ -1880,6 +2038,7 @@ def _door_turn(chat, seat, rt, prep=None):
         return ''
     if not d.here():
         logger.info(f"[ROOM] '{chat}': {name} passed (away: nobody at the door)")
+        _uncued(rt)
         return ''
     prep = prep or _prep(chat, seat)
     mid = uuid.uuid4().hex
@@ -1903,8 +2062,8 @@ def _door_turn(chat, seat, rt, prep=None):
     if not why:
         append_line(rt.chat, 'assistant', text, seat['id'], name, persona=seat.get('persona'), kind=DOOR,
                     seen=prep['seen'])                   # her row is in before her END (see _seat_turn)
-        _read_aloud(rt, seat, text)
-        publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign']})
+        _read_aloud(rt, seat, text, mid)
+        publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign'], 'source': SOURCE})
     publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': '' if why else text, 'speak': None, 'dropped': bool(why),
                                     'why': why, 'heard': rt.heard, 'tools': [], **tag})
     if why == 'ran out of time':

@@ -5594,12 +5594,18 @@ class ChatSessionManager:
             return None
         from core.chat.llm_errors import is_error_row
         tail = start
+        speaker = msgs[start].get('speaker')
         for i in range(start + 1, len(msgs)):
             role = msgs[i].get('role')
             if role == 'user':
                 break
             if is_error_row(msgs[i]):
                 break       # its own bubble (display_format), as the active edit walks (hunt 20)
+            if msgs[i].get('speaker') != speaker:
+                # a chat room: back-to-back assistant rows are different seats, each her
+                # own bubble - editing one seat's line rewrote the next seat's (2026-11-04).
+                # A chat's own rows carry no speaker: None == None, the walk as before.
+                break
             if role == 'assistant':
                 tail = i
         return tail

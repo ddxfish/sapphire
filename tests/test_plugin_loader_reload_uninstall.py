@@ -411,3 +411,37 @@ def test_uninstall_refuses_system_plugin(isolated_loader):
     # Plugin survives
     assert plugin_path.exists()
     assert 'core_thing' in tree.loader._plugins
+
+
+# ─── 4.11 a disabled plugin edited on disk comes up with its new manifest ─────
+
+def test_refresh_from_disk_rereads_a_disabled_plugins_manifest(isolated_loader):
+    """[REGRESSION_GUARD] Toggle-on loaded the manifest from the boot scan: a route
+    added to a plugin while it was disabled answered 404 until a restart, with
+    "signature verified" in the log (FlashHead's stop, 2026-11-04). The toggle now
+    calls refresh_from_disk before loading, as reload does: the manifest re-read,
+    its mtime restamped (or rescan re-queues a reload forever), the signature and
+    tier checked again. rescan() alone never helps here: it reloads only what is loaded."""
+    tree = isolated_loader
+    plugin_path = tree.add_plugin('sleeper', band='user')
+    _register_fake_plugin(tree.loader, 'sleeper', plugin_path, band='user',
+                          enabled=False, loaded=False, verified=False, verify_msg='unsigned')
+    tree.loader._plugins['sleeper']['_manifest_mtime'] = 1.0
+    tree.loader._plugins['sleeper']['verify_tier'] = 'unsigned'
+
+    grown = {'name': 'sleeper', 'version': '1.1.0', 'description': 'a route added while disabled',
+             'capabilities': {'routes': [{'method': 'POST', 'path': 'stop', 'handler': 'routes/api.py:stop'}]}}
+    (plugin_path / 'plugin.json').write_text(json.dumps(grown))
+
+    verify_spy = MagicMock(return_value=(True, 'verified', {'tier': 'community', 'author': 'someone'}))
+    with patch('core.plugin_loader.verify_plugin', verify_spy):
+        tree.loader.refresh_from_disk('sleeper')
+        tree.loader.refresh_from_disk('nobody-by-that-name')      # a stranger: nothing, no raise
+
+    info = tree.loader._plugins['sleeper']
+    assert info['manifest']['capabilities']['routes'][0]['path'] == 'stop'
+    assert info['_manifest_mtime'] == (plugin_path / 'plugin.json').stat().st_mtime
+    assert (info['verified'], info['verify_msg'], info['verify_tier'], info['verified_author']) == \
+        (True, 'verified', 'community', 'someone')
+    verify_spy.assert_called_once_with(Path(plugin_path))
+    assert info['enabled'] is False and info['loaded'] is False       # the record's state is the toggle's to change

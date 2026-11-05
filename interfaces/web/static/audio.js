@@ -115,6 +115,9 @@ export const stop = (force = false, chatWide = false) => {
     // _stoppedStreamId — the server mutes exactly that pump, never the next
     // turn that's still thinking. 2026-09-08.
     const sid = _currentStreamId;
+    // the text stream in flight (Replay, a chat room's line) is cut too: its start
+    // could land after Stop, clear the stop guard and play the whole line (2026-11-04)
+    if (_textCtrl) { try { _textCtrl.abort(); } catch {} _textCtrl = null; }
     _stopLegacyPlayer();
     // Tear down the streaming-TTS chunk queue too — Stop must cut both
     // legacy playback (full-blob) and the new per-chunk queue.
@@ -123,6 +126,9 @@ export const stop = (force = false, chatWide = false) => {
     // Always tell server to stop TTS — even if we don't think it's playing yet.
     // Server stop is idempotent and prevents races where TTS starts after our check.
     stopLocalTts(sid, chatWide);
+    // the person meant "quiet": a chat room's reading queue hears it and goes
+    // quiet too, instead of taking the stop as the end of a line (2026-11-04)
+    if (chatWide) dispatch('tts_user_stop', {});
 };
 
 export const isTtsPlaying = () => isStreaming;
@@ -280,19 +286,24 @@ export const replayTts = async (idx) => {
 // one — a private room speaking through a public active chat used to reach
 // a cloud TTS provider (broadsword H3). Omit for the operator's own chat.
 // `opts`: { speed, pitch } for this text only (a chat-room seat's own), else the live client's.
+let _textCtrl = null;          // playTextStreaming's fetch in flight: stop() aborts it
+
 export const playTextStreaming = async (text, voice = null, chat = null, opts = null) => {
     stop(true);  // clear any current playback before starting new stream
+    const ctrl = _textCtrl = new AbortController();
 
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
     let res;
     try {
         res = await fetch('/api/tts/stream', {
+            signal: ctrl.signal,
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
             body: JSON.stringify({ text, ...(voice ? { voice } : {}), ...(chat ? { chat } : {}),
                                    ...(opts?.speed ? { speed: opts.speed } : {}), ...(opts?.pitch ? { pitch: opts.pitch } : {}) }),
         });
     } catch (e) {
+        if (ctrl.signal.aborted) return true;      // stopped: it ran, nothing to fall back to
         throw new Error(`network: ${e.message}`);
     }
 
@@ -355,8 +366,12 @@ export const playTextStreaming = async (text, voice = null, chat = null, opts = 
                 }
             }
         }
+    } catch (e) {
+        if (ctrl.signal.aborted) return true;      // stopped mid-stream: the same
+        throw e;
     } finally {
         try { await reader.cancel(); } catch {}
+        if (_textCtrl === ctrl) _textCtrl = null;
     }
     return sawChunk || sawEnd;
 };
@@ -750,6 +765,9 @@ export const endTtsStream = (data = {}) => {
     if (data.stream_id && _currentStreamId && data.stream_id !== _currentStreamId) {
         return;
     }
+    // ...and the end of the stream just stopped: its stats were dropped with it, and a
+    // stop in its first second read as "chunks couldn't play" (2026-11-04)
+    if (data.stream_id && data.stream_id === _stoppedStreamId) return;
     _ttsStreamEnded = true;
     // Unconditional cleanup of streaming-state flags. The old version only
     // cleaned up if `_ttsStreamActive` was true, but a stream that emitted
@@ -775,6 +793,7 @@ const _ttsStreamStop = () => {
     _ttsStreamActive = false;
     _ttsStreamAnyPlayed = false;
     _stoppedStreamId = _currentStreamId || _stoppedStreamId;  // drop its in-flight stragglers
+    _ttsStats = null;         // a stopped stream is not a silent one: no "couldn't play" toast for it
     _currentStreamId = null;  // herring #5 — no stream is current after stop
     _ttsStreamCleanupCurrent();
 };

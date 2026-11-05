@@ -243,6 +243,7 @@ async function open(chat) {
     if (my !== epoch || !R || R.chat !== chat) return;
     claim();
     paintAll();
+    voicePing();
 }
 
 function claim() {
@@ -253,13 +254,19 @@ function claim() {
     }
     $('#rm-empty').style.display = 'none';
     bindComposer();
+    watchMentions();
     Promise.allSettled([refresh(false), updateScene(), populateChatDropdown()]).catch(() => {});
     try { ui.forceScrollToBottom(); } catch (e) { /* cosmetic */ }
 }
 
 function leave() {
     if (!R) return;
+    mentionObs?.disconnect();
+    mentionObs = null;
     hush();
+    voicePost({ on: false });
+    clearInterval(voiceTimer);
+    voiceTimer = null;
     unbindComposer();
     releaseOrgans(OWNER);
     R = null;
@@ -342,7 +349,14 @@ async function say() {
 function onState(d) {
     if (!R || d?.chat !== R.chat) return;
     const doors = JSON.stringify(R.info.state?.doors || {});
+    const was = R.info.state || {};
     R.info.state = d;
+    // the floor came back (your turn, or the run ended): one repaint after the last
+    // swap, so a refresh held while a seat was live (chat.js) is never lost (2026-11-04)
+    if ((was.running && !d.running) || (!was.waiting && d.waiting)) {
+        const me = R;
+        setTimeout(() => { if (R === me) refresh(false).catch(() => {}); }, 1200);
+    }
     if (d.turn) R.passed = null;                           // someone is speaking: the last pass is old news
     paintTurn();
     if (JSON.stringify(d.doors || {}) !== doors)           // someone came to the door, or left it
@@ -360,7 +374,40 @@ function onTurnEnd(d) {
         paintTurn();
         return;
     }
-    speakLine(seatOf(d.speaker), d.text, d.heard);
+    const me = R;
+    claimLine(d.message_id).then((mine) => {           // one tab reads a line, however many show the room (2026-11-04)
+        if (mine && R === me) speakLine(seatOf(d.speaker), d.text, d.heard, d.message_id);
+    });
+}
+
+// Tabs race for a line by message id, the TTS_SPEAK pattern (main.js): last writer
+// wins, and every tab checks after a beat. Two tabs used to read every line twice.
+function claimLine(mid) {
+    if (!mid) return Promise.resolve(true);
+    const key = 'sapphire_room_line', mine = `${mid}|${Date.now()}-${Math.random()}`;
+    if ((localStorage.getItem(key) || '').startsWith(`${mid}|`)) return Promise.resolve(false);
+    localStorage.setItem(key, mine);
+    return new Promise(r => setTimeout(() => r(localStorage.getItem(key) === mine), 60));
+}
+
+// The rounds keep pace with this tab's reading (core/rooms.py voice/_await_reading,
+// Krem's vote 2026-11-04): a ping while it reads aloud, each line's id when it is read,
+// a flush when it goes quiet. Fire and forget: a lost post costs a line's wait, never a wedge.
+function voicePost(body) {
+    if (!R) return;
+    fetch(roomUrl('/voice'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
+        body: JSON.stringify(body),
+    }).catch(() => {});
+}
+let voiceTimer = null;
+function voicePing() {
+    clearInterval(voiceTimer);
+    voiceTimer = null;
+    if (!R) return;
+    const ping = () => voicePost({ on: !!getTtsEnabled() });
+    ping();
+    voiceTimer = setInterval(ping, 20000);
 }
 
 // ------------------------------------------------------------------ voices: her line aloud, in order (Krem 2026-10-13)
@@ -371,9 +418,9 @@ function onTurnEnd(d) {
 // has played, so the chain waits for the queue to drain; a provider with no streaming door
 // gets the whole line as one blob. Stop and leaving the room hush it all (the generation
 // counter drops what was queued). A satellite as the output is a later lane.
-function speakLine(seat, text, heard = null) {
+function speakLine(seat, text, heard = null, mid = null) {
     if (heard) return;                                      // read on the satellite the person spoke from (core/rooms.py)
-    if (!R || !text || !seat || seat.tts === false || !getTtsEnabled()) return;
+    if (!R || !text || !seat || seat.tts === false || !getTtsEnabled()) { if (mid) voicePost({ mid }); return; }
     const me = R, st = seat.settings || {}, voice = st.voice || null, gen = me.voiceGen || 0;
     const live = () => R === me && me.voiceGen === gen;
     me.voiceChain = (me.voiceChain || Promise.resolve()).then(async () => {
@@ -398,12 +445,14 @@ function speakLine(seat, text, heard = null) {
                 el.play().catch(() => done());
             });
         } catch (e) { console.warn('[Rooms] voice failed:', e); }
+        finally { if (mid && R === me) voicePost({ mid }); }      // read (or failed): the rounds go on
     });
 }
 
 function hush() {
     audio.stop(true);
     if (!R) return;
+    voicePost({ on: !!getTtsEnabled(), flush: true });     // nothing queued any more: the rounds stop waiting
     R.voiceGen = (R.voiceGen || 0) + 1;
     R.voiceChain = null;
     if (R.voiceEl) { try { R.voiceEl.pause(); } catch (e) { /* gone */ } R.voiceEl = null; }
@@ -421,6 +470,7 @@ function bindBus() {
     eventBus.on('room_state', onState);
     eventBus.on('room_changed', onChanged);
     eventBus.on('voice_turn_end', onTurnEnd);
+    eventBus.on('tts_user_stop', hush);           // the mic's stop, the chat's Stop: the room's reading goes quiet too
 }
 
 function unbindBus() {
@@ -429,6 +479,7 @@ function unbindBus() {
     eventBus.off('room_state', onState);
     eventBus.off('room_changed', onChanged);
     eventBus.off('voice_turn_end', onTurnEnd);
+    eventBus.off('tts_user_stop', hush);
 }
 
 // ------------------------------------------------------------------ paint
@@ -447,6 +498,69 @@ function paintAll() {
     paintRoster();
     paintGuests();
     fillPersonas();
+    paintMentions();
+}
+
+// ------------------------------------------------------------------ @mentions in the seat's colour
+// While the room's @mentions switch is on, every `@Name` that would cue a seat is shown in
+// that seat's colour (Krem 2026-11-04: "that is all that had to happen for this to make
+// sense"). The rail is the shared one, so this paints from outside: an observer on the
+// room's slot wraps the words after each paint, never inside a live bubble or code.
+let mentionObs = null, mentionRaf = 0;
+
+function watchMentions() {
+    mentionObs?.disconnect();
+    const slot = $('#rm-rail-slot');
+    if (!slot || !R) return;
+    mentionObs = new MutationObserver(() => { if (!mentionRaf) mentionRaf = requestAnimationFrame(paintMentions); });
+    mentionObs.observe(slot, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-streaming'] });
+    paintMentions();
+}
+
+function paintMentions() {
+    mentionRaf = 0;
+    const slot = $('#rm-rail-slot');
+    if (!R || !slot) return;
+    const marked = [...slot.querySelectorAll('span.rm-mention')];
+    const seats = R.info.mentions === false ? []
+        : (R.info.seats || []).filter(x => x.enabled !== false && x.name).sort((x, y) => y.name.length - x.name.length);
+    if (!seats.length) {                                   // off (or nobody): the words go back to plain
+        marked.forEach(sp => sp.replaceWith(document.createTextNode(sp.textContent)));
+        return;
+    }
+    const byName = new Map(seats.map(x => [x.name.toLowerCase(), x]));
+    marked.forEach(sp => {                                 // a rename or a recolour since the last paint
+        const seat = byName.get(sp.textContent.slice(1).toLowerCase());
+        if (seat) sp.style.color = seat.color || '#4a9eff';
+        else sp.replaceWith(document.createTextNode(sp.textContent));
+    });
+    const re = new RegExp('(?<![\\w-])@(' + seats.map(x => x.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\w-])', 'gi');
+    for (const box of slot.querySelectorAll('.message-content')) {
+        if (box.closest('[data-streaming="true"]')) continue;       // live: the streamer owns its nodes
+        const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
+            acceptNode: n => n.nodeValue.includes('@') && !n.parentElement?.closest('pre, code, textarea, .rm-mention')
+                ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+        });
+        const nodes = [];
+        while (walk.nextNode()) nodes.push(walk.currentNode);
+        for (const n of nodes) {
+            const t = n.nodeValue;
+            const frag = document.createDocumentFragment();
+            let m, last = 0;
+            re.lastIndex = 0;
+            while ((m = re.exec(t))) {
+                frag.append(t.slice(last, m.index));
+                const sp = document.createElement('span');
+                sp.className = 'rm-mention';
+                sp.style.color = byName.get(m[1].toLowerCase())?.color || '#4a9eff';
+                sp.style.fontWeight = '600';
+                sp.textContent = m[0];
+                frag.append(sp);
+                last = m.index + m[0].length;
+            }
+            if (last) { frag.append(t.slice(last)); n.replaceWith(frag); }
+        }
+    }
 }
 
 function paintRounds() {
@@ -732,10 +846,13 @@ function openSettings() {
         { id: 'purpose', label: 'What this room is for (every bot reads it)', type: 'textarea', value: r.purpose || '', rows: 4 },
         { id: 'max_rounds', label: 'Round cap: stop after N rounds in one run (0 = no cap; the brake for "until you stop them")', type: 'number', value: String(r.max_rounds ?? 0) },
         { id: 'pause_s', label: 'Pause between bots, seconds', type: 'number', value: String(r.pause_s ?? 0) },
-        { id: 'mention_max', label: '@mentions: write @Name in a line and that seat answers next, whoever wrote it; a bot naming another chains. Most mentioned turns in a row since your last line (0 = no cap)', type: 'number', value: String(r.mention_max ?? 3) },
+        { id: 'mentions', label: '@mentions', type: 'checkboxes', selected: r.mentions === false ? [] : ['on'],
+          options: { on: 'On: write @Name and that seat answers next, whoever wrote it (shown in their colour). Off: @Name is just words.' } },
+        { id: 'mention_max', label: '@mentions in a row since your last line, at most (0 = no cap; a bot naming another chains)', type: 'number', value: String(r.mention_max ?? 3) },
     ], (data) => updateRoom({
         purpose: data.purpose,
         max_rounds: parseInt(data.max_rounds, 10) || 0, pause_s: parseFloat(data.pause_s) || 0,
+        mentions: (data.mentions || []).includes('on'),
         mention_max: Math.max(0, parseInt(data.mention_max, 10) || 0),
     }), { saveLabel: 'Save' });
 }

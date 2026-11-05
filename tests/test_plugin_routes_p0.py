@@ -48,9 +48,11 @@ def _mock_info(name, enabled=True, loaded=True, verified=True, verify_msg="verif
 def test_toggle_on_reverifies_even_if_already_loaded(
     client, temp_user_dir, monkeypatch
 ):
-    """[REGRESSION_GUARD] When a user disables a plugin, edits its code, and
-    re-enables it, the toggle path must re-invoke verify_plugin. Otherwise a
-    tampered plugin re-activates without re-check.
+    """[REGRESSION_GUARD] When a user disables a plugin, edits it, and
+    re-enables it, the toggle path must bring the loader's record up to date
+    from disk BEFORE loading (plugin_loader.refresh_from_disk: the signature
+    checked again, and the manifest re-read so a route or setting added while
+    it was disabled comes up; it loaded the boot-time copy, 2026-11-04).
     """
     c, csrf = client
 
@@ -61,14 +63,13 @@ def test_toggle_on_reverifies_even_if_already_loaded(
     mock_pl._plugins = {'foo': info}
     mock_pl._lock = threading.RLock()
     mock_pl._get_reload_lock = MagicMock(return_value=threading.RLock())
-    mock_pl._load_plugin = MagicMock(return_value=True)
+    order = []
+    mock_pl.refresh_from_disk = MagicMock(side_effect=lambda n: order.append(('refresh', n)))
+    mock_pl._load_plugin = MagicMock(side_effect=lambda n: order.append(('load', n)) or True)
 
     import core.plugin_loader
-    import core.plugin_verify
     import core.routes.plugins
     monkeypatch.setattr(core.plugin_loader, 'plugin_loader', mock_pl)
-    verify_spy = MagicMock(return_value=(True, "verified", {"tier": "official", "author": None}))
-    monkeypatch.setattr(core.plugin_verify, 'verify_plugin', verify_spy)
     monkeypatch.setattr(core.routes.plugins, '_get_merged_plugins', lambda: {
         "plugins": {"foo": {"name": "foo"}},
         "enabled": [],
@@ -77,10 +78,7 @@ def test_toggle_on_reverifies_even_if_already_loaded(
     r = c.put('/api/webui/plugins/toggle/foo', headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200, f"expected 200, got {r.status_code} {r.text}"
 
-    verify_spy.assert_called_once()
-    # The spy receives a Path argument pointing at the plugin dir
-    call_arg = verify_spy.call_args.args[0]
-    assert str(call_arg).endswith('foo'), f"verify_plugin called with wrong path: {call_arg}"
+    assert order == [('refresh', 'foo'), ('load', 'foo')]
 
 
 # ─── 1.4 Install rejects non-https zip URL ────────────────────────────────────

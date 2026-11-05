@@ -141,3 +141,12 @@ async def stop(chat: str, _=Depends(require_login)):
 @router.get("/api/rooms/{chat}/state")
 async def room_state(chat: str, _=Depends(require_login)):
     return rooms.state(chat)
+
+
+@router.post("/api/rooms/{chat}/voice")
+async def room_voice(chat: str, request: Request, _=Depends(require_login)):
+    """The room tab that reads the lines aloud: {on} while it reads (a ping),
+    {mid} when that line is read, {flush} when it went quiet (Stop, the mic).
+    The rounds wait on it (one line ahead), so the voices keep pace."""
+    body = await _json(request)
+    return rooms.voice(chat, on=body.get('on') is not False, mid=body.get('mid'), flush=bool(body.get('flush')))

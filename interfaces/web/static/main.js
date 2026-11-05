@@ -594,11 +594,13 @@ function initEventBus() {
             // working until her words arrive (a slow provider or a guest's door looked like
             // nothing happening; the typing events that paint "Generating..." for a typed turn
             // name HER chat, never the room's, so the rail never sees them; Krem 2026-10-12)
+            // the bubble first, then the status under it: above an empty bubble it read as
+            // floating over the last reply, for minutes on a door or a guest (2026-11-04)
+            ui.startStreaming(data?.speaker ? { speaker: data.speaker, name: data.name, persona: data.persona, kind: data.kind } : null);
             if (data?.speaker) {
                 ui.showStatus(data.persona || null);
                 ui.updateStatus(`${data.name || 'a bot'} is generating...${data.kind === 'sapphire' ? ' (on her machine)' : ''}`);
             }
-            ui.startStreaming(data?.speaker ? { speaker: data.speaker, name: data.name, persona: data.persona, kind: data.kind } : null);
             _voiceTurnActive = true;
             _voiceTurnId = data?.message_id ?? null;
             // Send→Stop for the live voice turn (wake/local conversation) —

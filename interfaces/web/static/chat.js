@@ -76,6 +76,12 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
             return { hist: null, len: lastLen };
         }
 
+        // ...and again after the fetch: a turn that went live while it was in flight
+        // (a chat room's next seat, within ms of the last) lost its bubble here (2026-11-04)
+        if (document.getElementById('streaming-message')) {
+            _heldRefresh = true;
+            return { hist: null, len: lastLen };
+        }
         const isNew = hist.length > lastLen;
         ui.renderHistory(hist);
         if (playAudio && isNew && audioFn && hist.length > 0 && typeof audioFn === 'function') {

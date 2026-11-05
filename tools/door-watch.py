@@ -61,11 +61,19 @@ def main():
     folder = Path(a.images) if a.images else Path(tempfile.mkdtemp(prefix='door-'))
     folder.mkdir(parents=True, exist_ok=True)
     print(json.dumps({'room': a.room, 'parked': True, 'images_dir': str(folder)}), flush=True)
+    errors = 0
     while True:
         try:
             r, images = call('room_wait', {'room': a.room, 'seconds': WAIT_S}, timeout=WAIT_S + 30)
+            errors = 0
         except Exception as e:
-            print(json.dumps({'room': a.room, 'error': str(e)[:300]}), flush=True)
+            errors += 1
+            # a blip passes; the same refusal five times over (the seat removed, the room
+            # gone or renamed) is permanent: the watcher ends instead of waking its
+            # reader every 10 s forever (hunt 2026-11-04)
+            print(json.dumps({'room': a.room, 'error': str(e)[:300], 'ending': errors >= 5}), flush=True)
+            if errors >= 5:
+                sys.exit(1)
             time.sleep(10)
             continue
         if r.get('turn') and 'cue' in r:
@@ -77,8 +85,8 @@ def main():
                               'about': r.get('about')}), flush=True)   # a turn is open and the cue went elsewhere: say so
             time.sleep(OPEN_S)
         elif 'note' in r and not r.get('about'):
-            print(json.dumps({'room': a.room, 'note': r['note']}), flush=True)   # the seat went, or the room: say so
-            time.sleep(10)
+            print(json.dumps({'room': a.room, 'note': r['note'], 'ending': True}), flush=True)   # the seat went, or the room: say so
+            return                                   # ...and stop: nothing will ever be cued here again
 
 
 if __name__ == '__main__':

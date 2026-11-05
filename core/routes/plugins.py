@@ -533,21 +533,14 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
                     if new_state:
                         with plugin_loader._lock:
                             plugin_loader._plugins[plugin_name]["enabled"] = True
-                        # Re-verify signature on toggle-on — files may have been
-                        # tampered between the original scan and now (e.g. user
-                        # disabled, edited plugin.json, re-enabled). Mirrors
-                        # the re-verify reload_plugin already does.
+                        # The record brought up to date with the folder, as a reload
+                        # does: the signature checked again (files may have changed
+                        # since the scan) and the manifest re-read (a route or setting
+                        # added while it was disabled came up missing, 2026-11-04).
                         try:
-                            from core.plugin_verify import verify_plugin
-                            from pathlib import Path as _Path
-                            plugin_path = _Path(plugin_loader._plugins[plugin_name]["path"])
-                            verified, verify_msg, verify_meta = verify_plugin(plugin_path)
-                            with plugin_loader._lock:
-                                plugin_loader._plugins[plugin_name]["verified"] = verified
-                                plugin_loader._plugins[plugin_name]["verify_msg"] = verify_msg
-                                plugin_loader._plugins[plugin_name]["verified_author"] = verify_meta.get("author")
+                            plugin_loader.refresh_from_disk(plugin_name)
                         except Exception as _verr:
-                            logger.warning(f"[PLUGINS] toggle re-verify failed for {plugin_name}: {_verr}")
+                            logger.warning(f"[PLUGINS] toggle refresh failed for {plugin_name}: {_verr}")
                         loaded = plugin_loader._load_plugin(plugin_name)
                         if loaded:
                             # Manifest-only registration just replaced whatever
