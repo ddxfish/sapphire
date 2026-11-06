@@ -1,13 +1,13 @@
 # API Reference
 
-Sapphire runs a single FastAPI server on port 8073 (HTTPS). Every endpoint below requires authentication — either a browser session or an API key.
+Sapphire runs a single FastAPI server on port 8073 (HTTPS). Almost every endpoint needs a login: a browser session or an API token. The exceptions are listed under [Open routes](#open-routes).
 
-Routes are split across modules under `core/routes/`, plus a few app-level routes in `core/api_fastapi.py` (login/setup pages, avatar files, plugin web assets). This doc covers the full surface.
+Routes are split across modules under `core/routes/`, plus a few app-level routes in `core/api_fastapi.py` (pages, avatar files, plugin web assets, static mounts). Plugins add their own under `/api/plugin/{plugin}/…` and `/ws/plugin/{plugin}/…`.
 
 ## Authentication
 
 ### Browser Session
-Log in at `/login` with your password. Sessions last 30 days.
+Log in at `/login` with your password. Sessions last 30 days. A password change logs out every other session.
 
 ### Named API Tokens (Programmatic Access)
 For scripts, external tools, and integrations, mint a named token at **Settings > System > API Keys** (or `POST /api/system/api-tokens`) and send it as a Bearer header:
@@ -19,11 +19,44 @@ curl -k https://localhost:8073/api/status \
 
 The full token value is shown **once** at creation — copy it then. Listing shows only the last 4 characters; each token is individually revocable (`DELETE /api/system/api-tokens/{token_id}`).
 
+**Persona keys.** A token made with a `persona` works at `/mcp` only. Anywhere else it is refused with 401, so a persona key can never act as a full admin key. See [MCP.md](MCP.md).
+
+### Open routes
+No login needed:
+
+| Route | Guard |
+|-------|-------|
+| `GET /api/health` | none; says only status, instance name, MCP on |
+| `GET/POST/PUT /api/events/webhook/{path}` | the webhook task's own secret (`X-Webhook-Secret` or GitHub-style `X-Hub-Signature-256`), 1 MB cap |
+| `GET /login`, `POST /login`, `GET /setup`, `POST /setup` | form CSRF field, 5 attempts per 60 s per IP |
+| `GET /favicon.ico`, `/static/*`, `/user-assets/*` (`user/public/`), `/user-fonts/*`, `/core-widgets/*` | static files |
+| The 11 device doors under `/api/devices/{id}/…` | the device's own key as Bearer (see [Devices](#devices)) |
+
 ### CSRF
-CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Bearer-token auth needs no CSRF token — no extra headers. The `/ws/conversation` WebSocket accepts session cookies only (same-origin enforced).
+A browser session sends `X-CSRF-Token` on every POST/PUT/PATCH/DELETE. It must equal the session's token, which the server stamps into the page it serves (there is no API to fetch it). A missing or wrong token is **403** "This page is out of date. Reload it and try again." `/login` and `/setup` carry it as the form field `csrf_token`. Bearer-token callers have no cookie and need no CSRF header.
+
+### WebSockets
+`/ws/conversation` and `/ws/plugin/{plugin}/{path}` accept the session cookie only (no Bearer), and the `Origin` must match `Host`. A refused handshake is accepted and closed with **4401**. Plugin sockets also close 4404 (no such socket), 4429 (that plugin already holds 8), 4410 (the plugin unloaded), 1011 (its handler crashed).
+
+### Status codes
+- **401**: no login on an `/api/*` route (or `/mcp`), or a persona key used off `/mcp`.
+- **307**: no login on a page route redirects to `/login`; before setup is done, to `/setup`.
+- **403**: CSRF failure, a wrong vault passphrase, a wrong webhook secret. Never "not logged in".
 
 ### Rate Limiting
-5 attempts per 60 seconds per IP on auth endpoints.
+`/login` and `/setup`: 5 attempts per 60 s per IP. Other buckets count per session (its CSRF token), else per IP, and answer **429**:
+
+| Bucket | Limit per minute |
+|--------|------------------|
+| `/api/chat` + `/api/chat/stream` | 30 |
+| `/api/tts`, `/api/tts/stream`, `/api/tts/preview` (shared) | 30 |
+| `/api/transcribe` | 20 |
+| `/api/stt/vad-test` | 10 |
+| `/api/system/password` | 5 |
+| Devices (login routes) | 240 reads, 60 writes, 1200 glass frames |
+| IR codes, wake word library | 60 writes |
+| Device doors | 30 per door per caller address; `text` reads and `history` 600 |
+| Plugin routes `/api/plugin/*` | 60 GET, 30 other, per plugin per verb (`media: true` GETs unmetered) |
 
 ---
 
@@ -41,10 +74,12 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. Beare
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/mcp` | Streamable HTTP MCP server, tools only, JSON answers, no session. Off until Settings > MCP Server turns it on (404). Bearer API token |
-| GET | `/api/mcp/tools` | Every tool with its state for the settings page: `{enabled, tools: [{name, description, module, plugin, scoped, exposed, own}]}` |
+| POST | `/mcp` | Streamable HTTP MCP server, tools only, JSON answers, no session. Off until Settings > MCP Server turns it on (404). Bearer API token (a persona key works here and only here) or the browser session |
+| GET | `/mcp` | 405: the door opens no stream of its own |
+| DELETE | `/mcp` | 200: there is no session to end |
+| GET | `/api/mcp/tools` | Every tool with its state for the settings page: `{enabled, tools: [{name, description, module, plugin, emoji, scoped, exposed, own}]}` |
 
-The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notifications get 202. It always offers two tools of its own: `ask` (`text`, `chat`, `from`: a turn in that chat, made if missing, her answer as the result) and `tell` (the same without waiting). The rest are the tools ticked in settings; tools of plugins that declare scopes are not offered yet. Clients: another Sapphire added as a device, or `claude mcp add --transport http sapphire https://host:8073/mcp --header "Authorization: Bearer <token>"`.
+The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notifications get 202. It always offers two tools of its own: `ask` (`text`, `chat`, `from`: a turn in that chat, made if missing, her answer as the result) and `tell` (the same without waiting). While Settings > MCP Server takes room invitations (`MCP_ROOM_INVITES`) it adds `room_invite`, `room_reset` and `room_update`. The rest are the tools ticked in settings; tools of plugins that declare scopes are not offered yet. Clients: another Sapphire added as a device, or `claude mcp add --transport http sapphire https://host:8073/mcp --header "Authorization: Bearer <token>"`. Full guide: [MCP.md](MCP.md).
 
 **Persona keys.** An API token made with a persona (`POST /api/system/api-tokens` with `persona`, or the picker under Settings > System > API Keys) is that persona at this door. The client never names a voice or a scope; both come from the persona. These tools are for the client outside and are not in her own toolkit:
 
@@ -54,6 +89,7 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | `ding` | Plays a short chime on this machine's speakers |
 | `listen` (`seconds`, 3 to 60) | Offered only when `MCP_SERVER_MIC` is on. A chime, then this machine's microphone records until the speaker stops; returns `Heard: "..."`. The wake word's stream is closed for the length of it and brought back after. Refused during a voice turn of her own, a live conversation, or a private chat with a cloud transcriber |
 | `memory_save`, `memory_search`, `memory_recent`, `memory_delete` | The persona's own memory scope and no other. Not offered when the persona's memory scope is `default`, `global` or unset: no key holds her scope |
+| `room_read`, `room_wait`, `room_post` | A seat at a chat room's door here (a seat added with `door: true`): read the room, wait up to 120 s for the turn, post the line. See [CHAT-ROOM.md](CHAT-ROOM.md) |
 
 `tools/mcp-bridge.py` is a stdio bridge to this door for clients that will not take a self-signed cert (Claude Code). It reads the token from `user/mcp-persona.token` (or `SAPPHIRE_MCP_TOKEN`, or the file named by `SAPPHIRE_MCP_TOKEN_FILE`, so two clients can each hold their own key), answers the handshake itself while she restarts, and serves the last tool list it saw.
 
@@ -61,12 +97,51 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/api/chat` | Send message, get response |
-| POST | `/api/chat/stream` | Streaming SSE response — one turn per chat: a second stream while a turn is live on that chat returns **409**. Optional `chat` in the body addresses a chat BY NAME (a room's rail bound to its session): the active chat runs as before; any other chat runs pinned to its own stored settings, never the active pointer. Sealed → 409, missing → 404. `continue_from` (an assistant turn's timestamp) resumes the chat's last reply in place: no user row is sent or saved, the row is edited on success and untouched on Stop |
+| POST | `/api/chat` | Send `{text}`, get `{response, notices?}`. Always the active chat: `chat` in the body is ignored (use the stream for a named chat) |
+| POST | `/api/chat/stream` | Streaming SSE response. The first line is `{type:"ticket", ticket, chat}`. A send while a turn is live on that chat is **queued** in the chat's inbox, not refused: the body says `{type:"queued", ticket, chat, position}` and closes; the tab rejoins by ticket (`/api/chat/attach`) when the bus says `inbox_ticket`. Typed sends waiting together fold into one turn (`merged`); a dropped one hears `queued_dropped`. Optional `chat` addresses a chat BY NAME (a room's rail bound to its session): the active chat runs as before; any other chat runs pinned to its own stored settings, never the active pointer. Sealed or an inbox refusal → 409, missing → 404. `continue_from` (an assistant turn's timestamp) resumes the chat's last reply in place: no user row is sent or saved, the row is edited on success and untouched on Stop |
 | POST | `/api/chat/attach` | Rejoin a turn after losing the feed (`{ticket?, chat?, since?, audio?}`). Turns are server-owned: the engine runs on its own thread and a viewer leaving never ends it. By **ticket** (the stream's first line names it): still queued → **202** `{state:"queued", position}`; live or just finished → replays the ring exact-once after `since` (every SSE line carries `seq`, first line `{type:"attached", audio}`), then follows live; **204** = it ran and is gone; 404 unknown ticket (a restart); 409 sealed chat. `audio: true` asks to hear her — granted only while nothing has been spoken yet. By chat alone: **204** = no live turn; 404 unknown chat; 409 sealed |
 | POST | `/api/cancel` | Cancel active stream (`?chat=` scopes to one chat) |
 | GET | `/api/events` | SSE event stream (real-time UI updates) |
 | GET | `/api/history` | Get chat message history (`?chat=` reads a chat by name; absent = active) |
+| GET | `/api/chat/queue` | What waits in a chat's inbox (`?chat=`, else active): ids, sources, lanes, ages, never text |
+| POST | `/api/chat/queue/drop` | `{ticket, chat?}`: take a waiting typed turn out of the inbox (the live turn is Stop's job) |
+
+### Perception & cadence
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/api/perception/{chat}` | `{frames: [{data, media_type}], text, source}`: what she should see next for `chat` (a game board, an mpv watcher). Latest wins; frames are model-only for the next unprompted turn, never persisted. 404 for an unknown or sealed chat |
+| GET | `/api/cadence/{chat}` | The cadence record for `chat`: `armed, mode (event\|timer), paused, next_in, last_at, skips, pending, fired, every, pokes, ttl_in` (event mode fires on every Nth poke). Arming is the room host plugin's business (`/api/plugin/game-room/room/cadence/*`) |
+
+### Slash Commands
+
+See [SLASH-COMMANDS.md](SLASH-COMMANDS.md).
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/commands` | The composer's command menu `{commands}` |
+| POST | `/api/commands/run` | `{line}`: run one slash command on `?chat=` (else the active chat). Never enters the turn engine |
+
+### Chat Rooms
+
+A room is a chat with several speakers. Not a room → 404; a bad request → 400. See [CHAT-ROOM.md](CHAT-ROOM.md).
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/rooms` | List rooms `{rooms}` |
+| POST | `/api/rooms` | `{name, purpose?}`: make one; answers its description |
+| GET | `/api/rooms/{chat}` | Purpose, rules, seats |
+| PUT | `/api/rooms/{chat}` | Purpose and rules (`human_every`, `pause_s`, `max_rounds`, `bots_enabled`, `shuffle`) |
+| POST | `/api/rooms/{chat}/seats` | `{persona, name?, door?}` seats a persona (`door: true` = answered at the MCP door by a key that speaks as her); `{device, name?, instructions?}` invites another Sapphire and waits for her decision (minutes) → `{joined, said, seat?}` |
+| PUT | `/api/rooms/{chat}/seats/{seat_id}` | Change a seat |
+| DELETE | `/api/rooms/{chat}/seats/{seat_id}` | Remove a seat |
+| POST | `/api/rooms/{chat}/say` | `{text, images?}` (up to 8 `{data, media_type}`): the person's line, lands between seat turns → `{ticket, state}`; 409 when the inbox refuses |
+| POST | `/api/rooms/{chat}/clear` | Wipe the transcript; seats, rules and purpose stay |
+| POST | `/api/rooms/{chat}/import` | `{messages?, room?}` from a chat export |
+| POST | `/api/rooms/{chat}/start` | Run one more round; `{rounds}` = N rounds before the human rule asks again |
+| POST | `/api/rooms/{chat}/stop` | Stop the rounds |
+| GET | `/api/rooms/{chat}/state` | The runner's state |
+| POST | `/api/rooms/{chat}/voice` | The tab reading lines aloud: `{on}` while reading, `{mid}` when a line is read, `{flush}` when it went quiet. The rounds keep pace with it |
 
 ### Chat Sessions
 
@@ -77,7 +152,8 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | GET | `/api/chats/search` | Search chat content (private chats excluded while the vault is sealed) |
 | DELETE | `/api/chats/{name}` | Delete chat (also deletes its plugin/playthrough data) |
 | POST | `/api/chats/{name}/activate` | Switch active chat |
-| GET | `/api/chats/active` | Get active chat name |
+| GET | `/api/chats/active` | `{active_chat, landing}`: the active chat, and where voice lands right now |
+| POST | `/api/chats/{name}/landing` | `{on}`: where voice (wake word, satellites, browser conversation) lands while a room is open; `on: false` clears it. Typed turns stay on the active chat → `{landing, active_chat}`; 404 unknown chat |
 | GET | `/api/chats/{name}/settings` | Get chat settings |
 | PUT | `/api/chats/{name}/settings` | Update chat settings |
 | POST | `/api/chats/{name}/rename` | Rename a chat (carries tool images, message rows, and RAG scope along) |
@@ -102,7 +178,7 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | POST | `/api/history/messages/remove-last-assistant` | Remove last assistant message |
 | POST | `/api/history/messages/remove-from-assistant` | Remove from last assistant message onward |
 | DELETE | `/api/history/tool-call/{id}` | Delete specific tool call |
-| POST | `/api/history/messages/edit` | Edit a message (the message-edit routes act on the active chat; a rail bound by name sends `?chat=` and gets **409** if that chat is no longer active) |
+| POST | `/api/history/messages/edit` | Edit a message. The message-edit routes act on `?chat=` by name when given (a room's rail), else the active chat |
 | GET | `/api/history/raw` | Export raw chat history |
 | POST | `/api/history/import` | Import chat history |
 
@@ -111,7 +187,7 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | POST | `/api/tts` | Generate TTS audio |
-| POST | `/api/tts/stream` | Streaming TTS — per-chunk OGG over chunked transfer (v2.7.0) |
+| POST | `/api/tts/stream` | Streaming TTS for known text, as SSE (`tts_stream_start`, `tts_chunk`, `tts_stream_end`). 503 when streaming is off or the provider can't stream: fall back to `/api/tts` |
 | POST | `/api/tts/preview` | Preview voice sample |
 | GET | `/api/tts/status` | TTS server status |
 | POST | `/api/tts/stop` | Stop TTS playback |
@@ -136,8 +212,6 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | PUT | `/api/settings/{key}` | Update a single setting |
 | DELETE | `/api/settings/{key}` | Reset a setting to default |
 | PUT | `/api/settings/batch` | Batch update multiple settings |
-
-Provider switches are jobs. `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER`, `WAKE_WORD_ENABLED`, `WAKEWORD_MODEL` (and the legacy `STT_ENABLED` / `TTS_ENABLED` toggles, which map onto their provider key) come back as `"status": "started"` with a notification row id per key (`job`, and `jobs` on the batch). The switch runs in the background under that row; the key lands in config and on disk only when the provider is really ready; `settings_changed` fires on finish with the live value and `ok: true|false`. A request for a key already switching to a different value is refused with `409`. Save an API key or model size in the same batch as its provider and it is written first.
 | POST | `/api/settings/reload` | Force reload from disk |
 | POST | `/api/settings/reset` | Reset all settings to defaults |
 | GET | `/api/settings/help` | Get setting descriptions |
@@ -148,6 +222,8 @@ Provider switches are jobs. `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER`
 | PUT | `/api/settings/chat-defaults` | Update chat defaults |
 | DELETE | `/api/settings/chat-defaults` | Reset chat defaults to factory |
 | GET | `/api/settings/wakeword-models` | List available wakeword models |
+
+Provider switches are jobs. `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER`, `WAKE_WORD_ENABLED`, `WAKEWORD_MODEL` (and the legacy `STT_ENABLED` / `TTS_ENABLED` toggles, which map onto their provider key) come back as `"status": "started"` with a notification row id per key (`job`, and `jobs` on the batch). The switch runs in the background under that row; the key lands in config and on disk only when the provider is really ready; `settings_changed` fires on finish with the live value and `ok: true|false`. A request for a key already switching to a different value is refused with `409`. Save an API key or model size in the same batch as its provider and it is written first.
 
 ### Credentials & SOCKS Proxy
 
@@ -175,6 +251,7 @@ Provider switches are jobs. `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER`
 | DELETE | `/api/llm/custom-providers/{key}` | Remove a custom LLM provider |
 | GET | `/api/llm/custom-providers/{key}/models` | Fetch models from a custom provider |
 | GET | `/api/llm/presets` | List LLM provider presets |
+| GET | `/api/llm/generation-params` | `?provider=&model=`: the `temperature`, `top_p`, `max_tokens` a blank provider-card field inherits for that model |
 
 ### Provider Registry (TTS / STT)
 
@@ -301,7 +378,9 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | DELETE | `/api/spice-sets/{name}` | Delete spice set |
 | POST | `/api/spice-sets/{name}/emoji` | Set spice set emoji |
 
-### Memory
+### Memory (legacy engine)
+
+> The Memory, Knowledge, People and Goals tables below belong to the **legacy memory engine** (plugin `memory`) and read its classic databases. The default engine, the Mind Palace, serves its own routes under `/api/plugin/mindpalace/` (see its README in Help → Plugins and [MEMORY.md](MEMORY.md)).
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -315,7 +394,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | POST | `/api/memory/import` | Import memories from JSON |
 | GET | `/api/memory/duplicates` | Find near-duplicate memories via vector similarity |
 
-### Knowledge
+### Knowledge (legacy engine)
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -337,7 +416,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/knowledge/dedup` | Find near-duplicate knowledge entries |
 | DELETE | `/api/knowledge/dedup/resolve` | Resolve/remove a duplicate entry |
 
-### People
+### People (legacy engine)
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -351,7 +430,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/knowledge/people/export` | Export people as JSON |
 | POST | `/api/knowledge/people/import` | Import people from JSON |
 
-### Goals
+### Goals (legacy engine)
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -397,8 +476,11 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 |--------|----------|---------|
 | GET | `/api/events/sources` | List daemon event sources from loaded plugins |
 | POST | `/api/events/emit/{source}` | Emit a daemon event to trigger matching tasks |
+| GET/POST/PUT | `/api/events/webhook/{path}` | **No login.** Fires the webhook task matching path + method. A task with a secret needs `X-Webhook-Secret` or `X-Hub-Signature-256` (403 otherwise); 1 MB cap (413); 404 no such webhook → `{status:"triggered", task, queued}`. See [DAEMONS-WEBHOOKS.md](DAEMONS-WEBHOOKS.md) |
 
 ### Notifications
+
+See [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -423,6 +505,8 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | POST | `/api/backup/restore-upload` | Restore from an uploaded backup file |
 | GET | `/api/backup/restore-result` | Outcome of the last restore, for the post-reboot banner |
 | DELETE | `/api/backup/restore-result` | Dismiss the restore-result banner |
+| POST | `/api/backup/send` | `{filename?}` (newest by default): send one backup, sealed, to every device that holds backups → `{status:"sending", filename, targets}`; 409 already sending. `/api/backup/health` says when it landed |
+| PUT | `/api/backup/password` | `{password}` (`''` clears): THE backup password (encrypted backups, device/path targets, Remembrance). Stored machine-bound, outside `user/` → `{ok, status}` |
 
 ### Agents
 
@@ -435,9 +519,6 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | POST | `/api/agents/spawn` | `{chat, kind, mission, options}` — the privacy gate reads the chat's own settings |
 | GET | `/api/agents/{id}/transcript?chat=` | an agent's transcript ring (chat-local) |
 | POST | `/api/agents/{id}/answer` · `/say` · `/stop` | `{chat, value}` — resolve its question · a follow-up turn · end it |
-| GET | `/api/chat/queue?chat=` | what waits in a chat's inbox (ids, sources, lanes, ages — never text) |
-| POST | `/api/chat/queue/drop` | `{ticket, chat?}` — take a waiting typed turn out of the inbox |
-| — | `POST /api/chat/stream` on a busy chat | no longer 409: the body opens with `{"type":"queued","ticket","position"}` and streams the turn when it is its turn; `merged` when folded into the turn ahead; `queued_dropped` when taken out |
 | GET | `/api/agents/providers` | List available LLM providers for agents |
 | POST | `/api/agents/{id}/dismiss` | Dismiss an agent |
 
@@ -475,6 +556,16 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | DELETE | `/api/plugins/{name}/uninstall` | Uninstall user plugin (unload + delete) |
 | GET | `/api/plugins/{name}/check-update` | Check for updates from install source |
 | POST | `/api/plugins/{name}/revert` | Swap a plugin back to the version retained by its last update |
+| POST | `/api/plugins/{name}/purge` | Delete everything the plugin stores about you (its state files + its per-chat data rows); it stays installed and configured. Sealed chats' rows are skipped and counted |
+
+### Plugin Routes & Sockets
+
+What a plugin declares in its manifest. See [plugin-author/routes.md](plugin-author/routes.md).
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET/POST/PUT/DELETE | `/api/plugin/{plugin}/{path}` | The plugin's own HTTP routes. Session login, or a Bearer matching the key the plugin keeps in `user/plugin_state/{plugin}_mcp_key.json`. A non-object JSON body arrives as `{}`; 404 no such route |
+| WS | `/ws/plugin/{plugin}/{path}` | The plugin's own WebSocket (`capabilities.sockets`). Session cookie + same origin; 8 per plugin; close codes under [WebSockets](#websockets) |
 
 ### Store (read-only proxy of sapphireblue.dev catalog)
 
@@ -513,6 +604,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET | `/api/apps` | List plugin apps (plugins with an app/ directory) |
+| PUT | `/api/apps/pins` | `{name, pinned}`: pin or unpin an app on the Apps menu; answers like `GET /api/apps`. 400 for an app with a place in the rail, 404 unknown |
 | GET | `/api/games` | List games registered via `capabilities.games` (empty unless game plugins are enabled) |
 | GET | `/api/themes` | List all themes (core + plugin manifest themes) |
 | GET | `/api/motions` | List motion themes (animation layer) |
@@ -609,7 +701,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 
 ### Devices
 
-Login required, except the two doors a device opens with its own key.
+Login required, except the 11 doors a device opens with its own key (marked **Device key**: `Authorization: Bearer <device key>`; 401 says the same for a wrong key and an unknown device). Every Devices route answers 404 on a hosted install. See [DEVICES.md](DEVICES.md) and [Satellite Protocol](SATELLITE-PROTOCOL.md).
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -618,11 +710,80 @@ Login required, except the two doors a device opens with its own key.
 | GET | `/api/devices/{id}` | One device: settings, status, what it can do |
 | PUT | `/api/devices/{id}` | Change a device. `locked` is a map `{capability: bool}` and changes only the capabilities it names |
 | GET | `/api/devices/found/{driver}` | What that driver can see right now, for a pick list: `{found: [{id, name, kind}]}`. `?device=<id>` lends a saved device's settings to the look |
+| POST | `/api/devices/found/{driver}/do` | `{id, do, config}`: a button under a pick-list entry (a phone's Pair), before it is a device |
+| POST | `/api/devices/provision` | `{label, driver?, location?, mac?, replace?, sapphire?}`: a board set up from the browser: the device row, two fresh keys, Sapphire's LAN address and cert. The page carries them to the board over USB |
+| GET | `/api/devices/here` | This machine's likely LAN addresses `{sapphire, addresses}` |
 | DELETE | `/api/devices/{id}` | Remove a device and its stored secrets |
+| POST | `/api/devices/{id}/connections` | `{driver, config}`: add a connection (a part) to a device |
+| DELETE | `/api/devices/{id}/connections/{driver}` | Remove one connection |
 | POST | `/api/devices/{id}/test` | Check the device now. Answers `{status, device}`: a device may have just said what it has |
 | POST | `/api/devices/{id}/run` | Run one action. Answers `{text, ok, images?}` |
-| POST | `/api/devices/{id}/voice` | Device key. A satellite sends what it heard, as the body with an `audio/*` Content-Type or as the form file `audio`. See [Satellite Protocol](SATELLITE-PROTOCOL.md) |
-| GET | `/api/devices/{id}/events` | Device key. SSE stream of what that satellite's light should show |
+| GET | `/api/devices/{id}/screen/stream` | What the board's glass takes, who has claimed it, the stream's status |
+| POST | `/api/devices/{id}/screen/frame` | Body = one JPEG frame for the glass (newest wins, paced to the board) |
+| DELETE | `/api/devices/{id}/screen/stream` | End the cast |
+| POST | `/api/devices/{id}/wake` | Device key. Its wake word fired: may it take this one? → `{yours}` |
+| POST | `/api/devices/{id}/voice` | Device key. A satellite sends what it heard, as the body with an `audio/*` Content-Type or as the form file `audio` |
+| POST | `/api/devices/{id}/room` | Device key. A piece of room audio during a capture; headers `X-Capture`, `X-Chunk`, `X-Fires`, `X-Fire-Count`, `X-Test`, `X-Model`. `accepted: false` tells the board to stop |
+| POST | `/api/devices/{id}/text` | Device key. Typed text (`text/plain` or `{text}`, 16 KB); her reply reaches the screen through `text` events |
+| GET | `/api/devices/{id}/text` | Device key. A piece of her reply: `?msg=&from=&max=` (no `msg` = the latest) |
+| POST | `/api/devices/{id}/press` | Device key. `{button, how: short\|long\|double, job?}`: a button press set to reach her |
+| POST | `/api/devices/{id}/ask` | Device key. `{job: stop\|backup}`: work with no chat turn → `{ok, accepted, job, said}` |
+| GET | `/api/devices/{id}/chats` | Device key. The chats it may pick from `{ok, chat, chats}`; a private chat is never named |
+| POST | `/api/devices/{id}/chat` | Device key. `{name}`: the chat it talks in |
+| GET | `/api/devices/{id}/history` | Device key. That chat read back: `?before=&max=`, newest first, with a cursor |
+| GET | `/api/devices/{id}/events` | Device key. SSE stream of what that satellite's light and screen should show |
+
+### Firmware & Flasher
+
+Login, the Devices limits, 404 on a hosted install.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/devices/firmware` | `{boards, sources: [{source, official, on, error, boards}], error}` |
+| PUT | `/api/devices/firmware/sources` | `{sources: [...], off: [...]}`: your firmware sources in order, and the ones switched off; 422 bad |
+| POST | `/api/devices/firmware/own` | Multipart `file`: your own firmware, kept as board `own`; 413 too large |
+| GET | `/api/devices/firmware/{board}/{path}` | One part's bytes (fetched and cached on first ask) |
+| GET | `/api/devices/flash/ports` | Serial ports on this machine `{ports}` |
+| POST | `/api/devices/flash/chip` | `{port}`: what chip is there |
+| POST | `/api/devices/flash/start` | `{port, board}`: flash in the background, one at a time |
+| GET | `/api/devices/flash/status` | `{state: idle\|getting\|writing\|done\|failed, percent, text, error}` |
+| POST | `/api/devices/flash/ask` | `{port, line, wait?}` (1-60 s): send a line to the board's console → its answer |
+| POST | `/api/devices/flash/close` | `{port}`: let go of the port |
+
+### IR Codes
+
+Writes 60/min; a library error is 400.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/ir/library` | `{appliances, brands}`: every appliance and its named codes, plus built-in brands |
+| POST | `/api/ir/appliance` | `{name, brand?}`: a new, empty appliance |
+| POST | `/api/ir/import` | `{brand, appliance?}`: seed an appliance from a brand's built-in codes |
+| POST | `/api/ir/command` | `{appliance, command, protocol: "nec", addr, cmd}` (hex bytes): add or replace a code |
+| DELETE | `/api/ir/library/{appliance}` | Remove an appliance |
+| DELETE | `/api/ir/library/{appliance}/{command}` | Remove one command |
+
+### Wake Word Library
+
+Writes 60/min. See [VOICE.md](VOICE.md).
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/wakeword/library` | `{models, listeners, families}` (no file paths) |
+| POST | `/api/wakeword/library` | Multipart `file` (`.onnx` or `.tflite`), `manifest?`, `name?`, `phrase?`, `overwrite?`; 409 name taken, 413 too large |
+| DELETE | `/api/wakeword/library/{family}/{name}` | Remove; allowed while in use, answers `used_by` |
+| GET | `/api/wakeword/library/{family}/{name}/file` | The model's bytes |
+| POST | `/api/wakeword/switch` | `{listener, model}`: listener `this computer` or a device id; model a name, `''` or `own` |
+
+### Shared Worker Doors
+
+Who may use this computer's shared workers. A door is `kokoro`, or a loaded plugin with a client mode.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/worker-door/{door}` | `{clients, seen, address}` |
+| POST | `/api/worker-door/{door}` | `{name, address?}` → `{name, pairing}`: the pairing string to paste on the client, shown once |
+| DELETE | `/api/worker-door/{door}/{name}` | Remove a client |
 
 ### Conversation Mode
 
@@ -638,7 +799,7 @@ Login required, except the two doors a device opens with its own key.
 |--------|----------|---------|
 | GET | `/api/setup/state` | Where setup stands: `complete`, the `step` to resume at, `consent` time, the `steps` that apply here, `managed`, `docker`, and `packages` (tts/stt/wakeword sets installed) |
 | PUT | `/api/setup/state` | `{complete?: bool, step?: id, consent?: true}`; the server stamps the consent time; a bad step is a 400 |
-| GET | `/api/setup/featured` | The plugins the wizard offers: title, blurb, icon, enabled, missing packages, settings tab, radio group |
+| GET | `/api/setup/featured` | The plugins the wizard offers `{featured: [{name, group, title, blurb, description, icon, enabled, loaded, missing_deps, legacy}]}` |
 
 The wizard itself is the `#setup` view: it hosts the real Settings tabs, so provider readiness and model downloads are the provider switch jobs and their notification rows (above). Provider status and package checks have no routes of their own any more.
 
@@ -662,6 +823,8 @@ The wizard itself is the `#setup` view: it hosts the real Settings tabs, so prov
 | GET | `/api/system/last-update-result` | Result of the most recent deferred update attempt (read-once, then cleared) |
 | GET | `/api/system/integrity` | Verify the core install against the shipped manifest (SHA256) |
 | POST | `/api/system/integrity/repair` | Restore files that don't match the manifest (git installs), per-file status |
+| GET | `/api/system/gpu` | Whether torch can use the NVIDIA card: the boot probe's verdict, the `install` plan, `pending`, `last_install`, `whisper`. `?refresh=1` re-probes in the background |
+| POST | `/api/system/gpu/install` | Queue the GPU torch install and restart (pip runs before Sapphire loads). 400 nothing to install, 503 no restart in this run mode |
 | POST | `/api/system/restart` | Restart Sapphire |
 | POST | `/api/system/shutdown` | Shutdown Sapphire |
 
@@ -688,10 +851,16 @@ The wizard itself is the `#setup` view: it hosts the real Settings tabs, so prov
 | GET | `/api/docs/search` | Search across all docs (?q=query) |
 | GET | `/api/docs/{path}` | Get raw markdown content of a doc |
 
-### Static Assets & Plugin Web
+### Pages, Static Assets & Plugin Web
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
+| GET | `/` | The app (login) |
+| GET/POST | `/login` | Login page and form (**no login**; form CSRF field, 5/60 s per IP) |
+| GET/POST | `/setup` | First-run password page and form (**no login**; same guards) |
+| POST | `/logout` | End this session |
+| GET | `/favicon.ico` | **No login** |
+| GET | `/static/*`, `/user-assets/*`, `/user-fonts/*`, `/core-widgets/*` | **No login.** App files, `user/public/`, downloaded fonts, built-in dashboard widgets |
 | GET | `/plugin-web/{name}/{path}` | Serve plugin web/app assets |
 | GET | `/workspace/{project}/{path}` | Serve Claude Code workspace files |
 | GET | `/cdn-cache/{path}` | Serve locally cached third-party assets |
@@ -700,24 +869,41 @@ The wizard itself is the `#setup` view: it hosts the real Settings tabs, so prov
 
 ## Reference for AI
 
-Sapphire API reference for programmatic access. Single FastAPI server, `https://localhost:8073`; every endpoint is auth-gated.
+Sapphire API reference for programmatic access. Single FastAPI server, `https://localhost:8073`; login-gated except the open routes below.
 
 AUTH:
-- Browser: session cookie via /login (30-day sessions; CSRF token required on mutations)
+- Browser: session cookie via /login (30-day sessions). Mutations (POST/PUT/PATCH/DELETE) need header `X-CSRF-Token` = the session token stamped into the page; wrong/missing = 403
 - Programmatic: `Authorization: Bearer <token>` — named API tokens minted at Settings > System > API Keys or POST /api/system/api-tokens (full value shown ONCE at creation; list shows last-4; revoke via DELETE /api/system/api-tokens/{token_id})
 - Bearer auth needs no CSRF token
-- /ws/conversation accepts session-cookie auth only (same-origin enforced)
-- Rate limit: 5 attempts/60s per IP on auth endpoints
+- Persona key (token made with `persona`): works ONLY at /mcp; 401 on every other route
+- Open (no login): GET /api/health; /api/events/webhook/{path} (task's own secret); /login, /setup (form CSRF, 5/60s per IP); /favicon.ico; static mounts /static /user-assets /user-fonts /core-widgets; the 11 device doors /api/devices/{id}/{wake,voice,room,text,press,ask,chats,chat,history,events} (device key as Bearer)
+- WebSockets /ws/conversation and /ws/plugin/{plugin}/{path}: session cookie only + Origin == Host; refused = close 4401
+- 429 buckets per session/IP: chat 30/min, TTS 30/min, transcribe 20, plugin routes 60 GET/30 other, devices 240 reads/60 writes
+- 401 = not logged in on /api/* (or persona key off /mcp); 307 = page route → /login (or /setup before setup); 403 = CSRF, vault passphrase, webhook secret
+
+MCP DOOR (POST /mcp, off until Settings > MCP Server; see MCP.md):
+- JSON-RPC: initialize, ping, tools/list, tools/call. Own tools: ask, tell; with MCP_ROOM_INVITES: room_invite, room_reset, room_update; plus the tools ticked in settings
+- Persona key adds: speak, ding, listen (MCP_SERVER_MIC), memory_* on the persona's own scope, room_read/room_wait/room_post (a door seat in a room here)
 
 ROUTE MODULES (core/routes/):
-- chat.py: chat + stream (SSE; one turn per chat — 409 if a turn is already live), cancel, events SSE, health/status/init, history editing, chat sessions + lifecycle (rename, archive, trim, repair, compress + status, bulk delete/clear/export, single export, prompt-preview)
+- chat.py: chat (active chat only) + stream (SSE; busy chat QUEUES), attach, queue + queue/drop, cancel, events SSE, health/status/init, history editing (?chat= by name), chat sessions + lifecycle (rename, archive, trim, repair, compress + status, bulk delete/clear/export, single export, prompt-preview, landing)
 - content.py: prompts, prompt components, piece trash/rename/usage, toolsets, functions, spices, spice sets, personas (PNG character-card export.png / import-card, legacy JSON import)
-- settings.py: settings CRUD, credentials, SOCKS proxy + /api/socks/status, LLM providers + test + test-thinking, custom providers, presets, TTS/STT/embedding provider registries, system status, system prompt (read-only)
-- system.py: backup suite (list/create/delete/download tar.gz/health/estimate/restore/restore-upload/restore-result), audio devices, continuity tasks, avatars, restart/shutdown, update + cancel + last-update-result, integrity verify + repair, metrics, api-tokens, daemon events, dashboard system-info + component-status, runtime true-speech GET/PUT
-- plugins.py: plugin listing/toggle/rescan/reload/surfaces, install/uninstall/revert/check-update, deps check/install, per-plugin conda envs (build-env, env-status, env DELETE), apps/games/themes/motions, plugin settings, HA/email/bitcoin/gcal/github/ssh routes
-- knowledge.py: embedding test/integrity/reembed, memory, goals, knowledge tabs/entries/dedup, people, per-chat RAG documents, export/import
-- tts.py: TTS generate/stream/preview/status/stop/test, voices, transcribe, mic active, STT VAD status/test, image upload
-- agents.py: agent status/providers/dismiss, workspace run/stop/status
+- settings.py: settings CRUD, credentials, SOCKS proxy + /api/socks/status, LLM providers + test + test-thinking + generation-params, custom providers, presets, TTS/STT/embedding provider registries, system status, system prompt (read-only)
+- system.py: extras install, GPU probe + install, backup suite (list/create/delete/download tar.gz/health/estimate/restore/restore-upload/restore-result/send/password), audio devices, continuity tasks, avatars, restart/shutdown, update + cancel + last-update-result, integrity verify + repair, metrics, api-tokens, password, daemon events + webhook (no login), dashboard system-info + component-status, runtime true-speech GET/PUT
+- plugins.py: plugin listing/toggle/rescan/reload/surfaces, install/uninstall/revert/check-update/purge, deps check/install, per-plugin conda envs (build-env, env-status, env DELETE), apps + apps/pins, games/themes/motions, plugin settings, HA/email/bitcoin/gcal/github/ssh routes, the /api/plugin/{plugin}/{path} dispatcher, /ws/plugin/{plugin}/{path}
+- knowledge.py: embedding test/integrity/reembed, memory, goals, knowledge tabs/entries/dedup, people, per-chat RAG documents, images-in-view, export/import
+- tts.py: TTS generate/stream (SSE)/preview/status/stop/test, voices, transcribe, mic active, STT VAD status/test, image upload
+- agents.py: agent status/kinds/chats/list/spawn/transcript/answer/say/stop/providers/dismiss, workspace run/stop/status
+- notifications.py: notification center rows (list, post, read, delete)
+- setup.py: setup wizard state + featured plugins
+- perception.py: perception deposit, cadence status
+- devices.py: devices, connections, provision, glass stream, firmware + flasher, the 11 device-key doors
+- wakeword.py: wake word library + per-listener switch
+- ir.py: IR code library
+- mcp.py: /mcp door + /api/mcp/tools
+- rooms.py: chat rooms (seats, say, rounds, voice pacing)
+- commands.py: slash command menu + run
+- worker_door.py: shared worker door clients (kokoro, plugin client modes)
 - vault.py: privacy vault setup/unlock/lock/rekey/move
 - conversation.py: /ws/conversation WebSocket (browser conversation mode — connect starts, disconnect ends)
 - store.py: read-only store proxy — plugins AND personas (status, categories, list/search, detail, persona install)
@@ -727,19 +913,18 @@ ROUTE MODULES (core/routes/):
 - videos.py: in-app Video Guide feed (cached)
 - media.py: tool-image serving
 - docs.py: doc tree, search, markdown content
-- body.py: multi-body runtime (wake, health, events SSE)
-Plus app-level routes in core/api_fastapi.py: /login, /logout, /setup, /api/avatar/{filename}, /plugin-web/{name}/{path}, /workspace/{project}/{path}, /cdn-cache/{path}.
+Plus app-level routes in core/api_fastapi.py: /, /login, /logout, /setup, /favicon.ico, /api/avatar/{filename}, /plugin-web/{name}/{path}, /workspace/{project}/{path}, /cdn-cache/{path}, and the static mounts /static, /user-assets, /user-fonts, /core-widgets.
 
 KEY ENDPOINTS:
 - GET /api/status — unified UI state (prompt, context, spice, streaming, TTS/STT readiness, vault state)
 - GET /api/init — mega endpoint (all toolsets, prompts, personas, spices, settings in one call)
-- POST /api/chat/stream — SSE streaming chat response (409 on a busy chat)
+- POST /api/chat/stream — SSE streaming chat response (a busy chat queues the send; 409 only sealed chat or inbox refusal)
 - GET /api/events — SSE event stream for real-time UI updates
 
 CHAT FLOW:
-1. POST /api/chat or /api/chat/stream with {"text": "message", "chat": "optional chat name"} — `chat` names the target chat; the active chat runs as before, another chat runs pinned to its own stored settings (never the active pointer)
-2. Response streams as SSE events (content, tool_pending, tool_start, tool_end, reload)
-3. POST /api/cancel (?chat= to scope) to abort; a second stream on a busy chat WAITS its turn — the body says `queued` and closes, the bus says `inbox_ticket {ticket, state}` when it starts. Turns are server-owned: dropping the SSE socket does NOT cancel — POST /api/chat/attach {ticket, since?} rejoins your turn (every line carries `seq`; 202 still queued, 204 = it already finished)
+1. POST /api/chat/stream with {"text": "message", "chat": "optional chat name"} — `chat` names the target chat; the active chat runs as before, another chat runs pinned to its own stored settings (never the active pointer). POST /api/chat ignores `chat` and runs the active chat, answering {response, notices?}
+2. Response streams as SSE lines: first `ticket`, then the turn's lines, each carrying `seq` — stream_started, iteration_start, content, thinking, tool_pending, tool_start, tool_end, tool_result, image, file, notice, llm_done, reload, tts_* (plus attached, resync on a rejoin); the last line is {done}, {cancelled} or {error} (no type)
+3. POST /api/cancel (?chat= to scope) to abort; a send on a busy chat is QUEUED in the chat's inbox — the body says `queued {ticket, chat, position}` and closes, the bus says `inbox_ticket {ticket, state}` when it starts; waiting typed sends fold into one turn (`merged`); a dropped one hears `queued_dropped`. Turns are server-owned: dropping the SSE socket does NOT cancel — POST /api/chat/attach {ticket, since?} rejoins your turn (202 still queued, 204 = it already finished). GET /api/chat/queue?chat= peeks the inbox; POST /api/chat/queue/drop {ticket} removes a waiting turn
 4. GET /api/history?chat=<name> reads any chat by name; GET /api/chats?kind=game&slim=1 lists game/story sessions with trimmed settings; POST /api/chats {"name", "settings"} stamps settings at birth (private_chat refused there — use the vault flip)
 
 PLUGIN MANAGEMENT:
@@ -749,6 +934,19 @@ PLUGIN MANAGEMENT:
 - POST /api/plugins/{name}/reload — hot-reload
 - POST /api/plugins/rescan — discover new plugins
 - PUT /api/webui/plugins/toggle/{name} — live enable/disable
+- POST /api/plugins/{name}/purge — delete the plugin's stored user data, keep it installed
+- Plugin routes: GET/POST/PUT/DELETE /api/plugin/{plugin}/{path} (manifest-declared; session, or Bearer matching user/plugin_state/{plugin}_mcp_key.json); sockets WS /ws/plugin/{plugin}/{path} (8 per plugin; close 4401/4404/4429/4410/1011)
+
+DEVICES (see DEVICES.md, SATELLITE-PROTOCOL.md):
+- Login routes under /api/devices (list, add, provision, connections, test, run, glass screen stream/frame, firmware, flash); 404 on a hosted install
+- Device doors take the DEVICE's key as Bearer, no login: wake, voice, room, text (POST + GET), press, ask, chats, chat, history, events (SSE)
+
+ROOMS (see CHAT-ROOM.md):
+- /api/rooms CRUD, /seats (persona, door seat, or invite another Sapphire by device), /say, /start, /stop, /clear, /import, /state, /voice
+- POST /api/chats/{name}/landing {on} — where voice lands while a room is open
+
+WEBHOOKS (see DAEMONS-WEBHOOKS.md):
+- GET/POST/PUT /api/events/webhook/{path} — no login; fires the matching webhook task; secret via X-Webhook-Secret or X-Hub-Signature-256; 1 MB cap
 
 MULTI-ACCOUNT CREDENTIALS (email/gcal/github):
 - GET /api/{type}/accounts — list all scoped accounts
@@ -761,11 +959,6 @@ COMMON PATTERNS:
 - File uploads use multipart/form-data
 - Toolsets: /api/toolsets (not /api/abilities — legacy name removed)
 - Most endpoints return JSON
-- 200/201 success, 400 validation, 403 auth/CSRF, 404 not found, 409 conflict (busy chat, existing vault), 503 system not ready
-
-## Perception & cadence (Game Room F3, 2026-09-09)
-
-| Method | Path | Body / Query | Notes |
-|---|---|---|---|
-| POST | `/api/perception/{chat}` | `{frames: [{data, media_type}], text, source}` | Deposit what she should see next for `chat` (a game board, an mpv watcher). Latest wins; frames are model-only for the next unprompted turn, never persisted. 404 for an unknown or sealed chat. |
-| GET | `/api/cadence/{chat}` | — | The cadence organ's record for `chat`: `armed, mode (event\|timer), paused, next_in, last_at, skips, pending, fired, every, pokes, ttl_in` (`every`/`pokes`: event mode fires on every Nth poke; the count since the last one that became her turn). Arming is the room host plugin's business (`/api/plugin/game-room/room/cadence/*`). |
+- 200/201 success, 202 queued/notification, 204 nothing live, 400 validation, 401 not logged in, 403 CSRF/vault passphrase/webhook secret, 404 not found (or hidden/sealed), 409 conflict (sealed chat, inbox refusal, existing vault, switch in flight), 413 too large, 429 rate limited, 503 system not ready
+- Perception: POST /api/perception/{chat} {frames, text, source} deposits what she sees next; GET /api/cadence/{chat} reads the cadence record
+- Slash commands: GET /api/commands, POST /api/commands/run {line} (?chat=); see SLASH-COMMANDS.md

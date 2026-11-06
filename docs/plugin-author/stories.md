@@ -210,7 +210,7 @@ The journal follows its chat: renamed with it, encrypted with it when the chat g
 
 1. `story.json` + rooms (every room reachable, `start` exists, endings have cards if you have art).
 2. Backdrops as ~q82 JPGs; tile art in `backdrops/` too.
-3. `python tools/sign_plugin.py <path-to-your-plugin>`, restart.
+3. Unsigned plugins allowed (Settings > Plugins banner switch), restart. Don't sign it yourself — only keyholders sign ([Signing](signing.md)).
 4. Your 📖 tile appears in the Game Room library; play it end to end — then hand it to someone who can be surprised.
 
 See [Games](games.md) for mechanical games, [Publishing](publishing.md) for the store.
@@ -233,4 +233,4 @@ STORY PACKS (Game Room story engine):
 - Emotion pieces: prompts/pieces.json keys `story_<slug>_<emotion>`; resolution: story-specific, then story_engine_<emotion>, else skipped.
 - Saves: the chat IS the save — per-(story, chat) event journal on the chat; state = pure replay (no LLM/randomness/clock). Journal follows the chat: rename/private-encrypt/delete. Vault-locked chat: playthrough invisible, engine refuses writes, role prompt name hidden. In local/combined the local persona can't be a vault prompt.
 - Player-side editing (scenarios/shadows) is user-layer only: shipped-object rewording field-merges (mechanics survive), mechanics edits go through fidelity gates (_replace / mechanics units, wholesale swap per playthrough); the pack stays canonical. Ship nothing for any of it.
-- Checklist: reachable rooms, start exists, tile/backdrops ~q82 JPG, sign plugin, 📖 tile in Game Room library.
+- Checklist: reachable rooms, start exists, tile/backdrops ~q82 JPG, ship unsigned with unsigned plugins allowed (keyholders sign; signing.md), 📖 tile in Game Room library.

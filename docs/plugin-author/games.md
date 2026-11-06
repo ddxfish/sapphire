@@ -188,7 +188,7 @@ const defs = await fetch(`${base}/defs.json`).then(r => r.json());
 A free-mount board can host a compiled engine (an emulator core, a source port). What the app gives you and what stays yours:
 
 - **It runs.** The page's CSP allows WebAssembly (`'wasm-unsafe-eval'`), and `.wasm` under `app/` is served with the right type.
-- **It is signed.** `.wasm` files are in the signature like your code, hashed byte for byte. Build before you sign, and leave no build folder inside the plugin.
+- **It is signed** (when a keyholder signs the plugin). `.wasm` files are in the signature like your code, hashed byte for byte. Build before signing, and leave no build folder inside the plugin.
 - **Her view of the screen.** The host copies the first `<canvas>` in your stage for her frames. A WebGL canvas reads back black unless it was created with `preserveDrawingBuffer: true`, so ask for that (wrap `canvas.getContext` before the engine makes its context).
 - **Keys.** Declare `keeps_focus: true` and make the engine listen on its canvas, not the window, or typing in the chat plays the game.
 - **Leaving.** `unmount` must stop the engine for real: its loop, its sound, its listeners. Build it so a second instance can start in the same page.
@@ -208,7 +208,7 @@ A free-mount board can host a compiled engine (an emulator core, a source port).
 ## Checklist
 
 1. `id` chosen and final; manifest declaration + `meta.json` + `engine.py` + board module.
-2. `python tools/sign_plugin.py <path-to-your-plugin>` — unsigned plugins are blocked by default.
+2. Unsigned plugins are blocked by default: turn them on with the Settings > Plugins banner switch. Don't sign it yourself — a self-made key is always blocked; only keyholders sign ([Signing](signing.md)).
 3. Restart, watch for `[GAMES] Game registered: '<id>' from '<your-plugin>'`.
 4. Tile appears in the Game Room library; sessions create, play, save, resume.
 
@@ -229,7 +229,7 @@ GAME PLUGINS (Game Room host):
 - Sessions ARE chats: state stored as a chat-scoped row (key `game:<id>`) — keep state JSON-serializable; saves follow the chat (rename/private-encrypt/delete), survive plugin rename, never survive changing the game id. Private (vault-locked) session: host reads no state, refuses writes LOUDLY, AI seat fails closed.
 - Actions prefixed `_` are silent system verbs (checkpoints, state sync): no talk line, no AI turn. Real-time games checkpoint at natural boundaries; keep snapshots small.
 - Streamed files (video, ROM, thumbnails): a route with `media: true` (GETs unmetered) returning a `FileResponse` (HTTP Range). A `<video>` stage has no canvas, so the board deposits its own frames + text (`ctx.deposit`); the room's grabber deposits frames only and would wipe the text.
-- Ship: sign (`python tools/sign_plugin.py <plugin>`), restart, expect log `[GAMES] Game registered: '<id>' from '<plugin>'`.
+- Ship: third-party = no plugin.sig + unsigned plugins allowed (keyholders sign; signing.md), restart, expect log `[GAMES] Game registered: '<id>' from '<plugin>'`.
 
 ## Cast: the stage on a board's glass
 

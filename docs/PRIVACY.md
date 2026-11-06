@@ -103,6 +103,8 @@ A task can target a chat by name. While the vault is sealed, a task pointing at 
 
 Backups include the chat database and the vault file (`user/prompts/prompt_vault.enc`), so a restored backup keeps working — but restore **both together**. The vault file holds the key that the encrypted chat rows were written with; pairing an old vault file with a newer chat database makes those rows unreadable, and Sapphire refuses to mint a replacement key rather than orphan them silently.
 
+Local backups are plain `.tar.gz` by default. Turn on `BACKUPS_ENCRYPT_LOCAL` (Settings > Backup) and each one is sealed as a `.sapphirebak` with your backup password — lose that password and those backups are gone. Backups that leave the machine (devices, offsite) are always encrypted.
+
 **A gap worth knowing:** backups taken *before* a chat went private still contain that chat's earlier history in plaintext. Marking a chat private encrypts it from that moment on; nothing can rewrite copies that already left. Prune old backups if that matters to you.
 
 See [BACKUPS.md](BACKUPS.md).
@@ -114,6 +116,14 @@ See [BACKUPS.md](BACKUPS.md).
 On a private-chat turn, core **withholds every hook** from plugins that haven't declared `"privacy_aware": true` in their manifest — fail-closed, so a plugin that mirrors conversation somewhere can't do it behind a locked vault. Housekeeping hooks (rename, delete) always deliver so plugin-side data never strands under a stale name.
 
 Plugin authors: see [Private chats & `privacy_aware`](plugin-author/hooks.md#private-chats--privacy_aware).
+
+---
+
+## Other doors
+
+- **MCP server** — an `ask` or `tell` into a private chat is refused: a reply would leave over the wire. With a cloud transcriber, `listen` is refused while the open chat is private. See [MCP.md](MCP.md).
+- **Notifications** — rows never carry a chat name. Anything raised from a private context is a passing toast, never a stored row ([NOTIFICATIONS.md](NOTIFICATIONS.md)).
+- **Model switching** — with the privacy ratchet on (Settings > Tools > AI Self-Management, `AI_MODEL_SWITCH_RATCHET`), the AI's `switch_model` only moves down the roster (top = least private), never back up. You can still change the model yourself in the sidebar.
 
 ---
 
@@ -169,3 +179,9 @@ PROMPTS:
 BACKUPS:
 - Chat DB and vault file are both backed up — restore them together (the vault holds the chat data key)
 - Backups made before a chat went private still hold its earlier plaintext history
+- BACKUPS_ENCRYPT_LOCAL (default off, Settings > Backup): local backups sealed as .sapphirebak with the backup password; on + no password = no backup made. Backups leaving the machine (devices, offsite) always encrypted
+
+OTHER DOORS:
+- MCP server: ask/tell into a private chat refused ("is private; it does not take messages over MCP"); listen refused while the active chat is private and STT is cloud (core/voice_privacy.py stt_gate_reason)
+- Notification rows never carry a chat name; private=True callers get a flash (toast, no stored row)
+- AI_MODEL_SWITCH_RATCHET (Settings > Tools > AI Self-Management): switch_model only moves DOWN AI_MODEL_SWITCH_ROSTER (top = least private); 'auto' or off-roster current counts as the top rung; the user can still change models in the sidebar

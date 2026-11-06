@@ -875,6 +875,8 @@ class SettingsManager:
             'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER', 'STT_LANGUAGE',
             # Play speech here - read at every speak()/render()/pump chunk
             'TTS_LOCAL_PLAYBACK',
+            # Kokoro primary/fallback - properties read on every sentence (kokoro.py)
+            'TTS_PRIMARY_SERVER', 'TTS_FALLBACK_SERVER', 'TTS_FALLBACK_TIMEOUT',
             # Tool settings - read per-request
             'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS',
             # Continuity caps - the scheduler reads them at task-create time
@@ -894,6 +896,8 @@ class SettingsManager:
             # Conversation (true speech) mode tunables — read fresh on each activation
             'CONVERSATION_VAD_THRESHOLD', 'CONVERSATION_BARGE_HOLD_MS',
             'CONVERSATION_MIN_SPEECH_MS', 'CONVERSATION_ENDPOINT_SILENCE_MS',
+            'CONVERSATION_START_WORD', 'CONVERSATION_START_WORD_FUZZY', 'CONVERSATION_DTLN',
+            'CONVERSATION_AEC_DELAY_MS', 'CONVERSATION_BARGE_GUARD_MS', 'CONVERSATION_BARGE_RMS_FLOOR',
             # the Off/Local/Browser switch's last choice - read once at boot
             'CONVERSATION_LAST_MODE',
         }

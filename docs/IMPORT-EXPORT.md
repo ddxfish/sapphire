@@ -1,6 +1,6 @@
 # Import & Export
 
-Share your Sapphire configurations with others or back them up. Prompts, toolsets, spice sets, knowledge tabs, people, memories, and tasks export as JSON files and import back. Personas export as PNG character cards. Chats and Mind Palace data have their own lanes, covered below.
+Share your Sapphire configurations with others or back them up. Prompts, toolsets, spice sets and tasks export as JSON files and import back. Personas export as PNG character cards. Chats and memory (the Mind) have their own lanes, covered below.
 
 ## How It Works
 
@@ -24,19 +24,15 @@ Everything is validated on import — bad JSON or wrong types are rejected with 
 | **Prompts** | `.prompt.json` | Prompts page → export button |
 | **Toolsets** | `.toolset.json` | Toolsets page → export button |
 | **Spice sets** | `.spiceset.json` | Spices page → export button |
-| **Knowledge tabs** | `.json` (one tab per file) | Mind → Knowledge → per-tab export |
-| **People** | `.json` (one scope per file) | Mind → People → export |
-| **Memories** | `.json` (one scope per file) | Mind → Memories → export |
 | **Tasks & triggers** | `.json` (one per file) | Triggers pages → per-row export |
 | **Chats** | `.json` / `.zip` | Sidebar menu & Chat Manager |
-| **Mind Palace layers** | `.json` (one layer × one scope) | Mind tabs, when Mind Palace is on |
-| **Library** | `.zip` | Mind → Knowledge, when Mind Palace is on |
+| **Mind layers** (memories, self, entities, goals) | `.json` (one layer × one scope) | Each Mind tab → ⬇ Export / ⬆ Import |
+| **Library** | `.zip` | Mind → Knowledge → ⇓ Export / ⇑ Import |
 
 Notes on a few of these:
 
 - **Prompts** have an export checkbox to include the pieces an assembled prompt uses, so the whole thing travels in one file.
 - **Spice sets** export the set with its enabled categories and their spices — a whole flavor loadout in one file, not individual spices.
-- **People** also accepts vCard imports — an **Import VCF** button next to the JSON lane.
 - **Tasks & triggers** export per-row from every Triggers page (Heartbeat, Scheduled, Daemons, Realtime, Webhooks). Imported tasks arrive **disabled** with their run history stripped, and any scope references that don't exist on this install are reset to default — check the task over, then switch it on.
 
 ## Personas: PNG Character Cards
@@ -54,13 +50,12 @@ Chats have two lanes:
 - **Sidebar menu (⋮)** — Export downloads the current chat's messages as JSON. Import reads a JSON file and **replaces the current chat's history** — it does not append. To keep what's there, create a fresh chat and import into that. [CHATS.md](CHATS.md) covers this in detail.
 - **Chat Manager** — each row has an export button that downloads the full chat: name, settings, and untrimmed message history. The bulk **Export** button zips the selected chats, one JSON file per chat, each importable through the sidebar lane. **Private chats are skipped from bulk exports by design** — nothing readable leaves the database in bulk; export those one at a time with the row button.
 
-## Memories & Mind Palace
+## Memory (the Mind)
 
-- **Classic Memories** (Mind → Memories) — export all memories in the current scope as JSON; import merges into the current scope and skips duplicates. Exports include private (keyed) rows verbatim, keys and all, and imports preserve them — an export you asked for never silently drops your own data.
-- **Mind Palace** (when the palace is your memory engine) — each Mind tab (Self, Memories, Entities, Goals, and any plugin layers) has its own ⬇ Export / ⬆ Import pair: one layer × one scope per file. Import lands in the **currently viewed scope**, is additive and idempotent (re-runs skip what's already there), and refuses a file from the wrong tab.
-- **Library** (Mind → Knowledge under Mind Palace) — the whole scope's library exports as a zip (files plus annotations), re-importable into any scope; re-imports skip documents already present.
+- **Mind layers**: each Mind tab (Self, Memories, Entities, Goals, and any plugin layers) has its own ⬇ Export / ⬆ Import pair, one layer × one scope per file. Import lands in the **currently viewed scope**, is additive and safe to re-run (it skips what's already there), and refuses a file from the wrong tab. Keyed (private) memories export verbatim, keys and all, so an export you asked for never drops your own data.
+- **Library** (Mind → Knowledge): the whole scope's library exports as a zip (files plus annotations), re-importable into any scope; re-imports skip documents already present.
 
-Migrating between the classic engine and Mind Palace is its own guided flow — see [MIND-PALACE.md](MIND-PALACE.md).
+Moving from the old memory engine is its own guided flow: Mind → Import, see [MEMORY.md](MEMORY.md#coming-from-the-old-memory-engine). The old engine's own JSON lanes (classic memories, people with VCF, knowledge tabs) still work while it's the active engine.
 
 ## Importing
 
@@ -73,9 +68,9 @@ Migrating between the classic engine and Mind Palace is its own guided flow — 
 
 What happens on a duplicate name depends on the type:
 
-- **Most types** (toolsets, prompts, spice sets, knowledge tabs, tasks) — a rename prompt pre-filled with `-imported` (edit it to whatever you want). Prompts, knowledge tabs, and spice sets also offer an explicit overwrite checkbox in the import dialog.
+- **Most types** (toolsets, prompts, spice sets, tasks) — a rename prompt pre-filled with `-imported` (edit it to whatever you want). Prompts and spice sets also offer an explicit overwrite checkbox in the import dialog.
 - **Personas** — an overwrite preview showing exactly what would be replaced, with per-piece keep choices.
-- **Memories, people, palace layers** — no collision concept; imports merge and duplicates are skipped.
+- **Mind layers and the Library** — no collision concept; imports merge and duplicates are skipped.
 
 Toolset imports also report which tools matched — tools from plugins you don't have installed are skipped and named in the report.
 
@@ -122,9 +117,7 @@ CONFIG TYPES (shared dialog: copy/download, paste/upload):
 - Prompts ({name}.prompt.json) — bundle {sapphire_export, type: "prompt", prompt, components?}; export checkbox includes used pieces; vault prompts/pieces refuse export; import dialog also accepts persona bundles (extracts the embedded prompt); overwrite checkbox for prompt + pieces
 - Toolsets ({name}.toolset.json) — type "toolset", functions list; import skips + reports tools not installed
 - Spice sets ({name}.spiceset.json) — type "spice_set"; enabled categories with spices/emoji/description; overwrite-categories checkbox
-- Knowledge tabs — GET /api/knowledge/tabs/{tab_id}/export?scope= → type "knowledge_tab" with entries; POST /api/knowledge/tabs/import with overwrite flag (merge report)
-- People — GET /api/knowledge/people/export?scope= / POST /api/knowledge/people/import → type "people", entries merge with dedup; POST /api/knowledge/people/import-vcf for vCard
-- Memories — GET /api/memory/export?scope= / POST /api/memory/import → type "memories"; includes private/keyed rows verbatim, private_key preserved on round-trip; import dedups
+- LEGACY engine only (plugin `memory` active): knowledge tabs (/api/knowledge/tabs/{tab_id}/export, /api/knowledge/tabs/import), people (/api/knowledge/people/export|import|import-vcf), memories (/api/memory/export|import)
 - Tasks/triggers — client-side in all Triggers views (heartbeat/scheduled/daemons/realtime/webhooks); bundle {sapphire_export, type: task type, task}; filename {name}.{type}.json; import strips id/run history, forces enabled=false, resets unknown *_scope refs to default; a vault-locked chat target exports with no target
 
 PERSONAS (PNG character cards, server lanes):
@@ -136,14 +129,14 @@ CHATS:
 - Per-chat: GET /api/chats/{chat_name}/export → {name, settings, messages} untrimmed (works for private chats — the explicit per-chat escape hatch)
 - Bulk: POST /api/chats/bulk-export (one JSON doc) and POST /api/chats/bulk-export-zip (zip, one importable JSON per chat) — both skip private chats by design
 
-MIND PALACE (plugin API, when active):
-- Per-tab transfer: GET transfer/export?scope=&layer= / POST transfer/import {scope, expect_layer, data} — format marker "mindpalace-export"; one layer × one scope per file; additive + idempotent; import lands in the viewed scope; wrong-layer files refused
+MIND (Mind Palace plugin API, the default engine):
+- Per-tab transfer: GET transfer/export?scope=&layer= / POST transfer/import {scope, expect_layer, data} — format marker "mindpalace-export"; one layer × one scope per file; additive + idempotent; import lands in the viewed scope; wrong-layer files refused; keyed rows round-trip with their keys
 - Library: GET library/export?scope= → zip (manifest + files + annotations, re-importable into any scope); POST library/import-zip (multipart) — skips existing docs, embedding continues in background
-- Classic↔palace migration is a separate guided flow (see MIND-PALACE.md)
+- Classic → palace migration: Mind → Import (import_v2), see MEMORY.md
 
 FORMAT RULES:
 - Config exports carry sapphire_export: true + type (+ version); palace transfer files carry format: "mindpalace-export"; chat exports and Library zips are unmarked raw data
-- Name collisions: rename prompt pre-filled with -imported (most types), overwrite checkboxes (prompts/knowledge/spice sets), overwrite preview modal (personas), merge+dedup (memories/people/palace)
+- Name collisions: rename prompt pre-filled with -imported (most types), overwrite checkboxes (prompts/spice sets), overwrite preview modal (personas), merge+dedup (mind layers, library)
 
 IMPLEMENTATION:
 - Shared dialogs in shared/import-export.js (handles JSON paste/upload plus binary files like PNG cards); entity APIs (persona-api.js etc.) handle persistence; chat lanes in core/routes/chat.py; persona lanes in core/routes/content.py; memory/people/knowledge lanes in core/routes/knowledge.py; palace lanes in the Mind Palace plugin routes

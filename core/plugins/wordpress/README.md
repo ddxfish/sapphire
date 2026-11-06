@@ -22,7 +22,8 @@ burn-on-use PIN that the AI never sees.
 | `wp_create_blog` / `wp_create_page` | Create (no id) or update (with id). Defaults to draft. |
 | `wp_delete_blog` / `wp_delete_page` | Trash by default; `force=true` permanent (PIN) |
 | `wp_settings` | List settings, or change one by name (PIN; site URL / admin email protected) |
-| `wp_user` | List users, or delete a user (PIN) |
+| `wp_get_user` | List users, or find some with `search` (name, login, email) |
+| `wp_delete_user` | Permanently delete a user; their content goes to admin (PIN) |
 | `wp_plugin` | List plugins, or enable/disable one (PIN) |
 
 ## The PIN (destructive actions)

@@ -14,9 +14,10 @@ Both come from the same recordings and the same synthesized clips. Only the trai
 
 ## The short road
 
-One afternoon, start to finish. Each step is a tab on the page, left to right.
+One afternoon, start to finish. Each step is a tab on the page, left to right, except Settings, which is the
+last tab and comes first.
 
-1. **Settings.** Build the environment (one click, several GB, once). Download the three openWakeWord sets;
+1. **Settings** (the last tab). Build the environment (one click, several GB, once). Download the three openWakeWord sets;
    add the microWakeWord set if you have an ESP32. The data folder is already set (see below).
 2. **Wakewords.** New wake word, type the phrase. Two or three syllables with a hard consonant hear best:
    "hey marcus" beats "hi sam".
@@ -180,3 +181,19 @@ python -m wakeword_maker.cli --root /path/to/wakeword run train --project hey_sa
 A coding assistant helping you (or checking the plugin after a change) starts at `core/plugins/wakeword-maker/HARNESS.md`:
 every door in the order the page uses them, and `python -m wakeword_maker.cli road`, which walks the whole road on a
 scratch wake word against the running Sapphire in a few minutes and reports each step.
+
+## See also
+- [VOICE.md](VOICE.md) — the wake word library, who listens for what, thresholds
+- [DEVICES.md](DEVICES.md) — satellites and their Wake word tab
+
+## Reference for AI
+
+WAKEWORD MAKER: plugin core/plugins/wakeword-maker (page: Apps > Wakeword Maker). Builds one dataset per phrase, trains openWakeWord (.onnx: desktop + Pi) and microWakeWord (.tflite + manifest: ESP32), judges on held-out own takes, installs through the wake word library (core/wakeword/library.py).
+TABS: Wakewords, Synthetic, Human, Background, Check, Train, Test, Install, Settings (Settings is last; build the env and download datasets there first).
+FLOORS (routes/api.py TARGETS, floor/good): own takes 240/440 (3 mics x 80); near misses 120/400; other words 80/320; room 30/90 min. Held-out default 25%.
+SETTINGS: data_dir (blank = wakeword/ in the Sapphire folder; out of git and backup; ~30 GB), device auto|cuda|cpu, qa_whisper_model (base.en).
+ENV: conda sapphire-plugin-wakeword-maker (torch, TF, Piper, Kokoro, Whisper), built from the Settings tab.
+TRAIN: Single or Search (Look/Standard/Thorough/Deep; Deep = Optuna refine). Scoreboard: Hears you, Sound-alikes, Stressed, Gap. Star = what Install uses.
+INSTALL: user/wakeword/models/<name>.onnx|.tflite + <name>.json sidecar (per-family threshold). This computer: switches WAKEWORD_MODEL live, Put back button. Satellites: via the board's model door (restart ~20 s; offline board gets it when next seen).
+JOBS: processes; survive a plugin reload; a Sapphire restart marks them interrupted (Run again).
+CLI: python -m wakeword_maker.cli --root <dir> datasets|projects|new "<phrase>"|run <kind> --project <slug> [--arg k=v]|road. Harness: core/plugins/wakeword-maker/HARNESS.md.

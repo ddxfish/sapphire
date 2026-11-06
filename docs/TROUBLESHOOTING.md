@@ -8,10 +8,12 @@ Contents:
 - [Update Issues](#update-issues)
 - [Web UI Issues](#web-ui-issues)
 - [Audio Issues](#audio-issues)
+- [Voice & Conversation Issues](#voice--conversation-issues)
 - [Prompt issues](#prompt-issues)
 - [Vault / private chat issues](#vault--private-chat-issues)
 - [Chat Database Issues](#chat-database-issues)
 - [LLM issues](#llm-issues)
+- [Network / Proxy Issues](#network--proxy-issues)
 - [Tool/Function Issues](#toolfunction-issues)
 - [Plugin Issues](#plugin-issues)
 - [Continuity Issues](#continuity-issues)
@@ -21,7 +23,8 @@ Contents:
 
 ## Where to Look First
 
-- **Main log**: `user/logs/sapphire.log` (rotates daily). Most problems leave a line here — search for `ERROR` or the feature name.
+- **Main log**: `user/logs/sapphire.log` (rotates daily). Most problems leave a line here — search for `ERROR` or the feature name. Voice engines log apart: `user/logs/kokoro.log` (TTS), `user/logs/whisper.log` (STT).
+- **System > Notifications**: errors land here as rows. A failed reply carries a **Fix it** button that opens the setting to change (see [NOTIFICATIONS.md](NOTIFICATIONS.md)).
 - **Browser console** (F12) for web UI problems — JS errors and failed requests show up there, not in the server log.
 - **Running as a systemd service?** `journalctl --user -u sapphire -f`
 - **Sapphire Launcher users**: the launcher's **Troubleshoot** tab checks whether Sapphire responds, verifies package versions and dependency health, scans voice features (STT/TTS/wake word), and detects your GPU — with fix buttons for common issues.
@@ -35,19 +38,14 @@ Ordered lightest to heaviest. Start at the top.
 
 Resets all settings to defaults and clears the login password. **Keeps everything else** — chats, memories, prompts, personas, knowledge, and your API keys (those live in a separate credentials file outside `settings.json`). The setup wizard runs again on next start.
 
+Only want the wizard again? **Settings > System > Run Setup Wizard** — no reset needed.
+
 Stop Sapphire first, then from the `sapphire/` folder:
 
-**Linux:**
+**Linux / macOS:**
 ```bash
 rm user/settings.json
-rm ~/.config/sapphire/secret_key
-python main.py
-```
-
-**macOS:**
-```bash
-rm user/settings.json
-rm ~/Library/Application\ Support/Sapphire/secret_key
+rm ~/.config/sapphire/secret_key          # macOS: ~/Library/Application\ Support/Sapphire/secret_key
 python main.py
 ```
 
@@ -58,11 +56,10 @@ Remove-Item "$env:APPDATA\Sapphire\secret_key"
 python main.py
 ```
 
-**Docker:**
+**Docker** (from the folder holding `docker-compose.yml`):
 ```bash
-docker exec sapphire rm /home/sapphire/.config/sapphire/secret_key
 docker compose down
-rm ~/sapphire/user/settings.json
+rm sapphire-data/settings.json sapphire-config/secret_key
 docker compose up -d
 ```
 
@@ -108,60 +105,34 @@ Notes:
 - Your password is **not** reset by this — it lives outside the app folder. Add the `secret_key` line from [Light Reset](#light-reset-settings--password-only) if you want that too.
 - Want fresh data as well? That's [Reset Everything](#reset-everything-delete-data) below — don't just skip the `mv`/`Move-Item` lines, back up first.
 - [Sapphire Launcher](https://github.com/ddxfish/sapphire-launcher) can do this without a terminal — its Uninstall tab removes the env or the whole install, then **Go** reinstalls.
-- Docker installs: recreating the container is the equivalent — see [DOCKER.md](DOCKER.md). Your data lives in the mounted `user/` dir and the config volume.
+- Docker installs: recreating the container is the equivalent — see [DOCKER.md](DOCKER.md). Your data lives in `sapphire-data/` and `sapphire-config/` beside `docker-compose.yml`.
 
 ### Reset Password
 
 If you still know the current one, you don't need any of this: change it in **Settings › System › Login Password**. That tab stays logged in and every *other* device is logged out once — sign back in there with the new password.
 
-Genuinely forgotten? Delete the password hash file and restart Sapphire. This resets your login — you'll set a new password on next visit. Your chats, settings, and user data are untouched.
+Genuinely forgotten? Delete the password hash file `secret_key` and restart Sapphire. You'll set a new password on next visit; chats, settings, and user data are untouched.
 
-**Linux:**
-```bash
-rm ~/.config/sapphire/secret_key
-```
-
-**macOS:**
-```bash
-rm ~/Library/Application\ Support/Sapphire/secret_key
-```
-
-**Windows (PowerShell):**
-```powershell
-Remove-Item "$env:APPDATA\Sapphire\secret_key"
-```
-
-**Docker:**
-```bash
-docker exec sapphire rm /home/sapphire/.config/sapphire/secret_key
-docker restart sapphire
-```
-
-Then restart Sapphire (or just the container for Docker).
+| Install | File to delete |
+|---|---|
+| Linux | `~/.config/sapphire/secret_key` |
+| macOS | `~/Library/Application Support/Sapphire/secret_key` |
+| Windows | `%APPDATA%\Sapphire\secret_key` |
+| Docker | `sapphire-config/secret_key` (beside `docker-compose.yml`), then `docker restart sapphire` |
 
 ### Reset Everything (Delete data)
 
-Nuclear option - fresh start. Deletes all user data including chats, settings, and password.
+Nuclear option - fresh start. Deletes all user data including chats, settings, and password. Stop Sapphire first, then from the `sapphire/` folder delete `user/` and the `secret_key` from the table above:
 
-**Linux:**
+**Linux / macOS:**
 ```bash
-pkill -f "python main.py"
 rm -rf user/
-rm ~/.config/sapphire/secret_key
-python main.py
-```
-
-**macOS:**
-```bash
-pkill -f "python main.py"
-rm -rf user/
-rm ~/Library/Application\ Support/Sapphire/secret_key
+rm ~/.config/sapphire/secret_key          # macOS: ~/Library/Application\ Support/Sapphire/secret_key
 python main.py
 ```
 
 **Windows (PowerShell):**
 ```powershell
-# Stop Sapphire first (close the terminal or Ctrl+C)
 Remove-Item -Recurse -Force user\
 Remove-Item "$env:APPDATA\Sapphire\secret_key"
 python main.py
@@ -170,10 +141,10 @@ python main.py
 **Docker:**
 ```bash
 docker compose down
-rm -rf ~/sapphire/user/
+rm -rf sapphire-data/ sapphire-config/secret_key
 docker compose up -d
 ```
-The config dir is a **persistent** volume (`sapphire-config` → `/home/sapphire/.config/sapphire`), so recreating the container does NOT reset the password. To reset it, delete the `secret_key` (the Docker command above) or remove the `sapphire-config` volume.
+Your API keys stay in `sapphire-config/`; delete the whole folder to drop them too.
 
 You'll need to re-run setup and reconfigure settings.
 
@@ -188,9 +159,10 @@ You'll need to re-run setup and reconfigure settings.
 - Usually harmless to core functionality. Missing optional dependencies for optional features.
 - If a specific feature is broken, check logs for the actual error.
 
-**Port 8073 already in use / web UI never comes up**
-- Another Sapphire instance (or another app) holds the port. Linux: `ss -tlnp | grep 8073`. Windows: `netstat -ano | findstr 8073`
-- Stop the other process, or change `WEB_UI_PORT` in `user/settings.json` and restart.
+**"Another Sapphire is already running on this user/" / "Port 8073 is already taken"**
+- One Sapphire per `user/` folder: a second `python main.py` stops at once instead of booting a twin. The line names the holder; stop that one first (launcher Stop, Task Manager, `systemctl --user stop sapphire`).
+- Port held by another app: Linux `ss -tlnp | grep 8073`, Windows `netstat -ano | findstr 8073`. Stop it, or change `WEB_UI_PORT` in `user/settings.json`.
+- The runner then logs `Not restarting: …` and exits 43 (another instance or the port) or 44 (bad web host, port or certificate). It never retries those — fix the cause, then start again.
 
 **Crash at boot with `malloc(): invalid size` (Linux, multi-GPU)**
 - See the [deep dive at the bottom](#boot-crash-with-malloc-invalid-size-on-linux-multi-gpu-systems) — TTS and STT grabbing the same GPU during boot.
@@ -218,21 +190,15 @@ You'll need to re-run setup and reconfigure settings.
 
 ## Web UI Issues
 
-**403 Forbidden**
-- Try http:// and https://
-- Delete cookies for this site
-- Test in private browsing window
-- Reset password (see [Reset Password](#reset-password) above)
-- Restart Sapphire app
-
-**Blank page or "Unauthorized"**
-- Clear browser cookies for localhost:8073
-- Try incognito window
-- Reset password (see [Reset Password](#reset-password) above) and restart
+**403 Forbidden, blank page or "Unauthorized"**
+- Try both http:// and https://
+- Delete cookies for this site, or test in a private window
+- Reset password (see [Reset Password](#reset-password) above) and restart Sapphire
 
 **Certificate warning on first visit**
 - Expected with self-signed certs. Accept once (Advanced → Proceed) and the browser remembers it.
 - Cert is persistent (valid 10 years), stored in `user/ssl/`. Not regenerated on restart.
+- Behind a reverse proxy that does HTTPS? Turn off `WEB_UI_SSL_ADHOC` (Settings > System, restart).
 
 **UI loads but chat doesn't respond**
 - Check browser console (F12) for errors
@@ -244,9 +210,10 @@ You'll need to re-run setup and reconfigure settings.
 - If it can't reconnect (roughly a minute of tries), the reply still finishes and lands in the chat — reload the page and it's there.
 - Audio isn't replayed for the part you missed; with TTS on the finished reply is spoken once when it arrives.
 
-**"Sapphire is still replying in this chat"**
-- One turn per chat, on purpose — a second send (Enter past the Stop button, or another tab on the same chat) is refused so two interleaved turns can't corrupt the transcript.
-- Press Stop, then send. Other tabs on that chat show Stop while a turn is live.
+**My message sat waiting while she was still replying**
+- By design: a send while a turn is live is **queued** in the chat's inbox, never refused. It runs when her reply ends; several typed sends fold into one turn. The × on a waiting bubble takes it back out.
+- Want her to stop now instead? Press Stop.
+- A send refused outright (HTTP 409) means the chat is sealed in a locked vault (or its inbox turned the turn away) — unlock and resend.
 
 ## Audio Issues
 
@@ -259,14 +226,15 @@ You'll need to re-run setup and reconfigure settings.
 - Selecting specific audio devices like default or a specific mic can work too
 - Auto-detect sometimes fails test due to it being open, but it may actually work so try it
 
-**Wakeword recorder does not detect when to stop recording (webcam mic)**
-- Change your Recorder Background Percentile in STT settings higher
-- This is VAD voice activity detection thinking your BG noise is speech so it keeps recording
-- Lapel/lav and headsets mics may be ~10-20, but with webcam or other weak mics, raise to ~40
+**Recording never stops after you speak (webcam or weak mic)**
+- Voice activity detection hears your background noise as speech, so it keeps recording.
+- Silero VAD (the default): Settings > STT > Voice Activity Detection > Silero VAD. Press **Test my voice (5s)** to see what your speech scores, then raise `STT_VAD_SPEECH_THRESHOLD` (0.6-0.7) if noise is counted as speech.
+- Classic VAD (only when Silero is off or unavailable): raise Recorder Background Percentile — headsets ~10-20, webcam mics ~40.
 
 **No TTS audio output**
 - Verify TTS is enabled in Settings > TTS
-- Check TTS server started: `grep "kokoro" user/logs/`
+- **Play speech here** (Settings > TTS) off sends her voice elsewhere: speech is made, nothing plays on this computer or in the browser
+- Check the TTS server started: `user/logs/kokoro.log`
 - Test system audio: `aplay /usr/share/sounds/alsa/Front_Center.wav`
 - Check PulseAudio/PipeWire is running
 
@@ -288,30 +256,17 @@ You'll need to re-run setup and reconfigure settings.
 - A site you blocked can't ask again: allow the mic from the icon left of the address. On Windows also check Settings > Privacy & security > Microphone, including access for desktop apps
 
 **Wake word not triggering**
-- Check which wakeword you are using in settings
+- Check which wakeword you are using in Settings > Wakeword, and that wake word is enabled (model changes apply on save, no restart)
 - Make sure you pip installed install/requirements-wakeword.txt
-- Wake word is enabled in settings (the model setting now hot-reloads — no restart needed)
-- Turn your mic volume up to 70-100%
-- Set system mic to the mic you want wakeword on
-- Try using Hey Mycroft as a wakeword instead of Hey Sapphire
-- Reduce sensitivity threshold to 0.5
+- Turn your mic volume up to 70-100%, and set the system mic to the one you want wakeword on
+- Try Hey Mycroft instead of Hey Sapphire, or lower the sensitivity threshold to 0.5
 - Test a different mic
+- First time you pick a new built-in (`hey_mycroft`, `hey_jarvis`, `alexa`…), openWakeWord downloads it — give it a few seconds
 
-**Switching to a different built-in wake word (`hey_mycroft`, `hey_jarvis`, `alexa`, etc.) didn't take effect**
-- Older Sapphire versions required a full app restart after changing `WAKEWORD_MODEL` — the running detector didn't reload. Fixed: the model now hot-swaps when you save the setting.
-- If you're on a build from before the fix, restart Sapphire once after the model change.
-- First time you select a new built-in, OpenWakeWord downloads the model (`hey_mycroft_v0.1.onnx` etc.) into its package directory — give it a few seconds before testing.
-
-**Adding a custom wake word**
-- Drop your `.onnx` or `.tflite` model into `user/wakeword/models/` and select it from the wakeword dropdown in settings.
-- The dropdown name is the **filename stem** — `my_word.onnx` shows up as `my_word`.
-- Built-in OpenWakeWord set: `alexa`, `hey_mycroft`, `hey_jarvis`, `hey_rhasspy`, `timer`, `weather`. Sapphire ships with `hey_sapphire`.
-
-**Training your own wake word**
-- OpenWakeWord (the engine Sapphire uses) supports custom-trained models. Project + training instructions: <https://github.com/dscripka/openWakeWord>
-- Fastest path is the official Colab notebook in that repo — generates a model from a phrase in ~1 hour, no audio recording required (it synthesizes training data with TTS).
-- Output is a `.onnx` file. Drop it into `user/wakeword/models/` and pick it from the dropdown.
-- For phrase quality tips and threshold tuning, see the `openWakeWord` docs and issues — the Sapphire side is just a thin loader.
+**Adding or making a custom wake word**
+- Upload it in **Settings > Wakeword > Library**. This computer uses openWakeWord `.onnx` models; a `.tflite` is a microWakeWord model for an ESP32 satellite and is never offered to this computer.
+- Make your own from a phrase in **Apps > Wakeword Maker** (a plugin, off by default — enable it in Settings > Plugins). It builds models for this computer and for ESP32 boards. See [WAKEWORD-MAKER.md](WAKEWORD-MAKER.md).
+- Built-in openWakeWord set: `alexa`, `hey_mycroft`, `hey_jarvis`, `hey_rhasspy`, `timer`, `weather`. Sapphire ships with `hey_sapphire`.
 
 ## Voice & Conversation Issues
 
@@ -380,13 +335,10 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - Sapphire backs up your data on a schedule — see [BACKUPS.md](BACKUPS.md) for what's covered and how to restore.
 - Manual integrity check (needs the sqlite3 CLI, Sapphire stopped): `sqlite3 user/history/sapphire_history.db "PRAGMA quick_check;"` — should print `ok`.
 
-**Chat opens but is read-only ("degraded")**
-- Some stored rows couldn't be read; repair it: Chat Manager -> the chat's 🔧 Repair button (see CHATS.md — degraded chats)
-
 ## LLM issues
 
-**Send refused: "Sapphire is still replying in this chat"**
-- One turn per chat: a stream is live (maybe another tab). Press Stop, then send (see CHATS.md)
+**A reply failed with an error**
+- The failed row says what went wrong in plain words and offers **Fix it**, which opens the setting to change (Settings > LLM, the provider, Context limit, timeout). Details under it hold the raw error. See [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 **LM Studio (simple) test failing**
 - Open LM studio, click Developer in lower left to show advanced options, click green Developer tab, toggle server on, load a model
@@ -403,11 +355,6 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - GPT-5.x: Uses Responses API, set reasoning_summary to "detailed"
 - Gemini: Set reasoning_effort (low/medium/high) on thinking-enabled models (Gemini 2.5 Flash/Pro)
 - Local models via LM Studio: May need specific model that outputs `<think>` tags
-
-**Thinking breaks when switching providers**
-- Thinking should transfer between chats
-- Note, models cannot see their past think tags in some cases (Claude)
-- Check if the model you are on supports thinking
 
 **Claude prompt caching not working (always MISS)**
 - Spice and datetime are NOT the cause — both ride the ghost rail and are cache-safe (see GHOST_MESSAGES.md)
@@ -439,16 +386,19 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 - If using the SOCKS proxy, verify it's working (see NETWORK.md)
 - Enable verbose tool debugging in settings for more logging
 
+**An MCP client gets 404 "The MCP server is off"**
+- The MCP door is off by default. Turn it on in Settings > MCP Server and tick the tools to share. See [MCP.md](MCP.md).
+- An `ask` into a private chat is refused on purpose: private words never leave over MCP.
+
 ## Plugin Issues
 
 **Plugin is enabled but its tools/features are missing**
-- Almost always a signature failure — plugins are signed, and a modified or unsigned plugin is blocked at boot. Sapphire still starts fine, so it looks silent.
+- Almost always a signature failure — an unsigned plugin is blocked unless you allow unsigned plugins, and a plugin whose `plugin.sig` matches no known key is always blocked. Sapphire still starts fine, so it looks silent.
 - Check the boot log for `[PLUGINS] Enabled but blocked (intent preserved, retry next restart): [...]` — blocked plugins are listed there, and each verified plugin logs `signature verified`.
-- If you edited a plugin on purpose: re-sign it (see [SIGNING.md](SIGNING.md)), or set `ALLOW_UNSIGNED_PLUGINS` to true — dev machines only, it turns off tamper protection.
-- A plugin whose signature file itself was tampered with is always blocked, regardless of that setting.
+- Editing a signed plugin's files breaks its signature, so it is blocked. Delete its `plugin.sig` (it becomes unsigned) and flip the switch on the **Settings > Plugins** banner to "Unsigned plugins ALLOWED" (`ALLOW_UNSIGNED_PLUGINS`) — dev machines only. Signing with a key you made yourself does not help: that is still blocked. See [SIGNING.md](SIGNING.md).
 
 **Plugin acting stale after an update**
-- Plugins load at boot only — restart Sapphire, then hard-refresh the browser (Ctrl+Shift+R) if the plugin has UI.
+- Reload it from its card's ⋮ menu in Settings > Plugins (or restart Sapphire), then hard-refresh the browser (Ctrl+Shift+R) if the plugin has UI.
 
 **Settings > Plugins shows a "Missing: …" strip on a plugin**
 - That plugin needs extra pip packages. Click **Install** — Sapphire installs them into its own conda environment or venv and reloads the plugin, no restart needed.
@@ -458,10 +408,9 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 ## Continuity Issues
 
 **Task not running at scheduled time**
-- Check enabled toggle is on (green) in the Tasks tab
+- Check its enabled toggle in Triggers > Scheduled (or Triggers > Heartbeat)
 - Verify cron syntax is correct (minute hour day month weekday)
-- Check cooldown hasn't blocked it (see Activity tab for "skipped - cooldown")
-- Low chance % may have rolled unfavorably (see Activity tab for "skipped - chance")
+- A chance below 100% may have rolled against it — the log says `failed chance roll`
 
 **Tasks fire at the wrong hour / her clock is off (often Windows)**
 - Timezone is auto-detected at first start. Linux/macOS read `/etc/localtime`; Windows needs the `tzlocal` package (it's in `requirements.txt` and the minimal set). Without it the log warns and `USER_TIMEZONE` stays UTC — schedules and the clock in her prompt run in UTC.
@@ -475,13 +424,12 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 - Weekday: 0 or 7 = Sunday, 1-6 = Mon-Sat
 
 **Task runs but no TTS audio**
-- Check "Enable TTS" is checked in task editor
+- In the task editor, tick "Speak on server speakers" (or "Play in browser" with a tab open)
 - Verify TTS is working for regular chat first
-- Background tasks still use TTS if enabled
+- A private chat or a privacy-required task skips browser TTS on purpose
 
 **croniter not installed**
-- Run: `pip install croniter`
-- Continuity requires this package for cron parsing
+- Run: `pip install croniter` — scheduled tasks need it for cron parsing
 
 ## Home Assistant Issues
 
@@ -490,15 +438,9 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 - Check Home Assistant is running and accessible from this machine
 - Try the URL in a browser first
 
-**"401 Unauthorized" error**
-- Token is invalid or expired
-- Create a new Long-Lived Access Token in HA profile
-- Make sure you copied the full token (~180+ characters)
-
-**Token shows "too short" warning**
-- HA tokens are typically 180+ characters
-- If shorter, you may have copied it incorrectly
-- Create a new token and copy the entire string
+**"401 Unauthorized" error, or a "too short" token warning**
+- Token is invalid, expired, or cut off (HA tokens are ~180+ characters)
+- Create a new Long-Lived Access Token in your HA profile and copy the whole string
 
 **Entity not found**
 - Check exact spelling (entity_id or friendly name)
@@ -521,13 +463,13 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 **Slow responses**
 - LLM is the bottleneck. Use a 4B or smaller model to test
 - Reduce `LLM_MAX_HISTORY` to send less context, it gets slower over time
-- Kokoro is slow(er) on my i5-8250u. Nvidia is way faster, or faster CPU too.
+- Kokoro on an older laptop CPU is slow; an NVIDIA card or a faster CPU helps a lot
 
 **High memory usage**
 - Large LLM models need RAM. 4B model needs ~7GB after KV cache.
 - Use quantized models in Q4_K_M to reduce memory
 - STT with base Whisper models uses ~2-3GB.
-- TTS (Kokoro) uses ~2-3GB.
+- TTS (Kokoro) uses ~2-3GB. Its process restarts itself (once quiet) when it grows 2 GB past its warm size or after 500 requests — a leak guard, not a crash.
 
 ### Voice runs on the CPU (GPU found, torch cannot use it)
 
@@ -556,14 +498,7 @@ settings tab says why. The card is almost never the problem:
 - **"is not in this torch build":** the build predates your card (RTX 50-series needs CUDA 12.8 or newer). Same command.
 - **"driver may be too old":** update the NVIDIA driver. In Docker, make sure the container was given the GPU.
 
-Restart Sapphire afterwards. On Linux, Kokoro gets CUDA from PyPI's torch already and usually only hits the driver case.
-
-### Troubleshoot Nvidia 5000 series on Linux
-Try Sapphire first. Most won't need this. Only do this if STT and TTS are not using your GPU. It's a nightly build of torch with cuda 12.8 that may work better with the Linux open-kernel drivers if you get stuck. Don't use this if you don't need it.
-
-```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
-```
+Restart Sapphire afterwards. On Linux, Kokoro gets CUDA from PyPI's torch already and usually only hits the driver case. The in-app installer logs to `user/logs/gpu-install.log`.
 
 ---
 
@@ -577,20 +512,11 @@ malloc(): invalid size (unsorted)
 Fatal Python error: Aborted
 ```
 
-The crash is in C-extension code (no Python traceback), and it's deterministic — happens every boot. Manually toggling wake word ON *after* boot works fine.
+The crash is in C-extension code (no Python traceback) and happens every boot. Toggling wake word on *after* boot works fine.
 
-**Cause:** Two separate audio libraries both default to GPU 0 and initialize at the same time:
+**Cause:** Kokoro (TTS, its own process) and Whisper (STT, its own worker process) both default to `cuda:0` and initialize at the same time. Their CUDA contexts collide during the boot init storm and corrupt the heap; the next allocation trips glibc's malloc check.
 
-- **Kokoro** (TTS) loads as a subprocess, picks `cuda:0` by default
-- **Whisper** (STT) loads in its own worker process, defaults to `cuda:0`
-
-When both grab the same GPU during the boot init storm, their CUDA contexts conflict and corrupt the heap. The next allocation (often inside the wakeword model's first audio buffer) trips glibc's malloc integrity check and the process aborts.
-
-After boot, manually toggling features works because only one library initializes at a time — no concurrent grab.
-
-**Fix on multi-GPU systems:** put TTS and STT on different cards.
-
-In your settings (`user/settings.json` or via the Settings UI):
+**Fix on multi-GPU systems:** put TTS and STT on different cards, in `user/settings.json` or the Settings UI:
 
 ```json
 {
@@ -601,11 +527,6 @@ In your settings (`user/settings.json` or via the Settings UI):
 
 `KOKORO_CUDA_DEVICE` accepts the device index as a string. It sets `CUDA_VISIBLE_DEVICES` on the Kokoro subprocess at the OS level, so Kokoro physically can't see the other GPU. Whisper uses `FASTER_WHISPER_CUDA_DEVICE` directly through CTranslate2.
 
-Restart Sapphire after changing these. Verify in `user/logs/sapphire.log`:
+Restart Sapphire after changing these. `user/logs/sapphire.log` then shows `Kokoro subprocess pinned to CUDA_VISIBLE_DEVICES=1`.
 
-```
-Kokoro subprocess pinned to CUDA_VISIBLE_DEVICES=1
-Using CUDA device 0 (NVIDIA ...)   ← whisper
-```
-
-**Single-GPU systems:** leave both at default (empty `KOKORO_CUDA_DEVICE`, `FASTER_WHISPER_CUDA_DEVICE=0`). The race is less common with deferred-action sequencing (already in place for the boot init order), and there's no second GPU to escape to. If you still hit the crash, disable wake word at boot and toggle it on manually after Sapphire is up — that bypasses the concurrent-init window entirely.
+**Single-GPU systems:** leave both at default (empty `KOKORO_CUDA_DEVICE`, `FASTER_WHISPER_CUDA_DEVICE=0`). If you still hit the crash, disable wake word at boot and toggle it on after Sapphire is up — that skips the concurrent-init window.

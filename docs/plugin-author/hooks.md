@@ -15,7 +15,7 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `pre_execute` | Before tool call | `function_name`, `arguments` | Modify args, block tools |
 | `post_execute` | After tool call | `function_name`, `result` | Audit, react to results |
 | `tools_filter` | After toolset resolution, before each LLM call | `tools` (subtract-only) | Withhold tools from this turn — [see below](#tools_filter--per-turn-tool-fence) |
-| `pre_tts` | Before whole-blob speech: the speakers, satellites, the browser's non-streaming playback, Telegram voice notes | `tts_text`, `skip_tts` | Modify text, cancel TTS — [route her voice elsewhere](voice-routing.md) |
+| `pre_tts` | Before whole-blob speech: the speakers, satellites, the browser's non-streaming playback, Telegram voice notes | `tts_text`, `skip_tts`, metadata `tts_client` | Modify text, cancel TTS — [route her voice elsewhere](voice-routing.md) |
 | `post_tts` | After playback ends (legacy/whole-blob) | `tts_text` | Analytics, reactions, subtitles |
 | `tts_stream_start` | Streaming TTS: turn begins | `skip_tts` | Disable the whole turn's streaming speech |
 | `tts_chunk_text` | Streaming TTS: per chunk, before synth | `tts_text`, `skip_tts` | Rewrite or mute a chunk before it's voiced |
@@ -27,7 +27,9 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `chat_deleted` | After a chat delete succeeds (every path) | metadata `name` | Drop chat-keyed data your plugin holds *outside* the chat-scoped store |
 | `chat_cleared` | After a chat's transcript is cleared (every clear path) | metadata `chat` | Drop turn-anchored rows (journals, message-index anchors) — the messages they pointed at are gone |
 | `chat_vaulted` | After a chat is encrypted into the vault | metadata `name` | Scrub plaintext deposits keyed by that name. **`privacy_aware` plugins only — see [Private chats](#private-chats--privacy_aware)** |
-| `plugins_ready` | After a registration wave settles — fires on the boot scan AND on hot reload, rescan, and toggle-on | metadata `loaded`, `reason` | Boot work that needs other plugins present — handlers must be idempotent |
+| `plugins_ready` | After a registration wave settles — fires on the boot scan AND on hot reload, rescan, and toggle-on | metadata `loaded`, `reason`, `plugin` (the plugin that just (re)loaded; `None` on a full scan) | Boot work that needs other plugins present — handlers must be idempotent |
+| `vault_unlocked` | After the prompt vault unlocks | — | Re-derive anything you cached from vault contents (vault prompts, private chats) |
+| `vault_locked` | After the prompt vault locks (manual or idle timer) | — | Drop anything you derived from vault contents — sealed chats and vault prompts are hidden again. Neither vault hook is always-delivered: while the active chat is private they reach `privacy_aware` plugins only |
 
 Data kept in the [chat-scoped store](tools.md#chat-scoped-state) needs neither
 rename nor delete handling — core carries those rows through the rename and
@@ -109,7 +111,7 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `pre_execute` | **Yes** | Yes | `arguments`, `skip_llm`, `result` |
 | `post_execute` | No | Yes | None (observational) |
 | `tools_filter` | No | No | `tools` (remove entries — additions are discarded) |
-| `pre_tts` | No | Yes | `tts_text`, `skip_tts` |
+| `pre_tts` | No (`metadata['tts_client']` = the TTS client speaking) | Yes | `tts_text`, `skip_tts` |
 | `post_tts` | No | Yes | None (observational) |
 | `tts_stream_start` | **Yes** | Yes | `skip_tts` |
 | `tts_chunk_text` | **Yes** | Yes | `tts_text`, `skip_tts` |
@@ -121,7 +123,8 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `chat_deleted` | No | No | None (observational; metadata `name`) |
 | `chat_cleared` | No | No | None (observational; metadata `chat`) |
 | `chat_vaulted` | No | No | None (observational; metadata `name`) |
-| `plugins_ready` | No | No | None (observational; metadata `loaded`, `reason`) |
+| `plugins_ready` | No | No | None (observational; metadata `loaded`, `reason`, `plugin`) |
+| `vault_unlocked` / `vault_locked` | No | No | None (observational; empty metadata) |
 
 ### What System Access Gives You
 
@@ -132,9 +135,9 @@ Through `system = event.metadata.get("system")`, plugins can control:
 | **TTS** | `system.tts` | `set_voice(name)`, `set_speed(float)`, `set_pitch(float)`, `speak(text)`, `speak_sync(text)`, `stop()`, `generate_audio_data(text)` |
 | **STT** | `system.toggle_stt(bool)` | Enable/disable speech-to-text at runtime |
 | **Wakeword** | `system.toggle_wakeword(bool)` | Enable/disable wakeword detection |
-| **LLM** | `system.llm_chat` | `chat(query)` — send a message directly to the LLM |
+| **LLM** | `system.llm_chat` | `chat(query)` runs a **full turn** in the active chat (saved to history). For a side question — a summary, a classification — use `core.chat.llm_providers.resolve.resolve(primary, model, private=...)` then `.provider.chat_completion(messages)`; see the summarizer example below |
 | **System Prompt** | `system.llm_chat` | `set_system_prompt(text)`, `get_system_prompt_template()` |
-| **Chat History** | `system.llm_chat.session_manager` | `get_messages()`, `list_chats()`, `create_chat(name)`, `set_active_chat(name)` (also applies that chat's prompt/toolset/voice to the live runtime), `delete_chat(name)` |
+| **Chat History** | `system.llm_chat` / `.session_manager` | `llm_chat.list_chats()`, `llm_chat.create_chat(name)`, `llm_chat.delete_chat(name)`; `session_manager.get_messages()`, `session_manager.read_chat_settings(name)` (any chat, no switch), `session_manager.set_active_chat(name)` (also applies that chat's prompt/toolset/voice to the live runtime) |
 | **Tool Manager** | `system.llm_chat.function_manager` | `update_enabled_functions([toolset])`, `execute_function(name, args)`, `get_enabled_function_names()` |
 | **Scopes** | `system.llm_chat.function_manager` | `set_rag_scope(s)`, `set_private_chat(bool)` — the only core scope setters. Plugin scopes (memory/knowledge/people/email/etc.) apply from chat settings via `apply_scopes_from_settings()`; there are no per-scope setter methods |
 | **Generation** | `system` | `cancel_generation()` — cancel in-progress LLM streaming |
@@ -527,23 +530,38 @@ def pre_tts(event):
 
 **Conversation summarizer (post_chat):**
 ```python
+import logging
+import threading
 from core.plugin_loader import plugin_loader
 
-def post_chat(event):
-    system = event.metadata.get("system")
-    if not system:
-        return
-    state = plugin_loader.get_plugin_state("summarizer")
-    turn_count = (state.get("turns", 0) + 1)
-    state.save("turns", turn_count)
+logger = logging.getLogger(__name__)
 
-    if turn_count % 10 == 0:
-        messages = system.llm_chat.session_manager.get_messages()
-        last_10 = [m["content"] for m in messages[-20:] if isinstance(m.get("content"), str)]
-        summary_prompt = f"Summarize this conversation excerpt:\n\n{'\\n'.join(last_10)}"
-        summary = system.llm_chat.chat(summary_prompt)
-        state.save("last_summary", summary)
+def post_chat(event):
+    state = plugin_loader.get_plugin_state("summarizer")
+    recent = (state.get("recent", []) + [f"User: {event.input}", f"AI: {event.response}"])[-20:]
+    state.save("recent", recent)
+    turns = state.get("turns", 0) + 1
+    state.save("turns", turns)
+    if turns % 10 == 0:
+        # post_chat runs inline before the turn finishes — never block it
+        threading.Thread(target=_summarize, args=(recent, bool(event.chat_private)),
+                         daemon=True).start()
+
+def _summarize(lines, private):
+    from core.chat.llm_providers.resolve import resolve, ProviderRefused
+    try:
+        provider = resolve("auto", private=private, health="skip").provider
+    except ProviderRefused as e:
+        logger.warning(f"summarizer: {e}")
+        return
+    excerpt = "\n".join(lines)
+    resp = provider.chat_completion(
+        [{"role": "user", "content": "Summarize this conversation excerpt:\n\n" + excerpt}],
+        generation_params={"max_tokens": 400})
+    plugin_loader.get_plugin_state("summarizer").save("last_summary", (resp.content or "").strip())
 ```
+
+The summary is a **side call**: `resolve()` picks a provider (`"auto"` = the fallback order, `private=True` holds it to local providers) and `chat_completion()` asks it one question. Never use `system.llm_chat.chat()` for this — that runs a full turn in the chat, saved to history and queued behind the turn that fired your hook.
 
 ---
 
@@ -634,11 +652,13 @@ The ghost rail is **labeled operator metadata**, not invisible puppetry. If you 
 ## Reference for AI
 
 - Register: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`; never `def run` (schedule-only, silently fails to register).
-- Pipeline hooks: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason`).
+- Pipeline hooks: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason`/`plugin`), `vault_unlocked` / `vault_locked` (no meta; re-derive/drop anything cached from vault contents; withheld from non-privacy_aware plugins while the active chat is private). Plugins also fire their own hooks (e.g. discord_*, `twilio_call_ended`) — see each plugin's README.
 - `plugins_ready` fires on the boot scan AND on hot reload, rescan, and toggle-on — handlers must be idempotent and re-check their plugin is still loaded.
-- Voice elsewhere (avatar, game, robot): listen on `pre_tts` (text, whole-blob lanes incl. the browser's non-streaming playback and Telegram voice notes) and `tts_chunk_audio` (her audio, streaming only); the user mutes this computer with Settings > Voice > Play speech here (`TTS_LOCAL_PLAYBACK`, hooks keep firing). Per turn: `skip_tts` in `pre_tts`/`tts_stream_start` cancels; `skip_tts` in `tts_chunk_audio` = consumed (not played here, counted as voiced, no drop notice; nulling `audio_bytes` = dropped, notice shown). Page: voice-routing.md.
+- Voice elsewhere (avatar, game, robot): listen on `pre_tts` (text, whole-blob lanes incl. the browser's non-streaming playback and Telegram voice notes) and `tts_chunk_audio` (her audio, streaming only); the user mutes this computer with Settings > TTS > Play speech here (`TTS_LOCAL_PLAYBACK`, hooks keep firing). Per turn: `skip_tts` in `pre_tts`/`tts_stream_start` cancels; `skip_tts` in `tts_chunk_audio` = consumed (not played here, counted as voiced, no drop notice; nulling `audio_bytes` = dropped, notice shown). Page: voice-routing.md.
 - `tools_filter`: `event.tools` = final tool-schema list for this turn; subtract-only (additions discarded by intersection); handler errors fail open (unfiltered list ships); no `system`/`config` on the event; `chat_name` pre-stamped.
 - `chat_cleared`: chat-scoped store rows SURVIVE a clear (unlike delete) — use this hook to drop turn-anchored rows whose message anchors are gone.
+- LLM side call (summary, classify) from any hook: `from core.chat.llm_providers.resolve import resolve, ProviderRefused`; `resolve('auto'|provider_key, model, private=event.chat_private, health='skip').provider.chat_completion([{role, content}], generation_params={...})` -> `.content`. Run it in a thread from `post_chat` (fires inline before the turn completes). Never `system.llm_chat.chat()` for this: that's a full persisted turn in the active chat. Chat list: `system.llm_chat.list_chats()` (session_manager has no list_chats).
+- `pre_tts` metadata carries `tts_client` (the TTS client speaking).
 - `event.metadata.get("system")` (VoiceChatSystem) is stamped on: `post_stt`, `pre_chat`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, and the `tts_stream_*`/`tts_chunk_*` hooks. NOT on: `prompt_inject`, `post_execute`, `pre_tts`, `post_tts`, `on_wake`, or the lifecycle hooks.
 - Private chats: every hook is withheld from plugins without top-level `"privacy_aware": true` (fail-closed on resolver error). ALWAYS_DELIVER regardless of privacy: `chat_renamed`, `chat_deleted`, `chat_cleared`, `plugins_ready`, `provider_switched`, `on_wake`.
 - Surfaces: manifest top-level `"surfaces": ["chat"|"game"]` withholds ONLY `prompt_inject`/`ghost_inject` on other surfaces; user override wins; absent = fire everywhere. A chat's surface = explicit `surface` setting, else derived (`mode: "game"` → `game`).

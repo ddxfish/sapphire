@@ -22,7 +22,9 @@ Every plugin needs a `plugin.json` in its root folder.
 | `surfaces` | string[] | No | — (everywhere) | Where this plugin's **presence** injections belong — `"chat"` (the chat view) and/or `"game"` (the Game Room: stories and games). Core withholds `prompt_inject` / `ghost_inject` from the plugin on any other surface, so an avatar that only renders in the chat sidebar never tells her she's visible inside a story. Omit it and the plugin fires everywhere (pre-2026-08-23 behavior). The user can override your default per plugin from the Plugins page ("Show in" strip) — see [Surfaces](hooks.md#surfaces--where-presence-hooks-fire) |
 | `essential` | bool\|string | No | false | `true` = core plugin: boot alarms if it fails to load, hidden from the plugin manager, toggle refused. A **string** names an alternates group (e.g. `"memory"` on both memory and mindpalace): visible and switchable, boot alarms only if NO plugin in the group loaded |
 | `managed_hide` | bool | No | false | Hide plugin entirely in managed/resale mode |
-| `settingsUI` | string\|null | No | `"auto"` | Controls settings panel: `"auto"` (from manifest schema), `"plugin"` (custom JS), `"core"` (hardcoded), or `null` (none) |
+| `settingsUI` | string\|null | No | `"auto"` | Top-level (never inside `capabilities`). Controls the settings panel: `"auto"` (custom JS if `web/index.js` exists, else the manifest schema, else none), `"plugin"` (custom JS), `"manifest"` (auto-render `capabilities.settings`), `"core"` (hardcoded), `"none"` or `null` (no panel) |
+| `requires_plugins` | string[] | No | `[]` | Host plugins this add-on rides (e.g. `["social"]`, `["discord"]`). While a host is missing or not loaded, the add-on stays enabled but unloaded with a "Requires plugin(s) not loaded" error; it loads after every host at boot and is retried automatically when the host loads |
+| `tool_expires` | str\|int\|object | No | — | Default `expires` for every tool in the plugin (e.g. `"never"`): when an old result is shortened in what the model is sent. A file's `TOOL_EXPIRES` or a tool's own `expires` wins — see [Tools](tools.md) |
 | `min_core_version` | string | No | — | Oldest Sapphire core your plugin works on. Compared against the `VERSION` file at load: if the core is older, the loader logs one loud `VERSION MISMATCH` warning and **loads anyway** — it never blocks. Set it so "my settings page is blank" becomes one readable log line |
 | `pip_dependencies` | string[] | No | `[]` | Python packages REQUIRED (plain pip specifiers, e.g. `["telethon>=1.34", "requests"]`). Checked before any code loads; missing ones keep the plugin enabled-but-unloaded and show in Settings › Plugins with an **Install** button. The install runs in the background through core's one pip engine (`core/extras.py`, logged to `user/logs/extras-plugin-<name>.log`), and the plugin reloads when the packages land. Enabling the plugin offers the same install. Refused on bare system Python (conda/venv only) and on hosted installs |
 | `extra` | object | No | — | Packages OPTIONAL for the plugin: `{"label": "Claude Agent SDK", "pip": ["claude-agent-sdk>=0.2.163"], "modules": ["claude_agent_sdk"], "note": "what it is and how big"}`. The plugin loads without them; the one feature that needs them checks `core.extras.installed("plugin:<name>")` and refuses with a pointer to the card until the person clicks **Install** there (or accepts the offer when enabling the plugin). `modules` is what proves the set is there without importing it; without it the distributions in `pip` are checked. Same engine, same log, same gates as `pip_dependencies`. Specs are plain requirements only — no options, URLs or paths reach pip from a manifest |
@@ -58,13 +60,15 @@ The `capabilities` object declares what the plugin provides:
     "devices": [ ... ],
     "agents": [ ... ],
     "prompts": { ... },
-    "web": { ... },
     "daemon": { ... },
     "services": [ ... ],
+    "sockets": [ ... ],
     "app": { ... },
     "themes": [ ... ],
+    "motions": [ ... ],
     "widgets": [ ... ],
-    "sidebar_accordion": { ... }
+    "sidebar_accordion": { ... },
+    "cleanup_paths": [ ... ]
   }
 }
 ```
@@ -73,7 +77,7 @@ Each capability is documented in its own guide:
 - [Hooks & Voice Commands](hooks.md) — including the `ghost_inject` hook for cache-friendly per-turn context (since 2.6.4)
 - [Tools](tools.md)
 - Scopes — see below
-- [Routes](routes.md)
+- [Routes](routes.md) — and `sockets`, WebSocket channels ([WebSockets](routes.md#websockets))
 - [Schedule](schedule.md)
 - [Settings & Web UI](settings.md)
 - [Providers (TTS, STT, Embedding, LLM)](providers.md)
@@ -83,7 +87,7 @@ Each capability is documented in its own guide:
 - [Games](games.md) — register a playable game (`capabilities.games`) with the Game Room host. Story packs need no capability at all: ship a `stories/` dir ([Stories](stories.md))
 - [Prompt Packs](prompts.md) — ship monolith prompts and assembled-prompt pieces (mirror-only, user always wins collisions)
 - [Apps](APPS.md)
-- [Themes](THEMES.md)
+- [Themes](THEMES.md) — including `motions`, animated chat backgrounds
 - [Widgets](widgets.md) — dashboard action-panel cards (rendered in Settings → Dashboard)
 - [Daemons](daemons.md) — long-running background threads with event sources (e.g. Telegram, Discord listeners)
 - [Services & Subprocesses](subprocesses.md) — declared subprocess servers, run by core (optionally in the plugin's own conda env)
@@ -230,8 +234,8 @@ user/
 ## Reference for AI
 
 - Only `name` is required (unique; overrides folder name). Display title resolution: `short_display_name` → `display_name` → `short_name` → truncated first clause of `description` → `name`. Set `short_display_name` (2-4 words).
-- Top-level fields: `privacy_aware` (bool — hooks delivered in private chats), `surfaces` (["chat","game"] — presence-hook fence for prompt_inject/ghost_inject only), `essential` (true = locked core plugin; string = alternates group — e.g. `"memory"`, which is also how other plugins find the loaded memory engine), `default_enabled`, `priority` (int — a non-int is coerced to 50 with a warning; lower fires first), `managed_hide`, `settingsUI` ("auto"|"plugin"|"core"|null), `min_core_version` (warn-only version skew check against the `VERSION` file; never blocks), `pip_dependencies` (required pip specifiers; missing → Install button, conda/venv only, background install, auto-reload), `extra` (OPTIONAL packages one feature needs: {label, pip, modules, note} → the same Install button, the plugin loads without them), `environment` ({python, pip, conda, channels, client} — dedicated conda env; `client` = a client-only mode), `platforms` ([sys.platform names] — refused elsewhere before any build or service start), `icon`/`emoji`, `url`, `author`, `version`.
-- `capabilities` keys: `hooks`, `voice_commands`, `commands`, `tools`, `scopes`, `routes`, `sockets`, `schedule`, `settings`, `providers`, `memory_layers`, `games`, `devices`, `agents`, `prompts`, `web`, `daemon`, `services`, `app`, `themes`, `widgets`, `sidebar_accordion`, `cleanup_paths`, `social` (read by the Social plugin, not the loader: [social.md](social.md)). Each has its own guide page.
+- Top-level fields: `privacy_aware` (bool — hooks delivered in private chats), `surfaces` (["chat","game"] — presence-hook fence for prompt_inject/ghost_inject only), `essential` (true = locked core plugin; string = alternates group — e.g. `"memory"`, which is also how other plugins find the loaded memory engine), `default_enabled`, `priority` (int — a non-int is coerced to 50 with a warning; lower fires first), `managed_hide`, `settingsUI` (TOP-LEVEL only; "auto"|"plugin"|"manifest"|"core"|"none"|null — auto = web/index.js present → plugin, else settings schema → manifest, else none), `requires_plugins` ([host plugin names] — add-on stays enabled-but-unloaded until every host is loaded; loads after hosts, retried when a host loads), `tool_expires` (default `expires` for the plugin's tools, e.g. "never"), `min_core_version` (warn-only version skew check against the `VERSION` file; never blocks), `pip_dependencies` (required pip specifiers; missing → Install button, conda/venv only, background install, auto-reload), `extra` (OPTIONAL packages one feature needs: {label, pip, modules, note} → the same Install button, the plugin loads without them), `environment` ({python, pip, conda, channels, client} — dedicated conda env; `client` = a client-only mode), `platforms` ([sys.platform names] — refused elsewhere before any build or service start), `icon`/`emoji`, `url`, `author`, `version`.
+- `capabilities` keys: `hooks`, `voice_commands`, `commands`, `tools`, `scopes`, `routes`, `sockets`, `schedule`, `settings`, `providers`, `memory_layers`, `games`, `devices`, `agents`, `prompts`, `daemon`, `services`, `app`, `themes`, `motions`, `widgets`, `sidebar_accordion`, `cleanup_paths`, `social` (read by the Social plugin, not the loader: [social.md](social.md)). Each has its own guide page. There is no `web` capability: `web/` files are served by convention at /plugin-web/{name}/.
 - Scope entry: `{key (python identifier), label, endpoint, data_key?, value_field?, name_field?, label_template?, nav_target?, default?}` — creates `scope_{key}` ContextVar (import from `core.chat.function_manager`, resolves via `__getattr__`) and a `{key}_scope` chat-setting key.
 - `sidebar_accordion`: `{title?, icon?, content?, script?}` — files live in the plugin's `web/` dir, served at `/plugin-web/{name}/...`; script exports `init(contentEl, pluginName)`, called after the HTML fragment lands; chat surface only; renders only while the plugin is enabled.
 - `cleanup_paths`: relative to `user/`, namespace-restricted to `plugin_state/` (filename must start with the plugin name), `webui/plugins/`, or `plugins/{name}/`; anything else is REFUSED. Auto-cleanup already covers `plugin_state/{name}*`, `webui/plugins/{name}.json`, and the plugin dir.

@@ -1,120 +1,68 @@
-# People
+# People — entities and contacts
 
-Sapphire can remember the people in your life — names, relationships, phone numbers, emails, addresses, and notes. The AI uses this to personalize conversations and, if you allow it, send emails to your contacts.
-
-People are managed in the **Mind** view (brain icon) under the **People** tab.
-
-With the Mind Palace plugin enabled, People is replaced by **Entities** — people, places, and things, with kinds, templates, and cards; [MIND-PALACE.md](MIND-PALACE.md) covers it.
+The people, places, projects and things in your world each get a card in **Mind → Entities**. Sapphire links memories to them as she saves, so asking about someone pulls what she knows about them. Person cards double as the contact book for the email and phone tools. Entities are the entity layer of the [Mind Palace](MEMORY.md).
 
 <img width="50%" alt="sapphire-people" src="https://github.com/user-attachments/assets/77b1df57-a0cf-4666-8bfe-4dcb5ce96579" />
 
 ---
 
-## Adding People
+## Cards
 
-### From the Web UI
+**+ New entity** picks a kind (Person, Place, Thing, Event, Other) and opens its card. Each kind has its own fields; **+ Add fact** adds a free line. A card also shows its connections, how often memories mention it, and recurring dates: a birthday shows with ↻ and returns to the Upcoming strip every year.
 
-1. Open **Mind** → **People** tab
-2. Click **+ Add Person**
-3. Fill in the fields you want:
+Person cards have:
 
 | Field | Purpose |
-|-------|---------|
-| Name | Required. Unique per scope (case-insensitive) |
-| Relationship | How you know them (friend, coworker, dad, etc.) |
-| Phone | Phone number |
-| Email | Email address |
-| Address | Physical address |
-| Notes | Anything else — birthday, preferences, context |
-| Allow AI to send email | Checkbox — whitelists this person for the email tool |
+|---|---|
+| Relationship | How you know them |
+| Nicknames | Comma-separated. A memory that says "the boss" links to this card |
+| Phone, Email, Address, Birthday | Contact details |
+| Notes, Background, Interests, Voice & humor, Likes, Dislikes | What she should know about them |
+| **Allow email** | Lets the email tools send to this person (off by default) |
+| **Allow phone calls** | Lets the phone tool call this person (off by default) |
 
-### From the AI
+**Your own kinds:** drop a JSON kind template into `user/mind_palace/templates/` and it appears in the kind list (a template with a built-in kind's name replaces it).
 
-The AI can save people during conversation using the `save_person` tool. It creates or updates by name — if a person with that name already exists in the current scope, it updates their info.
+## How she uses them
 
-### VCF Import
-
-Bulk import contacts from a vCard (.vcf) file:
-
-1. Mind → People tab → **Import VCF**
-2. Select your .vcf file
-3. Sapphire parses name, phone, email, address, notes, org, and title
-4. Duplicates (same name + email in scope) are skipped
-5. Extra phone numbers and emails go into the notes field
+- **Saving** a memory that names someone links it to their card automatically, nicknames included (whole words, case-insensitive, the longest name wins, and a real name beats another card's nickname).
+- **`entity=`** on a save files a fact on that card directly. A name that only partly matches still saves, and her reply asks "did you mean…".
+- **`list_entities`** gives her the roster, or one kind's cards with their fields.
+- She can't merge or delete entities. Merging is yours: **Mind → Settings → Maintenance → Human dedup → Entities**, which keeps the loser's name as a nickname.
 
 ---
 
-## Privacy & Email Whitelisting
+## Contacts: email and phone
 
-**How email sending works:**
-1. You add a person and check **"Allow AI to send email"**
-2. The AI calls `get_recipients()` — gets back a list of `{id, name}` pairs (no addresses)
-3. The AI calls `send_email(recipient_id=3, ...)` — Sapphire looks up the actual address server-side
-4. The email is sent without the AI ever knowing the address
+The email and phone plugins never see addresses or numbers. They see only the people you allowed:
 
-This prevents prompt injection or confused AI from sending emails to arbitrary addresses.
+1. On a person card, tick **Allow email** (or **Allow phone calls**).
+2. She calls `get_recipients()` and gets back `{id, name}` pairs, with no addresses.
+3. She sends with `send_email(recipient_id=…)` or calls with `phone_call`; Sapphire looks up the real address or number itself.
+
+So a confused model or a prompt injection can't email or call an arbitrary address. If the memory engine can't answer, the contact list comes back empty rather than guessing.
+
+**Which cards count:** the chat sidebar's **contacts** selector (the `people` scope) picks whose person cards the email and phone tools see. It's separate from the memory scope on purpose, so one contact book can serve several minds.
 
 ---
 
 ## Scopes
 
-People are **scoped** — each chat can access a different set of contacts via the **People scope** in Chat Settings sidebar.
-
-- **Default**: All chats share the "default" people scope
-- **Custom scopes**: Create scopes for isolation (e.g., "work" vs "personal")
-- **Global overlay**: A scope sees its own people plus any in the "global" scope
-- **None**: Set people scope to "none" to disable people access for a chat
-
-Create new scopes with the **+** button next to the People scope dropdown in the sidebar.
-
----
-
-## Search
-
-The AI searches people by semantic similarity and substring match (people have no full-text index — only knowledge entries do):
-
-1. Vector similarity (threshold: 0.55 — stricter than knowledge)
-2. Substring fallback (LIKE on name, relationship, notes)
-
-When the AI calls `search_knowledge`, it searches both people AND knowledge entries, returning combined results.
+Entities ride the chat's memory scope, like the rest of the Mind (see [Scopes](MEMORY.md#scopes)). The contacts selector above is the one exception.
 
 ---
 
 ## Reference for AI
 
-People system for contact management with privacy-first email integration.
+ENTITIES = Mind Palace entity layer (Mind → Entities): person/place/thing/event/other cards with template fields, nicknames, connections, mention counts, recurring dates (Upcoming strip). User templates: user/mind_palace/templates/*.json.
 
 TOOLS:
-- save_person(name, relationship?, phone?, email?, address?, notes?) — upsert by name per scope
-- search_knowledge(query) — searches people + knowledge combined
-- delete_knowledge(entry_id?, category?) — deletes AI-created knowledge entries only (cannot delete people)
-- get_recipients() — [email plugin] returns [{id, name}] of email-whitelisted contacts (no addresses)
-- send_email(recipient_id, subject, body) — [email plugin] sends to a whitelisted contact by ID
+- save_memory(content, entity=NAME) — file a fact on a card; nicknames resolve; a partial match saves + asks "did you mean". save_memory(layer='entities', entity=…) makes the fact a card chunk.
+- list_entities(kind?, limit?) — roster (name, kind, nicknames, fact count); with kind, the filled-in fields (relationship, birthday…).
+- search_memory finds entities too; depth=1 follows a card's connections.
+- Merge/delete entities: UI only (Mind → Settings → Maintenance → Human dedup). No save_person: that was the legacy engine.
 
-FIELDS:
-- name (required, unique per scope case-insensitive)
-- relationship, phone, email, address, notes (all optional text)
-- email_whitelisted (boolean — gates send_email AND calendar_add guest invites)
-- scope (via scope_people ContextVar)
-
-PRIVACY MODEL:
-- get_recipients returns IDs + names only
-- send_email requires recipient_id (looked up server-side)
-- Only email_whitelisted=true people appear in recipient list
-- calendar_add(attendees=[names or ids]) [google-calendar plugin] resolves guests server-side through the same whitelist; Google emails the invite
-
-SCOPES:
-- Scoped via scope_people ContextVar
-- Global overlay: scope sees own + 'global' entries (read-only for AI)
-- AI cannot write to the 'global' scope — only users can via the UI
-- Set per-chat in sidebar Mind Scopes → People
-
-VCF IMPORT:
-- POST /api/knowledge/people/import-vcf (multipart form)
-- Parses: FN, TEL, EMAIL, ADR, NOTE, ORG, TITLE
-- Deduplicates by (name, email) per scope
-
-SEARCH:
-- Vector similarity (threshold 0.55, stricter than knowledge at 0.40) + LIKE substring on name/relationship/notes
-- People have NO full-text index (only knowledge entries do)
-- Combined with knowledge results in the search_knowledge tool
+CONTACTS (core/contacts.py, provider = the active memory engine; fails closed on error):
+- Person fields allow_email / allow_call gate the tools.
+- get_recipients() [email] → [{id, name}] of allowed contacts, no addresses; send_email(recipient_id, subject, body); phone_call [twilio-voice] resolves the number server-side the same way.
+- Which cards: the chat's `people` scope (sidebar "contacts"), separate from memory_scope.

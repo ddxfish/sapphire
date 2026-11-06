@@ -79,7 +79,7 @@ Tools are the AI's abilities — memory, web search, knowledge, and more. A tool
 | Tool category | Good for |
 |---------------|----------|
 | **Memory** (save/search/recall) | Persistent conversations |
-| **Knowledge** (save/search/list) | Organized facts and topics |
+| **Library** (look up and read documents) | Organized facts and files |
 | **Web search + research** | Answering current questions |
 | **Meta tools** (prompt editing) | Self-modifying AI personality |
 | **Goals** | Tracking progress on things |
@@ -139,7 +139,7 @@ You now have a complete AI persona. Or skip building your own and use one of the
 
 Each chat has its own settings, and the chat sidebar *is* the settings panel — what you see there is what this chat uses:
 - Prompt, toolset, spice set, LLM provider — dropdowns, all independent per chat
-- **Mind** accordion — scopes that isolate memory, knowledge, entities per chat
+- **Mind** accordion — scopes that isolate memory and contacts per chat
 - **TTS (Voice)** accordion — voice, pitch, and speed for this chat
 
 Creating, renaming, importing, and organizing chats is covered in [CHATS.md](CHATS.md). The 🎨 button in the sidebar header opens Appearance — themes, scenes, and motion ([APPEARANCE.md](APPEARANCE.md)).
@@ -154,10 +154,8 @@ Set scopes in the chat sidebar's **Mind** accordion (or they come bundled with a
 
 | Scope | What it isolates | Sees global? |
 |-------|-----------------|-------------|
-| **Memory** | Long-term memories | Yes — own + global |
-| **Goals** | Goal tracking | Yes |
-| **Knowledge** | Knowledge tabs and entries | Yes |
-| **People** | Contacts | Yes |
+| **Memory** | Mind Palace: memories, Library documents, goals | Yes — own + global |
+| **Contacts** | Mind Palace people / entities | Yes |
 | **Email** | Email account | No |
 | **Bitcoin** | Wallet | No |
 | **Google Cal** | Calendar account | No |
@@ -167,7 +165,7 @@ Set scopes in the chat sidebar's **Mind** accordion (or they come bundled with a
 
 **Private chats** aren't a scope dropdown — unlock the vault with the padlock 🔒 in the chat sidebar, and any chat you talk in while it's open becomes private: locked to local models and local tools, encrypted on disk. See [PRIVACY.md](PRIVACY.md).
 
-**How global overlay works:** Memory, goals, knowledge, and people scopes see their own data AND anything in the "global" scope. So shared info (your name, your preferences) lives in global and every scope sees it, while specialized data stays isolated.
+**How global overlay works:** Memory and contacts scopes see their own data AND anything in the "global" scope. So shared info (your name, your preferences) lives in global and every scope sees it, while specialized data stays isolated.
 
 **Set to "none"** to disable a system entirely for that chat (e.g., no memory for throwaway chats).
 
@@ -295,8 +293,10 @@ Now that you're set up, explore:
 - [CHATS.md](CHATS.md) — Everything about creating and managing chats
 - [APPEARANCE.md](APPEARANCE.md) — Themes, scenes, fonts, and motion
 - [CONTINUITY.md](CONTINUITY.md) — Scheduled tasks (morning greetings, dream mode)
-- [KNOWLEDGE.md](KNOWLEDGE.md) — Organized knowledge base
-- [MIND-PALACE.md](MIND-PALACE.md) — The opt-in next-generation memory engine
+- [MEMORY.md](MEMORY.md) — The Mind Palace, her memory engine (on by default)
+- [KNOWLEDGE.md](KNOWLEDGE.md) — The Library: your documents and facts
+- [CHAT-ROOM.md](CHAT-ROOM.md) — Group chat rooms with several personas and guests
+- [SLASH-COMMANDS.md](SLASH-COMMANDS.md) — `/compact`, `/undo` and the rest of the composer commands
 - [AGENTS.md](AGENTS.md) — Spawn background AI workers
 - [TOOLMAKER.md](TOOLMAKER.md) — Let the AI create its own tools
 - [PLUGINS.md](PLUGINS.md) — Extend Sapphire with plugins
@@ -333,7 +333,7 @@ ASSEMBLED PROMPT SECTIONS:
 
 TOOLSET CREATION:
 - Toolsets view → + → name it → check tools → save
-- Starter set: memory (save/search/recall) + web search
+- Starter set: memory (save_memory/search_memory) + web search
 - Per-chat: each chat stores its own active toolset
 
 PERSONA CREATION:
@@ -342,8 +342,8 @@ PERSONA CREATION:
 - Set as Default: star (applies to new chats)
 
 SCOPES:
-- memory, goal, knowledge, people: global overlay (sees own + global)
-- email, bitcoin, gcal, telegram, discord: no overlay (strict per-scope)
+- memory, people (UI label "contacts"): Mind Palace, the default memory engine (user/memory/mind.db); global overlay (sees own + read-only global). Goals and the Library live in the memory scope; there is no goal or knowledge scope
+- email, bitcoin, gcal, telegram, discord, github, social, twilio, wordpress: no overlay (strict per-scope)
 - rag: strict per-chat isolation
 - plugins can register additional scopes
 - private: boolean — private chat (local models + local tools only); not a dropdown, vault padlock in chat sidebar, see docs/PRIVACY.md

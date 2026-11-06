@@ -12,7 +12,17 @@ from core.auth import require_login, check_endpoint_rate
 from core.ir import library
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+
+
+def _hosted_gate():
+    """IR codes drive devices: closed on a hosted install, like /api/devices."""
+    from core.devices import engine
+    why = engine.refusal()
+    if why:
+        raise HTTPException(status_code=404, detail=why)
+
+
+router = APIRouter(dependencies=[Depends(_hosted_gate)])
 WRITES_PER_MIN = 60           # adds, edits and removals, per client address
 
 

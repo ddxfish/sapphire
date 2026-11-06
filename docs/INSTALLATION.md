@@ -2,10 +2,12 @@
 
 ## Requirements
 
-- Ubuntu 22.04+ or Windows 11+
+- Ubuntu 22.04+ or Windows 10 (1809+) / 11
 - Python 3.11+
 - 16GB+ system RAM
 - (recommended) Nvidia GPU for TTS/STT
+
+One Sapphire runs per `user/` folder: starting a second copy on the same folder stops at once with "Another Sapphire is already running on this user/". Two installs need two folders and two `WEB_UI_PORT`s; they share the config directory, so the same login password and API keys.
 
 ---
 
@@ -82,7 +84,7 @@ cd sapphire
 pip install -r requirements.txt
 ```
 
-> **Windows with an NVIDIA GPU:** the default `torch` from PyPI has no CUDA, so voice would run on the CPU. After the requirements, in the same env: `pip install torch --index-url https://download.pytorch.org/whl/cu128` (GTX 10-series or older: `cu126`). Linux gets CUDA from PyPI already. Details: [TROUBLESHOOTING.md](TROUBLESHOOTING.md#voice-runs-on-the-cpu-gpu-found-torch-cannot-use-it).
+> **Windows with an NVIDIA GPU:** the default `torch` from PyPI has no CUDA, so voice would run on the CPU. Easiest: the top of Settings > TTS and Settings > STT offers **Install GPU torch and restart**, which picks the right wheel for your card and installs it on the restart, before Sapphire boots. By hand, in the same env: `pip install torch --index-url https://download.pytorch.org/whl/cu128` (GTX 10-series or older: `cu126`). Linux gets CUDA from PyPI already. Details: [TROUBLESHOOTING.md](TROUBLESHOOTING.md#voice-runs-on-the-cpu-gpu-found-torch-cannot-use-it).
 
 ### Minimal Install
 
@@ -115,9 +117,9 @@ pip install -r install/requirements-wakeword.txt
 pip install -r install/requirements-flash.txt
 ```
 
-Enable each in Settings after installing, then restart.
+Enable each in Settings after installing. The setup wizard also offers to install a missing voice set (TTS, STT, wake word) for you, no restart needed.
 
-> **Note:** those four files are the *only* difference from the full install. The minimal set already includes everything else — the dependencies for the Telegram and MCP plugins, EPUB and HEIC/iPhone files in the Library, and SOCKS proxy support for the LLM lane (see [NETWORK.md](NETWORK.md)).
+> **Note:** TTS, STT and wake word are the *only* difference from the full install. Two sets stay outside `requirements.txt` on purpose and install on demand from the page that needs them: `requirements-flash.txt` (board flashing) and `requirements-whisper-gpu.txt` (Linux Whisper GPU support, offered on Settings > STT). The minimal set already includes everything else — the dependencies for the Telegram and MCP plugins, EPUB and HEIC/iPhone files in the Library, and SOCKS proxy support for the LLM lane (see [NETWORK.md](NETWORK.md)).
 
 ---
 
@@ -291,10 +293,11 @@ EASIEST PATH — SAPPHIRE LAUNCHER (Windows & Linux):
 - Recommend this to non-terminal users before the manual steps below
 
 REQUIREMENTS:
-- Ubuntu 22.04+ or Windows 11+
+- Ubuntu 22.04+ or Windows 10 (1809+) / 11
 - Python 3.11+ (conda recommended, pins version easily)
 - 16GB+ RAM
 - Optional: Nvidia GPU for TTS/STT
+- One Sapphire per user/ folder (second start exits 43 "Another Sapphire is already running on this user/"); two installs = two folders + two WEB_UI_PORTs, shared config dir (same password, API keys)
 
 LINUX PREREQS:
 ```
@@ -324,7 +327,9 @@ MINIMAL INSTALL (no voice features):
 pip install -r install/requirements-minimal.txt
 # Then add: install/requirements-tts.txt, install/requirements-stt.txt, install/requirements-wakeword.txt as needed
 ```
-Minimal = the full set minus the voice packages, nothing else (Telegram, MCP, EPUB, HEIC, httpx[socks], tzlocal all included). A test enforces root requirements.txt == union of install/*.txt.
+Minimal = the full set minus the voice packages, nothing else (Telegram, MCP, EPUB, HEIC, httpx[socks], tzlocal all included). A test enforces root requirements.txt == union of install/ minimal + tts + stt + wakeword. On-demand sets outside root by design (core/extras.py): requirements-flash.txt (board flashing, offered by Devices), requirements-whisper-gpu.txt (Linux Whisper cuBLAS, offered on Settings > STT). The setup wizard's Voice step installs a missing tts/stt/wakeword set, no restart.
+
+WINDOWS GPU: PyPI torch has no CUDA on Windows. Settings > TTS / STT show "Install GPU torch and restart" (picks cu128/cu126 for the card; runs in the runner before boot; log user/logs/gpu-install.log). Manual: pip install torch --index-url https://download.pytorch.org/whl/cu128 (cu126 for GTX 10-series and older).
 
 VERSION CAPS: openai<3, anthropic<1, mcp<2 — untested majors (anthropic 1.0 dropped temperature/top_p/top_k). Install from the requirements files; never `pip install --upgrade` those three past the cap.
 
@@ -332,7 +337,7 @@ OPTIONAL FEATURES (only for minimal install):
 - TTS: pip install -r install/requirements-tts.txt
 - STT: pip install -r install/requirements-stt.txt
 - Wakeword: pip install -r install/requirements-wakeword.txt
-(Enable in Settings after install, then restart)
+(Enable in Settings after install; no restart needed)
 
 LLM OPTIONS:
 - Local: LM Studio on port 1234 (private, free)

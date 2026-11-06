@@ -47,7 +47,11 @@ LM Studio costs nothing. Use local models for everyday conversation and save clo
 
 ### 4. Limit Extended Thinking
 
-Thinking tokens add up fast. Default budget is 10,000 tokens — that's 10K extra **output** tokens per response (not cached). Only enable thinking for tasks that benefit from step-by-step reasoning (coding, analysis), not casual chat.
+Thinking tokens add up fast: they're extra **output** tokens on every response (not cached). Claude models think adaptively, steered by the provider card's effort setting (default `high`); lower effort, or thinking off, costs less. Haiku-class models use a fixed budget per effort level instead. With thinking on, the reply's Max Tokens is raised to at least 16,000. Only enable thinking for tasks that benefit from step-by-step reasoning (coding, analysis), not casual chat.
+
+### 4b. Keep the context lean
+
+Every turn resends the whole request, so its size is the bill. Old tool results decay into short stubs, pictures drop out after a few turns, and the oldest history goes out of view when the window fills. `/context` shows what's costing the most. See [CONTEXT.md](CONTEXT.md), and `/compact` or `/compact-daily` ([SLASH-COMMANDS.md](SLASH-COMMANDS.md)) to summarize a long chat.
 
 ### 5. Use Scopes Wisely
 
@@ -81,7 +85,7 @@ The 1-hour TTL keeps the cache alive between messages even if you walk away brie
 - **Cache hit** (subsequent same prefix): 0.10× normal price (90% off)
 - **Cache miss** (prefix changed or TTL expired): full price + 1.25× write tax to refill
 
-The Dashboard (Settings → Dashboard) shows cache hit/miss rates per chat.
+The Dashboard (Settings → Dashboard) shows cache hit/miss rates per model.
 
 ### Claude-Specific Tips
 
@@ -125,7 +129,7 @@ Sapphire tracks all token usage locally.
 - Per-model breakdown with cache hit percentages
 - Daily usage trend charts
 
-**Enable metrics:** Toggle in the Dashboard. All data stays local in `user/metrics/token_usage.db`.
+**Enable metrics:** Toggle in the Dashboard, or Settings → Privacy (`METRICS_ENABLED`). All data stays local in `user/metrics/token_usage.db`.
 
 Watch the cache hit percentage — if it's low, something is changing your system prompt every turn. Check spice and datetime injection first.
 
@@ -164,6 +168,8 @@ CACHE BREAKERS (still real):
 COST SAVINGS (ALL PROVIDERS):
 - Smaller toolsets (cheaper cache writes)
 - Shorter system prompts (cheaper cache writes)
+- Lean context: tool decay (TOOL_EXPIRES_AFTER), image memory (IMAGE_MEMORY_TURNS), /context to see the biggest buckets, /compact or /compact-daily (CONTEXT.md, SLASH-COMMANDS.md)
+- Claude thinking is adaptive by effort (default high; lower effort = cheaper); Haiku-class uses a budget per effort; thinking floors max_tokens at 16000
 - Local LLM for casual chat (free)
 - Limit extended thinking budget (output tokens, not cached)
 - Scope to "none" when not needed

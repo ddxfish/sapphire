@@ -14,11 +14,18 @@
 ## Live Toggle
 
 Settings > Plugins calls `PUT /api/webui/plugins/toggle/{name}`:
-- **Enable**: Loads immediately — all capabilities register
+- **Enable**: Loads immediately — all capabilities register. Before loading, the plugin's record is refreshed from disk: `plugin.json` re-read (a route, setting or hook added while it was off comes up) and the signature checked again
 - **Enable / boot / reload**: each tool module's optional `on_load()` runs after its tools register, fresh or reused from `sys.modules`: the place to register with core (providers, sinks, timers), never import time
 - **Disable**: Unloads immediately — device drivers let go (presence), each tool module's optional `shutdown()` runs, then hooks, tools, routes, schedules are removed and the plugin's modules leave `sys.modules`
 
-Unsigned/tampered plugins return 403 and the toggle reverts.
+Refusals:
+- **403** — unsigned (the detail points at the unsigned-plugins switch on the Settings > Plugins banner), tampered, or a verified plugin refused at load (tool-name collision, …; the detail carries the real reason). Also: disabling a locked or core plugin.
+- **409** — turning on one of an alternates pair (`essential: "<group>"`, e.g. memory / mindpalace) while its partner is on: turn the partner off first.
+- **404** — unknown plugin name.
+
+A refused enable leaves `plugins.json` holding your intent (enabled), so a fix + restart brings it up; the in-memory state shows it off.
+
+Success returns `{status, plugin, enabled, reload_required, missing_deps, env, warning}`: `missing_deps` lists absent `pip_dependencies` after an enable, `env` is the plugin's environment status, `warning` is set when turning off an alternates member left its group with no engine.
 
 ## Hot Reload (Dev)
 
@@ -75,19 +82,27 @@ See [Chat-Scoped State](tools.md#chat-scoped-state).
       "settingsUI": "plugin",
       "verified": true,
       "verify_msg": "verified",
+      "verify_tier": "official",
+      "verified_author": null,
       "version": "1.0.0",
       "author": "sapphire",
-      "url": "https://sapphireblue.dev"
+      "url": "https://example.com",
+      "band": "system",
+      "missing_deps": [],
+      "env": null
     }
   ],
-  "locked": []
+  "locked": [],
+  "surfaces": [{"id": "chat", "label": "Chat"}, {"id": "game", "label": "Game Room"}]
 }
 ```
+
+Each entry also carries `collapsible`, `showInSidebar`, `settings_schema`, `description`, `icon`, `has_script` (a `web/main.js` exists), `sidebar_accordion`, `surfaces` / `surfaces_active` (manifest default / effective list), `extra` (optional-package status), `essential`, and `has_prev` (a user plugin with a previous version kept for rollback).
 
 ## Reference for AI
 
 - Boot: `plugin_loader.scan()` reads `core/plugins/` (system band) then `user/plugins/` (user band) — a same-named user-band copy SHADOWS the system one (warned in the log; the installer refuses such a name, so it means a hand-placed fork); a root-level `plugins/` is NOT scanned (warning if it holds plugin folders); `core/user/` existing logs an error (root computed one level short); each manifest is validated and signature-checked; enabled plugins register hooks, tools, voice commands, routes, schedules; scheduler tasks defer until the scheduler initializes.
-- Live toggle: `PUT /api/webui/plugins/toggle/{name}` — enable loads immediately, disable unloads immediately; unsigned/tampered plugins return 403 and the toggle reverts. Unload order: device presence release → each tool module's optional `shutdown()` (also at Sapphire's own shutdown) → hooks/tools/routes unregistered → the plugin's modules purged from `sys.modules`.
+- Live toggle: `PUT /api/webui/plugins/toggle/{name}` — enable first runs `refresh_from_disk` (manifest re-read + signature re-checked), then loads immediately; disable unloads immediately. 403 = unsigned/tampered/refused at load (detail = the reason) or locked/core disable; 409 = alternates partner (`essential` group string) is on; 404 unknown. A failed enable keeps `plugins.json` intent (enabled). Response `{status, plugin, enabled, reload_required, missing_deps, env, warning}`. List entries carry verify_tier, verified_author, band, surfaces/surfaces_active, env, extra, essential, missing_deps, has_prev, sidebar_accordion, settingsUI. Unload order: device presence release → each tool module's optional `shutdown()` (also at Sapphire's own shutdown) → hooks/tools/routes unregistered → the plugin's modules purged from `sys.modules`.
 - Hot reload: `POST /api/plugins/{name}/reload`; a failed reload leaves the plugin unloaded — no half-loaded state. `SAPPHIRE_DEV=1` enables the file watcher (auto-reload on `.py`/`.json` changes, polled).
 - Rescan: `POST /api/plugins/rescan` → `{"added": [...], "removed": [...]}` without restart.
 - The `plugins_ready` hook fires after the boot scan AND after reload, rescan, and toggle-on — handlers must be idempotent (see hooks.md).

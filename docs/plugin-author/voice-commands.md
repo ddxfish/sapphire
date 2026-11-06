@@ -24,7 +24,7 @@ Use them for instant reactions: stop playback, toggle modes, trigger macros, con
 |-------|-------------|
 | `triggers` | Phrases to match (case-insensitive) |
 | `match` | `exact`, `starts_with`, `contains`, or `regex` |
-| `bypass_llm` | If true, runs at the top of the plugin's priority band — 0–19 for bundled plugins, top of the user band for installed plugins |
+| `bypass_llm` | If true, runs at the top of the plugin's priority band — priority capped at 19 for bundled plugins, at 119 for installed (user band 100–199) |
 | `handler` | Path to handler file |
 
 Multiple voice commands per plugin is fine — they're an array.
@@ -38,7 +38,7 @@ Multiple voice commands per plugin is fine — they're an array.
 | `contains` | Trigger appears anywhere | `"weather"` | "what's the weather", "weather today" |
 | `regex` | Regular expression | `"lights? (on\|off)"` | "light on", "lights off" |
 
-All matching is case-insensitive.
+All matching is case-insensitive. `exact` lowercases and trims the input and ignores punctuation at either end, so a transcription of "Stop." or "Be quiet!" matches `"stop"` / `"be quiet"`. Punctuation inside the phrase still counts.
 
 ## Handler
 
@@ -64,15 +64,23 @@ def pre_chat(event):
 
 ## Examples
 
-**Stop command — cancel TTS and generation:**
+**Stop command — cancel TTS and generation, scoped to who said it** (the bundled one, `core/plugins/voice-commands/hooks/stop.py`). A phone caller's "stop" must not silence your speakers, and yours must not hang up their reply:
 ```python
+from core.event_bus import publish, Events
+
 def pre_chat(event):
     system = event.metadata.get("system")
     if system:
-        if hasattr(system, "tts") and system.tts:
-            system.tts.stop()
-        if hasattr(system, "cancel_generation"):
-            system.cancel_generation()
+        mgr = system.get_conversation_manager()
+        calls = mgr.external_chats() if mgr else set()       # live phone calls
+        chat = system.llm_chat.session_manager._effective_chat_name()
+        if chat in calls:                                     # a caller said it: their stream only
+            system.cancel_generation(chat_name=chat)
+        else:                                                 # you said it: everything but the calls
+            if system.tts:
+                system.tts.stop()
+            publish(Events.TTS_STOPPED)                       # browsers stop their audio too
+            system.cancel_generation(exclude_chats=calls)
     event.skip_llm = True
     event.ephemeral = True
     event.response = "Stopped."
@@ -151,7 +159,7 @@ def pre_chat(event):
 
 ## How It Works Internally
 
-Voice commands are registered as `pre_chat` hooks. With `bypass_llm: true` they're promoted to the top of their plugin's priority band (0–19 for bundled plugins; user-installed plugins are capped at the top of the user band, so bundled commands still win). When the user speaks or types, the hook runner checks triggers before the message reaches the LLM. If a trigger matches, the handler fires and — with `skip_llm = True` — the AI never sees the input.
+Voice commands are registered as `pre_chat` hooks. With `bypass_llm: true` they're promoted to the top of their plugin's priority band (capped at 19 for bundled plugins; user-installed plugins are capped at 119, inside the user band 100–199, so bundled commands still win). When the user speaks or types, the hook runner checks triggers before the message reaches the LLM. If a trigger matches, the handler fires and — with `skip_llm = True` — the AI never sees the input.
 
 This means voice commands always win over the AI. They're the fastest path through the pipeline.
 
@@ -159,8 +167,8 @@ This means voice commands always win over the AI. They're the fastest path throu
 
 VOICE COMMANDS:
 - Manifest: `capabilities.voice_commands` = [{triggers: [phrases], match: "exact"|"starts_with"|"contains"|"regex" (default exact, case-insensitive), bypass_llm: bool, handler: path, description?}]. Multiple entries per plugin fine.
-- Registered as pre_chat hooks with trigger pre-filtering; bypass_llm promotes to the top of the plugin's priority band (0-19 bundled; user-installed plugins cap at the top of the user band).
+- Registered as pre_chat hooks with trigger pre-filtering; bypass_llm promotes to the top of the plugin's priority band (priority min(base, 19) bundled; min(base, 119) user-installed). Exact match = input lowercased + stripped, end punctuation ignored ("Stop." == "stop").
 - Handler: `def pre_chat(event)` (or `def handle(event)` fallback — never `run`). Pattern to fully handle without the AI: `event.skip_llm = True` (don't send to LLM), `event.ephemeral = True` (don't save to history), `event.response = "..."` (shown/spoken), `event.stop_propagation = True` (skip lower-priority hooks).
-- System access: `event.metadata.get("system")` -> VoiceChatSystem (tts.stop(), set_voice, set_speed, cancel_generation, toggle_wakeword...). Guard with hasattr — components may be None.
+- System access: `event.metadata.get("system")` -> VoiceChatSystem (tts.stop(), set_voice, set_speed, cancel_generation, toggle_wakeword...). Guard with hasattr — components may be None. Cancel scoped, never bare: cancel_generation(chat_name=call) for a phone caller, cancel_generation(exclude_chats=live calls) otherwise (core/plugins/voice-commands/hooks/stop.py).
 - Plugin state across commands: `plugin_loader.get_plugin_state(name)` .get/.save.
 - Matching fires before the LLM ever sees the input — voice commands always win over the AI.

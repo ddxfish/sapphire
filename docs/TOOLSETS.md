@@ -6,13 +6,13 @@ Named groups of tools so you don't have to switch between memory and web for exa
 
 | Toolset | Role |
 |---------|------|
-| `limited_web` | **Factory default for new chats.** Light web (search + fetch), memory, self-sheet, goals, and document/image reading |
-| `default` | Lean baseline used by background workers — the agent persona and the agents plugin point here. Web research, memory, knowledge, goals, notepad, help docs |
-| `work` | Research and productivity — web, goals, notepad, help docs |
-| `smarthome` | Home Assistant control (scenes, lights, climate, areas) plus knowledge |
-| `personality` | Self-modification — prompt editing, prompt pieces, voice, memory, knowledge, goals |
+| `limited_web` | **Factory default for new chats.** `ask_user`, light web (search, fetch, image search), her browser (`browser_*`, `open_stage`), memory, entities, self-sheet, ledger, goals, library documents and images, `search_help_docs` |
+| `default` | Lean baseline used by background workers — the agent persona and the agents plugin point here. Web research, memory, entities, goals, notepad, help docs, `get_time` |
+| `work` | Research and productivity — `ask_user`, web research and images, goals, notepad, help docs |
+| `smarthome` | `ask_user` plus Home Assistant control (scenes, lights, climate, areas) |
+| `personality` | Self-modification — `ask_user`, `slash_command`, prompt editing, prompt pieces, voice, model/toolset switching, memory, self-sheet, goals, `search_help_docs` |
 
-New chats start on `limited_web` (set in the chat defaults); `default` is deliberately lean so agents and scheduled tasks don't carry a heavy tool surface. You can create your own toolsets that combine tools from any modules.
+New chats start on `limited_web` (set in the chat defaults); `default` is deliberately lean so agents and scheduled tasks don't carry a heavy tool surface. A tool from a disabled plugin (the browser tools, for one) is simply absent until you enable the plugin. You can create your own toolsets that combine tools from any modules.
 
 ## Switching Toolsets
 
@@ -29,7 +29,7 @@ The Toolsets editor lives in the **Persona** nav group (Persona > Toolsets).
 
 1. Open the Toolsets view
 2. Name your toolset (or pick an existing one)
-3. Check the functions you want included
+3. Check the functions you want included — they're grouped by tool **category** (`web`, `memory`, `files`, `meta_danger`, ...; see [TOOLS.md](TOOLS.md)); a tool without one falls under its module's group (e.g. Mind Palace), then its module
 4. Save — available immediately in the chat sidebar dropdown
 
 Built-in defaults seed `user/toolsets/toolsets.json` on first run; after that the user file is authoritative, so your edits (and deletions) stick across restarts.
@@ -56,11 +56,11 @@ The `switch_toolset` tool lets the AI change its active toolset itself (e.g. gra
 Toolsets are named groups of tools/functions the AI can access. Enabled tools = the chat's base toolset UNION its extra_toolsets list.
 
 BUILT-IN TOOLSETS:
-- limited_web: factory NEW-CHAT default — light web, memory, self-sheet, goals, document/image reading
-- default: lean baseline for background workers/agents — web research, memory, knowledge, goals, notepad, help docs
-- work: web, research, and productivity tools
-- smarthome: Home Assistant control (scenes, lights, climate, areas) + knowledge
-- personality: self-modification — prompt tools, voice, memory, knowledge, goals
+- limited_web: factory NEW-CHAT default — ask_user, web_search, get_website, web_view_images, browser_open/look/act/tabs/console, open_stage, save/search/get_recent/update/delete_memory, list_entities, read_self, update_self, read_ledger, create/list/update_goal, read_document, memory_view_image, local_view_images, memory_save_image, search_help_docs
+- default: lean baseline for background workers/agents — web research, memory, list_entities, goals, notepad, search_help_docs, get_time
+- work: ask_user, web research + web_view_images, memory_view_image, local_view_images, goals, notepad, search_help_docs
+- smarthome: ask_user + Home Assistant control (scenes, lights, climate, areas)
+- personality: self-modification — ask_user, slash_command, prompt tools, set_voice, switch_model/switch_toolset (gated), list_tools, get_time, memory, read_self/update_self, goals, search_help_docs
 
 - Plus the two reserved names `all` (everything loaded, minus hidden tools) and `none`
 
@@ -71,7 +71,7 @@ HOW IT WORKS:
 - A saved toolset is a list of tool NAMES: a renamed/retired tool silently drops out of user-made toolsets (shipped ones are refreshed). Renamed Sept 2026: get_images / view_image / image_view / web_search_images → web_view_images, memory_view_image, local_view_images, memory_save_image
 
 MANAGE TOOLSETS:
-- UI editor: Persona nav group > Toolsets
+- UI editor: Persona nav group > Toolsets (tools grouped by category, else module group, else module)
 - Per-chat switcher: toolset dropdown in the chat sidebar
 - Files: core/toolsets/toolsets.json (factory seed), user/toolsets/toolsets.json (authoritative after first run)
 

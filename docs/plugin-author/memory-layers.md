@@ -167,7 +167,7 @@ ledger lines.
 - **Lazy imports only.** `from plugins.mindpalace.tools import layer_api` at module top-level breaks under load-order changes and when Mind Palace is disabled. Inside the function, wrapped in try/except: always safe.
 - **Don't write the palace DB directly.** `layer_api` is the contract; raw SQL against `mind.db` will break across palace versions and skips the ledger, weaving, and FTS.
 - **`writable: false` still lets users edit.** The web tab lets the user delete/favorite your mirrored chunks — your next sync should tolerate missing rows (idempotent re-save by `source`).
-- **Sign after every edit** (`python tools/sign_plugin.py <your-plugin>`) like any plugin.
+- **Signing** works like any plugin: yours ships unsigned with unsigned plugins allowed; only keyholders re-sign after edits ([Signing](signing.md)).
 
 ## Reference for AI
 
@@ -182,4 +182,4 @@ MEMORY LAYERS (plugin-declared Mind Palace layers):
   - `sync_note(layer, summary, scope='default', detail=None) -> bool` — one ledger line for an out-of-band event; one per sync run maximum.
 - Invariants: layer_api writes ONLY registered plugin layers (the palace's own layers are fenced); content capped at 512 chars per chunk; ledger etiquette = one line per sync run, never per item; plugin disabled => layer goes dark (rows kept, hidden from every read path) and re-enable relights; deleting a scope deletes its plugin-layer rows.
 - Scope: read the chat's memory scope via `core.chat.function_manager.scope_memory.get()`; on error return None and disable — never fall back to 'default'.
-- Never write mind.db directly; re-sign after any edit (`python tools/sign_plugin.py <plugin>`).
+- Never write mind.db directly. Signing: third-party = no plugin.sig + unsigned plugins allowed; keyholders re-sign after edits (signing.md).

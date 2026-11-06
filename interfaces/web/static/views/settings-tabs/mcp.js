@@ -26,8 +26,10 @@ export default {
                     her API tokens (System &gt; API Keys) can <b>ask</b> her something in a named
                     chat and get her answer, <b>tell</b> her something without waiting, and call
                     the tools ticked below. Another Sapphire added as a device uses this door;
-                    so can Claude Code: <code>claude mcp add --transport http sapphire
-                    https://this-machine:8073/mcp --header "Authorization: Bearer &lt;token&gt;"</code>.
+                    so can Claude Code, through the stdio bridge (it takes her self-signed
+                    certificate): <code>"mcpServers": {"sapphire": {"command": "python3",
+                    "args": ["/path/to/sapphire/tools/mcp-bridge.py"]}}</code>, token in
+                    <code>user/mcp-persona.token</code>. See Help &gt; MCP.
                     A token that speaks as a persona (pick one when you add the key) also gets
                     <b>speak</b> and <b>ding</b> on this machine's speakers and that persona's own
                     memory. The microphone switch below adds <b>listen</b>.

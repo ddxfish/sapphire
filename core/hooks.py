@@ -280,7 +280,11 @@ class HookRunner:
         input_lower = input_text.lower().strip()
 
         if match_type == "exact":
-            return input_lower in [t.lower() for t in triggers]
+            # Speech-to-text punctuates ("Stop.", "Be quiet!"): end punctuation
+            # never decides an exact match, on either side.
+            ends = " .,!?;:\"'…"
+            said = input_lower.strip(ends)
+            return said in [t.lower().strip(ends) for t in triggers]
         elif match_type == "starts_with":
             return any(input_lower.startswith(t.lower()) for t in triggers)
         elif match_type == "contains":

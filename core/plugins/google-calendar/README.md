@@ -144,11 +144,11 @@ RSVP (yes / no / maybe / pending).
 and Sam as guests, and Google emails them the invite from your account — the
 same invite they'd get if you added them in Google Calendar yourself.
 
-Guests come from **Mind → People**. A contact is invitable only when both are
-true:
+Guests come from the people in **Mind → Entities**. A contact is invitable only
+when both are true:
 
-- they have an email address on their card
-- **Allow AI to send email** is ticked on that card (the same switch the email
+- they have an **Email** on their card
+- **Allow email** is ticked on that card (the same switch the email
   plugin uses)
 
 The AI names guests by contact name (or id); it never types raw addresses.
@@ -184,12 +184,12 @@ The redirect URI in Google Console doesn't exactly match what Sapphire sends. Ma
 The Calendar ID isn't the display name. It's a long string like `abc123@group.calendar.google.com`. Find it in Google Calendar > calendar settings > Integrate calendar.
 
 **"Rob isn't allowed for invites"**
-Open Rob's card in Mind → People, add an email address if missing, and tick
-**Allow AI to send email**. Guests never resolve any other way.
+Open Rob's card in Mind → Entities, add an Email if missing, and tick
+**Allow email**. Guests never resolve any other way.
 
 **Guests were added but nobody got an email**
 Sapphire sends invites with Google's `sendUpdates=all`; if Google shows the
-guests on the event but they got nothing, check the address on their People
+guests on the event but they got nothing, check the address on their person
 card, and their spam folder — consumer Gmail sometimes files invites from
 unfamiliar senders there.
 

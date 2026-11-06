@@ -42,6 +42,7 @@ WHAT THE TOOL DOES
 """
 
 import logging
+import math
 import re
 from pathlib import Path
 
@@ -62,13 +63,22 @@ TOP_DOCS = ("self", "tools", "toolmaker", "plugin-author/ai-reference", "trouble
 DOCS_DIR = Path(__file__).parent.parent / "docs"
 
 
+# History, not help: readable by name, never ranked in search (it matched
+# nearly every query and pushed the real doc out of the results).
+UNSEARCHED = ("changelog",)
+# A read longer than this comes back cut, with its section list.
+READ_CAP = 16000
+_STOP = set("a an and are can do does for from how i in is it me my of on or "
+            "the to what when where which who why with you your".split())
+
+
 def _get_available_docs() -> dict:
     """Scan docs/ for .md files and include README. Returns {name: path} dict."""
     docs = {}
     if not DOCS_DIR.exists():
         logger.warning(f"Docs directory not found: {DOCS_DIR}")
         return docs
-    
+
     for md_file in DOCS_DIR.glob("*.md"):
         # Normalize name: INSTALLATION.md -> installation
         name = md_file.stem.lower().replace("_", "-")
@@ -79,13 +89,74 @@ def _get_available_docs() -> dict:
     for md_file in (DOCS_DIR / "plugin-author").glob("*.md"):
         name = "plugin-author/" + md_file.stem.lower().replace("_", "-")
         docs[name] = md_file
-    
+
     # Include README.md from project root
     readme_path = DOCS_DIR.parent / "README.md"
     if readme_path.exists():
         docs["readme"] = readme_path
-    
+
+    # Plugin READMEs, the same set Help shows people. A core plugin wins
+    # its name; a user plugin only fills a name core doesn't have.
+    for pdir in (DOCS_DIR.parent / "core" / "plugins", DOCS_DIR.parent / "user" / "plugins"):
+        for readme in sorted(pdir.glob("*/README.md")) if pdir.is_dir() else ():
+            docs.setdefault("plugin/" + readme.parent.name.lower(), readme)
+
     return docs
+
+
+def _terms(query: str) -> list:
+    """Search words: lowercased, stopwords out, a plural 's' off ('devices'
+    finds 'device'). A query of only stopwords keeps its words."""
+    words = re.findall(r"[a-z0-9/_.-]+", query.lower())
+    kept = [w for w in words if w not in _STOP and len(w) > 1] or words
+    return list(dict.fromkeys(w[:-1] if len(w) > 4 and w.endswith("s") else w for w in kept))
+
+
+def _sections(content: str) -> list:
+    """[(heading, text)] split at ## / ### headings; text before the first
+    heading is under the doc's title."""
+    out, head, buf = [], "", []
+    for line in content.splitlines():
+        if re.match(r"#{2,3} ", line):
+            if buf:
+                out.append((head, "\n".join(buf)))
+            head, buf = line.lstrip("#").strip(), [line]
+        else:
+            buf.append(line)
+    if buf:
+        out.append((head, "\n".join(buf)))
+    return out
+
+
+def _find_section(content: str, want: str) -> str | None:
+    """The section whose heading best matches `want`, else the one whose text
+    holds the most of its words."""
+    secs = _sections(content)
+    w = want.lower().strip()
+    for head, text in secs:
+        if head.lower() == w:
+            return text
+    for head, text in secs:
+        if w and w in head.lower():
+            return text
+    terms = _terms(want)
+    best = max(secs, key=lambda s: sum(t in s[1].lower() for t in terms), default=None)
+    if best and any(t in best[1].lower() for t in terms):
+        return best[1]
+    return None
+
+
+def _cap(content: str, name: str) -> str:
+    """A long read comes back cut at a line, with its section list so the
+    next call can ask for one part."""
+    if len(content) <= READ_CAP:
+        return content
+    cut = content.rfind("\n", 0, READ_CAP)
+    heads = [h for h, _ in _sections(content) if h]
+    return (content[:cut if cut > 0 else READ_CAP]
+            + f"\n\n[Cut at {READ_CAP} of {len(content)} chars. Sections: "
+            + " · ".join(heads)
+            + f". Read one: search_help_docs(doc_name='{name}', section='<heading>').]")
 
 
 def _extract_ai_section(filepath: Path, full: bool = False) -> str:
@@ -126,46 +197,77 @@ def _extract_ai_section(filepath: Path, full: bool = False) -> str:
 
 def _search_across_docs(query: str, available: dict, max_results: int = 6,
                         snippet_chars: int = 180) -> list:
-    """Case-insensitive substring search across every doc's FULL text.
+    """Word search across every doc's FULL text.
 
-    Returns list of (doc_name, match_count, snippet) tuples, highest count
-    first. Snippet centers on the first match with surrounding context so
-    the caller sees enough to judge relevance.
+    Returns (doc_name, match_count, snippet, section) tuples, best first.
+    She asks in sentences, so the query is split into words: a doc ranks by
+    how many of them it holds, then by the words in its name and headings,
+    then by how often they appear (damped, so a long doc can't win on bulk
+    alone). The whole phrase appearing as typed is a bonus. The snippet is
+    the line holding the most of the words; `section` is the heading above
+    it, for a section= read.
 
     Search is a router, so it scans raw files — human prose included. The
     old AI-section-only scan made every unmarked doc invisible: searching
     'ghost message' whiffed while GHOST_MESSAGES.md sat in the corpus
     (the "search has no search" AIX bug, 2026-08-05).
     """
-    if not query:
+    terms = _terms(query or "")
+    if not terms:
         return []
-    q = query.lower().strip()
-    results = []
+    phrase = query.lower().strip()
+    # Adjacent word pairs as typed ('cut off', 'chat room'): common words that
+    # mean something together
+    raw = re.findall(r"[a-z0-9/_.-]+", phrase)
+    pairs = [f"{a} {b}" for a, b in zip(raw, raw[1:]) if not (a in _STOP and b in _STOP)]
+    texts = {}
     for name, filepath in available.items():
+        if name in UNSEARCHED:
+            continue
         try:
-            content = filepath.read_text(encoding='utf-8')
+            texts[name] = filepath.read_text(encoding='utf-8')
         except Exception:
             continue
-        if not content:
-            continue
+    # A word most docs share ('control', 'set') says little; a rare one says a lot.
+    # Words match at a word start: 'cut' is not in 'execute', 'device' finds 'devices'
+    pat = {t: re.compile(r'(?<![a-z0-9])' + re.escape(t)) for t in terms}
+    df = {t: sum(bool(pat[t].search(c.lower())) for c in texts.values()) for t in terms}
+    idf = {t: 1 + math.log((len(texts) + 1) / (df[t] + 1)) for t in terms}
+    scored = []
+    for name, content in texts.items():
         lower = content.lower()
-        count = lower.count(q)
-        if count == 0:
+        counts = {t: len(pat[t].findall(lower)) for t in terms}
+        hit = [t for t in terms if counts[t]]
+        if not hit:
             continue
-        # Snippet around first match
-        idx = lower.find(q)
-        start = max(0, idx - snippet_chars // 2)
-        end = min(len(content), idx + len(q) + snippet_chars // 2)
-        snippet = content[start:end].strip()
+        heads = " ".join(h.lower() for h, _ in _sections(content))
+        score = (sum(idf[t] * (4 + min(counts[t], 25) ** 0.5) for t in hit)
+                 + sum(10 for t in hit if t in name)
+                 + sum(2 for t in hit if t in heads)
+                 + sum(6 for p in pairs if p in lower)
+                 + (8 if len(terms) > 1 and phrase in lower else 0))
+        # Author guides answer "how do I build"; her questions are mostly "how do I use"
+        if name.startswith("plugin-author/"):
+            score *= 0.75
+        # Snippet: the line with the most distinct words, body before headings,
+        # earliest on a tie
+        lines = content.splitlines()
+        best_i = max(range(len(lines)),
+                     key=lambda i: (sum(bool(pat[t].search(lines[i].lower())) for t in terms),
+                                    not lines[i].startswith("#"), -i))
+        line = lines[best_i]
+        at = min((m.start() for t in hit for m in [pat[t].search(line.lower())] if m), default=0)
+        start = max(0, at - snippet_chars // 2)
+        snippet = line[start:start + snippet_chars].strip()
         if start > 0:
             snippet = '...' + snippet
-        if end < len(content):
-            snippet = snippet + '...'
-        # Collapse whitespace for compact display
-        snippet = re.sub(r'\s+', ' ', snippet)
-        results.append((name, count, snippet))
-    results.sort(key=lambda r: -r[1])
-    return results[:max_results]
+        if start + snippet_chars < len(line):
+            snippet += '...'
+        section = next((l.lstrip("#").strip() for l in reversed(lines[:best_i + 1])
+                        if re.match(r"#{2,3} ", l)), "")
+        scored.append((score, name, sum(counts.values()), re.sub(r'\s+', ' ', snippet), section))
+    scored.sort(key=lambda r: -r[0])
+    return [r[1:] for r in scored[:max_results]]
 
 
 def _match_doc_name(query: str, available: dict) -> str | None:
@@ -183,23 +285,31 @@ def _match_doc_name(query: str, available: dict) -> str | None:
     if query in available:
         return query
 
+    # Never decided by the filesystem's glob order: user docs before the
+    # prefixed sets, then the shortest name.
+    def pick(names):
+        return min(names, key=lambda n: ("/" in n, n.startswith("plugin/"), len(n), n), default=None)
+
+    variants = {query, query[:-1] if query.endswith("s") else query + "s"}
+
+    def words(n):
+        return set(n.split("/")[-1].split("-"))
+
+    # Whole word of a user doc ('commands' -> 'slash-commands', 'room' -> 'chat-room')
+    found = pick([n for n in available if "/" not in n and variants & words(n)])
+    if found:
+        return found
     # Exact basename of a prefixed doc ('hooks' -> 'plugin-author/hooks')
     # before substring matching, which would hit 'daemons-webhooks' first
-    for name in available:
-        if "/" in name and name.split("/", 1)[1] == query:
-            return name
-    
-    # Partial match (query is substring of doc name)
-    for name in available:
-        if query in name or name in query:
-            return name
-    
-    # Prefix match
-    for name in available:
-        if name.startswith(query) or query.startswith(name):
-            return name
-    
-    return None
+    found = pick([n for n in available if "/" in n and n.split("/", 1)[1] in variants])
+    if found:
+        return found
+    # Whole word of a prefixed doc
+    found = pick([n for n in available if "/" in n and variants & words(n)])
+    if found:
+        return found
+    # Partial match either way round
+    return pick([n for n in available if query in n or n.split("/")[-1] in query])
 
 
 AVAILABLE_FUNCTIONS = ['search_help_docs']
@@ -210,17 +320,21 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_help_docs",
-            "description": f"Sapphire docs. No args: what this app is. Top docs: {', '.join(TOP_DOCS)}. self + full=true: feature list.",
+            "description": f"Sapphire docs. No args: what this app is. Top docs: {', '.join(TOP_DOCS)}. self + full=true: feature list. plugin/<name>: a plugin's README.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search all docs"
+                        "description": "Search all docs, plain words"
                     },
                     "doc_name": {
                         "type": "string",
                         "description": "Doc to read, fuzzy match"
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": "One heading of that doc"
                     },
                     "full": {
                         "type": "boolean",
@@ -240,28 +354,36 @@ def execute(function_name: str, arguments: dict, config) -> tuple[str, bool]:
     if function_name != "search_help_docs":
         return f"Unknown function: {function_name}", False
     
-    doc_name = arguments.get('doc_name', '').strip()
-    query = arguments.get('query', '').strip()
+    doc_name = str(arguments.get('doc_name') or '').strip()
+    query = str(arguments.get('query') or '').strip()
+    section = str(arguments.get('section') or '').strip()
     full = arguments.get('full', False)
+    if isinstance(full, str):
+        full = full.strip().lower() in ('true', '1', 'yes')
     available = _get_available_docs()
 
     if not available:
         return "No documentation files found in docs/ directory.", False
 
+    def doc_list():
+        names = sorted(n for n in available if not n.startswith("plugin/"))
+        return ", ".join(names) + " (and plugin/<name> for plugin READMEs)"
+
     # Query mode: cross-doc search. Routes the AI to the right doc without
-    # it having to read each one blindly. Paired with schemas that cite
-    # search_help_docs('topic') when the AI vaguely remembers a topic but
-    # not the doc name.
-    if query:
+    # it having to read each one blindly. With doc_name too, the query
+    # picks a section of that doc instead (below).
+    if query and not doc_name:
         hits = _search_across_docs(query, available)
         if not hits:
-            return f"No matches for '{query}'. Available docs: {', '.join(sorted(available.keys()))}", True
+            return f"No matches for '{query}'. Available docs: {doc_list()}", True
         lines = [f"Matches for '{query}':", ""]
-        for name, count, snippet in hits:
-            lines.append(f"[{name}] ({count} match{'es' if count != 1 else ''})")
+        for name, count, snippet, sec in hits:
+            where = f" § {sec}" if sec else ""
+            lines.append(f"[{name}]{where} ({count} match{'es' if count != 1 else ''})")
             lines.append(f"  {snippet}")
             lines.append("")
-        lines.append(f"Use search_help_docs(doc_name='<name>') for full AI reference.")
+        lines.append("Read: doc_name='<name>' = its AI reference; add section='<heading>' "
+                     "for one part, or full=true for the human doc.")
         return "\n".join(lines), True
 
     # No argument: the app abstract. Kept short in the doc itself — this
@@ -276,13 +398,32 @@ def execute(function_name: str, arguments: dict, config) -> tuple[str, bool]:
     matched = _match_doc_name(doc_name, available)
     
     if not matched:
-        doc_list = ", ".join(sorted(available.keys()))
-        return f"Doc '{doc_name}' not found. Available: {doc_list}", False
-    
+        # A name that names nothing is usually a topic: answer with the docs
+        # that hold it, not a dead end.
+        hits = _search_across_docs(doc_name, available, max_results=3)
+        if hits:
+            near = ", ".join(f"{n}" + (f" § {s}" if s else "") for n, _, _, s in hits)
+            return f"No doc named '{doc_name}'. Docs about it: {near}", False
+        return f"Doc '{doc_name}' not found. Available: {doc_list()}", False
+
     filepath = available[matched]
+
+    # One part: by heading, or the part that holds the query's words.
+    # Searched over the whole file, human prose included.
+    want = section or query
+    if want:
+        try:
+            part = _find_section(filepath.read_text(encoding='utf-8'), want)
+        except Exception:
+            part = None
+        if part:
+            return _cap(part.strip(), matched), True
+        heads = [h for h, _ in _sections(filepath.read_text(encoding='utf-8')) if h]
+        return f"No section '{want}' in {matched}. Sections: {' · '.join(heads)}", False
+
     content = _extract_ai_section(filepath, full=full)
-    
+
     if not content:
         return f"Doc '{matched}' exists but has no '## Reference for AI' section yet.", False
-    
-    return content, True
+
+    return _cap(content, matched), True

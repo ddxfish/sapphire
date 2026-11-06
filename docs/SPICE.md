@@ -43,6 +43,8 @@ Checkbox changes save to the selected set automatically. Sapphire seeds starter 
 
 The **Spice** pill in the chat sidebar toggles spice on/off for the current chat only. Its label shows the rotation interval (e.g. `Spice · 3`), which you can change under the sidebar's System Prompt section.
 
+New chats start with spice **off** (the factory chat defaults). Activating a persona stamps its own spice toggle — Sapphire, Cobalt, Anita, Einstein, Cantos, Marcus and Eddie ship with spice on. Chat-room seats never get spice: a room turns it off for every seat whatever the persona says.
+
 ## Category Management
 
 Categories and their spices are managed inline in the Spices view: **+ Category** creates one, and each category expands to add, edit, or delete individual spices. Categories can have their own emoji, and **Reload Pool** re-reads the spice pool from disk if you've edited the file by hand.
@@ -92,6 +94,8 @@ SPICE SETS:
 QUICK ACCESS:
 - Sidebar "Spice · N" pill: click toggles spice for this chat (N = rotation turns)
 - Sidebar "spice set" dropdown: which set this chat uses (↗ opens the Spices view)
+- New chats: spice_enabled false (core/prompt_defaults/chat_defaults.json); a persona's spice_enabled applies on activation (sapphire, cobalt, anita, einstein, cantos, marcus, eddie ship true)
+- Chat-room seats: spice forced off every turn (core/rooms.py)
 
 HOW IT WORKS:
 - One random snippet per interval; only the active chat's set categories contribute to the pool

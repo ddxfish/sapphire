@@ -48,14 +48,7 @@ keep the `widgets` array shape, point `render` at your file under
 Edit `user/plugins/my-widget/web/widgets/hello.js` — change the contents
 of `paint()` to whatever you want.
 
-Sign + restart:
-
-```bash
-python tools/sign_plugin.py user/plugins/my-widget
-systemctl --user restart sapphire   # or your usual restart command
-```
-
-Enable the plugin in **Settings > Plugins** (toggle on). Open
+Load it: in **Settings > Plugins**, turn on unsigned plugins with the banner switch, click **Rescan**, and toggle your plugin on. Don't sign it — only keyholders sign ([Signing](signing.md)). Open
 **Settings > Dashboard**, click `+ Add` in the controls row above the
 panels, click **Add** next to your widget. It appears.
 
@@ -407,21 +400,19 @@ to persisted state. To save changes, call
 through the modal. (V2 may add a programmatic save API; for now,
 modal-only.)
 
-### Forgot to re-sign after editing → blocked at boot
+### Plugin blocked at load (unsigned or Tampered)
 
-Sapphire verifies plugin signatures on load. If you edit anything
-under `user/plugins/{name}/` (or `core/plugins/{name}/` for a shipped plugin), you must re-sign before restart:
-
-```bash
-python tools/sign_plugin.py user/plugins/{name}
-```
-
-Skipping this means the plugin loads as unsigned and is blocked
-unless `ALLOW_UNSIGNED_PLUGINS=true` is set (default false).
+Your own plugin has no `plugin.sig`, so it's `unsigned`: blocked
+until you turn on unsigned plugins with the Settings > Plugins banner
+switch (`ALLOW_UNSIGNED_PLUGINS`, default off). Shows **Tampered**
+instead? A `plugin.sig` is present that no longer matches (you edited a
+signed plugin, or signed with your own key) — that's always blocked.
+Delete `plugin.sig`, or, if you're a keyholder, re-sign. See
+[Signing](signing.md).
 
 ### Widget renders but doesn't appear in picker
 
-Your plugin is signed but not enabled. Check **Settings > Plugins**
+Your plugin loaded but isn't enabled. Check **Settings > Plugins**
 and toggle your plugin on. Then re-open the dashboard picker.
 
 ### `render()` threw on first call
@@ -510,4 +501,4 @@ DASHBOARD WIDGETS:
 - Rules: no hardcoded element ids when multi_instance (scope by class/container), no inline onclick=, prefix CSS classes with the plugin name; host utility classes (.dash-action-panel-info-line, .dim) are stable.
 - Sizes are horizontal spans only (height is content-driven); mobile <=768px collapses to one column. api_version 1 promises: ctx only grows, api method signatures stable, render contract stable.
 - Hot-reload limitation: after POST /api/plugins/{name}/reload, already-rendered widgets keep running OLD code until the dashboard tab is reloaded.
-- Reference plugin: `core/plugins/sample-widgets/` (hello.js minimal, note.js full). Your own widget plugin goes in `user/plugins/{name}/`. Re-sign after edits: `python tools/sign_plugin.py user/plugins/{name}` (shipped: `core/plugins/{name}`).
+- Reference plugin: `core/plugins/sample-widgets/` (hello.js minimal, note.js full). Your own widget plugin goes in `user/plugins/{name}/`. Signing: third-party = no plugin.sig + unsigned plugins allowed (Settings > Plugins banner); keyholders re-sign after edits (signing.md).

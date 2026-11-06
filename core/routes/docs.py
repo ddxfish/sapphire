@@ -131,19 +131,18 @@ async def get_doc(path: str, request: Request, _=Depends(require_login)):
         target = ROOT_DIR / "README.md"
     elif path.startswith("_plugins/"):
         # e.g. _plugins/telegram/README.md → plugins/telegram/README.md
-        rel = path[len("_plugins/"):]
-        target = (SYSTEM_PLUGINS_DIR / rel).resolve()
-        # Also check user plugins
-        if not target.exists():
-            target = (ROOT_DIR / "user" / "plugins" / rel).resolve()
-        plugins_root = str((SYSTEM_PLUGINS_DIR).resolve())
-        user_plugins_root = str((ROOT_DIR / "user" / "plugins").resolve())
-        if not (str(target).startswith(plugins_root) or str(target).startswith(user_plugins_root)):
+        rel = Path(path[len("_plugins/"):])
+        # Judge the path as asked, never .resolve(): a symlinked user plugin
+        # resolves outside user/plugins and was refused. <plugin>/<file>.md only.
+        if len(rel.parts) < 2 or ".." in rel.parts or rel.is_absolute() or rel.suffix != ".md":
             raise HTTPException(status_code=403, detail="Access denied")
+        target = SYSTEM_PLUGINS_DIR / rel
+        if not target.exists():
+            target = ROOT_DIR / "user" / "plugins" / rel
     else:
         target = (DOCS_DIR / path).resolve()
-        # Prevent directory traversal
-        if not str(target).startswith(str(DOCS_DIR.resolve())):
+        # Prevent directory traversal (a path check, not a string prefix)
+        if not target.is_relative_to(DOCS_DIR.resolve()):
             raise HTTPException(status_code=403, detail="Access denied")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Doc not found")

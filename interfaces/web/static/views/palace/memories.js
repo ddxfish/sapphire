@@ -49,7 +49,7 @@ function content() { return container?.querySelector('#pal-mem-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'memories', help: helpPills('Memories', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — her diary, one stream. Deliberate self notes ride along (chip says which); the self SHEET lives on the Self tab. Expand "meta" on any card to see how a memory was made.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'memories', help: helpPills('Memories', { doc: 'MEMORY.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — her diary, one stream. Deliberate self notes ride along (chip says which); the self SHEET lives on the Self tab. Expand "meta" on any card to see how a memory was made.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">

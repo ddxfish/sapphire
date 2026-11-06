@@ -20,7 +20,7 @@ export default {
     icon: '🎵',
     description: 'Wake word detection model and threshold',
     essentialKeys: ['WAKE_WORD_ENABLED', 'WAKEWORD_MODEL', 'WAKEWORD_THRESHOLD'],
-    advancedKeys: ['WAKEWORD_FRAMEWORK', 'CHUNK_SIZE', 'BUFFER_DURATION', 'WAKE_TONE_DURATION', 'WAKE_TONE_FREQUENCY'],
+    advancedKeys: ['WAKEWORD_FRAMEWORK', 'CHUNK_SIZE', 'WAKE_TONE_DURATION', 'WAKE_TONE_FREQUENCY'],
 
     render(ctx) {
         if (ctx.wizard) {

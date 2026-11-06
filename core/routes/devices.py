@@ -364,7 +364,7 @@ async def devices_firmware_sources(request: Request, _=Depends(require_login)):
 async def devices_firmware_own(request: Request, file: UploadFile = File(...), _=Depends(require_login)):
     """A firmware file of the user's own: checked, kept, and from then on the
     board 'own' to either lane of the flasher."""
-    _open(request)
+    _open(request, write=True)
     from core.devices import firmware
     data = await file.read(firmware.FILE_MAX + 1)
     if len(data) > firmware.FILE_MAX:

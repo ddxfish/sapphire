@@ -51,11 +51,13 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | [Devices](devices.md) | Device drivers - teach Sapphire a machine or gadget: manifest declaration, the three driver functions, secrets, the tool door |
 | [Agents](agents.md) | Agent kinds - a background worker she spawns: the Agent class, ask/event/report, privacy flags, the four core tools |
 | [Stories](stories.md) | Story packs — rooms, referee, dice, sealed blanks, identity modes, backdrops |
+| [Social](social.md) | Social media providers — the `social` plugin's provider contract, posting through one tool |
 | [Apps](APPS.md) | Full-page plugin UIs in the Apps nav — render/cleanup contract, navrail + flyout promotion |
 | [Settings](settings.md) | Manifest-declared settings, custom web UI, settings API, danger confirms |
+| [Notifications](providers.md#notifications-and-progress-corenotify) | `core.notify` — rows in the notification center, toasts, progress bars (web twin `shared/notify.js` in [Web UI](web-ui.md); user side: [NOTIFICATIONS.md](../NOTIFICATIONS.md)) |
 | [Web UI](web-ui.md) | Shared JS modules, CSS variables, modals, CSRF, style injection |
 | [Themes](THEMES.md) | Custom themes — CSS, animated JS backgrounds, per-theme settings (Settings > Visual) |
-| [Signing](signing.md) | Verification states, sideloading, signing your own plugins |
+| [Signing](signing.md) | Verification states, the unsigned-plugins switch, why third-party authors don't sign |
 | [Lifecycle](lifecycle.md) | Startup, live toggle, hot reload, rescan, error isolation, chat lifecycle |
 | [Publishing](publishing.md) | How to structure your repo and submit to the Sapphire Store |
 | [Examples](examples.md) | Minimal working examples of every capability type — copy-paste templates |
@@ -98,7 +100,7 @@ def post_chat(event):
     logger.info(f"AI: {event.response}")
 ```
 
-Enable in Settings > Plugins. It loads immediately — no restart.
+Open **Settings > Plugins**, click **Rescan** (or restart) so Sapphire sees the new folder, turn on unsigned plugins with the switch on the banner ("Unsigned plugins blocked" → "Unsigned plugins ALLOWED"), then toggle your plugin on. It loads immediately — no restart. Your plugin is unsigned and that's normal: don't sign it ([Signing](signing.md)).
 
 ---
 
@@ -181,9 +183,9 @@ user/plugins/smart-home/
         "cron": "0 23 * * *",
         "handler": "schedule/lock_check.py"
       }
-    ],
-    "web": { "settingsUI": "plugin" }
-  }
+    ]
+  },
+  "settingsUI": "plugin"
 }
 ```
 

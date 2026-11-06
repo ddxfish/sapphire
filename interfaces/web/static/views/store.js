@@ -685,7 +685,7 @@ async function confirmAndInstall(slug, btn) {
         confirmBtn.disabled = true;
         confirmBtn.textContent = isUpdate ? 'Updating...' : 'Installing...';
         try {
-            await installFromStore({
+            const res = await installFromStore({
                 githubUrl: item.github_url,
                 storeSlug: item.slug,
             });
@@ -694,7 +694,7 @@ async function confirmAndInstall(slug, btn) {
             // a default_enabled:true plugin lands on disk + backend registers
             // its tools, but the frontend script never loads until the user
             // does a full page reload. 2026-05-14.
-            document.dispatchEvent(new CustomEvent('sapphire:plugin_toggled'));
+            document.dispatchEvent(new CustomEvent('sapphire:plugin_toggled', { detail: { plugin: res?.plugin_name || item.slug, enabled: true } }));
             close();
             // Refresh whichever surface is showing.
             if (state.detailSlug) renderDetail(state.detailSlug);

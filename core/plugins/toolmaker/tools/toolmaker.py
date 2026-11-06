@@ -95,7 +95,7 @@ TOOLS = [
         "function": {
             "name": "tool_save",
             "description": "Create or update a custom tool plugin; the code is validated. Then call tool_load. FIRST call "
-                           "search_help_docs(\"TOOLMAKER\") for the required format.",
+                           "search_help_docs(doc_name='toolmaker') for the required format.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -421,7 +421,7 @@ def execute(function_name, arguments, config):
                 if reloaded:
                     parts.append(f"Reloaded {len(reloaded)} updated: {', '.join(reloaded)}")
                 if failed_to_load:
-                    parts.append(f"FAILED to load {len(failed_to_load)}: {', '.join(failed_to_load)} (check plugin signing/sideloading)")
+                    parts.append(f"FAILED to load {len(failed_to_load)}: {', '.join(failed_to_load)} (your plugins are unsigned: they load only when unsigned plugins are allowed, the switch on the Settings > Plugins banner; ask the user)")
                 if parts:
                     return f"{'. '.join(parts)}. Tools are now available.", not failed_to_load
                 else:

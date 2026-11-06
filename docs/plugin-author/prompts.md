@@ -20,7 +20,7 @@ Prompts UI beside the user's own, badged with your plugin name.
 
 Both file keys are optional — ship either or both. Paths are relative to the
 plugin directory and the files are signed content like everything else
-(edit → re-sign).
+(in a signed plugin, edit → a keyholder re-signs; see [Signing](signing.md)).
 
 `kind` declares what your pack entries ARE, and visibility derives from it:
 
@@ -86,7 +86,7 @@ Component types: `character`, `location`, `relationship`, `goals`, `format`,
 ## Reference for AI
 
 PROMPT PACKS:
-- Manifest: `capabilities.prompts` = {monoliths?: path, pieces?: path, kind?: "user"|"internal"|"story"}. Paths relative to the plugin dir; files are signed content (edit -> re-sign). Either or both files.
+- Manifest: `capabilities.prompts` = {monoliths?: path, pieces?: path, kind?: "user"|"internal"|"story"}. Paths relative to the plugin dir; files are signed content when the plugin is signed (edit -> keyholder re-signs). Either or both files.
 - kind: "user" (default) = visible in Prompts UI/pickers/AI prompt tools, badged with the plugin name; "internal" = hidden from pickers but resolvable by name; "story" = reserved for rendered story prompts (engine-stamped). Unknown kind coerces to "user" WITH a boot warning (fail-open to visible). A monolith entry may override the pack kind with its own "kind".
 - monoliths.json: {name: {content, privacy_required}} — plain string values normalized to the object form. {ai_name}/{user_name} templates work in content.
 - pieces.json: {"components": {type: {key: text}}, "scenario_presets": {name: {component: value}}}. Component types: character, location, relationship, goals, format, scenario, extras, emotions.

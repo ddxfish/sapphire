@@ -1,145 +1,60 @@
-# Knowledge Base
+# Knowledge — the Library
 
-Sapphire can remember facts about your world — people you know, topics you care about, reference documents, and goals you're working toward. The Knowledge system organizes all of this and makes it searchable by the AI during conversations.
+The Library is where reference material lives: notes, files, whole books, folders you keep on disk, and pictures. Sapphire searches it, reads it page by page, and shelves new things herself. It's the knowledge layer of the [Mind Palace](MEMORY.md), at **Mind → Knowledge**.
 
-Everything lives in the **Mind** nav group (brain icon in the nav bar) — six views: Self, [Memories](MEMORY.md), [People](PEOPLE.md) (shown as Entities), Knowledge, [Goals](GOALS.md), and Admin. Self and Admin belong to the [Mind Palace](MIND-PALACE.md) engine; with classic memory they just point you to the plugin, and an **AI Knowledge** tab appears on the strip inside the classic Mind views. This guide covers the **Knowledge** tabs (human + AI) and the shared **scope** system.
-
-When the Mind Palace plugin is on, its **Library** replaces this whole knowledge surface — see [MIND-PALACE.md](MIND-PALACE.md).
-
-<img width="50%" alt="sapphire-memories" src="https://github.com/user-attachments/assets/348f1628-5f0c-4ce3-948e-2e0c1385bc75" />
-
----
-
-## How It Works
-
-The AI has tools to save and search knowledge automatically during conversations. You can also add knowledge manually through the Mind view in the web UI.
-
-Knowledge is **scoped** — each chat can access a different set of knowledge. This lets you keep work knowledge separate from personal, or give different personas different contexts. See [Scopes](#scopes) below.
-
----
-
-## Knowledge Tabs
-
-Knowledge is organized into **tabs** (categories). Each tab holds entries — chunks of text that the AI can search.
+Memories are short snippets about what happened ([MEMORY.md](MEMORY.md)). The Library is for anything longer you want her to be able to look up.
 
 <img width="50%" alt="sapphire-knowledge" src="https://github.com/user-attachments/assets/405a43e1-b542-4489-b213-6eb82c9226e4" />
 
-### Adding Knowledge (Web UI)
-
-1. Open the **Mind** view (brain icon)
-2. Click the **Human Knowledge** tab
-3. Click **+ New Tab** to create a category (e.g., "Cooking Recipes", "Work Projects")
-4. Add entries manually, or upload files
-
-### File Upload
-
-You can upload text files to a knowledge tab. Sapphire automatically:
-- Splits the content into chunks (paragraph → sentence → word boundaries)
-- Generates vector embeddings for semantic search
-- Stores with the source filename for reference
-
-### AI Knowledge
-
-The **AI Knowledge** tab shows knowledge tabs the AI created itself using the `save_knowledge` tool. These are marked as `type: ai` and can be deleted by the AI. User-created tabs are protected — the AI can't delete them.
-
 ---
 
-## Per-Chat Documents
+## How it's organized
 
-Each chat can have files attached directly. They're separate from the Knowledge tabs and belong strictly to that one chat. Attach with the **+** beside the message box, by dropping a file on it, or by pasting a copied file. Text files, PDF and EPUB work, up to 25MB.
+**Category → Topic → documents.** Categories and topics are drawers with descriptions, and the descriptions are search surface for her and for you, so write them as you'd explain the shelf to someone. **+ Category** makes a drawer; **+ topic** on a category adds one inside it.
 
-Attached files appear as a row of pills above the message box, with an X to remove each one. Pictures you send show there too, counting down the turns the AI can still see them.
+Every document has a kind, filtered by the **All / 📝 Notes / 📄 Files / 🖼️ Images** pills.
 
-**The Docs dropdown** in that row sets how much she's handed each turn, across all the chat's documents: Off, Light (~2K tokens), Normal (~8K) or Heavy (~24K), never more than a quarter of the model's window. Everything that fits arrives whole. Otherwise she gets the best matching excerpts and a list of what she isn't seeing.
+## Adding things
 
-**She can always read more.** `read_attachment` walks a file part by part or opens a PDF page, and `search_attachments` looks for meaning and exact words. They're offered whenever the chat has documents and any tools at all, whatever the toolset. Off withholds them too.
+| Button | What it does |
+|---|---|
+| **+ 📝 Note** | Write a note straight into a topic |
+| **+ 📄 File** | Upload one text file, PDF or EPUB |
+| **+ 📚 Bulk** | Import many files at once, in the background, with live progress chips |
+| **+ 🖼️ Images** | Add pictures, searchable by what's in them and by caption |
+| **+ 📂 Folder** | **Watch a folder**: index it in place, with the folder as the source of truth. ↻ rescans; a file that leaves the folder shows a **missing** chip |
 
-**Scanned PDFs** have no text, so search can't reach them. There's no OCR: she looks at the pages as pictures, which takes a model that can see. On one that can't, the image describer speaks for it, so its quality depends on Settings > Images. Some pages can't be shown, like vector charts (their text still reads) and JBIG2 scans unless `jbig2dec` is installed.
+Long documents are split into sections and embedded for meaning-based search. Importance is set automatically per kind.
 
-A pill marked in amber is found by exact words only until an embedding provider has processed it. Chat export doesn't include documents.
+## Reading
 
-**In a private chat, documents aren't protected.** Sealing the chat encrypts its messages and images but not its documents, so anyone with access to the disk can read their text and the stored PDFs. They're allowed, and their pills turn red with a warning. While sealed, the app hides them.
+Open a document for the reader. **⬇ original** downloads the file byte-for-byte, **⬇ text** the extracted text. Pictures open in a lightbox with annotations, and **⬇ annotated** saves them with the marks drawn on.
 
----
+## Moving a library
 
-## Goals
-
-Goals have their own guide now — see **[GOALS.md](GOALS.md)**.
-
----
+**⇓ Export** downloads the whole scope's library as a zip (files and annotations). **⇑ Import** brings a zip into the current scope; re-imports skip what's already there. Watched folders come across as entries to re-add by hand, because a zip never scans your disk.
 
 ## Scopes
 
-Scopes isolate knowledge per-chat. Each chat has scope selectors in the sidebar under **Mind Scopes**:
+The Library rides the chat's **memory scope**, like the rest of the Mind (see [Scopes](MEMORY.md#scopes)). There's no separate knowledge scope. A chat on scope `work` sees `work`'s library plus the read-only `global` scope.
 
-| Scope | What it controls |
-|-------|-----------------|
-| Memory | Which memory slot the AI reads/writes |
-| Knowledge | Which knowledge tabs are accessible |
-| People | Which contacts the AI can see |
-| Goals | Which goal set is visible |
+## Files attached to one chat
 
-Set a scope to **none** to disable that system for a chat entirely.
-
-### Global Overlay
-
-Knowledge and memory use a **global overlay** — when a chat uses scope "work", it sees both "work" entries AND entries in the "global" scope. This lets you share common knowledge across all chats while keeping specialized knowledge isolated.
-
-### Creating Scopes
-
-Click the **+** button next to any scope dropdown in the sidebar. Scopes are just names — create them to match your organizational style (e.g., "work", "personal", "gaming").
-
----
-
-## Search
-
-The AI searches knowledge using a cascading strategy (tries each method until it finds results):
-
-1. **Filename match** — exact source file name
-2. **Full-text search** (AND) — all search terms must match
-3. **Full-text search** (OR + prefix) — any term, prefix matching
-4. **Vector similarity** — semantic meaning (threshold: 0.40)
-5. **Substring fallback** — LIKE query
-
-This means the AI can find knowledge both by exact keywords and by meaning.
+A file you attach in a chat (the **+** by the message box) belongs to that chat only, not the Library. See [Chat documents](CHATS.md#documents). To keep something for good, save it to the Library.
 
 ---
 
 ## Reference for AI
 
-Knowledge base system for storing and searching structured information.
+LIBRARY = Mind Palace knowledge layer (Mind → Knowledge). Category → Topic → documents (notes, files, books, watched folders, images). Same memory_scope as memories; 'global' overlay read-only for you.
 
 TOOLS:
-- save_person(name, relationship?, phone?, email?, address?, notes?) — upsert contact
-- save_knowledge(category, content, description?) — store info in category (auto-chunks long content)
-- search_knowledge(query?, category?, entry_id?, limit?) — search people + knowledge + RAG docs
-- delete_knowledge(category?, entry_id?) — delete AI-created content only
+- library() — the catalog: every category, topic and document.
+- search_memory(query, layer='knowledge') — search inside documents (mixed searches include knowledge_search_chunks per document, default 2).
+- read_document(document_id, page?, around?, start?, end?, private_key?) — [doc N]; page=N reads in order (5 sections a page); around=N = section N with neighbors (follow a search hit); start/end = a range.
+- memory_save_image(source, topic, caption?, private_key?) — keep an image (img:<id>, doc:<N>, absolute path, URL) under a topic, searchable by pixels + caption.
+- memory_view_image(query? | document_id? | image_id?, count?) — library pictures by what's in them; the user sees them too; matches are relative to the scope's own scores, so 'none look like that' lists the nearest.
+- local_view_images(paths | folder, page?, count?) — image files on this computer as numbered tiles (folders paged).
+- No save_knowledge/search_knowledge/delete_knowledge: those were the legacy engine's.
 
-DATABASES:
-- user/knowledge.db — people, knowledge_tabs, knowledge_entries, knowledge_fts
-- (memory → see MEMORY.md · goals → see GOALS.md)
-
-SCOPES:
-- Knowledge scoped via scope_knowledge ContextVar (default: 'default')
-- People scoped via scope_people ContextVar (default: 'default')
-- Goals scoped via scope_goal ContextVar (default: 'default')
-- Global overlay: scope sees own data + 'global' scope entries (read-only for AI)
-- AI cannot write to the 'global' scope — only users can via the UI
-- RAG strict: __rag__:{chat_name} scope, no overlay
-
-SEARCH STRATEGY:
-1. Filename match (0.96 score)
-2. FTS AND (0.95 score)
-3. FTS OR + prefix
-4. Vector similarity (0.40 threshold for knowledge, 0.55 for people)
-5. LIKE fallback (0.35 score)
-
-CONTENT PROTECTION:
-- AI can delete entries from type='ai' tabs only
-- User-created tabs (type='user') are protected
-- AI cannot delete people
-
-CHUNKING:
-- Long content auto-split: paragraph → sentence → word boundaries
-- Each chunk embedded independently for search
-- Source filename tracked for reference
+Chat attachments are NOT the library: read_attachment/search_attachments (CHATS.md).

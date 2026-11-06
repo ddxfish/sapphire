@@ -49,23 +49,29 @@ line — so it can weave a line in, ignore it, or call it out, rather than obeyi
 hidden instructions silently. That labeling is what separates a ghost message from
 puppetry.
 
-**Message order** in the LLM payload: `[system, *history, ghost, new-user]`
-(assembled in `_build_base_messages`). If nothing contributes, no ghost message is
+**Message order** in the LLM payload: `[system, *history, ghost, documents?, new-user]`
+(assembled in `_build_base_messages`). The documents row, with its pictures, rides only
+when the chat has attached documents. If nothing contributes, no ghost message is
 sent at all.
 
 ---
 
 ## Three ways to contribute
 
-### 1. Built-in per-turn (spice + datetime)
+### 1. Built-in per-turn (datetime, idle, spice)
 
-Driven by chat settings, zero plugin involvement:
+Driven by settings, zero plugin involvement:
 
 - **Datetime** — when `inject_datetime` is true (**default off**). Emits the current
   time in `USER_TIMEZONE`.
-- **Spice** — when `spice_enabled` is true (**default on**) and a spice is selected.
+- **Idle** — when the chat was quiet for at least `IDLE_NOTICE_MINUTES` (default 60,
+  0 = never, Settings → LLM → General): *"Quiet here: 2 h 10 min since the last message
+  in this chat."*
+- **Spice** — when `spice_enabled` is true and a spice is selected. New chats ship with
+  spice **off**; a persona can turn it on. With `SPICE_DELIVERY` set to `system`, spice
+  goes into the system prompt instead of here.
 
-Both are `(core)` contributions, built in `core/ghost_messages.py`.
+All are `(core)` contributions, built in `core/ghost_messages.py`.
 
 ### 2. The per-chat "Ghost Message" box (operators / users)
 
@@ -254,14 +260,14 @@ user, never saved.
 
 ## Reference for AI
 
-Per-turn ephemeral context rail: one user-role message inserted right before the new user turn. Payload order [system, *history, ghost, new-user]. Never persisted (architectural — built into the payload list, never handed to history saves), never rendered to the user, sits outside Claude's cache prefix (cache-safe; other providers get it as a plain user message).
+Per-turn ephemeral context rail: one user-role message inserted right before the new user turn. Payload order [system, *history, ghost, documents?, new-user]. Never persisted (architectural — built into the payload list, never handed to history saves), never rendered to the user, sits outside Claude's cache prefix (cache-safe; other providers get it as a plain user message).
 
 ENVELOPE:
 - Header sentinel: "[System context from Sapphire's own app — not written by the user]" (_ENVELOPE_HEADER, core/ghost_messages.py)
 - One attributed line per source; attribution is runner-enforced (no label spoofing)
 
 SOURCES:
-- (core) Time — chat setting inject_datetime (default off); (core) Spice — spice_enabled (default on)
+- (core) Time — chat setting inject_datetime (default off); (core) Idle — "Quiet here: X since the last message in this chat." once quiet ≥ IDLE_NOTICE_MINUTES (60; 0 = never); (core) Spice — spice_enabled (new chats ship off) unless SPICE_DELIVERY='system' (then it rides the system prompt)
 - (operator) — per-chat ghost_context setting ("Ghost Message" box, chat surface sidebar); same line every turn, no length cap
 - <plugin> — ghost_inject hook: set event.ghost_text (string); errors isolated, non-strings coerced, 2 KB/plugin cap; event.config is None (import config directly)
 

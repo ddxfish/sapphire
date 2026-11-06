@@ -67,8 +67,8 @@ Time-based tasks are half the picture: Sapphire can also react to outside events
 
 | Field | What it does |
 |-------|--------------|
-| **Mind scopes** | Per-task memory, knowledge, people, and goals scopes (plus any plugin scopes). Default "none"—isolated unless you say otherwise. |
-| **Context window** | Token limit for conversation history. 0 = app default. |
+| **Mind scopes** | Per-task memory and contacts scopes (plus any plugin scopes). Default "none"—isolated unless you say otherwise. |
+| **Context window** | Token budget for the whole request — system prompt, tool schemas, history and the reply. 0 = the app's `CONTEXT_LIMIT`. See [CONTEXT.md](CONTEXT.md). |
 | **Max parallel tools / Max tool rounds** | Per-task tool execution limits. 0 = app default. |
 
 If a task targets a private chat and the vault is locked, the Chat Name shows **🔒 locked vault** instead of the name — saving the task keeps the real target, or type a name to retarget. A task that fires at a sealed chat fails loudly rather than creating a plaintext chat with the same name. See [PRIVACY.md](PRIVACY.md).
@@ -114,6 +114,8 @@ An Idle Heartbeat (Triggers › Heartbeat › **+ Idle**) is a heartbeat that wa
 - A laptop asleep counts as quiet: open it after a night away and she may greet you.
 - They have their own column and their own 4 slots.
 
+Separate from idle heartbeats: when you write after a chat has been quiet at least **`IDLE_NOTICE_MINUTES`** (Settings › LLM › General, default 60; 0 = never), she's told how long it was ("Quiet here: 2 h 10 min since the last message in this chat.") in the per-turn note beside the time — see [GHOST_MESSAGES.md](GHOST_MESSAGES.md).
+
 ## Tips
 
 - Start with infrequent schedules while testing to avoid spam
@@ -131,6 +133,7 @@ Continuity runs scheduled autonomous tasks. UI: **Triggers** nav group with five
 TASK CREATION (UI):
 - Triggers > Scheduled > "+ Task" (heartbeats: Triggers > Heartbeat > "+ Heartbeat"; idle heartbeats: "+ Idle")
 - Idle Heartbeat = a heartbeat with `idle_minutes` > 0: fires once the person has been quiet that long app-wide (core/idle.py, person=True); `idle_backoff` (default on) = 1x/2x/4x then rest until they speak (a long quiet at the first look jumps to its rung: one beat); `{quiet}` in the message = the quiet in words
+- IDLE_NOTICE_MINUTES (Settings > LLM > General, default 60, 0 = never): a message after that much quiet in a chat tells her "Quiet here: X since the last message in this chat." in the ghost message — not a heartbeat, no turn of her own
 - Set schedule (cron or simple time picker), initial message, prompt, toolset; picking a Persona auto-fills prompt/voice/toolset/model/scopes
 - Accordions: AI, Chat, Voice, Mind (scopes), Execution Limits
 
@@ -149,9 +152,9 @@ KEY FIELDS:
 - tts_enabled: server speakers; browser_tts: route audio to an open browser tab instead
 - voice / pitch / speed: TTS overrides; pitch/speed 0.5-2.0, null = current default
 - privacy_required: local providers only; auto-set when the pinned prompt requires privacy
-- context_limit / max_parallel_tools / max_tool_rounds: per-task execution limits, 0 = app default
+- context_limit: whole-request token budget (system + tools + history + reply), 0 = CONTEXT_LIMIT; max_parallel_tools / max_tool_rounds: per-task execution limits, 0 = app default
 - max_runs: auto-disable after N runs (0 = unlimited); delete_after_run: delete the task once its runs finish
-- *_scope keys (memory_scope, knowledge_scope, ...): per-task mind scopes, default 'none'
+- *_scope keys (memory_scope, people_scope, plugin scopes): per-task mind scopes, default 'none'
 
 MANUAL TRIGGER:
 - ▶ Run now on any task in the Heartbeat/Scheduled views

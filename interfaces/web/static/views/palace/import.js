@@ -36,7 +36,7 @@ function content() { return container?.querySelector('#pal-import-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: tabsWithImport(), active: 'import', help: helpPills('Import', { doc: 'MIND-PALACE.md', inline: true }), status: '\u{1F4E6} Mind Palace — bring Memory (legacy) across. The old databases are opened read-only; the import is additive and safe to re-run. Scrub, below, is the one thing here that writes to them.', rows: [{ cls: 'pal-done', html: doneBar() }] })}
+        ${renderSectionHeader({ tabs: tabsWithImport(), active: 'import', help: helpPills('Import', { doc: 'MEMORY.md', inline: true }), status: '\u{1F4E6} Mind Palace — bring Memory (legacy) across. The old databases are opened read-only; the import is additive and safe to re-run. Scrub, below, is the one thing here that writes to them.', rows: [{ cls: 'pal-done', html: doneBar() }] })}
         <div class="view-body view-scroll" id="pal-import-content"><div class="ui-empty">Counting…</div></div>`;
     bindSectionHeader(container);
     container.querySelector('#pal-import-done')?.addEventListener('click', toggleDone);

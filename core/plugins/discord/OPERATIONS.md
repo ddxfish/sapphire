@@ -100,7 +100,7 @@ None. The plugin keeps nothing that needs pruning.
 
 ## Voice runbook
 
-1. **The rule.** Settings → Continuity → Realtime → **Discord: Voice channel**: account, filter
+1. **The rule.** Triggers → Realtime → **+ Realtime** → **Discord: Voice channel**: account, filter
    (blank = every voice channel the bot sees), Auto-join (off by default), keep chat history, and
    the persona / provider / model / toolset that run the voice chat. No enabled rule = voice off.
 2. **Join.** `/voice join` (in a voice channel, or name one) or her `discord_join_voice` tool. A
@@ -137,4 +137,4 @@ Registered per connected bot: `/voice join [channel]`, `/voice leave`.
 | **Bot connected, no message events** | Message Content Intent; the task's filter; Debug → Recent decisions names the stage that refused it |
 | **Crash loop on login** | Discord's daily identify cap — leave it 24 h; the 5-minute backoff protects the token |
 | **Stuck voice session** | `/voice leave`; if it does not answer, disable and re-enable the plugin (stop disconnects every voice connection) |
-| **Wrong bots online** | only bots selected by an enabled Continuity task log in; the tick reconciles within 15 s of a task change |
+| **Wrong bots online** | only bots selected by an enabled Daemon or Realtime task (Triggers) log in; the tick reconciles within 15 s of a task change |

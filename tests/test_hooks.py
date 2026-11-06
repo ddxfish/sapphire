@@ -403,3 +403,14 @@ class TestEdgeCases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_exact_voice_match_ignores_end_punctuation():
+    """STT punctuates: "Stop." and "Be quiet!" must still hit exact triggers."""
+    from core.hooks import HookRunner
+    r = HookRunner()
+    vm = {"triggers": ["stop", "be quiet"], "match": "exact"}
+    for said in ("Stop.", "stop", " STOP! ", "Be quiet!", "be quiet..."):
+        assert r._check_voice_match(vm, said), said
+    for said in ("stop it", "don't stop", "be, quiet"):
+        assert not r._check_voice_match(vm, said), said

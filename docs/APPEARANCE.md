@@ -4,7 +4,7 @@ Everything that controls how Sapphire looks: color themes, fonts, text size and 
 
 ## What it is
 
-**Settings > Visual** is the global appearance control room: pick a theme, a font, text sizing, a background scene, and an ambient motion. Each chat can then override the accent color, scene, and motion for itself from the 🎨 **Appearance** button in the chat sidebar — and Sapphire has tools (`set_scene`, `set_motion`) to change the current chat's look mid-conversation.
+**Settings > Visual** is the global appearance control room: pick a theme, a font, text sizing, a background scene, and an ambient motion. Each chat can then override the accent color, scene, and motion for itself from the 🎨 **Appearance** button in the chat sidebar — and Sapphire has tools (`set_scene`, `set_motion`) to change the current chat's look mid-conversation. The setup wizard's optional **Look** step is the same Visual tab (colors, type and a background up front, the rest folded) plus a default-persona picker.
 
 ## Using it
 
@@ -70,7 +70,6 @@ Both write the same per-chat settings the 🎨 modal writes, and the page update
 
 ### Other options
 
-- **Send Button** — color the send button with the active trim instead of the provider indicator.
 - **Icon Color** — tints the gem logo and favicon for this Sapphire instance (handy when you run more than one). An active chat/persona trim overrides it. Saved with the Settings **Save** button.
 - **Avatars In Chat** — show or hide avatars next to messages. Saved with the Settings **Save** button.
 
@@ -82,7 +81,6 @@ Both write the same per-chat settings the 🎨 modal writes, and the page update
 | Theme's own settings | panel under the theme grid | per browser | only when the theme declares any |
 | Font | Visual > Type | per browser | webfonts download on first use |
 | Spacing / Font Size | Visual > Options | per browser | instant |
-| Send Button trim | Visual > Options | per browser | instant |
 | Global scene underlay | Visual > Background & Motion | server (all devices) | saves immediately |
 | Motion + Speed / Intensity | Visual > Background & Motion | per browser | the global default |
 | Icon Color | Visual > Options | server | Save button; trim overrides it |
@@ -117,7 +115,7 @@ BROWSER-LOCAL PICKS (localStorage, per device):
 - font: `sapphire-font` (system|rounded|serif|mono|handwriting) — explicit pick > theme bundle font
 - density: `sapphire-density` (compact|comfortable; unset=default); text scale: `sapphire-fontsize` (small|large|xlarge)
 - motion: `sapphire-motion` ('none' = explicitly off); multipliers: `sapphire-motion-speed` / `sapphire-motion-intensity` (0.5|1|1.75)
-- send button trim: `sapphire-send-btn-trim`
+- send button: no pick — fixed privacy tint (`--llm-local` / `--llm-cloud` on `#send-btn`, style.css)
 
 SERVER SETTINGS: DEFAULT_BACKGROUND (global scene underlay, saves immediately from the Visual picker), ICON_COLOR (gem+favicon tint; active trim overrides), AVATARS_IN_CHAT.
 

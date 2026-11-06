@@ -2,6 +2,17 @@
 
 Sapphire uses ed25519 signatures to verify plugin integrity. This page is the plugin-author summary — the full authorized-author walkthrough (key generation, getting on the key list) lives in [docs/SIGNING.md](../SIGNING.md).
 
+## Do I sign my plugin?
+
+**No — unless your key is on the central key list.** Most authors never sign.
+
+- **Developing or sharing a plugin:** ship no `plugin.sig`. Turn on unsigned plugins with the switch on the **Settings > Plugins** banner ("Unsigned plugins blocked" → "Unsigned plugins ALLOWED"). Your plugin loads as `unsigned`; anyone installing it flips the same switch.
+- **Never sign with a key you generated yourself.** A signature from a key that isn't Sapphire's or on the central list verifies against nothing → `failed` ("Tampered") → **always blocked**, even with unsigned plugins allowed. Self-signing is worse than not signing.
+- **`tools/sign_plugin.py` is for keyholders** — Sapphire devs and listed authors. Without a key it errors and prints a keygen one-liner; don't follow it unless you're getting that key on the list.
+- **Edited a signed plugin?** Its signature no longer matches → `failed` → blocked. A keyholder re-signs; anyone else deletes `plugin.sig` so it loads as `unsigned`.
+
+Every "sign + restart" step elsewhere in this guide means: keyholders re-sign, everyone else has no `plugin.sig` and unsigned plugins allowed.
+
 ## Verification States
 
 | State | Badge | Behavior |
@@ -30,11 +41,11 @@ The official public key is baked into `core/plugin_verify.py`. Authorized third-
 
 ## Sideloading (Unsigned Plugins)
 
-`ALLOW_UNSIGNED_PLUGINS` defaults to **off**. Enable it in Settings > Plugins with the toggle. A danger dialog warns about the risks.
+`ALLOW_UNSIGNED_PLUGINS` defaults to **off**. Enable it with the switch on the Settings > Plugins banner. A danger dialog warns about the risks.
 
 When enabled, unsigned plugins load with a warning. Tampered (`failed`) plugins are always blocked regardless of this setting.
 
-## Signing Plugins
+## Signing Plugins (keyholders)
 
 The signing tool lives at `tools/sign_plugin.py`. It requires `cryptography` (already in Sapphire's deps). The default key path is `user/plugin_signing_key.pem`; override it with `--key`.
 
@@ -94,6 +105,7 @@ Until your key is on the central list, a signature from it verifies against noth
 
 ## Reference for AI
 
+- Third-party authors don't sign: no `plugin.sig` + unsigned plugins allowed (Settings > Plugins banner switch). Self-generated key = `failed` = always blocked. `sign_plugin.py` is for keyholders (Sapphire devs, listed authors). Edited signed plugin = `failed`; re-sign (keyholder) or delete `plugin.sig`.
 - Verification states: `official` (baked-in key), `verified_author` (key on the central authorized list), `unsigned` (no plugin.sig), `failed` (signature matches no trusted key OR files modified — shown as "Tampered"). Managed/Docker mode only: `validated` (unsigned + passed strict file validation).
 - Load gate: official / verified_author / validated always load; unsigned needs `ALLOW_UNSIGNED_PLUGINS` on (Settings > Plugins); failed never loads, no override.
 - Signable files: `.py .json .js .css .html .md` (hashes computed with CRLF→LF normalization) and `.wasm` (hashed byte for byte); extra signable files not in the manifest fail verification.

@@ -3,8 +3,8 @@
   "version": "2.3.1",
   "files": {
     "CHANGELOG.md": "sha256:c7314d64f0fce4534e0921cddcee352e23482b8aacc32df8a886412dfe243e7f",
-    "OPERATIONS.md": "sha256:bb84d0e6791bb118bc0522c1178915d25e889f3b88fe4a0bf6eeafb1611aef30",
-    "README.md": "sha256:bad698b6862b4aacd4f4fa36b0e0b5e2b1741879e8c81af6d4da1aef0efe99f9",
+    "OPERATIONS.md": "sha256:d54b438c1afd9bfa67b145c7d7caf32fb06b256c55ca6c4d9649d6829924436a",
+    "README.md": "sha256:6fd579c03e2be687c881dd4d063d33b652dcd4ddf679383672d733e3cecd53be",
     "__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "accounts.py": "sha256:f560b46d669e23ae3d910285011e1e23e23cfdec9d4501e3d39eb2960892a18f",
     "api/__init__.py": "sha256:01b39649711c6caba7cd872fc0e7660748dc4f065708124cd665399a744bc134",
@@ -153,5 +153,5 @@
     "voice/voice_workers.py": "sha256:9a120b61ae0b94d90fae64b39a847e84463632bc348c00ea1e71b9759c9a1698",
     "web/index.js": "sha256:41c824acfb6517d4709f975a96f4176185624d4aad4793ef1179f0f3967b0682"
   },
-  "signature": "2zvyUhZ30Jl+Rh9u4Q2e8y2UoOQTIVnZhQtZlCex5bPnwz8cPUzZLD1frTsnyEsFmGZP5R6YMx7xrRQ9zgsVDQ=="
+  "signature": "779GWrwQylFSvseJsVSrp/gmlW/JG6wRGonM8tG2y7zpJGHGsqWYfYqBv0vOoyTVF253WiQW7seWpkGMm6vYDQ=="
 }

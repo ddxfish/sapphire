@@ -1,7 +1,11 @@
 # Plugin Examples — Party Sampler
 
-Real working examples of every plugin capability type, stripped to the minimum.
+Real working examples of the core plugin capability types, stripped to the minimum.
 Use these as templates. Each section is a complete working plugin.
+
+To load one: drop the folder in `user/plugins/`, then in **Settings > Plugins** click **Rescan**, turn on unsigned plugins with the banner switch, and toggle the plugin on. Ship it unsigned — don't sign it yourself ([Signing](signing.md)).
+
+More capabilities, each with a worked example on its own page: [slash commands](commands.md), [websockets](routes.md#websockets), [apps](APPS.md), [widgets](widgets.md), [games](games.md), [stories](stories.md), [devices](devices.md), [agents](agents.md), [memory layers](memory-layers.md), [prompt packs](prompts.md), [social providers](social.md), [services and subprocesses](subprocesses.md), [themes](THEMES.md).
 
 ---
 
@@ -96,7 +100,7 @@ def prompt_inject(event):
     event.context_parts.append("The user's favorite color is blue.")
 ```
 
-Hook points: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `on_wake`, `provider_switched`, `chat_renamed`, `chat_deleted`, `chat_cleared`, `chat_vaulted`, `plugins_ready` — plus the streaming TTS hooks. Full table with fields and semantics: [hooks.md](hooks.md)
+Hook points: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `on_wake`, `provider_switched`, `chat_renamed`, `chat_deleted`, `chat_cleared`, `chat_vaulted`, `plugins_ready`, `vault_unlocked`, `vault_locked` — plus the streaming TTS hooks. Full table with fields and semantics: [hooks.md](hooks.md)
 
 In a private chat your hooks are withheld unless the manifest declares top-level `"privacy_aware": true` — see [Private chats](hooks.md#private-chats--privacy_aware).
 
@@ -163,7 +167,8 @@ Match types: `exact`, `starts_with`, `contains`, `regex`
         "display_name": "My TTS Engine",
         "entry": "provider.py",
         "class_name": "MyTTSProvider",
-        "requires_api_key": false
+        "requires_api_key": false,
+        "is_local": true
       }
     }
   }
@@ -219,7 +224,8 @@ class MyTTSProvider(BaseTTSProvider):
 
 **Important rules for TTS providers:**
 - `voice_id` in `list_voices()` must be the actual identifier your engine uses (language code, model name, etc.) — NOT a display name. The `name` field is what the UI shows.
-- Audio output goes through an Opus encoder. **WAV audio MUST be at an Opus-compatible sample rate: 8000, 12000, 16000, 24000, or 48000 Hz.** If your engine outputs a different rate (e.g., 22050Hz), you must resample to 24000Hz before returning the bytes. Use `audioop.ratecv()` + `wave` module for resampling.
+- `is_local: true` only if speech is made entirely on this machine. Absent = cloud: private chats refuse your provider ([providers.md](providers.md)).
+- Return WAV at a standard rate — 24000 Hz is Sapphire's own TTS rate. If your engine outputs something odd (e.g. 22050 Hz), resample with `core.audio.resample_audio(samples, from_rate, to_rate)` (numpy) and write with `soundfile`. Don't use `audioop`: it's gone in Python 3.13.
 - MP3 audio (like gTTS/ElevenLabs) is handled separately and does not have this constraint.
 - The `voice` parameter passed to `generate()` comes from the voice picker UI. It will be a `voice_id` from your `list_voices()` return. Make sure the mapping is correct.
 
@@ -435,8 +441,8 @@ def run(event):
 - Tool file exports: `ENABLED` (bool), `EMOJI` (str), `AVAILABLE_FUNCTIONS` (list), `TOOLS` (OpenAI-style schemas), `execute(function_name, arguments, config[, plugin_settings[, credentials]])` → `(message: str, success: bool)`.
 - Hooks: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`. Full hook list, mutable fields, and system-access table: hooks.md.
 - Voice commands: `capabilities.voice_commands` = `[{triggers, match: exact|starts_with|contains|regex, bypass_llm, handler}]`; handler is a `pre_chat` function.
-- Providers: `capabilities.providers.{tts|stt|embedding|llm}` = `{key, display_name, entry, class_name, requires_api_key}`. TTS `generate()` returns audio bytes or None; WAV must be at 8000/12000/16000/24000/48000 Hz (resample 22050 → 24000); `list_voices()` returns `[{voice_id, name}]` where `voice_id` is the engine's real identifier.
-- Settings: `capabilities.settings` schema auto-renders (types string/number, widgets password/select/textarea, min/max/options/rows); read via `plugin_loader.get_plugin_settings('my-plugin')`.
+- Providers: `capabilities.providers.{tts|stt|embedding|llm}` = `{key, display_name, entry, class_name, requires_api_key, is_local?}` (absent is_local = cloud, private chats refuse it). TTS `generate()` returns audio bytes or None; WAV at a standard rate, 24000 Hz preferred (resample with `core.audio.resample_audio`; no `audioop`, gone in 3.13); `list_voices()` returns `[{voice_id, name}]` where `voice_id` is the engine's real identifier.
+- Settings: `capabilities.settings` schema auto-renders (types string/number/boolean/list/rows/found, widgets text/password/select/radio/textarea/button/list/rows/found, min/max/options/rows; full key list: settings.md); defaults seeded to user/webui/plugins/<name>.json on first load only, stored values win after; read via `plugin_loader.get_plugin_settings('my-plugin')`.
 - Daemon: `capabilities.daemon` = `{entry, event_sources: [{name, label, description}]}`; entry exports `start(plugin_loader, settings)` / `stop()`; fire events via `plugin_loader.emit_daemon_event(name, json_string)` — they trigger continuity tasks.
 - Routes: `capabilities.routes` → `/api/plugin/{plugin-name}/{path}`; handler receives path params + `body`, `settings`, `credentials`, `query`, `request` as kwargs — end signatures with `**_`. Details: routes.md.
 - Schedule: `capabilities.schedule` = `[{name, cron, description, handler}]`; handler exports `run(event)` where event is a dict with `system`, `config`, `task`, `plugin_state`.

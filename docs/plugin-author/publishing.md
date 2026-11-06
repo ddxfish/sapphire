@@ -135,7 +135,7 @@ Before submitting, test your plugin the way users will experience it:
 3. Verify tools appear, hooks fire, settings render, etc.
 4. Check the Sapphire logs for any load errors
 
-Unless you're an authorized author signing with a key on the central key list (see [Signing](signing.md)), your plugin is unsigned — make sure `ALLOW_UNSIGNED_PLUGINS` is enabled in Settings > Plugins so it loads, the same way most of your users will run it.
+Unless you're an authorized author signing with a key on the central key list (see [Signing](signing.md)), your plugin is unsigned — turn on unsigned plugins with the switch on the Settings > Plugins banner (`ALLOW_UNSIGNED_PLUGINS`) so it loads, the same way most of your users will run it.
 
 ---
 
@@ -175,7 +175,7 @@ To share another branch, give people the branch URL: `https://github.com/you/my-
 | **Verified Author** | `verified_author` | Signed by an author whose public key is on the central authorized key list |
 | **Community** | `unsigned` | No signature — loads only if sideloading is enabled |
 
-Community plugins are unsigned. Users need `ALLOW_UNSIGNED_PLUGINS` enabled to load them (Settings > Plugins toggle). Verification states and the authorized-author path are covered in [Signing](signing.md).
+Community plugins are unsigned. Users turn on unsigned plugins with the switch on the Settings > Plugins banner (`ALLOW_UNSIGNED_PLUGINS`) to load them. Verification states and the authorized-author path are covered in [Signing](signing.md).
 
 ### About Signing and plugin.sig
 
@@ -322,11 +322,11 @@ Ask Sapphire: "What's the weather in Tokyo?"
 
 ## Reference for AI
 
-- Store is a directory, not a host: listings link to public GitHub repos; install downloads the repo zip (`main` branch, `master` fallback; a `/tree/<branch>` URL pins that branch, and updates follow it) and extracts to `user/plugins/{name}/`.
+- Store is a directory, not a host: listings link to public GitHub repos; install downloads the repo zip (`main` branch, `master` fallback; a `/tree/<branch>` URL pins that branch, and updates follow it) and extracts to `user/plugins/{name}/`. Install-from-URL also takes GitLab (`gitlab.com/<path>/<repo>`, `/-/tree/<branch>`) and a direct `https://` `.zip` URL.
 - `plugin.json` must be at the repo ROOT (no `src/` or `plugin/` nesting). Everything tracked in the repo gets installed.
 - `name`: lowercase, hyphen-separated, unique (becomes the folder name; can't collide with system plugins). `version` semver. `README.md` at repo root is required for store approval (what it does, setup, usage, requirements).
 - Trust levels = verification states: Official (`official`, baked-in key) / Verified Author (`verified_author`, central key list) / Community (`unsigned`, needs `ALLOW_UNSIGNED_PLUGINS`).
 - `plugin.sig` rule: ship one only if it verifies — signed by you with a key on the central authorized list. A sig matching no trusted key, or any file edited after signing, shows as TAMPERED and always blocks (worse than unsigned). Forked a signed plugin: delete its `plugin.sig`.
-- Test path: copy to `user/plugins/{name}/`, enable in Settings > Plugins, sideloading on unless verified-author signed.
+- Test path: copy to `user/plugins/{name}/`, Rescan + enable in Settings > Plugins, unsigned plugins allowed (banner switch) unless verified-author signed.
 - Updates: push to GitHub, then edit your existing store listing's version; users reinstall to update.
 - Repos must be public; no secrets committed; third-party code needs license compliance (GPL is copyleft — the whole plugin becomes GPL).

@@ -144,7 +144,7 @@ all. Without the check the reasoning would be used as the answer.
   into the chat will be read by the next model as fact.
 - **Do not strip user text.** These rules are for model output. A user may type
   a tag for any reason.
-- **Sign after every edit** (`python tools/sign_plugin.py <your-plugin>`).
+- **Signing:** third-party plugins ship unsigned with unsigned plugins allowed; only keyholders re-sign after edits ([Signing](signing.md)).
 
 ## Reference for AI
 

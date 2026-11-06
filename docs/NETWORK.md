@@ -110,7 +110,10 @@ Independent of the proxy, Sapphire holds a set of quiet-egress guarantees:
 | Hugging Face telemetry | Disabled unconditionally at boot. |
 | Silero VAD | Model pinned to an exact upstream commit URL — no floating "latest" fetch. |
 | Plugin signing keys | Disk-cached allowlist is authoritative for a day — a boot with a warm cache makes no GitHub call. |
-| Update check | A once-daily GitHub check for new releases — the **only unprompted outbound call the core app makes**. Turn off `UPDATE_CHECK_ENABLED` to stop it (takes effect within a day; restart applies immediately). |
+| Update check | A once-daily GitHub check for new releases — the **only recurring unprompted outbound call the core app makes**. Turn off `UPDATE_CHECK_ENABLED` to stop it (takes effect within a day; restart applies immediately). |
+| Dashboard font | One fetch from Google Fonts on first boot (the Dancing Script name font, saved to `user/fonts/`); never again once the file exists. Set `DASHBOARD_FONTS_AUTOFETCH` to `false` in `user/settings.json` to skip it — the dashboard falls back to a system font. |
+| Store | Contacted only when you open System > Store; answers cached in memory (`STORE_CACHE_TTL_SECONDS`, default 1 h). |
+| Video guide | System > Videos fetches public YouTube channel pages and feeds only when opened with a stale cache (12 h, `VIDEO_GUIDE_CACHE_TTL_SECONDS`); hide channels with `VIDEO_GUIDE_CHANNELS_DISABLED`. |
 | Cookies | API traffic accepts no cookies at all; only the web-tools browser session keeps a bounded cookie jar. |
 | Images in chat / store / video guide | Rendered with `no-referrer` policy — remote image hosts don't learn your Sapphire URL. |
 
@@ -127,7 +130,8 @@ All in Settings > Network:
 | `SOCKS_ROUTE_LLM` | `false` | Off: LLM APIs go direct, everything else rides the proxy. On: full tunnel — needs a remote-DNS-capable proxy. |
 | `SOCKS_REMOTE_DNS` | `false` | Off: local DNS (`socks5`), works on every proxy. On: DNS via proxy (`socks5h`), no local name leak — fails on proxies without server-side DNS. |
 | `SOCKS_NO_PROXY_EXTRA` | `""` | Comma-separated hosts that always bypass the proxy (LAN gear with real names). |
-| `UPDATE_CHECK_ENABLED` | `true` | Daily GitHub check for a newer release — the core app's only unprompted outbound call. |
+| `UPDATE_CHECK_ENABLED` | `true` | Daily GitHub check for a newer release — the core app's only recurring unprompted outbound call. |
+| `DASHBOARD_FONTS_AUTOFETCH` | `true` | First-boot download of the dashboard name font from Google Fonts. JSON only (`user/settings.json`), no UI. |
 
 Proxy credentials (username/password) are set in the same tab but stored in the credential manager, not in settings.
 
@@ -185,6 +189,8 @@ EGRESS INVARIANTS (independent of proxy):
 - HF_HUB_DISABLE_TELEMETRY=1 unconditionally.
 - HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE honored, never set or cleared by Sapphire; a download they block is named as such (core/hf_words.py why() -> notify.progress words=, kokoro.log, TTS Test).
 - Plugin-key allowlist: disk cache authoritative 24h — warm-cache boot makes no GitHub call.
-- UPDATE_CHECK_ENABLED: daily GitHub release check = only unprompted core outbound call; toggle checked per-iteration (effective within a day, restart = immediate).
+- UPDATE_CHECK_ENABLED: daily GitHub release check = only RECURRING unprompted core outbound call; toggle checked per-iteration (effective within a day, restart = immediate).
+- One-time: first boot fetches the dashboard font (Dancing Script) from Google Fonts into user/fonts/ unless DASHBOARD_FONTS_AUTOFETCH=false (JSON only); skipped once the file exists (core/font_bootstrap.py).
+- On demand only: Store (STORE_URL, opening System > Store; cache STORE_CACHE_TTL_SECONDS 3600), Video guide (YouTube channel pages/feeds on opening System > Videos with a stale 12 h cache; VIDEO_GUIDE_CACHE_TTL_SECONDS, VIDEO_GUIDE_CHANNELS_DISABLED).
 - Cookies: API sessions block all Set-Cookie; browser-profile web-tools session keeps a capped jar.
 - Chat/store/video images: referrerpolicy=no-referrer.

@@ -441,6 +441,9 @@ function makeCtx(me) {
             try {
                 await coreApi.updateChatSettings(me.session, patch);
                 Object.assign(me.settings, patch);
+                // the brain section's pick, painted once it landed (core-sections paints none)
+                if (R === me && ('llm_primary' in patch || 'llm_model' in patch))
+                    updateSendButtonLLM(me.settings.llm_primary || 'auto', me.settings.llm_model || '');
                 if (R === me && me.mod) { await loadState(me); drawResolved(me); }
             } catch (e) { showError(e.message); }
         },

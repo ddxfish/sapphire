@@ -294,7 +294,7 @@ async function savePluginSettings(patch) {
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Settings', { doc: 'MIND-PALACE.md', inline: true }),
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'admin', help: helpPills('Settings', { doc: 'MEMORY.md', inline: true }),
             status: '\u2699\uFE0F Mind Palace — settings and the operator console. The knobs are install-wide; Librarian, Maintenance and Debug work the scope on the left. Nothing here edits memory content except ✂ Strip date stamps (previewed, undoable from the Ledger); only the Danger box deletes.',
             rows: [{ cls: 'pal-subtabs', html: SUBS.map(s => `<button class="ui-pill${s.key === sub ? ' ui-pill-on' : ''}" data-sub="${s.key}">${s.label}</button>`).join('') }] })}
         <div class="two-panel">

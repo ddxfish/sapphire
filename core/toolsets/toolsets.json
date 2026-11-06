@@ -28,11 +28,12 @@
       "read_document",
       "memory_view_image",
       "local_view_images",
-      "memory_save_image"
+      "memory_save_image",
+      "search_help_docs"
     ]
   },
   "default": {
-    "emoji": "\uD83E\uDDF0",
+    "emoji": "🧰",
     "functions": [
       "web_search",
       "get_website",
@@ -42,8 +43,6 @@
       "search_memory",
       "get_recent_memories",
       "list_entities",
-      "save_knowledge",
-      "search_knowledge",
       "create_goal",
       "list_goals",
       "update_goal",
@@ -52,11 +51,13 @@
       "notepad_delete_lines",
       "notepad_insert_line",
       "search_help_docs",
-      "get_time"
+      "get_time",
+      "library",
+      "read_document"
     ]
   },
   "work": {
-    "emoji": "\uD83D\uDCBC",
+    "emoji": "💼",
     "functions": [
       "ask_user",
       "web_search",
@@ -79,7 +80,7 @@
     ]
   },
   "smarthome": {
-    "emoji": "\uD83C\uDFE0",
+    "emoji": "🏠",
     "functions": [
       "ask_user",
       "ha_list_scenes_and_scripts",
@@ -94,13 +95,12 @@
       "ha_set_switch",
       "ha_notify",
       "ha_house_status",
-      "save_knowledge",
-      "search_knowledge",
-      "delete_knowledge"
+      "library",
+      "read_document"
     ]
   },
   "personality": {
-    "emoji": "\uD83C\uDFAD",
+    "emoji": "🎭",
     "functions": [
       "ask_user",
       "slash_command",
@@ -122,13 +122,13 @@
       "delete_memory",
       "read_self",
       "update_self",
-      "save_knowledge",
-      "search_knowledge",
-      "delete_knowledge",
       "create_goal",
       "list_goals",
       "update_goal",
-      "delete_goal"
+      "delete_goal",
+      "library",
+      "read_document",
+      "search_help_docs"
     ]
   }
 }

@@ -42,9 +42,9 @@ _cache_lock = asyncio.Lock()
 
 def _cache_ttl() -> float:
     try:
-        return float(config.STORE_CACHE_TTL_SECONDS or 1800)
+        return float(config.STORE_CACHE_TTL_SECONDS or 3600)
     except AttributeError:
-        return 1800.0
+        return 3600.0
 
 
 def _cache_key(path: str, params: dict, namespace: Optional[str] = None) -> tuple:

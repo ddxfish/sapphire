@@ -8,16 +8,18 @@ Sapphire itself.
 | This computer | Sapphire | The machine she runs on: volume, outputs, screen, power |
 | Satellite | Sapphire | A room box with mic, speaker, light and camera: a Raspberry Pi, an ESP32 board |
 | SSH machine | the SSH plugin | Any machine you can log in to |
-| WiFi gadget | the gadget plugin | A small board with a light, a screen, a button |
 | IP camera (ONVIF) | the IP Cameras plugin | A network camera she sees through, and turns and zooms when it can move |
 | Hardware synth, MIDI keyboard | the MIDI plugin | Instruments she plays and hears |
 | Phone (KDE Connect) | the KDE Connect plugin | A phone running the KDE Connect app: shares to her chat, its texts, a notification from her, battery |
+| Another Sapphire | Sapphire | A second Sapphire on your network, reached through her MCP door |
 
 Any plugin can bring more types. A type appears when its plugin is enabled.
 
 ## The page
 
-System > Devices in the rail (or the Devices tab in Settings). One card per
+System > Devices in the rail (or the Devices tab in Settings). Three tabs
+across the top: **Devices** (the list), **Settings** (the board firmware
+sources) and **IR** (the IR library). One card per
 device: its dot, name, what it can do, and its state. When the devices are of
 more than one type, a row of pills at the top filters by type; **All** is the
 default.
@@ -27,7 +29,8 @@ default.
 1. System > Devices > **+ Add Device** (a satellite has its own button,
    **+ Add Satellite**, over the left column).
 2. **What are you adding?** One row per kind of thing: Camera, Computer, MIDI,
-   Sapphire. Open one to see the ways it is reached, each with an **Add**
+   Phone, Sapphire. Satellites are not in this list; they are added with
+   **+ Add Satellite**. Open one to see the ways it is reached, each with an **Add**
    button: a Computer is **This computer** or an **SSH connection**. A greyed-out
    row names the plugin to enable.
 3. Only what that type needs to work: a name (one is filled in, change it if
@@ -64,18 +67,23 @@ A device that can be restarted or switched off has a **Power** tab.
 
 | Device | Restart | Off |
 |---|---|---|
-| Satellite | Yes, back in about a minute | Shutdown. Unplug and replug it to bring it back |
-| WiFi gadget | Yes, back in a few seconds | Sleep. It has no true off while plugged in. Its button wakes it |
+| Satellite | Yes, back in about a minute | Shutdown. Unplug and replug it to bring it back. A board that sleeps (the pendant) also has `sleep`: its BOOT key wakes it |
+| This computer | Yes | Shutdown; sleep on Linux |
 | SSH machine | Yes | Shutdown |
 
 **Sapphire may use this** is a switch on the Power tab, one per device. Turn it
 off and she is told that power is locked on that device, and where you can
 change it. Your own buttons on the tab always work, and each asks first.
 
+The same switch sits on every tab that can reach into a room or a life:
+Power, Camera, Screen, Mic, Backup (storage), Move (a camera's turning),
+Text messages and Wake word (installing a wake word restarts the board).
+
 | Device | The switch starts out |
 |---|---|
-| Satellite, WiFi gadget | On |
-| SSH machine | Off |
+| Satellite, camera | On |
+| This computer, SSH machine | Off for Power |
+| Phone | Off for Text messages |
 
 **Shut a satellite down before you touch its cables.** The camera connector
 carries power. Moving the ribbon while the Pi runs can short it.
@@ -227,7 +235,11 @@ name: volume     command: pactl set-sink-volume @DEFAULT_SINK@ {value}%
 | What | Where | In backups |
 |---|---|---|
 | Devices and their settings | `user/plugin_state/devices.json` | yes |
+| Online or offline, kept across a restart | `user/plugin_state/device_health.json` | yes |
 | Passwords and keys | the Sapphire config folder, `device_secrets.json` | no |
+| Boards proven to take signed calls | `user/device_signed.json` | yes |
+| Firmware fetched for flashing offline | `user/firmware_cache/` | yes |
+| The IR library | `user/ir/library.json` | yes |
 
 After a restore onto another machine, devices come back but their passwords and keys must be entered again.
 
@@ -313,22 +325,42 @@ program is ever sent to that board from here, and its Firmware tab only
 checks. The switch is Sapphire's; the board's own two slots are its
 builder's choice and show up as `firmware` in what it says it has.
 
-The firmware comes from the firmware sources: Sapphire's own release (the
+The firmware comes from the firmware sources, listed under **Board firmware
+sources** on the Settings tab of System > Devices: Sapphire's own release (the
 latest release of the firmware repository, `DEVICE_FIRMWARE_SOURCE`), and
-before it any you add in Settings > Devices > Settings with **+ Board Repo**
-(`DEVICE_FIRMWARE_SOURCES`). A source is a release URL, or a folder on
+before it any you add with **+ Board Repo** (`DEVICE_FIRMWARE_SOURCES`, 12 at
+most). A source is a release URL, or a folder on
 Sapphire's computer with an `index.json` (the firmware repository's
-`build.sh` makes one in its `dist` folder). Every source is read; a board
+`build.sh` makes one in its `dist` folder). Each row says how many boards it
+offers, or why it could not be read, and has an on/off switch
+(`DEVICE_FIRMWARE_SOURCES_OFF`): a source switched off is not read, and
+Sapphire's own release can be switched off too. **Remove** takes one of yours
+away. Every source that is on is read; a board
 two of them have comes from the first, yours before hers, and a board from a
 source that is not hers is marked. Sapphire fetches it, never the page, and keeps each board's parts
 under `user/firmware_cache` so a board can be flashed again offline.
+
+**Your own firmware.** The flasher's board list ends with **Your own
+firmware? Write a .bin from this computer**: a whole-board image (32 MB at
+most), like the ones a release has, written as is. Under it, a board that
+already runs Sapphire's firmware can skip the install: **Only change its
+name, WiFi or Sapphire's address**.
+
+**Signed calls.** Firmware 0.9.4 and later (0.5.2 on the readers) takes
+Sapphire's calls signed with the board's key (HMAC), so the key never
+crosses the WiFi. A board that has answered signed once is remembered in
+`user/device_signed.json` and is never sent the key in the clear again. An
+older board is called with the plain key and asked signed again every 10
+minutes, in case it was updated. A board on older firmware is worth
+rekeying once it is updated: **Reflash (USB)** or **Change WiFi (USB)** on
+its card makes new keys.
 
 The flasher's board list says where the firmware comes from: any source
 that is not Sapphire's release is named with a warning, each board from one
 is marked, and a device's Firmware tab says so too. Firmware from another
 source is someone else's code, not part of Sapphire: it runs on your board,
 holds your WiFi password and can talk to Sapphire as that device. Sources are
-added and removed in Settings > Devices > Settings, by you alone.
+added and removed on the Settings tab of System > Devices, by you alone.
 
 On Linux the browser opens the port as you, so you need to be in the
 `dialout` group once; for the Sapphire-side lane it is the user she runs as. A board with native USB (an ESP32-S3) vanishes from
@@ -348,20 +380,54 @@ Add one with **+ Add Satellite**, then **Raspberry Pi or computer**:
 | Talks in chat | On the first tab. The chat this device is in: what it hears, what is typed on it and what its buttons send land there, and its screen shows it. Empty means the last chat used. A name means always that chat; a name that is not a chat yet is made when you save |
 | Key the satellite sends | The satellite's own key for talking to Sapphire. See "Give a Pi its own key" below |
 
+The device window has more, each shown only on a board that has the part:
+
+| Setting | Tab | What it does |
+|---|---|---|
+| Browse chats | Status | Off (the default): the board's chat picker shows only its own chat, and its key reaches no other. On: every open chat |
+| Updates over the air | Status | Off = no program is ever sent to it from here |
+| Turn its pictures | Camera | 0, 90, 180 or 270 degrees, for a camera mounted on its side |
+| A volume button changes it by | Speaker | 5, 10 or 20%, for its volume buttons and her `up` and `down` |
+| Longest question | Wake word | 5 to 60 seconds (30): the cut-off when you keep talking |
+| Listens for | Wake word | A wake word from the library (Settings > Wakeword), or the board's own. Save sends it; the board restarts, about half a minute; an offline board gets it when next seen |
+| Brightness in use / when left alone | Screen | Percent (80 / 15) |
+| Dims after / Screen dark after | Screen | Seconds (120) / minutes (0 = never) |
+| Sleeps after | Screen | Minutes (60) on a board that sleeps, the pendant: everything off but its brain; its BOOT key wakes it |
+| Face frames a second, Stream slack, Face sync delay | Screen | Her face as a stream on the glass: the beat (25), packets held (1 to 3, 2), how long her voice waits for her face (700 ms) |
+| Rotation, Invert colors, Mirror image, Upside down | Screen | How the glass sits and a wrong variant put right |
+| Opens on | Screen | The page a board with pages starts on: the chat, Backups, Status, Board or Actions |
+
 What Sapphire can do with it:
 
 ```
 device_action("kitchen","speaker","say","Dinner is ready")
 device_action("kitchen","speaker","stop")
 device_action("kitchen","speaker","volume","80")
+device_action("kitchen","speaker","volume","up")
 device_action("kitchen","speaker","sound","ping")
 device_action("kitchen","mic","listen","10")
+device_action("kitchen","mic","gain","36")
 device_action("kitchen","light","set","cyan blink 5s")
 device_action("kitchen","light","rest","sapphire heartbeat bpm=33")
 device_action("kitchen","wake","off")
+device_action("kitchen","wake","install","hey_sapphire")
 device_action("kitchen","camera","look")
+device_action("kitchen","screen","picture","last seconds=120")
+device_action("kitchen","ir","blast","tv power")
+device_action("kitchen","storage","check")
 device_action("kitchen","power","restart")
 ```
+
+Each is offered only on a board that has it: `mic` `gain` (0 to 37.5 dB,
+`up`, `down`) and `agc` (`on`/`off`, the board restarts); `wake` `read`,
+`on`, `off`, and `install <model | own>` on a board that takes wake word
+models; `camera` `look flash` on a board with a light by its lens;
+`screen` `show`, `clear` and `picture` (an `img:` handle, `doc:N`, or `last`);
+`ir` `blast` on a board with an IR blaster (see [The IR library](#the-ir-library));
+`storage` `check` re-reads every backup on a card; `power` `sleep` on a board
+that sleeps. A few are yours alone, from the device window: a firmware
+`update`, a card's `format` and `cancel`, a touch-glass `calibrate`, a
+button `press`.
 
 **Stop.** `stop` ends what she is saying there: nothing more of that reply
 is sent, and the satellite cuts the sentence playing (Pi body 0.7.3 and the
@@ -552,7 +618,36 @@ device_action("pocket","screen","clear")
 ```
 
 Its light takes the same words as a ring. The first such board is the
-capacitive Cheap Yellow Display: see `tmp/pocket-esp32/README.md`.
+Cheap Yellow Display reader: its program is `cyd` in the firmware repository
+(<https://github.com/ddxfish/sapphire-firmware>). A resistive glass gets a
+`calibrate` action on its Screen tab, yours alone: three crosses come up on
+the board to tap.
+
+### The pendant
+
+A satellite to wear: the Elecrow ESP32-S3 AI Camera board, set up like any
+board with **+ Add Satellite** > **Dev board**. It hears, speaks, sees and
+shows her face, and it runs on a battery, so it sleeps:
+
+- **Sleeps after** (Screen tab, 60 minutes; 0 = never) turns off its
+  screen, camera, mic and WiFi when it is left alone. It goes offline here
+  until its BOOT key wakes it. `device_action("pendant","power","sleep")`
+  puts it to sleep now.
+- `device_action("pendant","camera","look","flash")` takes the picture with
+  the light beside its lens on, for a dark room.
+- With the FlashHead plugin her face and voice reach it as one stream; the
+  Screen tab's **Face frames a second**, **Stream slack** and **Face sync
+  delay** tune it.
+
+### Streams on the glass
+
+A board whose screen takes pictures can show a stream: a Game Room table
+cast to it, her FlashHead face. The newest frame wins and nothing queues;
+the board's own page comes back a few seconds after the last frame. A tap
+hides a stream. While a game owns the taps (each tap is a move), a long
+press is the way out. Senders use `POST /api/devices/<name>/screen/frame`
+(one JPEG, up to 256 KB); `GET` and `DELETE /api/devices/<name>/screen/stream`
+read and end it.
 
 ### Give a Pi its own key
 
@@ -580,7 +675,16 @@ A satellite without a key cannot reach Sapphire at all.
 | `POST /api/devices/<name>/voice` | What it heard. Proven with its own key |
 | `GET /api/devices/<name>/events` | What its light should show. Proven with its own key |
 | `POST /api/devices/<name>/wake` | It heard the wake word: the room is its for the next words |
-| `POST|GET /api/devices/<name>/text` | What was typed on it, and her reply for its screen |
+| `POST /api/devices/<name>/room` | A piece of its room while a room recording runs (the Wakeword Maker) |
+| `POST /api/devices/<name>/text` | What was typed on it |
+| `GET /api/devices/<name>/text` | Her reply for its screen |
+| `POST /api/devices/<name>/press` | A button press set to send her a message |
+| `POST /api/devices/<name>/ask` | A job that is Sapphire's (a backup now), no chat turn |
+| `GET /api/devices/<name>/chats` | The chats its picker may show |
+| `POST /api/devices/<name>/chat` | The chat it picked |
+| `GET /api/devices/<name>/history` | Its chat read back for its screen |
+
+The wire for all of these is the [Satellite Protocol](SATELLITE-PROTOCOL.md).
 
 ### Coming from the Body plugin
 
@@ -604,19 +708,66 @@ heard again:
 | `body_set_baseline` | `light` / `rest` |
 | `body_health` | `device_status` |
 
-## WiFi gadgets
+## IP cameras
 
-Small boards with a light, a screen, or a button. The gadget plugin ships the
-program for the board and the setup steps. See its README.
+A network camera that speaks ONVIF, from the IP Cameras plugin. Add Device >
+**Camera** > **IP camera (ONVIF)**: its **Address**, **User** (`admin` unless
+you changed it) and **Password**. ONVIF has to be switched on in the camera's
+own settings. **ONVIF port** 0 is found for you on save. **Flip picture left
+to right** and **top to bottom** are for a camera with no flip of its own;
+moves follow the picture.
+
+```
+device_action("porch","camera","look")
+device_action("porch","camera","look","sharp")
+device_action("porch","ptz","move","left 50")
+device_action("porch","ptz","zoom","in")
+device_action("porch","ptz","goto","driveway")
+device_action("porch","ptz","stop")
+```
+
+`look` takes the camera's own snapshot, or a frame off its RTSP stream when
+it has none; `sharp` is the full-size picture (up to 1600 px wide), a few
+seconds slower. A camera that can move gets a **Move** tab: `move
+<left|right|up|down> [1-100]` (30 when left out, 100 is a wide sweep), `zoom
+<in|out> [1-100]`, `goto <place>`, `stop`. **Places** are named presets:
+point the camera, `save <number>` on the Move tab (yours alone), then give
+that number a name under Places. Move has a "Sapphire may use this" switch.
+
+## The IR library
+
+A satellite with an IR blaster sends remote-control codes to a TV or any
+appliance in its room. The codes live in the **IR** tab of System > Devices
+(`user/ir/library.json`).
+
+- **+ Add appliance**: a name (`tv`), a brand if you like, and **Start from
+  a brand** to fill in known codes: LG TV, TCL TV (Android), TCL Roku TV.
+- Each appliance card: **+ Add command** (a name and an NEC code: address up
+  to 16 bits, like `04` or `57e3`, command 8 bits, both hex), **Test** per
+  command, and **⋮** for **Import from brand…**, **Export**, **Remove
+  appliance**. **Test through** picks the board that sends the tests.
+
+```
+device_action("den","ir","blast","tv power")
+device_action("den","ir","blast","04 08")
+```
+
+She names a code as `<appliance> <command>` (by the appliance's name or its
+brand), or the command alone when there is one appliance, or a raw NEC code.
+A name she gets wrong answers with the names it knows.
 
 ## Another Sapphire
 
 A second Sapphire on your network, as a device. She is reached through her
-MCP door, so first, over there: **Settings > MCP Server**, switch it on, and
+MCP door ([MCP.md](MCP.md)), so first, over there: **Settings > MCP Server**, switch it on, and
 make a token under **System > API Keys**. Then here: Add Device > **Another
 Sapphire**: her address (`https://192.168.1.102:8073`), that token, and the
 name of the chat on her side where this Sapphire's words should land. The
-chat is made over there the first time it is used.
+chat is made over there the first time it is used. **Call me** is how she
+is told who is talking (empty = this machine's name).
+
+She can also take a seat in a chat room here: invite her from the room
+([CHAT-ROOM.md](CHAT-ROOM.md)), and each of her turns rides the same door.
 
 - **Chat**: `ask` lands in that chat with a line saying who is asking, and
   her answer comes back as the result. `tell` does not wait. She is told to
@@ -659,7 +810,9 @@ word in the log. **Unpair** on the Link tab forgets the phone.
   out to her; text and links land as words. **A picture or file shared from
   the phone** on the Share tab says whether it also stays as a file (under
   `user/plugin_state/kdeconnect_inbox`; a kept document also goes into the
-  chat's documents).
+  chat's documents). The other way, `share` `send` puts words or a link on
+  the phone (a link opens there), and `share` `list` names the files it
+  shared lately.
 - **Texts.** The **Text messages** tab is **locked** until you flip its
   switch: then she can list who texted lately (names, numbers, when), read
   one conversation by name or number (a number without its area code
@@ -683,3 +836,24 @@ Devices are switched off on a hosted Sapphire. It has no home network to reach.
 ## For plugin authors
 
 See [Device Drivers](plugin-author/devices.md).
+
+## Reference for AI
+
+DEVICES (core/devices/, page System > Devices):
+- Tools: device_list(), device_status(device), device_action(device, capability?, action?, value?). Their descriptions already name every device, its place, online/offline and abilities: go straight to device_action.
+- Two calls: device_action(device) = its state + every action with the value it takes; then run one. A wrong name, capability or action answers with the list one level up.
+- You cannot add, change or remove a device or a premade command, and never see a key. The user does that in System > Devices.
+- "(locked)" = the user switched off "Sapphire may use this". Lockable: power, camera, screen, mic, storage, ptz, sms, wake. Power on this computer and SSH machines, and a phone's texts, start locked.
+- Not yours (owner only): firmware update, card format/cancel, screen calibrate, button press, phone pair/unpair, IP camera save.
+- Offline = two missed checks in a row; device_status asks fresh.
+- "[Voice from device ...]", "[Typed on device ...]", "[Button pressed on device ...]" = your reply already goes there; never call speaker say for it.
+- all: speaker say|stop on every device that speaks (listed once two can).
+- Satellite: speaker say|stop|sound [name]|volume [0-100|up|down] · mic listen [s]|gain [0-37.5|up|down]|agc on|off · light set "<color> [anim] [5s|2m] [bpm= speed= floor= ceiling=]"|clear|off|rest|options · wake read|on|off|install <model|own> · camera look [flash] · screen show "<text> [seconds=20]"|clear|picture "<img:id|doc:N|last> [seconds=60]" · ir blast "<appliance command>"|"04 08" · sensors read · storage backup|list|check · power restart|shutdown|sleep · firmware check. Only what the board has.
+- This computer: sound set|read|up|down|mute|unmute|outputs|use · screen look · power restart|shutdown|sleep · storage backup|list.
+- SSH machine: ssh <premade> [value]; run <command> only with Allow any command · power · storage backup|list.
+- IP camera: camera look [sharp] · ptz move <dir> [1-100]|zoom in|out [1-100]|goto <place>|stop.
+- Phone: battery read · share send|list · sms conversations|read|send "<number or name> | <words>" · notify ping|find · contacts find.
+- MIDI keyboard: sound instrument|loudness|on|off · notes play "C4 E4 G4 C5:2 bpm=120"|loop|listen [s]|stop. Hardware synth: sound voice|effect · notes play|loop|listen|stop.
+- Another Sapphire: chat ask|tell · tools <her tool> <words fill args in order>. A question from a Sapphire cannot ask one back.
+- IR names come from the IR library (core/ir/library.py resolve); an unknown name answers with the known list.
+- Wire: docs/SATELLITE-PROTOCOL.md. Drivers: docs/plugin-author/devices.md.

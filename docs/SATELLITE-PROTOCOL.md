@@ -1,18 +1,28 @@
 # Satellite Protocol
 
 What a board has to speak to be a [Satellite](DEVICES.md#satellites). Any board
-that speaks it is added in Settings > Devices as type **Satellite**. It needs no
+that speaks it is added in System > Devices with **+ Add Satellite**. It needs no
 driver and no plugin. A Raspberry Pi speaks it, and so can an ESP32.
 
 ```
-board    --POST /api/devices/<name>/voice-->   Sapphire   what it heard
-board    --POST /api/devices/<name>/press-->   Sapphire   a button set to send her a message
+board    --POST /api/devices/<name>/wake---->   Sapphire   its wake word fired: may it take this one?
+board    --POST /api/devices/<name>/voice--->   Sapphire   what it heard
+board    --POST /api/devices/<name>/room---->   Sapphire   a piece of its room, while a capture runs
+board    --POST /api/devices/<name>/text---->   Sapphire   what was typed on it
+board    --GET  /api/devices/<name>/text---->   Sapphire   her reply, for its screen
+board    --POST /api/devices/<name>/press--->   Sapphire   a button set to send her a message
 board    --POST /api/devices/<name>/ask----->   Sapphire   work that is hers to do: stop, backup
-board    --GET  /api/devices/<name>/events-->  Sapphire   what its light should show
-Sapphire --GET /health, POST /audio/speak--->  board      status, say, light, ...
+board    --GET  /api/devices/<name>/chats--->   Sapphire   the chats its picker may show
+board    --POST /api/devices/<name>/chat---->   Sapphire   the chat it picked
+board    --GET  /api/devices/<name>/history->   Sapphire   its chat, read back
+board    --GET  /api/devices/<name>/events-->   Sapphire   what its light should show
+Sapphire --GET /health, POST /audio/speak--->   board      status, say, light, ...
 ```
 
-Everything is plain HTTP with a bearer key, on the local network only.
+Both directions stay on the local network. Sapphire calls the board over
+plain HTTP, every request signed with the board's key (HMAC, see "What
+Sapphire asks of the board"), so the key never crosses the WiFi. The board
+calls Sapphire over HTTPS with her own certificate and a bearer key.
 
 | Key | Who sends it | Setting in Devices |
 |---|---|---|
@@ -38,16 +48,21 @@ Everything is plain HTTP with a bearer key, on the local network only.
 | `plays` | The one sound format it plays. Sapphire converts her voice to it. `codec` is what the WAV body holds: `pcm` (16-bit, the default when left out) or `ima_adpcm` (~4:1, for a board on a crowded link). An unknown codec gets `pcm` |
 | `link.connected` | Its events stream to Sapphire is open |
 | `volume`, `temp_c` | Optional readings |
-| `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` with a card in; a board with a slot but no card may say `{"mounted": false}` (the page then reads "card: none") and leaves `storage` out of `has` |
+| `volume_step` | A board with volume buttons: what one press changes, in percent. It then takes `step=` on `POST /volume` |
+| `problems` | A list of short strings: what did not start. Each shows as a "trouble" reading |
+| `reset` | Why it last started: `crash`, `task watchdog`, `interrupt watchdog`, `watchdog` or `brownout` show as "started after" |
+| `last_words` | `{"reason", "when"}` (unix seconds): what the board said as it went down, shown as "last went down" |
+| `free_internal_kb` | The internal RAM left (the RAM TLS needs), shown as "free RAM" |
+| `camera` | `{"flash": true}` on a board with a light beside its lens (the pendant) |
 | `sensors` | With `sensors` in `has`: the board's own sensors as `{"name": number}` (a light sensor's raw value, a battery). Each shows as a reading on the device's page |
-| `screen` | When it has one: `{"w", "h", "format": "rgb565be"}`, what `/screen/picture` takes, plus `"jpeg": true` when it also takes one JPEG and `"fps"` when JPEG frames sent one after another are painted on a beat (a stream, below); with `chat` and `background`, the chat name and scene it shows now. A touch glass whose places tile it states `"zones": [{"name", "x", "y", "w", "h"}, ...]` (glass pixels, no gap: every tap lands in one; each name is a button in `buttons.list`) and `"taps": true`: a stream may ask for the taps (`?taps=1`, below) |
+| `screen` | When it has one: `{"w", "h", "format": "rgb565be"}`, what `/screen/picture` takes, plus `"jpeg": true` when it also takes one JPEG and `"fps"` when JPEG frames sent one after another are painted on a beat (a stream, below); with `chat` and `background`, the chat name and scene it shows now. A touch glass whose places tile it states `"zones": [{"name", "x", "y", "w", "h"}, ...]` (glass pixels, no gap: every tap lands in one; each name is a button in `buttons.list`) and `"taps": true`: a stream may ask for the taps (`?taps=1`, below). `"door"` (a port) is where it takes frames in a task of its own, and `"av"` says it takes her voice and face as one stream ("Her voice and her face as one stream", below) |
 | `firmware`, `model`, `slot` | The program's version (`"0.3.0"`), which program it is (`"pocket"`, `"satellite"`: the firmware source's board id, so Sapphire knows what to send it), and the slot running it (`"ota_0"`). With `firmware` in `has` the board takes a new program over the air (below). A board with one program slot (a builder who kept the whole flash for the program, a small chip) leaves `firmware` out of `has`: the device then reads "updates: over USB only" and gets no Firmware tab. The person can also turn updates off per device in Sapphire (the Status tab's switch) whatever the board says |
 | `mac` | The chip's own id, `"aa:bb:cc:dd:ee:01"`. The flasher reads the same over USB: a board is known by it whatever it is called |
 | `led` | `{"state", "animation", "blackout"}`, what the ring shows now. A ring that can be turned off for good adds `"off"` (true = dark through every state until it is turned on) and `"level"`, its own brightness in percent |
 | `buttons` | With `buttons` in `has`: `{"list": [{"name": "boot", "short": "keyboard", "long": "clear"}], "can": {"keyboard": "Show or hide the keyboard", "clear": "Clear the chat window"}}`. `list` names each button and the job it does by itself for a short, long or double press (left out = nothing). An entry may state `"ways": ["short"]`: the only ways that button can be pressed (a place on a touch screen is tapped, never held), and the page offers no others. `can` is every job the board can do by itself, with the words the Devices page shows for it. See "A button was pressed" |
 | `capture` | `{"active", "test", "sent", "dropped", "lost", "fires"}` and, while one goes on, `id`, `seconds`, `left_s`, `chunk_s`: how the room-in-pieces capture goes (`POST /capture`, below). A board with this key has the door; the Wakeword Maker's room watch asks it of an ESP32 |
 | `wakeword.format` | Which model family the board runs: `tflite` (microWakeWord, an ESP32) or `onnx` (openWakeWord, a Pi). The Wakeword Maker sends that family to it. A board that leaves it out is taken for a Pi unless its `board` name says ESP32 |
-| `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then |
+| `storage` | `{"free_bytes", "total_bytes", "can": ["format"]}` when the board has a card or a folder for backups. `can` names what it does beyond the four doors below: `format` on a board that can wipe its card (an ESP32); a Pi never says it. The device shows a Format button only then. A board with a slot but no card may say `{"mounted": false}` (the page then reads "card: none") and leaves `storage` out of `has` |
 
 **`has`** takes these names: `speaker`, `mic`, `light`, `wake`, `camera`,
 `power`, `storage`, `screen`, `keyboard`, `buttons`, `sensors`, `firmware`, `ir`, `picker`. A name Sapphire does not know is left out and logged.
@@ -57,7 +72,7 @@ has one too and said `keyboard` before the name existed): the Devices page then
 offers *Browse chats*, and the board uses the doors in "The board picks its chat".
 `storage` is said only while the card is mounted: no card, no Backup tab.
 `keyboard` is a board that types at her instead of listening (a pocket
-terminal, `tmp/pocket-esp32`): it gets the mic's key and chat settings, and
+terminal, the CYD reader in `firmware/cyd`): it gets the mic's key and chat settings, and
 her reply goes to its `screen` as she writes it (below).
 
 **`plays`** has one type today, `audio/wav`, which is always 16 bit PCM. `rate`
@@ -76,6 +91,10 @@ so it holds while the board is off):
 - each key in `/health` `screen` is a screen setting it takes (`brightness`, `dim`, `dim_after_s`, `off_after_min`, `flip`, `rotation`, `invert`, `mirror`, `home`)
 - `screen` with `w`, `h` and `format`: it takes a picture
 - `mic.max_s`: it takes the longest question
+- `volume_step`: it takes the volume step (`volume.step`)
+- `camera.flash` true: its `look` takes `flash`
+- `wakeword.format` (`tflite` or `onnx`): it takes wake word models (`wake.model`: the *Listens for* setting and the `install` action)
+- `screen.sleep_after_min`: it sleeps (the `sleep_after_min` setting and the `power` `sleep` action)
 - `led.looks`, a list of look names: the only looks it takes. A board that lists none takes them all
 
 ## What Sapphire asks of the board
@@ -96,7 +115,7 @@ every 401 carries `X-Board-Time` (its unix ms) and Sapphire retries once with th
 board needs no clock of its own. A board that answers 401 without `X-Board-Time` is from before
 signing and is sent `Authorization: Bearer <key>`; a board once seen signing never is. Signing
 protects the key only: what is sent and answered is still plain HTTP on the LAN. A board that ran
-before 0.9.4 / 0.5.2 sent its key in the clear: give it new keys (Reflash or Change WiFi in Settings > Devices).
+before 0.9.4 / 0.5.2 sent its key in the clear: give it new keys (Reflash or Change WiFi in System > Devices).
 
 | Has | Request | What it does |
 |---|---|---|
@@ -127,7 +146,7 @@ before 0.9.4 / 0.5.2 sent its key in the clear: give it new keys (Reflash or Cha
 | `storage` | `POST /storage/cancel` | Only a board whose `storage.can` lists `cancel`: the backup arriving now is dropped (the PUT is answered 409 "cancelled on the board"); 409 when none is. The Backups page on a CYD reader has the same button |
 | `screen` | `POST /screen` | `{"text", "seconds"}`: a line across the top of its screen for that long (20 s if left out), or `{"clear": true}`. Answers `{"ok": true, "seconds"}`. Her `screen` / `show` action |
 | `screen` | `POST /screen/calibrate` | Only a board that states `screen.calibrate` in `/health` (a resistive glass: the CYD 2.8): three crosses come up on the glass for 60 s and the calibration is kept on the board. Answers `{"ok": true, "seconds": 60}`; 400 on a glass that needs none. A board with no calibration kept shows the crosses by itself when it starts |
-| `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action. A board saying `screen.jpeg` also takes `?format=jpeg` with one JPEG as the body (`image/jpeg`; width and height multiples of 16, up to the glass), and answers `took_ms` (`recv`, `wait`, `decode`, `show`); the last picture stays up until the next is whole, so pictures sent in a row play as frames: a stream. A board saying `screen.fps` paints a stream on that beat (the speaker board: 3 a second), the newest decoded frame each beat, so frames that arrive unevenly reach the glass evenly; a frame that lands while one still waits replaces it (`"replaced": true` in its answer, counts in `screen.stream`), and the first frame of a stream paints at once. Sapphire paces its sender to `fps` (`core/devices/glass.py`). A tap on a stream while she talks hides it until her reply ends; meanwhile its frames are answered `{"ok": true, "hidden": true}` and not decoded. On a board stating `screen.taps`, frames sent `&taps=1` own the taps: every tap on the stream is posted to the press door as the raw press of the place under the finger (`{"button": "<zone name>", "how": "short"}`, never through `bound`), no tap dismisses it, and a finger held anywhere (1.2 s on the speaker board) leaves it (the board's own page is back and the stream's next `taps=1` frame is answered `hidden`, which the sender reads as "the player left"; a frame still decoding when the hold or the tap came is dropped once whole and answered the same, and a clear disarms the hold's answer). Sapphire's `glass.claim` sends such frames with `seconds=60` and again every 30 s while nothing moves A board that states `screen.door` (a port) takes frames there instead, in a server task of its own, so a frame never waits behind her audio arriving at the main door (the pendant from 0.1.45); the door check is the same. |
+| `screen` | `POST /screen/picture?w=&h=&seconds=` | The whole glass: the body is `w` x `h` pixels of RGB565, big-endian (`application/octet-stream`), up to the size `/health` states in `screen: {"w", "h", "format": "rgb565be"}`; the board centres it on black and paints it as it arrives, no frame buffer needed, until a tap or `seconds` (60). Sapphire fits and packs the image (`satellite.rgb565`). Her `screen` / `picture` action. A board saying `screen.jpeg` also takes `?format=jpeg` with one JPEG as the body (`image/jpeg`; width and height multiples of 16, up to the glass), and answers `took_ms` (`recv`, `wait`, `decode`, `show`); the last picture stays up until the next is whole, so pictures sent in a row play as frames: a stream. A board saying `screen.fps` paints a stream on that beat (the speaker board: 3 a second), the newest decoded frame each beat, so frames that arrive unevenly reach the glass evenly; a frame that lands while one still waits replaces it (`"replaced": true` in its answer, counts in `screen.stream`), and the first frame of a stream paints at once. Sapphire paces its sender to `fps` (`core/devices/glass.py`). A tap on a stream while she talks hides it until her reply ends; meanwhile its frames are answered `{"ok": true, "hidden": true}` and not decoded. On a board stating `screen.taps`, frames sent `&taps=1` own the taps: every tap on the stream is posted to the press door as the raw press of the place under the finger (`{"button": "<zone name>", "how": "short"}`, never through `bound`), no tap dismisses it, and a finger held anywhere (1.2 s on the speaker board) leaves it (the board's own page is back and the stream's next `taps=1` frame is answered `hidden`, which the sender reads as "the player left"; a frame still decoding when the hold or the tap came is dropped once whole and answered the same, and a clear disarms the hold's answer). Sapphire's `glass.claim` sends such frames with `seconds=60` and again every 30 s while nothing moves. A board that states `screen.door` (a port) takes frames there instead, in a server task of its own, so a frame never waits behind her audio arriving at the main door (the pendant from 0.1.45); the door check is the same. |
 | `screen` | `POST /screen/background?w=&h=&name=` | The scene behind its clock: the body is `w` x `h` pixels of RGB565, big-endian, cropped by Sapphire to fill the glass; `name` is the scene's name and comes back in `/health` as `screen.background`. `{"clear": true}` as JSON takes it away. Sapphire sends it when the board links, and when its chat or that chat's scene changes (`core/devices/glass.py`). A board that states no `screen.background` in `/health` is sent no scene (a text-only glass). |
 | `screen` | `POST /screen` with `{"chat", "brain", "trim"}` | The chat the board talks in: its name, shown on the glass (`""` hides it), the name of the model that answers in it, and its trim color `"#rrggbb"` (`""` = none). They come back as `screen.chat`, `.brain`, `.trim`; only the ones a board states are compared. A board that states no `screen.chat` in `/health` is sent neither the name nor a scene. A private chat is never named or pictured. |
 | `screen` | `PUT /screen/settings` | `{"brightness", "dim", "dim_after_s", "off_after_min", "sleep_after_min", "beat", "face_lag_ms", "av_buffer", "touch_dy", "flip", "home"}`, any of them (`sleep_after_min`: a board that sleeps, as `power` above, after this long left alone, 0 = never; `beat`: on a board that states `screen.beat`, the frames a second its face is painted on, 1 to 12, `screen.fps` following so a sender paces to it; `face_lag_ms`: on a board that states it, how long her voice waits at the start of a reply while her face streams there, 0 to 2000, so voice and face meet; `av_buffer`: on a board that states `screen.av`, packets of her stream held before it plays, 1 to 3; `touch_dy`: pixels added to every touch's y on a glass whose chip reads high, -40 to 40, read off `screen.touches` in `/health`, the last touch-downs) (`home` is the page a board with pages opens on: `chat`, `backups`, `status`, `board`, `actions`; it comes back as `screen.home`): the backlight in use and when left alone (percent), when it dims (seconds, 0 = never) and when it goes dark (minutes, 0 = never), and `flip` (true or false) to turn the picture and its touch 180 degrees, or `rotation` (0, 90, 180 or 270, on a board that states `screen.rotation`: the CYD readers) to turn them any way, `w` and `h` in `/health` following, and `invert` and `mirror` (true or false, on a board that states them: the CYD readers from 0.5.1) for a glass variant that draws in negative or scans the other way; those two take effect at once, no restart. A board with only `flip` (the backup stick) or `rotation` answers `{"flip" or "rotation", "restarting"}` and restarts to draw that way; it refuses with 409 while its card is being written. Kept on the board across a restart; `/health` states them in `screen`. Sent when the device is saved. |
@@ -293,7 +312,7 @@ X-Model: hey_marcus
 ```
 
 `X-Capture` names the capture (the board's clock at its start), `X-Chunk` the piece's number in it, `X-Fires`
-the wake fires that fell in the piece as `[sample offset, score x 1000]` (up to 40; `X-Fire-Count` counts them
+the wake fires that fell in the piece as `[sample offset, score x 1000]` (up to 50; `X-Fire-Count` counts them
 all), `X-Test` whether fires were only counted, `X-Model` the wake word model that was listening.
 
 | Answer | Meaning |
@@ -400,7 +419,6 @@ answered `{"ok": true, "accepted": true, "job": "stop", "said": "Stopped"}`.
 
 An unknown job is `{"ok": false, "error": "..."}`. A Sapphire without the door
 answers 404. A new job is one function and one name in `voice.ASKS`.
-| `{"ok": false, "error": "..."}` | The reason. With `"busy": true`, three questions already wait |
 
 **Her reply, for a screen.** Her words never ride the events stream: a
 stream that falls behind drops a line, and a dropped line of prose is garbage
@@ -511,8 +529,11 @@ the stream ends, open it again. A board only ever hears about its own turns.
 - `has` is kept by the engine on the device row (`parts[].has`, `engine.capabilities`). `status()` of any driver may answer it.
 - Conversion: `core/devices/voice.py` `fit(audio, kind, plays)`, checked by `wanted(plays)`. The only place her voice is converted for a device.
 - A board from the browser: `interfaces/web/static/views/settings-tabs/device-flash.js` (two lanes: esptool-js over Web Serial with `shared/md5.js` for the write check, or `core/devices/flasher.py` on Sapphire's computer through `/api/devices/flash/{ports,chip,start,status,ask,close}`; then the console line), the chip's MAC as the device `fingerprint` (`engine.provision`, `/health.mac`, console `show.mac`), `POST /api/devices/provision` (`engine.provision`: the row with no url, two keys, her address: the body's `sapphire` or `GET /api/devices/here`'s guess from `net.local_ips`, tunnels and bridges excluded; `ssl_utils.cert_pem`), `GET /api/devices/firmware[/{board}/{part}]` (`core/devices/firmware.py`, index + ESP Web Tools manifests, cached). The address: `engine.learned`, called by `_device_key` on every device door.
-- Doors: `core/routes/devices.py` `devices_voice` (body or form, `AUDIO_BODIES`) and `devices_events`; typed words `devices_text` (POST) and `devices_text_read` (GET), which ride `voice.typed`, `voice.Reply` and `voice.reply_text`.
+- Signing (Sapphire -> board): `satellite._call` / `_signature`, HMAC-SHA256 from firmware 0.9.4 (readers 0.5.2); boards proven signed are kept in `SIGNED_FILE` (`user/device_signed.json`) and never sent Bearer again; an older board gets Bearer and is asked signed again every `OLD_AGAIN_S` (600 s).
+- Doors: `core/routes/devices.py` `devices_wake` (`voice.woke`), `devices_voice` (body or form, `AUDIO_BODIES`), `devices_room` (`voice.room_sink`, at most `voice.ROOM_FIRES_MAX` fires a piece), `devices_press` (`voice.pressed`), `devices_ask` (`voice.ASKS`) and `devices_events`; typed words `devices_text` (POST) and `devices_text_read` (GET), which ride `voice.typed`, `voice.Reply` and `voice.reply_text`.
 - A board's chat picker: `voice.chats` and `voice.pick_chat` (`devices_chats`, `devices_chat`): the same `chat` setting the Devices page saves, then `glass.sync_soon`. Its history: `voice.history` (`devices_history`) over `session_manager.get_display_messages_for`.
 - Buttons: the `buttons` setting is a `bindings` field (`engine._bound`, `engine._menu`), its menu is the driver's `bindings()` from the board's `/health`; `voice.bound` is what the stream carries (`routes.light_stream` at open, the driver's `apply` at a save), `voice.pressed` the press door (`devices_press`). The chat every lane uses: `voice.chat_for`, which makes a chat that is named and does not exist. Firmware: `main/buttons.c` in each board.
 - Backups onto a board: `core/devices/storage.py` makes a `SatelliteTarget` (in the driver) for every device whose `has` says `storage`; `core/backup_targets.ship` seals once, PUTs, rotates by the device's keep fields, drops the openers. Never plaintext: `Target.check` (Sapphire) + the board's own magic check.
+- The glass: `core/devices/glass.py` (chat name and scene `sync`; streams `stream_frame` paced to `screen.fps`, `claim` for a stream that owns the taps; the voice+face packets to `screen.door`). Doors `GET`/`DELETE /api/devices/{id}/screen/stream`, `POST /api/devices/{id}/screen/frame` (one JPEG, `glass.FRAME_MAX` 256 KB).
+- IR: `ir` / `blast` resolves a name through `core/ir/library.py` `resolve` (`user/ir/library.json`), else takes two hex bytes, and calls `POST /ir/blast`.
 - `tests/test_docs_satellite_protocol.py` runs this page's health example through the real driver and checks every address in the table.

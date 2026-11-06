@@ -48,7 +48,11 @@ Pick a provider in **Settings → TTS**:
 | **ElevenLabs** (plugin) | Cloud | No | Needs an API key |
 | **Google Translate** (plugin) | Cloud | No | Free, basic quality |
 
-Plugin providers appear in the dropdown automatically when their plugin is enabled. The **Test TTS** button at the bottom of the tab speaks a test line and reports latency.
+Plugin providers appear in the dropdown automatically when their plugin is enabled. The **Test TTS** button at the bottom of the tab speaks a test line, reports latency, and names the Kokoro server that answered (primary, or the fallback and why the primary didn't).
+
+A provider switch runs as a job under its own row in the notification center, so Save returns at once even while a model downloads. If the new provider fails to start, the previous one comes back when it can be rebuilt, otherwise voice goes off; the row says which.
+
+**Kokoro servers** (Settings → TTS → Kokoro, advanced): `TTS_PRIMARY_SERVER` is where speech is made, a URL or a pairing string from another computer's shared Kokoro. `TTS_FALLBACK_SERVER` is tried when the primary doesn't answer within `TTS_FALLBACK_TIMEOUT` (0.2 s); blank means no fallback. Both are read on every sentence, so an edit reaches her next one. To share this computer's Kokoro, turn on `TTS_SHARE_ENABLED`: a second door with a pinned self-signed certificate and a key per computer; add computers in the panel under the Test button and paste each one's pairing string as its primary. The Kokoro worker guards itself against leaks: it measures its own size after her first word and restarts once quiet for 5 s when it has grown 2 GB past that, or after 500 requests. It never restarts mid-sentence.
 
 **Voice, pitch, and speed are per-chat, not global.** They live in the chat sidebar under the **TTS (Voice)** accordion — a voice dropdown plus Pitch and Speed sliders. Each chat (and each persona) remembers its own; switching chats switches her voice. Defaults: voice Heart (`af_heart`), pitch 0.98, speed 1.3.
 
@@ -61,9 +65,11 @@ Where her voice comes out:
 - **Wake word turns** — audio plays on the server's speakers.
 - **Conversation mode** — server speakers (Local mic) or your browser (Browser mic).
 
+**Play speech here** (Settings → TTS, `TTS_LOCAL_PLAYBACK`, on by default) is the switch for all of the above. Off: speech is still made and every TTS hook still fires, but nothing plays on this computer or in its browser. That is the switch for sending her voice to an avatar or robot plugin instead ([plugin-author/voice-routing.md](plugin-author/voice-routing.md)). It doesn't govern satellites, phone calls, Discord, Telegram voice notes, the voice preview, or the chime.
+
 ### Streaming TTS
 
-On by default. With **Streaming** on (Settings → TTS → Streaming section), Sapphire synthesizes and starts speaking each chunk as the LLM finishes it — speech starts a second or two after generation begins instead of after the whole reply. Only streaming-capable providers do this (Kokoro, Piper); others fall back to whole-reply playback automatically, no harm done.
+On by default. With **Streaming** on (Settings → TTS → **Streaming (Kokoro)** section), Sapphire synthesizes and starts speaking each chunk as the LLM finishes it — speech starts a second or two after generation begins instead of after the whole reply. Only streaming-capable providers do this (Kokoro, Piper); others fall back to whole-reply playback automatically, no harm done.
 
 Tuning lives in the same section: split mode (`paragraph` keeps prosody natural, `sentence` gets audio out faster), min/max chunk sizes, pauses after paragraph/sentence boundaries, and how `*stage directions*` and `(parentheticals)` are rendered as pauses.
 
@@ -86,9 +92,13 @@ Turn it on in **Settings → Wakeword**. Sapphire then listens continuously on t
 
 - **Bundled with Sapphire:** `hey_sapphire` (the default).
 - **Built into openWakeWord:** `alexa`, `hey_mycroft`, `hey_jarvis`, `hey_rhasspy`, `timer`, `weather`.
-- **Custom:** drop `.onnx` or `.tflite` files into `user/wakeword/models/` — they appear in the dropdown automatically. Community collections exist on GitHub.
+- **Custom:** add them in the **Library** on the Wakeword tab, or train your own with the Wakeword Maker ([WAKEWORD-MAKER.md](WAKEWORD-MAKER.md)). This computer listens with openWakeWord `.onnx` models only. A `.tflite` is a microWakeWord model for an ESP32 satellite and is never offered to this computer's detector.
 
-Changing the model in Settings hot-swaps the detector — no restart. The **threshold** (default 0.6) sets sensitivity: lower catches more but false-triggers more.
+Changing the model in Settings hot-swaps the detector — no restart. The **threshold** (default 0.6) sets sensitivity: lower catches more but false-triggers more. A model change brings the model's own threshold along (from its `.json` sidecar, else 0.5 for an `.onnx`); a threshold you set in the same save wins.
+
+**The Library** (Settings → Wakeword → Library) lists every phrase Sapphire can listen for, one row per phrase. The PC column holds openWakeWord `.onnx` models (this computer and a Pi), the Satellite column microWakeWord `.tflite` + `.json` manifest pairs (ESP32 boards). **Add a PC wake word** takes a `.onnx` of 4 KB to 8 MB with an optional manifest; **Add a satellite wake word** takes a `.tflite` of 4 KB to 1.5 MB plus its manifest, which is required. × removes one. Your files live in `user/wakeword/models/` and win over a shipped model of the same name; only yours can be removed. A file dropped there by hand that fails the checks shows as **unusable** (hover for why).
+
+**Who listens for what.** Each listener has its own switch: this computer is the `WAKEWORD_MODEL` dropdown, each satellite is its board's **Wake word** tab in Devices (a library model or the board's own built-in word). A board restarts on the change; one that is offline keeps the request and gets it when next seen. The switch applies the model's own threshold.
 
 **A wake turn, start to finish:** wake word detected → short acknowledgment tone → she records until you stop talking (or aborts after a few seconds of no speech) → transcribe → voice-command check → the reply streams live into any open web page *and* speaks on the server's speakers. The Stop button on the page works on wake turns too.
 
@@ -96,11 +106,11 @@ Wake word needs a working STT provider — with STT disabled she'll hear her nam
 
 ### Voice commands
 
-The **voice-commands** plugin (enabled by default) handles instant actions before the LLM ever sees them — the utterance must match exactly:
+The **voice-commands** plugin (enabled by default) handles instant actions before the LLM ever sees them — the utterance must match exactly (case and surrounding spaces aside):
 
 | Say | Does |
 |-----|------|
-| "stop", "halt", "be quiet", "shut up" | Stop TTS and cancel generation |
+| "stop", "halt", "be quiet", "shut up" | Stop TTS and cancel generation (a phone caller's "stop" cancels only their call) |
 | "reset", "reset chat", "clear chat", "clear history" | Clear the current chat's history |
 
 These are ordinary plugin hooks — other plugins can register their own triggers.
@@ -118,7 +128,7 @@ The headline voice feature: **continuous listening with real turns and real inte
 | For **Local mic**: wake word enabled and running | Local conversation borrows the wakeword's mic via a fail-safe handoff |
 | For **Browser mic**: a mic permission in your browser | The browser is the audio device. **Settings > Audio > Browser Mic** tests it and picks which mic this browser uses (Settings > STT on hosted installs) |
 
-**Starting and stopping:** mic flyout → Conversation → **Local mic** (the server's microphone and speakers) or **Browser mic** (this browser over a WebSocket — works from your phone on the couch). **Off** ends it, as does tapping the green 🎙 mic button. The two sources are mutually exclusive; picking one hands off from the other. The mode is ephemeral — it doesn't survive a restart, and the wake word is restored the moment it ends. If the mic can't be acquired, the mode simply doesn't engage and wakeword listening stays intact — she is never left deaf.
+**Starting and stopping:** mic flyout → Conversation → **Local mic** (the server's microphone and speakers) or **Browser mic** (this browser over a WebSocket — works from your phone on the couch). **Off** ends it, as does tapping the green 🎙 mic button. The two sources are mutually exclusive; picking one hands off from the other. The switch is remembered across restarts: Local mic resumes at boot when the wake word is on and the mic is free (otherwise it tries again next boot); Browser mic resumes in the tab that chose it, when that browser still holds mic permission (otherwise a toast says to pick Browser to resume it). The wake word is restored the moment the mode ends. If the mic can't be acquired, the mode simply doesn't engage and wakeword listening stays intact — she is never left deaf.
 
 **How a turn works.** Every audio frame is scored by Silero VAD against `CONVERSATION_VAD_THRESHOLD`. When speech starts, she accumulates your utterance; when you've been silent for `CONVERSATION_ENDPOINT_SILENCE_MS` (default 700ms), the utterance ends and goes to STT. Utterances shorter than `CONVERSATION_MIN_SPEECH_MS` (default 200ms) are discarded as blips — a cough doesn't start a turn. Her reply streams to the page and to the speakers as it generates.
 
@@ -167,6 +177,7 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 | `STT_FIREWORKS_API_KEY` | *(empty)* | Fireworks key for cloud Whisper | STT tab (Fireworks) |
 | `STT_FIREWORKS_MODEL` | `whisper-v3-turbo` | Fireworks model choice | STT tab (Fireworks) |
 | `FASTER_WHISPER_DEVICE` | `cuda` | cpu / cuda / auto | STT tab, advanced |
+| `FASTER_WHISPER_CUDA_DEVICE` | `0` | GPU index for multi-GPU setups | STT tab, advanced |
 | `FASTER_WHISPER_COMPUTE_TYPE` | `int8` | Precision vs. speed (int8 / float16 / float32) | STT tab, advanced |
 | `FASTER_WHISPER_BEAM_SIZE` | `3` | Decoding beam; higher = slower, slightly better | STT tab, advanced |
 | `FASTER_WHISPER_NUM_WORKERS` | `4` | Parallel transcription workers | STT tab, advanced |
@@ -191,7 +202,9 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 | `KOKORO_DEVICE` | `cuda` | Kokoro synthesis on GPU or CPU | TTS tab (Kokoro) |
 | `KOKORO_CUDA_DEVICE` | *(empty)* | GPU index for multi-GPU setups | TTS tab, advanced |
 | `TTS_SERVER_HOST` / `TTS_SERVER_PORT` | `127.0.0.1` / `5012` | The local Kokoro server subprocess bind | TTS tab, advanced |
-| `TTS_PRIMARY_SERVER` / `TTS_FALLBACK_SERVER` | localhost URLs | Where the app reaches the TTS server; the primary may be a pairing string from another computer's shared Kokoro (falls back per request) | TTS tab, advanced |
+| `TTS_LOCAL_PLAYBACK` | `true` | **Play speech here**: off = speech is still made and hooks fire, nothing plays on this computer or its browser | TTS tab |
+| `TTS_PRIMARY_SERVER` / `TTS_FALLBACK_SERVER` | localhost URLs | Where the app reaches the TTS server; the primary may be a pairing string from another computer's shared Kokoro. Fallback is tried per sentence; blank = no fallback | TTS tab, advanced |
+| `TTS_FALLBACK_TIMEOUT` | `0.2` | Seconds the primary gets to answer before the fallback is tried | TTS tab, advanced |
 | `TTS_SHARE_ENABLED` / `TTS_SHARE_PORT` | `false` / `5013` | Share this Kokoro: a second door, TLS with a pinned self-signed cert and a key per computer (`core/worker_door.py`, keys in `user/worker_door/kokoro/`); add computers in the panel under the Test button, paste each one's pairing string as its primary. Her words are never logged | TTS tab, advanced |
 | `TTS_STREAMING_ENABLED` | `true` | Speak sentence-sized chunks as the LLM writes; required for Conversation-mode audio | TTS tab, Streaming |
 | `TTS_STREAMING_SPLIT_MODE` | `paragraph` | Chunk on paragraphs (natural) or sentences (faster first audio) | TTS tab, Streaming |
@@ -200,7 +213,8 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 | `TTS_STREAMING_PAUSE_PARAGRAPH_MS` | `80` | Silence after a paragraph chunk | TTS tab, Streaming |
 | `TTS_STREAMING_PAUSE_SENTENCE_MS` | `0` | Silence after a sentence chunk (sentence mode) | TTS tab, Streaming |
 | `TTS_STREAMING_STAGE_PAUSE_STYLE` | `comma` | How `*stage directions*`/(parens) pause: comma / period / ellipsis / none | TTS tab, Streaming |
-| `TTS_ELEVENLABS_API_KEY` / `_MODEL` / `_VOICE_ID` | *(empty)* | ElevenLabs plugin credentials/choices | ElevenLabs plugin settings |
+
+ElevenLabs is set in its plugin's settings (Settings → Plugins → ElevenLabs): **API Key**, **Model** (default Turbo v2.5, `eleven_turbo_v2_5`), **Voice ID** (blank = default voice). The old `TTS_ELEVENLABS_*` keys are read only when the plugin setting is blank.
 
 ### Wakeword (Settings → Wakeword)
 
@@ -208,8 +222,8 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 |-----|---------|--------------|-------------|
 | `WAKE_WORD_ENABLED` | `false` | Continuous wake-word listening on the server mic | Wakeword tab |
 | `WAKEWORD_MODEL` | `hey_sapphire` | Which model/phrase to listen for | Wakeword tab, dropdown |
-| `WAKEWORD_THRESHOLD` | `0.6` | Detection confidence; lower = more sensitive | Wakeword tab |
-| `WAKEWORD_FRAMEWORK` | `onnx` | Inference backend (onnx everywhere; tflite Linux-only) | Wakeword tab, advanced |
+| `WAKEWORD_THRESHOLD` | `0.6` | Detection confidence; lower = more sensitive. Reset to the model's own on a model change | Wakeword tab |
+| `WAKEWORD_FRAMEWORK` | `onnx` | Inference backend. Leave it on onnx: `tflite` makes this computer look for library `.tflite` files, which are microWakeWord (ESP32) models it can't load | Wakeword tab, advanced |
 | `CHUNK_SIZE` | `1280` | Detector frame size (samples) | Wakeword tab, advanced |
 | `WAKE_TONE_DURATION` | `0.15` | Acknowledgment beep length (seconds) | Wakeword tab, advanced |
 | `WAKE_TONE_FREQUENCY` | `440` | Acknowledgment beep pitch (Hz) | Wakeword tab, advanced |
@@ -236,6 +250,10 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 |-----|---------|--------------|-------------|
 | `AUDIO_INPUT_DEVICE` | auto | Server input device (mic) — pick + 🎙 Test | Audio tab |
 | `AUDIO_OUTPUT_DEVICE` | auto | Server output device (speakers) — pick + 🔊 Test | Audio tab |
+| `AUDIO_SAMPLE_RATES` | `[44100, 48000, 16000, 8000]` | Fallback sample rates tried, in order, when a device won't open at the wanted rate or its default | Audio tab, advanced |
+| `AUDIO_BLOCKSIZE_FALLBACKS` | `[1024, 512, 2048, 4096]` | Block sizes tried in order | Audio tab, advanced |
+| `AUDIO_PREFERRED_DEVICES_LINUX` | `["pipewire", "pulse", "default"]` | Device names auto picks first on Linux | Audio tab, advanced |
+| `AUDIO_PREFERRED_DEVICES_WINDOWS` | `["default", "microsoft sound mapper", "microphone"]` | Device names auto picks first on Windows | Audio tab, advanced |
 
 ## Quick Troubleshooting
 
@@ -246,9 +264,9 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 - **Keyboard/cough interrupts her** → raise `CONVERSATION_BARGE_HOLD_MS` (150–250) and `CONVERSATION_MIN_SPEECH_MS`.
 - **She cuts you off mid-sentence** → raise `CONVERSATION_ENDPOINT_SILENCE_MS` (900–1200).
 - **Wake word misses you** → lower `WAKEWORD_THRESHOLD` (0.4–0.5), check the Audio tab input device with 🎙 Test, and confirm the right model is selected. False triggers → raise the threshold.
-- **Wake tone plays but nothing happens** → STT is disabled or still loading → pick a provider in Settings → STT; the mic button tooltip shows "STT loading — downloading speech model" while a model downloads.
-- **Mic button stuck "loading" / provider switch seemed to work but voice is dead** → the provider failed to construct (bad key, missing CUDA, model download failure) and fell back to disabled → check the app log for `[stt] Failed to create` / `[tts] Failed to create`, fix the cause, re-select the provider.
-- **TTS test says "Reachable, but synthesis failed"** → the server answers but can't make audio; the reason is shown and is in `user/logs/kokoro.log`. A voice never used before downloads from Hugging Face on first use (one reach, then cached for good); a box that can't reach it says so in that log at boot.
+- **Wake tone plays but nothing happens** → STT is disabled or still loading → pick a provider in Settings → STT; the mic button tooltip shows "STT enabled but not initialized — loading speech model" while a model loads.
+- **Mic button stuck "loading" / provider switch seemed to work but voice is dead** → the provider failed to start (bad key, missing CUDA, model download failure) → its row in the notification center says why, and the previous provider was put back (or voice turned off) → fix the cause, re-select the provider. The app log has `[stt] Failed to create` / `[tts] Failed to create`.
+- **TTS test says "The voice engine answered, but couldn't make speech (…)"** → the server answers but can't make audio; the reason is shown and is in `user/logs/kokoro.log`. A voice never used before downloads from Hugging Face on first use (one reach, then cached for good); a box that can't reach it says so in that log at boot.
 - **Pitch sounds wrong / audio speeds up or slows down with pitch** → the provider has no native pitch, so pitch is a resample (changes duration too) → keep pitch near 1.0 on ElevenLabs/gTTS; Kokoro and Piper shift pitch natively.
 - **No audio in the browser at all, toast about autoplay** → the browser blocked audio before your first interaction → click anywhere on the page and retry.
 - **Voice refused with a "Private chat" message** → the vault gate: the active STT or TTS provider isn't local → switch to a local provider (Faster Whisper / Kokoro / Piper) or type. Note plugin providers must declare themselves local in their manifest, or they're treated as cloud.
@@ -257,6 +275,9 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 ## See also
 
 - [PHONE-CALLS.md](PHONE-CALLS.md) — telephony: the same conversation engine over a real phone line
+- [WAKEWORD-MAKER.md](WAKEWORD-MAKER.md) — train your own wake word for this computer and the satellites
+- [DEVICES.md](DEVICES.md) — satellites: boards that hear and speak for her in other rooms
+- [plugin-author/voice-routing.md](plugin-author/voice-routing.md) — sending her voice to an avatar, robot or bot
 - [PRIVACY.md](PRIVACY.md) — the vault, private chats, and why cloud voice gets refused
 - [CHATS.md](CHATS.md) — per-chat settings, including the sidebar voice/pitch/speed
 - [PERSONAS.md](PERSONAS.md) — bundling a voice with a prompt/toolset as a persona
@@ -267,19 +288,19 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 
 STT: registry core/stt/providers (faster_whisper local, fireworks_whisper cloud, sapphire_router managed, none). `STT_ENABLED`/`TTS_ENABLED` are DERIVED from provider != 'none', not user keys. Silero VAD (core/stt/silero_vad.py) with Classic percentile fallback (RECORDER_* keys, only active when Silero off/unavailable). Hallucination filter at provider boundary (core/stt/hallucination.py) — all lanes inherit. Routes: POST /api/transcribe (browser hold-to-record; 403 on private-chat cloud-STT gate), GET /api/stt/vad-status, POST /api/stt/vad-test.
 
-TTS: registry core/tts/providers (kokoro local subprocess :5012, sapphire_router managed, none) + plugin providers (piper local, elevenlabs, gtts). 28 Kokoro voices (11 AF, 9 AM, 4 BF, 4 BM). supports_streaming: kokoro + piper only. supports_pitch: kokoro + piper (native); others = client-side resample (duration changes). Voice/pitch/speed are PER-CHAT settings (`voice`, `pitch`, `speed` in chat settings; sidebar "TTS (Voice)" accordion; applied on chat switch via tts.set_voice/set_pitch/set_speed). Defaults af_heart / 0.98 / 1.3; pitch clamped 0.5–2.0. Routes: POST /api/tts (play=server speakers, file=browser blob), /api/tts/stream (SSE chunks; 503 if streaming off → client falls back), /api/tts/test, /api/tts/stop, GET /api/tts/status, /api/tts/voices.
+TTS: registry core/tts/providers (kokoro local subprocess :5012, sapphire_router managed, none) + plugin providers (piper local, elevenlabs, gtts). 28 Kokoro voices (11 AF, 9 AM, 4 BF, 4 BM). supports_streaming: kokoro + piper only. supports_pitch: kokoro + piper (native); others = client-side resample (duration changes). Voice/pitch/speed are PER-CHAT settings (`voice`, `pitch`, `speed` in chat settings; sidebar "TTS (Voice)" accordion; applied on chat switch via tts.set_voice/set_pitch/set_speed). Defaults af_heart / 0.98 / 1.3; pitch clamped 0.5–2.0. Routes: POST /api/tts (play=server speakers, file=browser blob), /api/tts/stream (SSE chunks; 503 if streaming off → client falls back), /api/tts/test, /api/tts/preview, /api/tts/stop, /api/mic/active, GET /api/tts/status, /api/tts/voices. Kokoro servers read per call: TTS_PRIMARY_SERVER (URL or pairing string), TTS_FALLBACK_SERVER (blank = none), TTS_FALLBACK_TIMEOUT 0.2 s probe; test reports served_by. Kokoro worker leak guard (core/tts/tts_server.py): restart once quiet 5 s when RSS grows >2.0 GB past warm size or after 500 requests, never mid-sentence. Share door: TTS_SHARE_ENABLED/TTS_SHARE_PORT (core/worker_door.py). Provider switches (STT/TTS/embedding/wakeword) are jobs with a notification row (core/provider_switch.py); failure = previous provider back if rebuildable, else off. ElevenLabs = plugin settings api_key/model (eleven_turbo_v2_5)/voice_id; TTS_ELEVENLABS_* only as fallback.
 
 STREAMING TTS: core/tts/streaming.py (chunker) + stream_pump.py. Pump enabled iff TTS_ENABLED && TTS_STREAMING_ENABLED && provider.supports_streaming. Web replies auto-speak in browser (SSE tts_chunk); streaming off = whole-blob after generation. Strips think/reasoning/tools blocks + code fences before synth.
 
-PLAY SPEECH HERE (2026-10-17): `TTS_LOCAL_PLAYBACK`, Settings > Voice, default on. "Make speech" and "play it on this computer" are two switches. Off = synthesis and every TTS hook unchanged, nothing plays on this machine or in the browser: speak()/speak_sync() return after pre_tts; the pump fires the chunk hooks and emits nothing (counted as voiced, no drop notice); /api/tts file mode answers 204. Lane ownership: the stream owner stamps `stream.tts_plays_here` (default True = the browser; cadence's device lane and the conversation driver's phone/Discord turns stamp False) and the pump takes `plays_here`; tts.render(plays_here=True) for the browser route and the MCP persona, default False for devices/Telegram. Not governed: satellites, phone/Discord, Telegram voice notes, voice preview, ding. Also: a plugin that forwarded a chunk sets `skip_tts` in tts_chunk_audio = consumed (not lost); the browser's whole-blob route now goes through render (gate + cleanup + pre_tts), no longer the raw primitive, and `render` reasons in `QUIET_REASONS` are silence on purpose (204), the rest 503. Plugin side: docs/plugin-author/voice-routing.md.
+PLAY SPEECH HERE (2026-10-17): `TTS_LOCAL_PLAYBACK`, Settings > TTS ("Play speech here"), default on, hot. "Make speech" and "play it on this computer" are two switches. Off = synthesis and every TTS hook unchanged, nothing plays on this machine or in the browser: speak()/speak_sync() return after pre_tts; the pump fires the chunk hooks and emits nothing (counted as voiced, no drop notice); /api/tts file mode answers 204. Lane ownership: the stream owner stamps `stream.tts_plays_here` (default True = the browser; cadence's device lane and the conversation driver's phone/Discord turns stamp False) and the pump takes `plays_here`; tts.render(plays_here=True) for the browser route and the MCP persona, default False for devices/Telegram. Not governed: satellites, phone/Discord, Telegram voice notes, voice preview, ding. Also: a plugin that forwarded a chunk sets `skip_tts` in tts_chunk_audio = consumed (not lost); the browser's whole-blob route now goes through render (gate + cleanup + pre_tts), no longer the raw primitive, and `render` reasons in `QUIET_REASONS` are silence on purpose (204), the rest 503. Plugin side: docs/plugin-author/voice-routing.md.
 
-WAKEWORD: core/wakeword/ (openWakeWord). Builtin: alexa, hey_mycroft, hey_jarvis, hey_rhasspy, timer, weather; bundled: hey_sapphire (core/wakeword/models); custom: user/wakeword/models/*.onnx|.tflite auto-discovered (GET /api/settings/wakeword-models). WAKEWORD_MODEL change = hot-swap (reload_wakeword_model), no restart. Wake turn: tone → record (RECORDER_NO_SPEECH_TIMEOUT abort) → transcribe → post_stt hook → process_llm_query(voice_turn=True) → streams to page (VOICE_TURN events) + server speakers. Suppressed during web activity (_web_active) and conversation mode. Requires STT.
+WAKEWORD: core/wakeword/ (openWakeWord). Builtin: alexa, hey_mycroft, hey_jarvis, hey_rhasspy, timer, weather; bundled: hey_sapphire (core/wakeword/models); custom: user/wakeword/models/<name>.onnx (this computer + Pi) or <name>.tflite + <name>.json (microWakeWord, ESP32 satellites ONLY, never the desktop detector). User file wins over a shipped one of the same name. Library core/wakeword/library.py (Settings > Wakeword > Library): GET/POST /api/wakeword/library, DELETE /api/wakeword/library/{family}/{name}, POST /api/wakeword/switch {listener: "this computer" | device id, model: name | "own" (board built-in)}; offline board keeps the wish. Dropdown list: GET /api/settings/wakeword-models (onnx only). WAKEWORD_MODEL change = hot-swap (reload_wakeword_model), no restart, and takes the model's own threshold (sidecar, else onnx 0.5) unless WAKEWORD_THRESHOLD is in the same save. WAKEWORD_FRAMEWORK must stay onnx on the desktop. Training: Wakeword Maker (docs/WAKEWORD-MAKER.md). Wake turn: tone → record (RECORDER_NO_SPEECH_TIMEOUT abort) → transcribe → post_stt hook → process_llm_query(voice_turn=True) → streams to page (VOICE_TURN events) + server speakers. Suppressed during web activity (_web_active) and conversation mode. Requires STT.
 
-VOICE COMMANDS: core/plugins/voice-commands — pre_chat hooks with voice_match, exact match, bypass LLM. stop|halt|be quiet|shut up → stop TTS + cancel; reset|reset chat|clear chat|clear history → clear history.
+VOICE COMMANDS: core/plugins/voice-commands — pre_chat hooks with voice_match, exact match (lowercased + trimmed, end punctuation ignored: "Stop." = stop), bypass LLM. stop|halt|be quiet|shut up → stop TTS + cancel (scoped: a phone caller's stop cancels only that call; the operator's spares live calls); reset|reset chat|clear chat|clear history → clear history.
 
-CONVERSATION MODE ("true speech"): core/conversation/ — engine.py (IDLE/USER_SPEAKING/RESPONDING state machine), driver.py (STT→chat_stream→sink; barge = scoped cancel_generation + sink.stop), manager.py, vad.py (SpeechGate w/ hysteresis: exit threshold = threshold−0.15). Sources: local_source (headphone tier), duplex_source (DTLN-AEC 256/512, one duplex stream = source AND sink, models user/models/dtln/, soft-fallback to headphone), browser_source (WS /ws/conversation). UI: mic flyout conv-seg Off|Local mic|Browser mic (features/convo.js owns transitions; truth via conversation_mode_changed SSE). Routes: PUT/GET /api/runtime/true-speech (local), WS /ws/conversation (browser; refused 4409 if local active). Local requires active wakeword (fail-safe handoff, restored on any failure/exit); browser doesn't. AUDIO REQUIRES streaming TTS + capable provider (driver feeds sink only tts_chunk events). Barge-in arms on first tts_chunk (not content — thinking is uninterruptible by design). Start word = STT-side fuzzy prefix gate (match_start_word), no pause, strips prefix. Tuning read fresh per activation. Settings tab "Conversation" (💬). External sessions (phone) = manager.start_external, CONVERSATION_EXTERNAL_SLOTS cap (default 2), own driver/gate per call, never touches wakeword; one live session per chat. Mode is ephemeral (not persisted).
+CONVERSATION MODE ("true speech"): core/conversation/ — engine.py (IDLE/USER_SPEAKING/RESPONDING state machine), driver.py (STT→chat_stream→sink; barge = scoped cancel_generation + sink.stop), manager.py, vad.py (SpeechGate w/ hysteresis: exit threshold = threshold−0.15). Sources: local_source (headphone tier), duplex_source (DTLN-AEC 256/512, one duplex stream = source AND sink, models user/models/dtln/, soft-fallback to headphone), browser_source (WS /ws/conversation). UI: mic flyout conv-seg Off|Local mic|Browser mic (features/convo.js owns transitions; truth via conversation_mode_changed SSE). Routes: PUT/GET /api/runtime/true-speech (local), WS /ws/conversation (browser; refused 4409 if local active). Local requires active wakeword (fail-safe handoff, restored on any failure/exit); browser doesn't. AUDIO REQUIRES streaming TTS + capable provider (driver feeds sink only tts_chunk events). Barge-in arms on first tts_chunk (not content — thinking is uninterruptible by design). Start word = STT-side fuzzy prefix gate (match_start_word), no pause, strips prefix. Tuning read fresh per activation. Settings tab "Conversation" (💬). External sessions (phone) = manager.start_external, CONVERSATION_EXTERNAL_SLOTS cap (default 2), own driver/gate per call, never touches wakeword; one live session per chat. Mode IS persisted: CONVERSATION_LAST_MODE (off|local|browser, set by deliberate choices only); local resumes at boot via manager.resume() when wakeword is on and the mic is free; browser resumes in the tab that chose it (GET /api/runtime/true-speech last_mode).
 
-PRIVACY: core/voice_privacy.py — private chat + non-local provider = refuse (stt_gate_reason/tts_gate_reason). Fail-closed on missing is_local metadata; fail-open only on systemic settings errors. No override toggle by design. Gates: /api/transcribe 403, wake path pre-record, conversation driver per-session, pump first-push, /api/tts file-mode 403. NOTE: piper/gtts/elevenlabs manifests don't declare is_local → all treated as cloud by the gate (piper is factually local — known gap).
+PRIVACY: core/voice_privacy.py — private chat + non-local provider = refuse (stt_gate_reason/tts_gate_reason). Fail-closed on missing is_local metadata; fail-open only on systemic settings errors. No override toggle by design. Gates: /api/transcribe 403, wake path pre-record, conversation driver per-session, pump first-push, /api/tts file-mode 403. Plugin manifests declare is_local: piper true (allowed in private chats), gtts and elevenlabs false (refused).
 
 MANAGED MODE: Audio + Wakeword settings tabs hidden; recorder keys hidden; sapphire_router STT/TTS providers.
 

@@ -1,6 +1,6 @@
 # Personas
 
-A persona bundles everything about an AI personality into one package — prompt, voice, tools, spice set, model, scene background, accent color, and mind scopes (memory, knowledge, people, goals, plus any scopes plugins register). Switch between them instantly. Each chat can be a different persona or overlap some and make new creative additions.
+A persona bundles everything about an AI personality into one package — prompt, voice, tools, spice set, model, scene background, accent color, and mind scopes (memory and contacts on the Mind Palace, plus any scopes plugins register). Switch between them instantly. Each chat can be a different persona or overlap some and make new creative additions.
 
 Think of personas as saved configurations. Instead of manually setting the prompt, voice, toolset, and spice every time you create a chat, pick a persona and everything applies at once.
 
@@ -24,6 +24,8 @@ Sapphire ships with 12 pre-made personas:
 | **Marcus** | Michael (M) | The waves decide |
 | **Eddie** | Puck (M) | Heart over horsepower |
 | **Agent** | Heart (F) | Background worker — lean, focused, no personality layer |
+
+Sapphire, Cobalt, Anita, Cantos, Marcus and Eddie ship on the `personality` toolset, which carries `slash_command` — they can trim or compact their own chat (`/remove N`, `/compact-daily`; see [SLASH-COMMANDS.md](SLASH-COMMANDS.md)). Pick another toolset to take that away.
 
 **Agent** is the utility persona the background agent system runs on — a lean, tool-focused worker rather than a chat companion. It's editable like the others, but changes affect how background agents behave.
 
@@ -73,7 +75,7 @@ Click the **Personas** nav item (in the Persona group, alongside Prompts, Toolse
 | **Spice Set** | Which spice set is active, plus the per-chat spice toggle and rotation turns |
 | **Voice** | TTS voice, pitch, and speed |
 | **LLM** | Provider and model selection |
-| **Mind Scopes** | Memory, knowledge, people, and goal scopes — plus any plugin-registered scopes (calendar, email, Telegram, Discord, etc.), which appear as extra dropdowns automatically |
+| **Mind Scopes** | Memory and contacts (people) scopes — plus any plugin-registered scopes (calendar, email, Telegram, Discord, etc.), which appear as extra dropdowns automatically |
 | **Background** | The chat scene — pick it in the editor's Scene section; activating the persona stamps it onto the chat |
 | **Motion** | The chat's ambient animation — captured from the chat when you save a persona, applied on activation |
 | **Trim Color** | The persona's accent color — becomes the chat's accent when activated. Per-chat tweaks live in the 🎨 Appearance modal (see [APPEARANCE.md](APPEARANCE.md)) |
@@ -188,7 +190,7 @@ SETTINGS INCLUDED:
 - llm_primary, llm_model
 - trim_color, background, motion
 - inject_datetime, custom_context
-- every registered scope key (memory_scope, knowledge_scope, people_scope, goal_scope, plus plugin scopes like email/calendar/telegram/discord) — the list is dynamic from the scope registry; unknown *_scope keys are preserved on save so plugin scope bindings survive a plugin being unloaded
+- every registered scope key (memory_scope, people_scope from the Mind Palace — no goal or knowledge scope; plus plugin scopes like email/calendar/telegram/discord) — the list is dynamic from the scope registry; unknown *_scope keys are preserved on save so plugin scope bindings survive a plugin being unloaded
 
 FAVORITES:
 - PERSONA_FAVORITES setting = ordered list of persona names; curates and orders the chat sidebar faces strip
@@ -219,3 +221,4 @@ API:
 
 BUILT-IN PERSONAS (12):
 sapphire, cobalt, anita, claude, alfred, ada, einstein, nexus, cantos, marcus, eddie, agent (background-worker persona used by the agent system)
+Toolsets: personality (carries slash_command) = sapphire, cobalt, anita, cantos, marcus, eddie; limited_web = claude, alfred; work = ada, einstein; smarthome = nexus; default = agent

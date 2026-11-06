@@ -8,6 +8,8 @@ System architecture and internals for developers and power users. For API endpoi
 
 ```
 main.py (runner with restart loop)
+├── instance lock (core/single_instance.py) → one Sapphire per user/
+├── pre-start window → pending update, restore, GPU torch install (core/gpu_install.py), integrity check
 └── sapphire.py (VoiceChatSystem)
     ├── LLMChat (core/chat/)
     │   ├── llm_providers → Claude, OpenAI, Gemini (core) + custom + plugin-provided
@@ -18,17 +20,20 @@ main.py (runner with restart loop)
     │   ├── scheduler → cron-based task runner
     │   └── executor → context isolation, task execution
     ├── TTS (core/tts/) → provider-based: Kokoro, sapphire_router (core) + plugins (Piper, ElevenLabs, gTTS)
-    ├── STT (core/stt/) → provider-based: faster-whisper, fireworks-whisper, sapphire_router (core) + plugins
+    ├── STT (core/stt/) → provider-based: faster-whisper (worker process), fireworks-whisper, sapphire_router (core) + plugins
     ├── Wake Word (core/wakeword/) → thread (hot-toggleable)
     ├── Conversation (core/conversation/) → true speech mode: engine, driver, manager
     ├── Network Facade (core/net.py) → one LAN/WAN proxy decision point for outbound HTTP
     ├── Provider Registry (core/provider_registry.py) → TTS, STT, Embedding, LLM
     ├── Agents (core/agents/) → agent spawning, registry, lifecycle
     ├── FastAPI Server (core/api_fastapi.py + core/routes/) → 0.0.0.0:8073
-    └── Event Bus (core/event_bus.py) → SSE pub/sub
+    ├── MCP server door (core/mcp_server.py + core/routes/mcp.py) → POST /mcp, off by default
+    ├── Notification center (core/notify.py) → rows, progress, toasts
+    ├── Event Bus (core/event_bus.py) → SSE pub/sub
+    └── Watchdogs → core/loop_watch.py (event-loop stalls), core/watchdog.py (wedged shutdown: stacks + exit at 60 s)
 ```
 
-**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). `sapphire.py` spawns the Kokoro TTS server as a subprocess via `ProcessManager` when that provider is selected. STT runs as a thread. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE) on a single port. Everything else runs in the main process.
+**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). It takes the instance lock first (a second runner on the same `user/` exits 43) and never restarts exits 43 (another instance or the web port held) or 44 (bad web host, port or certificate). Before each spawn it applies a pending update, restore, or GPU torch install — the one moment nothing holds files open. `sapphire.py` spawns the Kokoro TTS server as a subprocess via `ProcessManager` when that provider is selected, and faster-whisper runs in its own worker process (`core/stt/whisper_worker.py`, JSON lines over stdin/stdout, no port) so a native crash can't take Sapphire down. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE, MCP) on a single port bound in the main thread. Everything else runs in the main process.
 
 ---
 
@@ -38,20 +43,19 @@ Scopes isolate data per-chat via ContextVars. Only `rag` and `private` are hardc
 
 | Scope | What it isolates | Overlay | Source |
 |-------|-----------------|---------|--------|
-| `scope_memory` | Memory slot | Yes (sees own + global) | memory plugin |
-| `scope_goal` | Goal set | Yes | memory plugin |
-| `scope_knowledge` | Knowledge tabs | Yes | memory plugin |
-| `scope_people` | Contacts | Yes | memory plugin |
+| `scope_memory` | Mind Palace memory slot: memories, Library, goals | Yes (sees own + global) | mindpalace plugin |
+| `scope_people` | Mind Palace contacts (UI label "contacts") | Yes | mindpalace plugin |
 | `scope_github` | GitHub account | No | github plugin |
 | `scope_email` | Email account | No | email plugin |
 | `scope_bitcoin` | Wallet | No | bitcoin plugin |
 | `scope_gcal` | Calendar account | No | google-calendar plugin |
 | `scope_telegram` | Telegram account | No | telegram plugin |
 | `scope_discord` | Discord account | No | discord plugin |
+| `scope_social`, `scope_twilio`, `scope_wordpress` | Social profile, phone number, WordPress site | No | social, twilio-voice, wordpress plugins |
 | `scope_rag` | Per-chat documents | No (strict) | core (hardcoded) |
 | `scope_private` | Private chat (bool) — non-local tools refuse | N/A | core (hardcoded) |
 
-**Global overlay:** Memory, goals, knowledge, and people scopes see both their own data AND entries in the "global" scope. RAG is strict — only the chat's own documents.
+**Global overlay:** The palace's memory and people scopes see both their own data AND entries in the read-only "global" scope. RAG is strict — only the chat's own documents. (The retired legacy `memory` plugin also registered `goal` and `knowledge` scopes; the default Mind Palace engine has neither.)
 
 **Setting scopes:** Per-chat in Chat Settings sidebar → Mind Scopes. Set to "none" to disable a system for that chat.
 
@@ -83,17 +87,18 @@ user/
 │   └── activity.json       # Task execution log
 ├── webui/
 │   └── plugins/            # Plugin settings (HA, email, etc.)
-├── functions/              # Legacy custom tools (most moved to core/plugins/memory/)
+├── functions/              # Legacy custom tools
 ├── plugins/                # Your private plugins
 ├── history/
 │   └── sapphire_history.db # Chat sessions (SQLite WAL)
+├── memory/
+│   └── mind.db             # Mind Palace: memories, Library, people, goals (SQLite)
 ├── public/
 │   └── avatars/            # User/assistant avatars
-├── memory.db               # Long-term memory (SQLite)
-├── knowledge.db            # Knowledge + people (SQLite)
-├── goals.db                # Goals + progress (SQLite)
+├── wakeword/models/        # Your wake word models (Settings > Wakeword > Library)
+├── notifications.json      # Notification center rows
 ├── ssl/                    # Self-signed cert (10yr, persistent)
-└── logs/                   # Application logs
+└── logs/                   # sapphire.log, kokoro.log, whisper.log, gpu-install.log
 ```
 
 **Bootstrap:** On first run, `core/setup.py` copies factory defaults from `core/prompt_defaults/` to `user/`.
@@ -134,8 +139,12 @@ Runtime config
 | rag / memory | `RAG_SIMILARITY_THRESHOLD`, `MEMORY_DEDUP_THRESHOLD` |
 | plugins | `ALLOW_UNSIGNED_PLUGINS`, `PLUGIN_KEYS_URL` |
 | store | `STORE_ENABLED`, `STORE_URL` |
-| server | `WEB_UI_HOST`, `WEB_UI_PORT`, `LOG_LEVEL`, `MAX_DAEMON_TASKS`, `MAX_TOTAL_TASKS` |
+| server | `WEB_UI_HOST`, `WEB_UI_PORT`, `WEB_UI_SSL_ADHOC` (self-signed HTTPS, default on; off behind a reverse proxy), `LOG_LEVEL`, `MAX_DAEMON_TASKS`, `MAX_TOTAL_TASKS` |
+| mcp | `MCP_SERVER_ENABLED`, `MCP_SERVER_TOOLS`, `MCP_SERVER_MIC`, `INSTANCE_NAME` — see [MCP.md](MCP.md) |
+| notifications | `NOTIFY_TOAST_SECONDS`, `NOTIFY_TOAST_MIN_LEVEL` |
 | backups | `BACKUPS_ENABLED`, `BACKUPS_KEEP_DAILY`, etc. |
+
+**Environment overrides** (env wins over the UI, re-applied every boot): `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER`, `WEB_UI_HOST`, `WEB_UI_PORT`, `WAKE_WORD_ENABLED`, `LMSTUDIO_BASE_URL`; `SAPPHIRE_ROUTER_URL` / `SAPPHIRE_ROUTER_TENANT_ID` are internal to managed (hosted) installs. `SAPPHIRE_MANAGED` locks those keys plus `WEB_UI_SSL_ADHOC`, audio devices, `ALLOW_UNSIGNED_PLUGINS` and the task caps. GPU install testing knobs: `SAPPHIRE_GPU_INDEX=cu126|cu128` forces the torch offer and index, `SAPPHIRE_GPU_INSTALL_DRY_RUN=1` makes pip only resolve.
 
 Two things that look like settings but aren't:
 
@@ -274,14 +283,14 @@ Plugins are signed with ed25519 to detect tampering. The signing key lives outsi
 
 ### How Signing Works (Authors)
 
-The signing tool (`tools/sign_plugin.py`) walks every file in a plugin directory matching `SIGNABLE_EXTENSIONS` (`.py`, `.json`, `.js`, `.css`, `.html`, `.md`), computes a SHA256 hash of each, builds a JSON manifest, and signs it with an ed25519 private key. The output is `plugin.sig` in the plugin directory.
+The signing tool (`tools/sign_plugin.py`) walks every file in a plugin directory matching `SIGNABLE_EXTENSIONS` (`.py`, `.json`, `.js`, `.css`, `.html`, `.md`) plus `RAW_EXTENSIONS` (`.wasm`, hashed as raw bytes), computes a SHA256 hash of each, builds a JSON manifest, and signs it with an ed25519 private key. The output is `plugin.sig` in the plugin directory. It is for keyholders only (Sapphire devs, authors on the central key list) — a self-generated key signs as `failed`, which is always blocked.
 
 ```
 python tools/sign_plugin.py core/plugins/voice-commands/
 python tools/sign_plugin.py --all          # sign all plugins in core/plugins/
 ```
 
-**Private key:** `user/plugin_signing_key.pem` (gitignored). Generate with `user/tools/generate_signing_key.py`.
+**Private key:** `user/plugin_signing_key.pem` by default (gitignored; `--key` overrides). Authorized authors generate theirs with the snippet in [SIGNING.md](SIGNING.md).
 
 ### How Verification Works (App)
 
@@ -291,7 +300,7 @@ On plugin load (`core/plugin_verify.py`), the app:
 2. Re-hashes every file listed in the manifest and compares to the signed hashes
 3. Scans for any new files not in the manifest (injection detection)
 
-**Results:** `official` (signed with Sapphire's baked-in key), `verified_author` (signed by an authorized third-party key), `unsigned` (no `plugin.sig` — loads with a warning only when sideloading is enabled), or `failed` (signature doesn't match a trusted key, or files were modified — always blocked). Managed/Docker installs add a `validated` tier: unsigned plugins that pass strict file validation load without a signature. Full guide: [SIGNING.md](SIGNING.md).
+**Results:** `official` (signed with Sapphire's baked-in key), `verified_author` (signed by an authorized third-party key), `unsigned` (no `plugin.sig` — loads with a warning only when sideloading is enabled), or `failed` (signature doesn't match a trusted key, or files were modified — always blocked). Managed installs (`SAPPHIRE_MANAGED`; plain Docker only sets `SAPPHIRE_DOCKER` and doesn't count) add a `validated` tier: unsigned plugins that pass strict file validation load without a signature. Full guide: [SIGNING.md](SIGNING.md).
 
 ### Cross-Platform Line Ending Normalization
 
@@ -305,7 +314,7 @@ Without this, a plugin signed on Linux (LF) would read as tampered on Windows if
 |---------|---------|--------|
 | `ALLOW_UNSIGNED_PLUGINS` | `false` | Allow unsigned plugins with sideloading confirmation |
 
-Default is `false` — only `official` and `verified_author` plugins load; unsigned plugins are blocked entirely (except the managed-mode `validated` lane above). Toggle on in Settings > Plugins (guarded by a danger dialog) to load unsigned plugins with a warning. `failed` plugins are blocked regardless.
+Default is `false` — only `official` and `verified_author` plugins load; unsigned plugins are blocked entirely (except the managed-mode `validated` lane above). Flip the switch on the Settings > Plugins banner (guarded by a danger dialog) to load unsigned plugins with a warning. `failed` plugins are blocked regardless.
 
 ---
 
@@ -331,7 +340,7 @@ The user-facing guide for the whole voice stack (STT, TTS, wake word, conversati
 - Core providers: Kokoro (local), sapphire_router (managed), Null (disabled)
 - Plugin providers: Piper (local), ElevenLabs, gTTS (Google Translate), and any plugin-registered provider
 
-The Kokoro subprocess is started by `ProcessManager` when the Kokoro provider is selected. Auto-restarts on crash. Server auto-restarts at 3GB memory or 500 requests.
+The Kokoro subprocess is started by `ProcessManager` when the Kokoro provider is selected; its output goes to `user/logs/kokoro.log`. Auto-restarts on crash. A leak guard measures its warm size after the first word and restarts it (once quiet for 5 s) when it grows 2 GB past that, or after 500 requests.
 
 Kokoro: 28 voices (American and British, male and female). Voice, pitch, and speed are per-chat settings, not global keys. Pitch is native for Kokoro and Piper; providers without native pitch get it via resampling. Plugin providers appear in Settings → TTS → Provider dropdown.
 
@@ -345,9 +354,7 @@ Kokoro: 28 voices (American and British, male and female). Voice, pitch, and spe
 - Core providers: faster-whisper (local GPU/CPU), fireworks-whisper (cloud), sapphire_router (managed)
 - Plugin providers: any plugin-registered STT provider
 
-`core/stt/server.py` is a backwards-compat shim only — the faster-whisper implementation lives in `core/stt/providers/faster_whisper.py` and loads in the main process.
-
-Runs as a thread when an STT provider is selected. Supports **hot-toggle** at runtime via `VoiceChatSystem.toggle_stt()`. GPU (CUDA) with CPU fallback.
+`core/stt/server.py` is a backwards-compat shim only. `core/stt/providers/faster_whisper.py` is the client of `core/stt/whisper_worker.py`, a separate process (one JSON line per message on stdin/stdout, no port; errors to `user/logs/whisper.log`) — CTranslate2 needs CUDA 12's cuBLAS, and a native crash there must not take Sapphire down. Supports **hot-toggle** at runtime via `VoiceChatSystem.toggle_stt()`. GPU (CUDA) with CPU fallback.
 
 ### Conversation Mode
 
@@ -360,7 +367,7 @@ Runs as a thread when an STT provider is selected. Supports **hot-toggle** at ru
 - Recorder: `core/wakeword/audio_recorder.py`
 - Null impl: `core/wakeword/wakeword_null.py`
 
-Supports **hot-toggle** at runtime. Auto-suppresses when web UI mic is active. Custom models supported in `user/wakeword/models/` (.onnx, .tflite).
+Supports **hot-toggle** at runtime. Auto-suppresses when web UI mic is active. Model library: `core/wakeword/library.py` — shipped models in `core/wakeword/models/`, the user's in `user/wakeword/models/` (uploaded on Settings > Wakeword or made by the Wakeword Maker). The desktop detector is offered `.onnx` (openWakeWord) models; a library `.tflite` is microWakeWord for ESP32 satellites and never offered to it.
 
 ### Audio Device Manager
 
@@ -472,9 +479,11 @@ Each chat carries per-chat settings (prompt, voice, toolset, LLM, spice, scopes)
 | `core/net.py` | Network facade — single LAN/WAN proxy decision point ([NETWORK.md](NETWORK.md)) |
 | `core/continuity/scheduler.py` | Cron-based task scheduler |
 | `core/audio/device_manager.py` | Audio device handling |
-| `core/plugins/memory/tools/knowledge_tools.py` | Knowledge base + people |
-| `core/plugins/memory/tools/memory_tools.py` | Long-term memory + embeddings |
-| `core/plugins/memory/tools/goals_tools.py` | Goals + progress journaling |
+| `core/single_instance.py` | Instance lock, web port bind, exit codes 43/44 |
+| `core/gpu_install.py` | In-app GPU torch install, run by the runner before boot |
+| `core/mcp_server.py` + `core/routes/mcp.py` | MCP server door ([MCP.md](MCP.md)) |
+| `core/stt/whisper_worker.py` | faster-whisper worker process |
+| `core/plugins/mindpalace/` | Mind Palace memory engine (`user/memory/mind.db`, [MEMORY.md](MEMORY.md)) |
 
 ---
 
@@ -483,11 +492,11 @@ Each chat carries per-chat settings (prompt, voice, toolset, LLM, spice, scopes)
 Sapphire architecture for troubleshooting and development.
 
 PROCESSES:
-- main.py: Runner with restart loop (exit 42 = restart)
+- main.py: Runner with restart loop (exit 42 = restart; 43 another instance/port held, 44 config error: never restarted). Takes the one-per-user/ instance lock; applies pending update/restore/GPU torch install before spawning
 - sapphire.py: Core VoiceChatSystem
-- core/api_fastapi.py + core/routes/: FastAPI server (port 8073, HTTPS)
-- TTS server: Kokoro HTTP subprocess (port 5012, when the kokoro provider is selected)
-- STT: provider thread in main process (faster-whisper / fireworks-whisper / sapphire_router; core/stt/server.py is a compat shim)
+- core/api_fastapi.py + core/routes/: FastAPI server (port 8073, HTTPS); MCP door POST /mcp (MCP_SERVER_ENABLED, off default; 404 when off) — see docs/MCP.md
+- TTS server: Kokoro HTTP subprocess (port 5012, when the kokoro provider is selected); restarts itself past warm size +2 GB or 500 requests
+- STT: faster-whisper runs in core/stt/whisper_worker.py (own process, stdin/stdout JSON, no port); fireworks-whisper / sapphire_router in process; core/stt/server.py is a compat shim
 - Conversation mode: core/conversation/ (engine=turn-state machine, driver=STT->stream->TTS, manager=lifecycle+wakeword handoff) — see docs/VOICE.md
 - Network: core/net.py facade — one LAN/WAN proxy decision point; LAN lane direct (trust_env off), WAN lane env-honoring/SOCKS — see docs/NETWORK.md
 
@@ -497,8 +506,8 @@ PORTS:
 - 1234: Default LLM (LM Studio)
 
 SCOPES (ContextVar-based; only rag/private hardcoded, the rest plugin-registered):
-- scope_memory, scope_goal, scope_knowledge, scope_people: global overlay
-- scope_email, scope_bitcoin, scope_gcal, scope_telegram, scope_discord: no overlay
+- scope_memory, scope_people: Mind Palace (default engine), global overlay; no goal or knowledge scope (goals + Library live in the memory scope)
+- scope_email, scope_bitcoin, scope_gcal, scope_telegram, scope_discord, scope_github, scope_social, scope_twilio, scope_wordpress: no overlay
 - scope_rag: strict per-chat isolation
 - scope_private: boolean — private chat; tools not flagged is_local refuse
 - Set per-chat in sidebar Mind Scopes (private is not a dropdown — see PRIVACY)
@@ -532,10 +541,13 @@ SETTINGS:
 - Voice/pitch/speed: PER-CHAT settings (chat sidebar), no global keys
 - Network: SOCKS_ENABLED/HOST/PORT/TIMEOUT, SOCKS_ROUTE_LLM, SOCKS_REMOTE_DNS, SOCKS_NO_PROXY_EXTRA, UPDATE_CHECK_ENABLED (docs/NETWORK.md)
 - Streaming TTS: TTS_STREAMING_ENABLED + TTS_STREAMING_* tuning (docs/VOICE.md)
+- Env overrides win over the UI every boot: STT_PROVIDER, TTS_PROVIDER, EMBEDDING_PROVIDER, WEB_UI_HOST, WEB_UI_PORT, WAKE_WORD_ENABLED, LMSTUDIO_BASE_URL (SAPPHIRE_ROUTER_* managed only)
+- WEB_UI_SSL_ADHOC (default true): self-signed HTTPS; off only behind a reverse proxy; restart
 
 PLUGIN SIGNING (docs/SIGNING.md):
 - Tiers: official (baked-in key) / verified_author (authorized third-party key) / unsigned / failed (tampered — always blocked)
-- ALLOW_UNSIGNED_PLUGINS=false default: only official + verified_author load; managed installs add 'validated' (strict file validation)
+- ALLOW_UNSIGNED_PLUGINS=false default: only official + verified_author load; managed installs (SAPPHIRE_MANAGED, not plain Docker) add 'validated' (strict file validation)
+- Self-generated signing key = failed = blocked; edited signed plugin = failed until re-signed or plugin.sig deleted
 
 HOT RELOAD:
 - Settings/prompts/toolsets: ~2s after file change
@@ -548,10 +560,11 @@ API: See docs/API.md for the full endpoint list
 
 DATABASES:
 - user/history/sapphire_history.db: chats (settings + storage_format blob|rows), chat_messages (one row per message), chat_messages_quarantine, plugin_chat_data, tool_images
-- user/memory.db: memories, memories_fts, memory_scopes
-- user/knowledge.db: people, knowledge_tabs, knowledge_entries, knowledge_fts
-- user/goals.db: goals, progress_journal
+- user/memory/mind.db: Mind Palace (memories, Library, entities/people, goals)
+- user/notifications.json: notification center rows (ring of 500)
 
 LOGS:
 - user/logs/sapphire.log: Main log
-- user/logs/tts.log: TTS server log
+- user/logs/kokoro.log: Kokoro TTS server
+- user/logs/whisper.log: faster-whisper worker errors
+- user/logs/gpu-install.log: in-app GPU torch install

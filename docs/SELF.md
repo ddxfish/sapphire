@@ -19,6 +19,9 @@ search_attachments
 Picture turn countdown
 Multi-bot chat rooms
 Remote Sapphire guests
+Message queue coalesce
+Fix-it error help
+Setup wizard
 ### History
 SQLite message rows
 Edit regen delete
@@ -29,7 +32,10 @@ Import export
 Content search
 ### LLM
 Claude OpenAI Gemini
-LMStudio custom OpenAI-compat
+LMStudio Ollama Fireworks
+OpenRouter Groq DeepSeek
+Many provider presets
+Custom OpenAI-compat
 Plugin LLM providers
 Auto fallback order
 Per-chat model
@@ -86,6 +92,10 @@ set_voice
 list_tools
 search_help_docs
 switch_model switch_toolset
+agent_spawn agent_action
+device_list device_action
+open_stage
+chatroom_join
 ### Scopes
 Per-chat data scopes
 Global overlay
@@ -105,6 +115,11 @@ Other Sapphire instances
 Presence tracking
 Dual-wake arbiter
 Speak all devices
+Infrared remote library
+ESP32 firmware flasher
+IP cameras ONVIF
+KDE Connect phone
+Pendant face stream
 ### Privacy
 Vault passphrase
 Encrypted private chats
@@ -140,15 +155,13 @@ MCP persona keys
 
 ## Plugins
 ### Mind
-Memory embeddings FTS
+Mind Palace memory
 Keyed memories
-Knowledge tabs
-People contacts
+Entity contacts
 Goals subtasks journal
-Mind Palace layers
 Identity self sheet
 Entity cards
-Librarian passes
+Librarian passes (Beta)
 Library docs images
 ### Voice
 Twilio VOIP
@@ -164,6 +177,7 @@ Discord bot
 Telegram bot/client
 Google Calendar
 Social media profiles
+Bluesky social provider
 ### Build
 Claude Code
 Coding harness
@@ -190,6 +204,7 @@ Bitcoin wallet
 Game Room host
 Story packs
 Texas Hold'em
+Piano practice game
 ### System
 Status dashboard
 Plugin store
@@ -222,6 +237,8 @@ games
 prompts packs
 memory_layers
 services conda env
+agents kinds
+requires_plugins add-ons
 ### Hooks
 post_stt pre_chat post_chat
 prompt_inject ghost_inject post_llm
@@ -231,6 +248,7 @@ tts_stream_start tts_stream_end
 tts_chunk_text tts_chunk_audio
 chat_renamed chat_deleted chat_cleared
 chat_vaulted provider_switched plugins_ready
+vault_locked vault_unlocked
 ### Runtime
 Plugin state KV
 Chat-scoped state
@@ -252,4 +270,6 @@ Has: chat, LLMs, TTS, STT, wakeword, phone, memory, tools, triggers, agents, dev
 Feature list: search_help_docs(doc_name='self', full=true)
 Search docs: search_help_docs(query='tts')
 Read doc: search_help_docs(doc_name='voice')
+One part: add section='<heading>'
+Plugin README: doc_name='plugin/<name>'
 Build: toolmaker (tools), plugin-author/ai-reference (plugins)

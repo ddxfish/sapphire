@@ -5379,7 +5379,7 @@ span[data-image-gone] {
 }
 
 #llm-indicator.cloud {
-    color: var(--warning);
+    color: var(--llm-cloud);
     opacity: 1;
 }
 
@@ -5403,37 +5403,30 @@ span[data-image-gone] {
 #send-btn:focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
 #send-btn:disabled { background: var(--border-light); cursor: not-allowed; }
 
-/* Send button uses trim color when enabled */
-#send-btn.use-trim { 
-    background: var(--trim, var(--primary));
+/* LLM mode = the privacy tint: blue local, orange cloud, gradient auto/mixed.
+   Fixed colors set on the elements, so no theme's :root can repaint them. */
+#send-btn, #llm-indicator {
+    --llm-local: #2979ff;
+    --llm-local-hover: #1e5bb8;
+    --llm-cloud: #ff9800;
+    --llm-cloud-hover: #f57c00;
 }
-#send-btn.use-trim:hover { 
-    background: var(--trim-50, var(--primary-hover));
-}
-#send-btn.use-trim.llm-local,
-#send-btn.use-trim.llm-cloud,
-#send-btn.use-trim.llm-auto {
-    background: var(--trim, var(--primary));
-    box-shadow: none;
-}
-
-/* LLM Mode indicators - subtle glow on send button */
-#send-btn.llm-local { 
+#send-btn.llm-local {
+    background: var(--llm-local);
     box-shadow: 0 0 6px rgba(41, 121, 255, 0.4);
 }
-#send-btn.llm-cloud { 
-    background: var(--warning);
+#send-btn.llm-local:hover { background: var(--llm-local-hover); }
+#send-btn.llm-cloud {
+    background: var(--llm-cloud);
     box-shadow: 0 0 6px rgba(255, 152, 0, 0.5);
 }
-#send-btn.llm-cloud:hover { 
-    background: var(--accent-orange);
-}
-#send-btn.llm-auto { 
-    background: linear-gradient(135deg, var(--primary) 0%, var(--warning) 100%);
+#send-btn.llm-cloud:hover { background: var(--llm-cloud-hover); }
+#send-btn.llm-auto {
+    background: linear-gradient(135deg, var(--llm-local) 0%, var(--llm-cloud) 100%);
     box-shadow: 0 0 6px rgba(255, 152, 0, 0.3);
 }
-#send-btn.llm-auto:hover { 
-    background: linear-gradient(135deg, var(--primary-hover) 0%, var(--accent-orange) 100%);
+#send-btn.llm-auto:hover {
+    background: linear-gradient(135deg, var(--llm-local-hover) 0%, var(--llm-cloud-hover) 100%);
 }
 
 #stop-btn { background: var(--danger-red); }

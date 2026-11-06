@@ -3,7 +3,7 @@ import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as eventBus from '../core/event-bus.js';
 import { getElements, getIsProc, refresh } from '../core/state.js';
-import { updateScene, updateSendButtonLLM } from '../features/scene.js';
+import { updateScene, updateSendButtonLLM, setProviderMeta } from '../features/scene.js';
 import { applyTrimColor, applyBackground } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData, refreshInitData, getInitDataSync } from '../shared/init-data.js';
@@ -177,12 +177,11 @@ export default {
             }
             // Foreign lane's write never repaints THIS chat's sidebar either
             // (the guard above covered background/motion but not this leg).
-            if (s.llm_primary && !foreign) {
-                // The badge itself — loadSidebar repaints dropdowns but never
-                // touches #send-btn, so a switch made elsewhere (her
-                // switch_model tool, another tab, a room-sidebar save) left
-                // the tint on the old provider (Krem 2026-08-23).
-                updateSendButtonLLM(s.llm_primary, s.llm_model || '');
+            if (('llm_primary' in s || 'llm_model' in s) && !foreign) {
+                // The badge now, when the pair rode along (her switch_model
+                // tool, another tab, a room-sidebar save); a model-only PUT
+                // carries no provider, so the sidebar reload paints it from truth.
+                if (s.llm_primary) updateSendButtonLLM(s.llm_primary, s.llm_model || '');
                 softSidebar();
             }
         });
@@ -632,6 +631,12 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
             console.log(`[SIDEBAR] Chat changed during load (${chatName} → ${chatNow}), discarding`);
             return;
         }
+        // The send button wears THIS chat's brain: every door that shows a chat
+        // (own switch, a remote switch, boot, a settings echo) lands here with
+        // its truth. Before the editing hold below, the badge is no field.
+        if (llmResp.status === 'fulfilled' && llmResp.value) setProviderMeta(llmResp.value.providers);
+        const painted = settingsResp.status === 'fulfilled' ? settingsResp.value?.settings : null;
+        if (painted) updateSendButtonLLM(painted.llm_primary || 'auto', painted.llm_model || '');
         // softSidebar checked the hold at CALL time; the user may have moved
         // into a sidebar field (or a save may be pending) during the seven
         // fetches above. Don't paint under them — re-arm the soft refresh and

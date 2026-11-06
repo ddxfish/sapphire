@@ -398,7 +398,7 @@ async def serve_avatar_asset(filename: str, _=Depends(require_login)):
     """Serve avatar files from user/avatar/."""
     avatar_dir = (PROJECT_ROOT / "user" / "avatar").resolve()
     file_path = (avatar_dir / filename).resolve()
-    if not str(file_path).startswith(str(avatar_dir)) or not file_path.exists():
+    if not file_path.is_relative_to(avatar_dir) or not file_path.is_file():
         return JSONResponse({"error": "Not found"}, status_code=404)
     content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=content_type)

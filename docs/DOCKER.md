@@ -152,23 +152,18 @@ That's it. Your data in `sapphire-data/`, `sapphire-backups/`, and `sapphire-con
 
 ## Uninstalling
 
-### Keep your data (can reinstall later)
+Remove the container and its image (use `:gpu` if that's the tag you run):
 
 ```bash
 docker compose down
 docker rmi ghcr.io/ddxfish/sapphire:latest
 ```
 
-Your data stays in `sapphire-data/`, `sapphire-backups/`, and `sapphire-config/`.
+Your data stays in `sapphire-data/`, `sapphire-backups/`, and `sapphire-config/`, ready for a reinstall.
 
-### Remove everything
+### Remove your data too
 
-```bash
-docker compose down
-docker rmi ghcr.io/ddxfish/sapphire:latest
-```
-
-Then delete the data directories:
+Delete the data directories as well — chats, memories, backups, password and API keys all go:
 
 **Linux / Mac:**
 ```bash
@@ -192,8 +187,7 @@ sapphire/                         ← ~/sapphire (Linux/Mac) or %USERPROFILE%\sa
 ├── sapphire-data/                ← Chats, memories, settings, plugins
 │   ├── settings.json
 │   ├── history/
-│   ├── memory.db
-│   ├── knowledge.db
+│   ├── memory/mind.db            ← Mind Palace memory
 │   └── ...
 ├── sapphire-backups/             ← Automatic backups
 └── sapphire-config/              ← Credentials and secrets
@@ -223,6 +217,21 @@ Make sure LM Studio's server is running and set to allow network connections.
 
 ---
 
+## Environment overrides
+
+These variables, set under `environment:` in `docker-compose.yml`, **win over the web UI** — they're re-applied every boot, so a change made in Settings reverts on the next start while the variable is set:
+
+| Variable | Sets |
+|---|---|
+| `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER` | Voice and embedding providers (`none` turns one off) |
+| `WEB_UI_HOST`, `WEB_UI_PORT` | Where the web server listens inside the container (the image sets `0.0.0.0` / `8073`) |
+| `WAKE_WORD_ENABLED` | Wake word on/off (`true`/`false`) |
+| `LMSTUDIO_BASE_URL` | The LM Studio provider's URL |
+
+API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`) work the other way round: a key saved in Settings wins, the variable is the fallback. `TZ` sets the timezone.
+
+---
+
 ## Troubleshooting
 
 **"Permission denied" on data directories (Linux)**
@@ -244,4 +253,4 @@ Check the logs for errors: `docker compose logs --tail 50`. Common causes:
 
 ## Reference for AI
 
-Docker install: image built from repo Dockerfile, CMD = main.py supervisor. Tags: latest/cpu = amd64 + arm64 (Apple Silicon native), gpu = amd64 only. Deps = install/requirements-minimal + -tts + -stt (no wakeword: no container mic) + onnxruntime/transformers/huggingface_hub; Kokoro, Whisper base.en and Nomic pre-baked under HF_HOME=/app/models. Telegram/MCP/EPUB/HEIC/SOCKS deps are in minimal, so those plugins run; MCP stdio needs its binary in the image (no Node/npx), HTTP MCP works; plugin pip auto-install refuses inside the container (system Python, non-root) and prints the command. Port 8073, HEALTHCHECK curls https://localhost:8073/api/health. docker-compose mounts three volumes (user data, backups, config/credentials at /home/sapphire/.config/sapphire); TZ + API-key + LMSTUDIO env vars pass through; extra_hosts maps host LLM servers. In-app Settings > Backup restore works in Docker (supervisor applies staged swap on restart). Data path answers: user/ rides the mounted volume — container replacement never loses it.
+Docker install: image built from repo Dockerfile, CMD = main.py supervisor. Tags: latest/cpu = amd64 + arm64 (Apple Silicon native), gpu = amd64 only. Deps = install/requirements-minimal + -tts + -stt (no wakeword: no container mic) + onnxruntime/transformers/huggingface_hub; Kokoro, Whisper base.en and Nomic pre-baked under HF_HOME=/app/models. Telegram/MCP/EPUB/HEIC/SOCKS deps are in minimal, so those plugins run; MCP stdio needs its binary in the image (no Node/npx), HTTP MCP works; plugin pip auto-install refuses inside the container (system Python, non-root) and prints the command. Port 8073, HEALTHCHECK curls https://localhost:8073/api/health. docker-compose bind-mounts three folders beside it: ./sapphire-data → /app/user, ./sapphire-backups → /app/user_backups, ./sapphire-config → /home/sapphire/.config/sapphire (secret_key password hash + credentials.json API keys); TZ + API-key + LMSTUDIO env vars pass through; extra_hosts maps host LLM servers. Env overrides WIN over the UI every boot: STT_PROVIDER, TTS_PROVIDER, EMBEDDING_PROVIDER, WEB_UI_HOST, WEB_UI_PORT, WAKE_WORD_ENABLED, LMSTUDIO_BASE_URL; API-key env vars are only the fallback behind a key saved in Settings. Docker sets SAPPHIRE_DOCKER only (not managed: no `validated` plugin tier). In-app Settings > Backup restore works in Docker (supervisor applies staged swap on restart). Data path answers: user/ rides the mounted volume — container replacement never loses it.

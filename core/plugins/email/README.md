@@ -44,11 +44,11 @@ Sapphire supports OAuth2 (XOAUTH2) for Microsoft accounts. Select OAuth2 as the 
 ### Privacy Design
 
 The AI **never sees email addresses** — only display names. This is intentional:
-- `get_recipients` shows names from your People contacts (Knowledge → People)
+- `get_recipients` shows names from your contacts (people in **Mind → Entities**)
 - `send_email` uses a `recipient_id` that maps to the real address behind the scenes
 - Replies use `reply_to_index` from the inbox, no address needed
 
-To allow the AI to email someone, add them as a contact in **Knowledge → People** with their email address.
+To allow the AI to email someone, add them as a person in **Mind → Entities** with an **Email** and tick **Allow email**.
 
 **Escape hatch (off by default):** a plugin setting, `allow_all_recipients`, lets `send_email` accept a raw `address` argument so the AI can email arbitrary addresses directly. It's gated behind a danger-confirm in the email plugin settings. Leave it **off** to keep the address-blind guarantee above — turning it on trades that guarantee for convenience.
 
@@ -117,7 +117,7 @@ Auto-reply off. AI extracts invoice details and saves to knowledge.
 
 - **Connection failed** — Check IMAP/SMTP server addresses and ports
 - **Gmail blocked** — Use an App Password, not your regular password
-- **Can't send to someone** — Add them to People contacts with an email address first
+- **Can't send to someone** — In Mind → Entities, give them an Email and tick Allow email
 - **Daemon not firing** — Check poll interval, verify account is connected
 - **Tools not available** — Add Email tools to your active toolset
 
@@ -142,7 +142,7 @@ AVAILABLE TOOLS:
 
 PRIVACY:
 - AI never sees raw email addresses
-- Recipients gated by People contacts in Knowledge
+- Recipients gated by contacts (person entities with email + allow_email)
 - send_email uses recipient_id (mapped internally) or reply_to_index
 
 DAEMON:
@@ -158,4 +158,4 @@ SCOPES:
 TROUBLESHOOTING:
 - Gmail: use App Password (Security → 2FA → App Passwords)
 - O365: use OAuth2 auth method
-- Can't send: add recipient to People contacts first
+- Can't send: recipient needs email + allow_email on their person card

@@ -14,6 +14,8 @@ This is the guide for **AI-created tools** — simple tool plugins. For full plu
 
 Tool Maker auto-generates a `plugin.json` manifest from the code. The AI only writes the Python file.
 
+**Unsigned plugins must be allowed.** What she builds is an unsigned plugin, and unsigned plugins are blocked by default. Turn on the switch on the **Settings → Plugins** banner ("Unsigned plugins blocked" → "ALLOWED") before using the Tool Maker, or `tool_load` reports the plugin as failed to load. See [SIGNING.md](SIGNING.md).
+
 ---
 
 ## Simple Tool Format
@@ -347,6 +349,7 @@ Not supported by Tool Maker:
 TOOL MAKER — creates custom tool plugins at runtime.
 
 WORKFLOW: tool_save(name, code) → tool_load() → tool is live
+UNSIGNED: your plugins are unsigned; they load only with ALLOW_UNSIGNED_PLUGINS on (Settings → Plugins banner switch, default off). "FAILED to load" from tool_load = ask the user to turn it on.
 
 TEMPLATE:
 ```python

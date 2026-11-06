@@ -14,9 +14,9 @@ A chat is not just a transcript. Stored on each chat:
 - **Toolset** — which tools Sapphire can use
 - **Provider and model** — which LLM answers (or Auto)
 - **Voice, pitch, speed** — how she sounds in this chat
-- **Memory scopes** — which memory/knowledge/goals boxes she reads and writes
+- **Memory scope and contacts scope** — which mind she reads and writes, and whose contacts the email/phone tools see ([MEMORY.md](MEMORY.md#scopes))
 - **Spice set, spice on/off, spice turns** — personality variation
-- **Documents** — files attached with the + by the message box, plus their budget level (see [KNOWLEDGE.md](KNOWLEDGE.md))
+- **Documents** — files attached with the + by the message box, plus their budget level (see [Documents](#documents) below)
 - **Custom Context and Ghost Message** — extra per-chat prompt injections
 - **Date/Time toggle** — whether the current date rides the prompt
 
@@ -37,9 +37,35 @@ The sidebar header handles daily chat work:
 
 You can't switch chats while a reply is generating — press Stop first.
 
-### One turn per chat
+### Sending while she's replying: the queue
 
-Each chat runs one turn at a time. If you send a message while Sapphire is still replying in that chat — Enter past the Stop button, or a second browser tab on the same chat — the send is refused with a toast: *"Sapphire is still replying in this chat — wait for her to finish or press Stop."* (An HTTP 409 under the hood.) Other tabs viewing the same chat flip their Send button to Stop while a turn is live. This protects the history: two interleaved turns used to corrupt the transcript in ways that broke the next request. Press Stop, then send.
+Each chat runs one turn at a time, and everything else waits its turn. Send while she's still replying (or from a second tab, a satellite, a daemon) and the message **queues**: a **⧖ N queued** chip appears, and it runs when the current turn ends. Several messages you type while she's busy **fold into one turn**, so she answers them together. Click the chip to see what's waiting and take an item out with ×.
+
+Two interleaved turns used to corrupt the transcript; the queue is why that can't happen. Stop still stops the live turn; queued messages then run.
+
+### Slash commands
+
+Type `/` in the message box for the command menu: `/compact`, `/compact-daily`, `/context`, `/status`, `/remove`, `/undo` and more. See [SLASH-COMMANDS.md](SLASH-COMMANDS.md).
+
+### The context bar
+
+The thin bar above the message box shows how full the model's window was on the last turn. Hover it for the breakdown, or type `/context`. See [CONTEXT.md](CONTEXT.md).
+
+### Documents
+
+Each chat can have files attached directly. They belong strictly to that one chat, separate from the Library ([KNOWLEDGE.md](KNOWLEDGE.md)). Attach with the **+** beside the message box, by dropping a file on it, or by pasting a copied file. Text files, PDF and EPUB work, up to 25MB.
+
+Attached files appear as a row of pills above the message box, with an X to remove each one. Pictures you send show there too, counting down the turns the AI can still see them.
+
+**The Docs dropdown** in that row sets how much she's handed each turn, across all the chat's documents: Off, Light (~2K tokens), Normal (~8K) or Heavy (~24K), never more than a quarter of the model's window. Everything that fits arrives whole. Otherwise she gets the best matching excerpts and a list of what she isn't seeing.
+
+**She can always read more.** `read_attachment` walks a file part by part or opens a PDF page, and `search_attachments` looks for meaning and exact words. They're offered whenever the chat has documents and any tools at all, whatever the toolset. Off withholds them too.
+
+**Scanned PDFs** have no text, so search can't reach them. There's no OCR: she looks at the pages as pictures, which takes a model that can see. On one that can't, the image describer speaks for it, so its quality depends on Settings > Images. Some pages can't be shown, like vector charts (their text still reads) and JBIG2 scans unless `jbig2dec` is installed.
+
+A pill marked in amber is found by exact words only until an embedding provider has processed it. Chat export doesn't include documents.
+
+**In a private chat, documents aren't protected.** Sealing the chat encrypts its messages and images but not its documents, so anyone with access to the disk can read their text and the stored PDFs. They're allowed, and their pills turn red with a warning. While sealed, the app hides them.
 
 ### Message actions — edit, regenerate, continue
 
@@ -82,11 +108,12 @@ Two counts worth knowing:
 
 Click a chat's name to open it in the Chat view (works for archived chats too).
 
-#### The five tabs
+#### The six tabs
 
 - **💬 Chats** — ordinary conversations.
 - **🗝 Private** — private chats. Only visible when there are private chats to show; while the vault is sealed, private chats are hidden entirely (server-side) and the tab disappears.
 - **🎲 Game Room** — game sessions and story playthroughs (badged 🎲 game or 📖 story). These chats don't appear in the sidebar picker at all — the Manager is the one surface that lists everything.
+- **🪑 Chat Rooms** — [chat rooms](CHAT-ROOM.md), and each seat's own chat under its room.
 - **📚 Librarian** — chats minted by the librarian's tending sessions.
 - **📦 Archive** — archived chats, from any category.
 
@@ -122,7 +149,7 @@ Bulk results are per-chat: a refused chat (a live phone call owns it, agents att
 
 ### Trim — cut the middle out
 
-Trim keeps the first *A* and last *B* turns and deletes everything between. A turn is your message plus everything until your next one — tool chains never split. The modal shows a live preview: how many messages would go, roughly how many tokens that frees, how many remain. You must keep at least the last turn — deleting the recent end is message surgery, which belongs in the chat view itself (hover a message for its ✕). If the chat has fewer turns than you asked to keep, trim is a no-op and says so.
+Trim keeps the first *A* and last *B* turns and deletes everything between. A turn is your message plus everything until your next one — tool chains never split. The modal shows a live preview: how many messages would go, roughly how many tokens that frees, how many remain. You must keep at least the last turn — deleting the recent end is message surgery, which belongs in the chat view itself (hover a message for its 🗑️ Delete from here, or `/remove N`). If the chat has fewer turns than you asked to keep, trim is a no-op and says so.
 
 ### Compress — summarize old history
 
@@ -130,11 +157,12 @@ Compress rewrites older history as AI-written summaries while the recent tail st
 
 - **One summary** — everything except the kept tail becomes a single summary pair.
 - **Timeline chunks** — history is split into spans of a few thousand tokens; each span becomes one summary pair in place, so the chronological chain survives.
+- **By day** — the `/compact-daily` command: one labelled summary per day for the last few days. See [SLASH-COMMANDS.md](SLASH-COMMANDS.md).
 - **Model** — pick the provider/model that writes the summaries. Private chats only offer local providers.
 - **Speaks as** — the persona the summary is written as, so it reads as her own memory ("I") and wears her avatar. Starts on the chat's persona. Only the name goes to the summarizer, never the persona's prompt. Room chats have no selector: their summaries are third person, attributed by speaker name.
 - **Advanced** — the instructions for what summaries keep and how they're written. Your edit is saved to `user/prompts/compress_instructions.txt` when you press Compress and applies to every later compress; **Reset to default** removes it. Rooms use fixed instructions.
 - **Target size** — the approximate total size of the compressed output.
-- **Keep last N turns verbatim** — the untouched tail. The server caps this below half the LLM history window; a bigger tail would push the summary out of what the model ever sees.
+- **Keep last N turns verbatim** — the untouched tail. When an LLM history window is set (Settings → LLM, default 0 = unlimited), the server caps this below half of it; a bigger tail would push the summary out of what the model ever sees.
 - **Back up full JSON first** — writes an export to `user/history/exports/` before touching anything. Forced off for private chats (nothing readable leaves the database).
 
 The job runs in the background — minutes on a local model — one at a time; the Manager's summary line shows progress and a toast lands when it finishes. It's write-last: the chat isn't touched until every summarize call has succeeded, so a failure or a server restart mid-job leaves the chat exactly as it was. In the chat, each summary carries a **Compressed summary** badge. Summaries made before these options stay as written.
@@ -155,13 +183,14 @@ One guard: if *most* of a chat can't be decrypted, that usually means the vault 
 
 There is no Chats section on the Settings page — per-chat settings *are* the sidebar, and each chat stores its own. Related knobs elsewhere:
 
-- **Settings → LLM** — providers, default models, and the LLM history window (which also caps Compress's keep-last-turns).
+- **Settings → LLM → General** — the LLM history window (`LLM_MAX_HISTORY`, 0 = unlimited), the context limit (`CONTEXT_LIMIT`, see [CONTEXT.md](CONTEXT.md)), tool decay (`TOOL_EXPIRES_AFTER`), the idle notice (`IDLE_NOTICE_MINUTES`, see [GHOST_MESSAGES.md](GHOST_MESSAGES.md)), the request timeout (`LLM_REQUEST_TIMEOUT`, 240 s) and spice delivery. Providers and models are on the same page.
 - **Prompts, Toolsets, Spices pages** — the ↗ buttons beside sidebar dropdowns jump straight there.
 - **Vault** — configured via the sidebar padlock; see [PRIVACY.md](PRIVACY.md).
 
 ## Quick Troubleshooting
 
-- **Send refused: "still replying in this chat"** → a turn is live in this chat (maybe another tab) → wait, or press Stop, then send again.
+- **My message didn't send, a "⧖ queued" chip appeared** → a turn is live in this chat → it runs when that turn ends; click the chip to see or drop it.
+- **Send refused (409)** → the chat is private and the vault is sealed, or its inbox is full → unlock the vault, or wait.
 - **Can't switch chats** → a reply is generating → Stop first; switching is blocked mid-generation.
 - **Reply seemed to die when my phone locked** → it didn't — the turn runs on the server → wake the tab and it reconnects itself; if it can't, the finished reply is in the chat after a reload.
 - **"Nothing to add — this provider doesn't continue a reply in place"** → that provider ignores a half-written reply (OpenAI, Fireworks, GLM/Z.AI behave this way) → the message is untouched; ask her to carry on in a new message, or switch that chat to a provider that accepts one.
@@ -188,12 +217,12 @@ There is no Chats section on the Settings page — per-chat settings *are* the s
 
 ## Reference for AI
 
-Chats are the unit of configuration: each chat stores prompt, toolset, spice_set, voice/pitch/speed, llm_primary/llm_model, memory scopes, RAG docs + rag_context, custom_context, ghost_context, inject_datetime, spice_enabled/spice_turns. Switching chats applies the whole loadout.
+Chats are the unit of configuration: each chat stores prompt, toolset, spice_set, voice/pitch/speed, llm_primary/llm_model, memory_scope + people (contacts) scope, documents + their level, custom_context, ghost_context, inject_datetime, spice_enabled/spice_turns. Switching chats applies the whole loadout. Slash commands: SLASH-COMMANDS.md. Context bar, budget, decay: CONTEXT.md. Rooms: CHAT-ROOM.md.
 
 CHAT MANAGER:
 - Access: nav rail Chat → flyout → 🗂️ Manage, or sidebar chat picker → See more
 - Frontend: views/chat-manage.js; routes: core/routes/chat.py
-- Tabs: 💬 Chats / 🗝 Private / 🎲 Game Room / 📚 Librarian / 📦 Archive; one chat one tab; archived trumps all; Private tab hidden when empty or vault sealed
+- Tabs: 💬 Chats / 🗝 Private / 🎲 Game Room / 🪑 Chat Rooms (rooms + seat chats) / 📚 Librarian / 📦 Archive; one chat one tab; archived trumps all; Private tab hidden when empty or vault sealed
 - Columns sortable: Name, Msgs (stored messages incl. tool results), Turns (user msg + full reply incl. tool work), Size, Last active, Created
 - Search: typing = live name filter; Enter/🔍 = deep content search (GET /api/chats/search)
 - Selection: All / None / Older than 30/60/90 days; only visible rows selectable
@@ -209,8 +238,8 @@ TRIM (POST /api/chats/{name}/trim):
 - Turn-snapped middle cut: keep first A + last B turns, delete between; keep_last min 1; preview:true = report only; no-op when turns <= A+B
 
 COMPRESS (POST /api/chats/{name}/compress, core/chat/compress.py):
-- Background job, one at a time (409 if busy); modes: whole (one summary pair) | chunked (one pair per ~6k-token span)
-- target_tokens ≈ output size; keep_last_turns must be < half LLM_MAX_HISTORY; optional backup JSON to user/history/exports/ (forced off for private chats); private chats need a local provider
+- Background job, one at a time (409 if busy); modes: whole (one summary pair) | chunked (one pair per ~6k-token span) | daily (/compact-daily: one labelled pair per day, see SLASH-COMMANDS)
+- target_tokens ≈ output size; keep_last_turns must be < half LLM_MAX_HISTORY when that is > 0 (default 0 = unlimited, no cap); optional backup JSON to user/history/exports/ (forced off for private chats); private chats need a local provider
 - Write-last: chat untouched until all LLM calls succeed; restart mid-job = chat untouched
 - Status: GET /api/chats/compress/status (UI polls)
 - Voice: optional `persona` in the POST (omitted = the chat's own; "" = none); instructions override via GET/PUT /api/chats/compress/instructions (blank or default removes user/prompts/compress_instructions.txt); rooms ignore both
@@ -220,8 +249,14 @@ DEGRADED / REPAIR (POST /api/chats/{name}/repair):
 - Repair preview classifies healthy/corrupt/undecryptable/sequence gaps; real run quarantines bad rows verbatim (recoverable via matching vault backup), re-sequences, unlatches
 - Vault-mismatch guard: majority undecryptable → advises restoring vault backup; force:true to override
 
-ONE TURN PER CHAT:
-- POST /api/chat/stream is exclusive per chat; second send while live → 409 {"error": "...press Stop"}; other tabs mirror Send→Stop; cancel via POST /api/cancel
+ONE TURN PER CHAT, EVERYTHING ELSE QUEUES:
+- A send while a turn is live QUEUES in the chat's inbox (first SSE line `ticket`, then `queued`, body closes); typed sends fold into one turn (`merged`); UI chip "⧖ N queued" (GET /api/chat/queue, drop one with ×). 409 only = sealed private chat or inbox refusal (full). Cancel the live turn via POST /api/cancel.
+
+DOCUMENTS (per chat, core/documents.py):
+- Attach via + / drop / paste; text, PDF, EPUB ≤25MB; docs bar level off 0 / light 2K / normal 8K / heavy 24K tokens per turn, ≤25% of the window
+- read_attachment(file, part/page) + search_attachments(query) are added to the turn whenever the chat has documents and any tools; Off withholds them
+- Scanned PDF = pages as pictures (vision model, else the image describer); not encrypted in private chats; not in chat export
+- Not the Library (KNOWLEDGE.md)
 
 SERVER-OWNED TURNS (core/chat/turn.py, 2026-09-15):
 - The engine runs on its own server thread; every HTTP body is a VIEWER of it. A viewer leaving (phone lock, tab sleep, proxy timeout) never ends the turn — only POST /api/cancel does

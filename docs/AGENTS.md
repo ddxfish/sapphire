@@ -40,7 +40,7 @@ called), `model`, `context` (extra material appended to the mission). Each kind 
 
 **What an `llm` agent carries** (`toolset`): one word or several — `'web, files'`. Each word is a
 **tool category** (`web`, `memory`, `knowledge`, `people`, `goals`, `files`, `system`, `devices`,
-`comms`, `media`, `meta_danger`, `agents`), a saved toolset from Settings → Toolsets, or a plugin
+`comms`, `media`, `meta_danger`, `agents`), a saved toolset from Persona → Toolsets, or a plugin
 by name (`mindpalace`; a few stand alone on purpose — `bitcoin`, `wordpress` — and come only when
 named). `agent_spawn('llm')` with no mission lists the words with what is installed in each. Tools
 whose data scope the agent does not have are shed automatically — the lean `agent` no longer carries
@@ -127,10 +127,6 @@ process on the same session. An agent that fails before it ever reported (its se
 still tells the chat `[Spark failed: …]`; one that finishes with no answer at all (a tool loop that
 ran out, an empty reply) says `[Spark finished without an answer: …]`. Names are never reused while
 an agent of that name is live or resting.
-
-The pill bar above the chat input shows them: yellow running, **purple pulsing waiting**, teal
-idle, green done (amber if the run degraded to a placeholder), red failed. A finished pill
-lingers eight seconds and goes.
 
 ## Claude Code
 

@@ -53,7 +53,7 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "store_install",
-            "description": "Install a plugin from the Sapphire Store by slug. The user confirms first.",
+            "description": "Install a plugin from the Sapphire Store by slug and enable it. No confirm step: it installs at once.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -341,12 +341,24 @@ def _install(slug, plugin_settings=None):
             # Rescan to discover and load the new plugin
             plugin_loader.rescan()
 
+            # Say what the rescan really did: an unsigned plugin is enabled
+            # but blocked while unsigned plugins are off.
+            info = plugin_loader.get_plugin_info(plugin_name) or {}
+            if plugin_name in plugin_loader.get_loaded_plugins():
+                state_line = "It's enabled and loaded now."
+            elif info.get("verify_msg") == "unsigned":
+                state_line = ("It's enabled but blocked: it's unsigned and unsigned plugins are off "
+                              "(the switch on the Settings > Plugins banner). Ask the user if they want it on.")
+            elif info.get("verify_msg") and not info.get("verified"):
+                state_line = f"It's enabled but blocked: {info['verify_msg']}."
+            else:
+                state_line = "It's enabled but didn't load; Settings > Plugins shows why."
             lines = [
                 f"Installed '{name}' v{plugin_version} successfully!",
                 f"Author: {plugin_author}",
                 f"Trust level: {trust.upper()}",
                 "",
-                "The plugin is now available. Enable it in Settings > Plugins if needed.",
+                state_line,
             ]
 
             if trust == "community":

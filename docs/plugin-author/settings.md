@@ -22,19 +22,25 @@ Declare settings in `plugin.json` and they auto-render in Settings > Plugins:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `key` | yes | Setting key (unique within plugin) |
-| `type` | yes | `"string"`, `"number"`, `"boolean"`, `"list"` (array of strings) |
+| `type` | yes | `"string"`, `"number"`, `"boolean"`, `"list"` (array of strings), `"rows"` (array of objects), `"found"` (live pick list) |
 | `label` | yes | Display name |
 | `default` | yes | Default value |
 | `help` | no | Description text |
-| `widget` | no | Override: `"textarea"`, `"password"`, `"select"`, `"radio"`, `"button"` (action button), `"rows"` (a list of objects, needs `columns`) |
+| `widget` | no | Override: `"textarea"`, `"password"`, `"select"`, `"radio"`, `"button"` (action button), `"rows"` (a list of objects, needs `columns`), `"found"`, `"list"` |
 | `options` | no | `[{label, value}]` for select/radio |
 | `placeholder` | no | Input hint text |
+| `min` / `max` | no | Bounds for a number field |
+| `rows` | no | Textarea height in lines (default 8; 4 for a secret textarea) |
+| `secret` | no | Textarea only: never echoed back — shows "Set" + clear, like `password` (for pasted multi-line keys) |
+| `hidden` | no | `true` = never rendered on the Plugins page and skipped on save there (for a field your own UI owns) |
 | `confirm` | no | Danger confirm gate (see below) |
 | `show_if` | no | `{"other_key": "value"}` - the field shows only while that other field has that value. Hidden fields still save |
 | `columns` | rows only | Column keys, or `{key, label, placeholder}` objects. `add_label` names the add button |
+| `button_label`, `action`, `action_mode`, `status`, `disconnect`, `button_label_connected` | button only | `action` = URL the button opens; `action_mode: "display"` fetches it and shows the JSON result instead of navigating (use it whenever the URL returns a secret); `status` = URL answering `{connected}` to flip the label; `disconnect` = URL POSTed by a Disconnect button |
+| `found_url`, `found_do_url`, `many`, `all_label`, `only_label` | found only | `found_url` answers `{found: [{id, name, kind, note?, actions?: [{do, label}]}]}`; action buttons POST `{id, do}` to `found_do_url`; the value is `{all, only: [{id, name}]}`; `many: false` = pick one |
 | `tab` | no | Tab name for grouping fields. Untagged fields land on a "General" tab (shown first); tagged tabs follow in first-seen schema order. The tab strip only renders when there are 2+ groups |
 
-Widget inference when omitted: `string` -> text, `string` + `options` -> select, `number` -> number spinner, `boolean` -> toggle, `textarea` type -> textarea, `list` -> chips with a "+ Add" row.
+Widget inference when omitted: `string` -> text, `string` + `options` -> select, `number` -> number spinner, `boolean` -> toggle, `textarea` type -> textarea, `password` type -> password, `list` -> chips with a "+ Add" row, `rows` -> row editor, `found` -> pick list.
 
 ### List Fields
 
@@ -69,7 +75,9 @@ Any field can have a `confirm` object that shows a danger dialog when a specific
 
 ### Storage
 
-Settings are stored at `user/webui/plugins/{name}.json` and read via `plugin_loader.get_plugin_settings(name)` (merges stored values with manifest defaults).
+Settings are stored at `user/webui/plugins/{name}.json` and read via `plugin_loader.get_plugin_settings(name)` (stored values merged over manifest defaults).
+
+**Seeding happens once.** The first time the plugin loads with no settings file, every manifest default is written to that file. From then on stored values win: changing a key's `default` in a later version never reaches anyone who already ran the plugin. A key you *add* later isn't in their file, so it gets its default. To move existing users to a new value, migrate it in code (or use a fresh key name).
 
 ---
 
@@ -77,17 +85,20 @@ Settings are stored at `user/webui/plugins/{name}.json` and read via `plugin_loa
 
 For settings that need custom JavaScript beyond what manifest settings provide, plugins can ship a `web/` subdirectory.
 
-**Most plugins should use manifest `settings` instead** — it's simpler and requires no JavaScript. Use `web` only for complex interactive UIs.
+**Most plugins should use manifest `settings` instead** — it's simpler and requires no JavaScript. Use a custom panel only for complex interactive UIs.
 
 ### Manifest
 
+A `web/index.js` file is enough: `settingsUI` defaults to `"auto"`, which picks your panel when that file exists. To be explicit, set the **top-level** key:
+
 ```json
-"capabilities": {
-  "web": {
-    "settingsUI": "plugin"
-  }
+{
+  "name": "my-plugin",
+  "settingsUI": "plugin"
 }
 ```
+
+`settingsUI` lives at the top of `plugin.json`, never inside `capabilities` (a `capabilities.web` block is not read). Values: `"auto"`, `"plugin"`, `"manifest"` (render `capabilities.settings` even though `web/index.js` exists), `"core"`, `"none"`/`null` (no panel).
 
 ### Structure
 
@@ -165,11 +176,12 @@ bug, which shipped in eight plugins by copy-paste before being caught).
 ## Reference for AI
 
 PLUGIN SETTINGS:
-- Manifest: `capabilities.settings` = [{key (required, unique in plugin), type (required: string|number|boolean|list), label (required), default (required), help?, widget? (textarea|password|select|radio|button), options? ([{label, value}] for select/radio), placeholder?, confirm?, tab?}].
+- Manifest: `capabilities.settings` = [{key (required, unique in plugin), type (required: string|number|boolean|list|rows|found), label (required), default (required), help?, widget? (textarea|password|select|radio|button|rows|found|list), options? ([{label, value}] for select/radio), placeholder?, min?/max? (number), rows? (textarea height), secret? (textarea never echoed), hidden? (never rendered/saved on the Plugins page), columns?/add_label? (rows), button_label?/action?/action_mode? ('display' = fetch + show JSON, else navigate)/status?/disconnect? (button), found_url?/found_do_url?/many?/all_label?/only_label? (found), show_if?, confirm?, tab?}].
 - Widget inference when omitted: string->text, string+options->select, number->spinner, boolean->toggle, type "textarea"->textarea, type "password"->password, list->chips with add row.
 - `tab` groups fields; untagged fields land on "General" (first); tab strip renders only with 2+ groups.
 - List fields save as a JSON array of strings; optional dropdown add row via options_endpoint (API URL), data_key (picks array from response; omit if response IS the array), value_field (default "name"; rows may be plain strings). Added values are filtered from the dropdown.
 - `confirm` on any field: {values: [...], title, warnings: [...], buttonLabel} — danger dialog when a listed value is selected.
+- Seeding: on first load with no settings file, all manifest defaults are written to user/webui/plugins/{name}.json; stored values win afterwards, so a changed default never reaches existing users (a newly added key does get its default).
 - Storage: user/webui/plugins/{name}.json. Python read: `plugin_loader.get_plugin_settings(name)` (stored values merged over manifest defaults). REST: GET/PUT/DELETE `/api/webui/plugins/{name}/settings` (DELETE = reset to defaults).
-- Custom JS settings UI: `capabilities.web.settingsUI: "plugin"` + `web/index.js` served at /plugin-web/{name}/index.js; `export default {name, init(container), destroy()}` calling registerPluginSettings({id, name, icon, helpText, render(container, settings), load, save, getSettings(container)}).
+- Custom JS settings UI: `web/index.js` (auto-detected), or explicit TOP-LEVEL `"settingsUI": "plugin"` (`capabilities.web` is never read; settingsUI values auto|plugin|manifest|core|none|null); served at /plugin-web/{name}/index.js; `export default {name, init(container), destroy()}` calling registerPluginSettings({id, name, icon, helpText, render(container, settings), load, save, getSettings(container)}).
 - Global Save contract: getSettings+save wire the panel to the Settings view's global Save button. Panels that persist through their OWN buttons must OMIT both (the global button then hides for that tab). NEVER register stub getSettings/save — it reports "saved" while writing nothing.

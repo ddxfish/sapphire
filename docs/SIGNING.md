@@ -1,6 +1,6 @@
 # Plugin Signing
 
-Sapphire verifies plugin integrity using ed25519 signatures. Every plugin can be signed by its author, and Sapphire checks these signatures on startup.
+Sapphire verifies plugin integrity using ed25519 signatures. Only Sapphire's own key and keys on the central author list can produce a signature Sapphire trusts; Sapphire checks signatures on startup and rescan.
 
 ## Verification Tiers
 
@@ -11,13 +11,25 @@ Sapphire verifies plugin integrity using ed25519 signatures. Every plugin can be
 | **unsigned** | No `plugin.sig` file — allowed only when sideloading is enabled |
 | **failed** | Signature exists but doesn't match any trusted key, or files were modified |
 
-When `ALLOW_UNSIGNED_PLUGINS` is disabled, only `official` and `verified_author` plugins load — plus, in managed/Docker mode, unsigned plugins that pass strict file validation load with a `validated` tier.
+When `ALLOW_UNSIGNED_PLUGINS` is disabled, only `official` and `verified_author` plugins load — plus, in managed/Docker mode, unsigned plugins that pass strict file validation load with a `validated` tier. `failed` never loads, whatever the setting.
+
+## Writing Your Own Plugin? Don't Sign It
+
+This is the path for nearly every plugin author:
+
+1. Ship **no** `plugin.sig`.
+2. Turn on unsigned plugins with the switch on the **Settings > Plugins** banner ("Unsigned plugins blocked" → "Unsigned plugins ALLOWED"; setting `ALLOW_UNSIGNED_PLUGINS`, default off). Users installing your plugin flip the same switch.
+3. Your plugin loads with the `unsigned` badge.
+
+**Do not sign with a key you generated yourself.** A signature that matches no trusted key is `failed` ("Tampered") and is **always blocked**, even with unsigned plugins allowed — self-signing is strictly worse than not signing. `tools/sign_plugin.py` is for keyholders: Sapphire devs and authors whose key is already on the central list.
+
+Editing a signed plugin's files breaks its signature, which also makes it `failed`. A keyholder re-signs; anyone else deletes `plugin.sig` so the plugin loads as `unsigned`.
 
 ---
 
 ## For Authorized Plugin Authors
 
-You've been invited as a trusted plugin author. Here's how to set up signing.
+You've been invited as a trusted plugin author. Here's how to set up signing. Until your public key is on the central list, don't ship a `plugin.sig` — see above.
 
 ### 1. Generate Your Signing Key
 
@@ -88,7 +100,7 @@ The tool:
 
 ### 4. Re-sign After Changes
 
-Any time you modify a plugin file, the signature becomes invalid. Re-run the sign command after making changes.
+Any time you modify a plugin file, the signature becomes invalid and the plugin is blocked as `failed`. Re-run the sign command after making changes.
 
 ---
 
@@ -122,9 +134,10 @@ The signature covers the JSON-serialized `plugin`, `version`, and `files` fields
 
 ## Reference for AI
 
-Plugin signing = Ed25519 signature over plugin.json's serialized plugin/version/files fields (sorted keys, compact separators; signature field excluded). Files hashed individually; editing ANY hashed file invalidates the signature.
+Plugin signing = Ed25519 signature over plugin.sig's serialized plugin/version/files fields (sorted keys, compact separators; signature field excluded). Files hashed individually; editing ANY hashed file invalidates the signature.
 
 STATES: official (Sapphire key) / verified_author (authorized third-party key) / unsigned / failed. Tampered (failed) is ALWAYS blocked at boot — no override. Unsigned is blocked unless ALLOW_UNSIGNED_PLUGINS=true (default false). Managed installs add 'validated'.
+THIRD-PARTY AUTHORS: don't sign. Ship no plugin.sig; turn on unsigned plugins (Settings > Plugins banner switch). A self-generated key = failed = always blocked, worse than unsigned. sign_plugin.py is for keyholders (Sapphire devs, listed authors).
 KEYS: authorized third-party keys distributed via the central key list (PLUGIN_KEYS_URL, fetched with a 24h disk-cache-first policy; user/authorized_plugin_keys.json is only the fetch cache — there is no user-local key-add mechanism).
-SIGNING: python tools/sign_plugin.py core/plugins/<name> (shipped) | user/plugins/<name> --key /path/to/private_key.pem (third-party) | --all (core/plugins/) [--include-user]. Default key path user/plugin_signing_key.pem.
-SYMPTOM: plugin silently missing after an edit = signature stale — re-sign, restart. Check Settings > Plugins for the trust badge.
+SIGNING: python tools/sign_plugin.py core/plugins/<name> (shipped) | user/plugins/<name> --key /path/to/private_key.pem (listed author; key must be on the central list) | --all (core/plugins/) [--include-user]. Default key path user/plugin_signing_key.pem.
+SYMPTOM: plugin silently missing after an edit = signature stale (failed) — keyholder re-signs, otherwise delete plugin.sig (loads as unsigned when allowed). Check Settings > Plugins for the trust badge.

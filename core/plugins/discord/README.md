@@ -3,13 +3,13 @@
 Connect Sapphire to Discord. The host plugin is the bot itself: accounts, the reply pipeline
 (mentions, name match, organic replies, batching, typing), images in and out, GIFs, silent
 reactions, and voice channels running on Sapphire's own conversation engine. **What she does on
-Discord is configured in Continuity**: chat and greetings are daemon tasks, voice is a Realtime
-rule, and each task's persona, provider, model and toolset are the brain behind it. Personality
+Discord is configured in Triggers**: chat and greetings are daemon tasks (**Triggers → Daemons**),
+voice is a Realtime rule (**Triggers → Realtime**), and each task's persona, provider, model and toolset are the brain behind it. Personality
 modules (people memory, birthdays, typos) live in the separate
 `discord-personality` plugin.
 
 When the plugin is enabled it starts its own background daemon. You never add a daemon entry for
-the runtime itself — only Continuity tasks for what she should do.
+the runtime itself — only Triggers tasks for what she should do.
 
 Meticulously crafted by ddxfish and zeebie-the-zebra
 
@@ -35,7 +35,7 @@ manager**, where every other plugin keeps its secrets, and the old plugin databa
 `discord.sqlite3.imported`. The plugin keeps no database of its own any more. Everything else the old
 versions stored (profiles, memories, channel messages, traces, transcripts, per-server overlays)
 belongs to features that left the host; delete the `.imported` file once your bots are online. Your
-Continuity tasks keep working. See [CHANGELOG.md](CHANGELOG.md).
+daemon and realtime tasks keep working. See [CHANGELOG.md](CHANGELOG.md).
 
 **A hand-installed copy in `user/plugins/discord`** always wins over the shipped one (the log says
 `[PLUGINS] 'discord' (user band) shadows the system copy`). Delete that folder and restart.
@@ -62,18 +62,18 @@ Continuity tasks keep working. See [CHANGELOG.md](CHANGELOG.md).
 2. The settings page shows **Daemon is running** when healthy
 3. **Bot Accounts** → name + token → **Add Bot**
 
-A saved bot stays offline until an enabled Continuity task selects it — that is the switch that
-decides which bots log in.
+A saved bot stays offline until an enabled daemon or realtime task selects it — that is the
+switch that decides which bots log in.
 
-### 4. Give her a job in Continuity
+### 4. Give her a job in Triggers
 
-**Settings → Continuity → Daemon → + New** with source **Discord: Chat**, pick the bot, set
+**Triggers → Daemons → + Daemon** with source **Discord: Chat**, pick the bot, set
 filters (start with `mentioned = true`), leave **Auto-reply** on, set the persona / provider /
 toolset. She answers in that channel from the next message.
 
-Optional: **Realtime → + New → Discord: Voice channel** for voice (see [Voice](#voice)).
+Optional: **Triggers → Realtime → + Realtime → Discord: Voice channel** for voice (see [Voice](#voice)).
 
-## Continuity sources
+## Trigger sources
 
 | Source | Kind | What it does | Task fields |
 |---|---|---|---|
@@ -88,7 +88,7 @@ filter hears everything the bot can see.
 
 A bot that should reply and greet gets one task of each; either task keeps it online.
 
-**Active hours** on a Chat task (Continuity → the task → Active hours, overnight allowed) is her
+**Active hours** on a Chat task (Triggers → Daemons → the task → Active hours, overnight allowed) is her
 Discord day: outside the window the task skips messages, the bot stays online, and with **Presence**
 on she shows the away line. Greetings are not gated by it.
 
@@ -142,7 +142,7 @@ Other plugins extend the host through nine hooks fired via core's hook runner �
 `metadata['api']`, a small facade (send, edit, react, typing, image, presence, join / leave
 voice, recent messages, text channels). An add-on may veto a reply or claim one she was
 going to skip (never past safety, the ignore list or the bot gate), append to her prompt,
-reshape the outgoing chunks, retint a presence line, and sees which Continuity task (and
+reshape the outgoing chunks, retint a presence line, and sees which daemon task (and
 so which memory scope) is answering. `hooks_out.py` documents the payloads. The
 `discord-personality` plugin is the reference add-on; its `DESIGN-PRINCIPLES.md` is the
 bar for an add-on that ships with Sapphire.
@@ -168,7 +168,7 @@ See [OPERATIONS.md](OPERATIONS.md) for the runtime, storage, runbooks and recove
 |---|---|
 | **"Missing: py-cord…"** | click **Install**, or run the command shown; Git on PATH; `discord.py` not installed |
 | **Settings changes do nothing** | an older copy in `user/plugins/discord` shadows the shipped plugin |
-| **Bot shows disconnected** | no enabled Continuity task selects it; invalid token; missing portal intents (the account row shows `last_error`) |
+| **Bot shows disconnected** | no enabled daemon or realtime task selects it; invalid token; missing portal intents (the account row shows `last_error`) |
 | **She never replies** | task exists for that bot; filters match; Reply mode allows it; Debug → Recent decisions names the stage that refused it |
 | **She ignores DMs** | Safety → Allow DMs is off by default |
 | **Voice join fails / "no rule covers it"** | a **Discord: Voice channel** rule for that bot whose filter covers the channel; Connect/Speak permissions |

@@ -1,59 +1,47 @@
 # Goals
 
-Track what you're working toward. Goals support hierarchy (subtasks), priorities, and a timestamped progress journal. They live in the **Mind** view (brain icon in the nav bar) → **Goals** tab.
+What you and Sapphire are working toward: goals with subtasks, priorities, due dates, step-by-step instructions and a progress journal. They live in **Mind → Goals**, as the goal layer of the [Mind Palace](MEMORY.md), so they're part of the same graph as her memories. A search finds them, and a goal that names a person links to that person's card.
 
 <img width="50%" alt="sapphire-goals" src="https://github.com/user-attachments/assets/9ab3e309-5014-4d83-add0-4004d507085c" />
 
 ---
 
-## Creating Goals
-
-The AI can create goals during conversation using `create_goal`, or you can add them yourself in the Mind → Goals tab.
+## Goal fields
 
 | Field | Purpose |
-|-------|---------|
+|---|---|
 | Title | What you want to accomplish |
-| Description | Details and context |
+| Description | Context and what counts as done |
+| Instructions | *How* to do it: step notes for whoever does the work |
 | Priority | high, medium, low |
-| Status | active, completed, abandoned |
-| Parent | Optional — makes this a subtask |
+| Status | active, in_progress, completed, abandoned |
+| Due | A date (YYYY-MM-DD) |
+| Parent | Makes this a subtask |
+| Permanent | A standing goal (below) |
 
-Subtasks roll up under their parent goal. A goal can be marked **permanent** — the AI cannot complete or delete a permanent goal, only you can (useful for long-standing objectives you don't want the AI tidying away).
+She creates goals with `create_goal` and logs progress with `update_goal(progress_note=…)`. You can do both in the Goals tab. The **journal** is append-only: a running log of what happened, not editable history.
 
----
+**Permanent goals** are long-standing objectives: they never fade, and she can only add notes to them, never complete, retitle or delete them. You keep full control in the UI.
 
-## Progress Notes
-
-Goals have a timestamped **progress journal**. The AI logs progress with `update_goal`, or you can add notes in the UI. The journal is append-only — a running log of what happened, not editable history.
-
----
+**Deleting** a goal removes its subtasks and journal too. To keep the history, set it to `abandoned` instead.
 
 ## Scopes
 
-Goals are scoped like the rest of the Mind section: each chat can see a different goal set, and a scope you create exists across **all** Mind sections at once (memories, people, knowledge, goals). Pick or create a scope from the left sidebar in the Goals tab. See [Scopes](KNOWLEDGE.md#scopes) for the full explanation.
+Goals ride the chat's memory scope (see [Scopes](MEMORY.md#scopes)). There's no separate goal scope.
 
----
+## Daemons and heartbeats
 
-With the Mind Palace plugin enabled, goals work differently (due dates, per-goal instructions, an in-progress status) — see [MIND-PALACE.md](MIND-PALACE.md).
+A heartbeat or scheduled task can work through goals unattended: its prompt asks her to `list_goals`, pick one, and journal what she did. See [CONTINUITY.md](CONTINUITY.md).
 
 ---
 
 ## Reference for AI
 
-Goal tracking with subtasks, priorities, and a progress journal.
+GOALS = Mind Palace goal layer (Mind → Goals); chunks in the graph on memory_scope (no goal scope); search_memory finds them.
 
 TOOLS:
-- create_goal(title, description?, priority?, parent_id?, permanent?) — create a goal or subtask (permanent=true: standing goal the AI cannot complete/delete)
-- list_goals(goal_id?, status?) — smart overview or detail view
-- update_goal(goal_id, title?, description?, status?, priority?, progress_note?) — modify + journal a note
-- delete_goal(goal_id, cascade?) — delete, optionally cascading to subtasks
-
-DATABASE:
-- user/goals.db — goals, progress_journal
-
-DETAILS:
-- Priorities: high, medium, low
-- Statuses: active, completed, abandoned
-- Progress journal: timestamped, append-only
-- Goals scoped via scope_goal (default: 'default')
-- Permanent goals are protected from AI complete/delete (user-only)
+- create_goal(title, description?, instructions?, priority?, due?, parent_id?, permanent?) — parent_id = subtask; permanent = standing goal.
+- list_goals(goal_id?, status?) — overview; goal_id = deep view (detail, subtasks, journal). status active|in_progress|completed|abandoned|all (default active, includes in_progress).
+- update_goal(goal_id, title?, description?, instructions?, priority?, status?, due?, progress_note?) — '' clears instructions/due; progress_note appends a timestamped journal line.
+- delete_goal(goal_id) — always removes subtasks + journal; prefer status='abandoned' to keep history.
+- Permanent goals: you may only add progress notes; never complete, retitle or delete.

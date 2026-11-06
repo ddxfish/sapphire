@@ -9,30 +9,43 @@ import { getElements, setTtsEnabled, setSttEnabled, setSttReady, setPromptPrivac
 // 🏠 sidebar (V6, 2026-09-21). Fetched once, lazily; repaints when it lands.
 let _providerMeta = null;
 let _providerMetaPending = null;
+let _metaSeq = 0;                // newest roster wins: a reset mid-fetch drops the older answer
 let _lastBadge = null;
+function _repaint() {
+    if (_roomBadge) _paintRoomBadge();
+    else if (_lastBadge) _paintBadge(_lastBadge[0], _lastBadge[1]);
+}
 function _loadProviderMeta() {
     if (_providerMeta || _providerMetaPending) return;
+    const mine = ++_metaSeq;
     _providerMetaPending = fetch('/api/llm/providers')
-        .then(r => r.ok ? r.json() : null)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
         .then(data => {
-            _providerMeta = {};
-            for (const p of (data?.providers || [])) _providerMeta[p.key] = p;
-            if (_roomBadge) _paintRoomBadge();
-            else if (_lastBadge) updateSendButtonLLM(_lastBadge[0], _lastBadge[1]);
+            if (mine !== _metaSeq) return;
+            _providerMetaPending = null;
+            setProviderMeta(data?.providers);
         })
-        .catch(() => { _providerMetaPending = null; });
+        // a failed answer is never cached as an empty roster (every provider
+        // painted cloud until a provider setting changed): the next paint retries
+        .catch(() => { if (mine === _metaSeq) _providerMetaPending = null; });
 }
 // The roster changed (a provider added, renamed, removed): forget it, and refetch
 // now if a badge is up (it was loaded once and never invalidated, so a new
 // provider showed a prettified key and a cloud tint until reload).
 export function resetProviderMeta() {
+    _metaSeq++;
     _providerMeta = null;
     _providerMetaPending = null;
-    if (_lastBadge) _loadProviderMeta();
+    if (_lastBadge || _roomBadge) _loadProviderMeta();
 }
+// A fresh roster from a caller that already fetched it (the chat sidebar): adopt it and repaint.
 export function setProviderMeta(list) {
+    if (!Array.isArray(list)) return;
+    _metaSeq++;
+    _providerMetaPending = null;
     _providerMeta = {};
-    for (const p of (list || [])) _providerMeta[p.key] = p;
+    for (const p of list) _providerMeta[p.key] = p;
+    _repaint();
 }
 
 // A chat room holding the composer (views/rooms.js): the badge is its SEATS' brains,

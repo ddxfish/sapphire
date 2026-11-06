@@ -92,7 +92,7 @@ per rule.
 
 Sapphire can place calls, but **only to whitelisted people**:
 
-1. In **Mind → People**, give a contact a phone number and check **Allow AI to call**.
+1. In **Mind → Entities**, give a person card a **Phone** and tick **Allow phone calls** ([PEOPLE.md](PEOPLE.md)).
 2. In the chat's sidebar Mind section, pick the **twilio number** the chat dials from
    (set to None to disable outbound for that chat).
 3. Make sure `phone_call` is in the chat's toolset, and that the number's Realtime rule is
@@ -109,7 +109,7 @@ By default the call runs in its own throwaway side chat, memory-isolated, and wh
 drops a transcript report lands back in the chat that placed the call — she acknowledges the
 outcome there. Pass `memory=true` to let her memory scopes travel onto the call, or
 `ephemeral=false` to run the call directly in the current chat. There is no way to dial an
-arbitrary number — the People whitelist is the only path to a dialable contact.
+arbitrary number — a person card with Allow phone calls is the only path to a dialable contact.
 
 ### Passphrase toolset elevation
 
@@ -222,7 +222,7 @@ rule in **Triggers → Realtime**.
 | One-way or no audio, or unanswered calls, on UDP transport | Account's SIP Transport | UDP is the legacy path and fights router NAT/ALG. Switch the account back to TLS (the default — encrypted, ALG-proof). If you must use UDP, turn router SIP ALG off. |
 | Call doesn't end when the caller hangs up | Wait ~a minute | Lost-hangup backstop: no inbound audio for a while ends the call automatically. If lines wedge repeatedly on UDP, switch to TLS. |
 | She won't stop answering / you want the line offline | Triggers → Realtime | Disable the rule; the number deregisters on the next reconcile pass. |
-| Outbound call refused | Account + rule | Outbound needs Account SID + Auth Token and a Phone Number on the account, an enabled rule keeping the number registered, the contact whitelisted in Mind → People, and the chat's sidebar "twilio number" not set to None. |
+| Outbound call refused | Account + rule | Outbound needs Account SID + Auth Token and a Phone Number on the account, an enabled rule keeping the number registered, the person card's Allow phone calls ticked in Mind → Entities (in the chat's contacts scope), and the chat's sidebar "twilio number" not set to None. |
 
 ## See also
 
@@ -243,7 +243,7 @@ INBOUND:
 - Chat routing: saved chat (persistent, chat's own prompt/toolset/scopes) or per-caller ephemeral chat (📞, TTL minutes after last call, resumes within window). Ephemeral defaults: toolset none, isolated per-caller scopes. Saved rule with no chat → call refused.
 
 OUTBOUND (phone_call tool):
-- Only People with phone + "Allow AI to call" checked. No arbitrary-number dialing.
+- Only person cards (Mind → Entities, the chat's `people`/contacts scope) with Phone + "Allow phone calls" ticked. No arbitrary-number dialing.
 - Call with no args → menu (contacts + models). goal required. Optional: opening_line, model, memory (default false = isolated), ephemeral (default true = side chat + transcript report-back to origin chat), prompt, max_minutes (default 10, max 60, Twilio-enforced).
 - Dial-from account = chat sidebar Mind "twilio number" scope; None = outbound disabled. Needs account SID/token + number + the number registered (enabled rule).
 

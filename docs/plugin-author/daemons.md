@@ -168,6 +168,10 @@ Called once when the plugin loads. If the scheduler isn't ready yet (early boot)
 
 Called when the plugin unloads (toggle off, hot-reload, shutdown). Clean up threads, close connections.
 
+### on_settings_saved(settings) — optional
+
+Called after the user saves this plugin's settings, with the full effective settings dict. Without it, a value your daemon read in `start()` stays frozen until the next reload. Errors are logged, never raised into the save.
+
 ---
 
 ## Emitting Events
@@ -307,7 +311,8 @@ Daemons survive hot-reload — `stop()` is called before unload, then `start()` 
 
 DAEMON SYSTEM:
 - Plugin declares `capabilities.daemon` with `entry` (module path) and `event_sources` (what events it emits)
-- Module exports `start(plugin_loader, settings)` and `stop()`
+- Module exports `start(plugin_loader, settings)` and `stop()`; optional `on_settings_saved(settings)` runs after each settings save (full effective dict) — else values read in start() stay frozen until reload
+- Event source entry: `{name, label, description?, filter_fields?, task_fields?, realtime?}` (description = help text in the Triggers UI)
 - Daemon thread listens for external events, calls `plugin_loader.emit_daemon_event(source_name, json_payload)`
 - Scheduler finds tasks matching source, fires them with event data as context
 - Reply handlers route LLM responses back to source platform

@@ -138,7 +138,7 @@ Per-game rules (chips, blinds, her playing style) live behind each tile's ⚙ �
 | Symptom | Check | Fix |
 |---------|-------|-----|
 | Story character wrong after a restart (she's herself, not the role) | The story prompt re-registers shortly after boot — give it a minute | Reopen the playthrough from the library; entering re-asserts the costume |
-| Game or story tile missing from the library | Settings → Plugins: is the plugin that ships it enabled and signed? | Enable it, or re-sign it if you edited its files; unsigned plugins are blocked at boot |
+| Game or story tile missing from the library | Settings → Plugins: is the plugin that ships it enabled and signed? | Enable it. Editing a signed plugin's files breaks its signature and blocks it; a keyholder re-signs. The engine only runs games from signed plugins, so an unsigned game won't play even with unsigned plugins allowed |
 | Library says no games installed | The game-room plugin itself may be disabled/unsigned | Same check — the host plugin must load for any tiles to appear |
 | Saves gone after deleting a chat | Did you 🗑 the session? | That's by design — the chat IS the save; deleting it deletes chips, journals, everything. Use ✕ clear to reset without deleting |
 | Story tools missing mid-run | Sidebar: "include story tools" checkbox; gear → Setup: the AI tools fence | Re-tick the checkbox, or unfence the tool; a ⏸ paused story also runs without story context until resumed |

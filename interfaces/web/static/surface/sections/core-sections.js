@@ -14,7 +14,6 @@
 // hooks are gs- classes scoped to the section element — no document ids.
 
 import { getInitData } from '/static/shared/init-data.js';
-import { updateSendButtonLLM } from '/static/features/scene.js';
 import {
     renderScopeDropdowns, fetchScopeData, populateScopeOptions, readScopeSettings,
 } from '/static/shared/scope-dropdowns.js';
@@ -79,23 +78,16 @@ export const brainSection = {
             import('/static/core/router.js').then(r => r.switchView('settings'));
         });
 
-        // Repaint the send-button tint from the save the user just made —
-        // chat mode paints it in its own saveSettings (views/chat.js), but
-        // ctx.save is a bare PUT, so the room/story hosts otherwise leave
-        // the button on the previous provider's color (Krem 2026-08-23).
+        // No send-button paint here: the ctx's owner paints after its save
+        // lands (rooms.js saveSeat → the seats' badge, room-host ctx.save →
+        // the session's). Painting here wrote a seat's brain into the Chat
+        // view's kept badge, and painted saves that failed.
         sel.addEventListener('change', () => {
             refreshModel(sel.value, '');
             ctx.save({ llm_primary: sel.value, llm_model: '' });
-            updateSendButtonLLM(sel.value, '');
         });
-        modelSel.addEventListener('change', () => {
-            ctx.save({ llm_model: modelSel.value });
-            updateSendButtonLLM(sel.value, modelSel.value);
-        });
-        customInput.addEventListener('change', () => {
-            ctx.save({ llm_model: customInput.value.trim() });
-            updateSendButtonLLM(sel.value, customInput.value.trim());
-        });
+        modelSel.addEventListener('change', () => ctx.save({ llm_model: modelSel.value }));
+        customInput.addEventListener('change', () => ctx.save({ llm_model: customInput.value.trim() }));
     },
 };
 

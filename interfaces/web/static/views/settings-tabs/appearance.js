@@ -89,15 +89,6 @@ export default {
                         </select>
                     </div>
                 </div>
-                <div class="setting-row">
-                    <div class="setting-label"><label>Send Button</label><div class="setting-help">Use trim color vs provider indicator</div></div>
-                    <div class="setting-input">
-                        <label class="setting-toggle">
-                            <input type="checkbox" id="app-send-trim" ${localStorage.getItem('sapphire-send-btn-trim') === 'true' ? 'checked' : ''}>
-                            <span>Use trim color</span>
-                        </label>
-                    </div>
-                </div>
                 <div class="setting-row" data-key="ICON_COLOR">
                     <div class="setting-label"><label>Icon Color</label><div class="setting-help">Tint the gem logo + favicon for this Sapphire (persona trim overrides it)</div></div>
                     <div class="setting-input" style="display:flex;gap:6px;align-items:center">
@@ -310,13 +301,6 @@ export default {
             iconPicker.value = '#036ec3';
             ctx.markChanged('ICON_COLOR', '');
             previewIcon('');
-        });
-
-        // Send button trim
-        el.querySelector('#app-send-trim')?.addEventListener('change', e => {
-            localStorage.setItem('sapphire-send-btn-trim', e.target.checked);
-            const sendBtn = document.getElementById('send-btn');
-            if (sendBtn) sendBtn.classList.toggle('use-trim', e.target.checked);
         });
     }
 };

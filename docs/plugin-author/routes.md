@@ -10,8 +10,8 @@ Plugins can register custom HTTP endpoints. Auth, CSRF, and rate limiting are en
     "routes": [
       {
         "method": "POST",
-        "path": "capture/{request_id}",
-        "handler": "routes/capture.py:handle_capture"
+        "path": "items/{item_id}",
+        "handler": "routes/items.py:handle_item"
       }
     ]
   }
@@ -20,7 +20,7 @@ Plugins can register custom HTTP endpoints. Auth, CSRF, and rate limiting are en
 
 The full URL becomes: `POST /api/plugin/{plugin_name}/{path}`
 
-For the example above: `POST /api/plugin/webcam/capture/abc123`
+For the example above, in a plugin named `my-plugin`: `POST /api/plugin/my-plugin/items/abc123`
 
 ## Route Fields
 
@@ -36,10 +36,10 @@ For the example above: `POST /api/plugin/webcam/capture/abc123`
 The framework calls your handler with **keyword arguments**: every `{name}` path param, plus `body`, `settings`, `credentials`, `query`, and `request`. Always end your signature with `**_` to absorb the ones you don't use — otherwise the call raises `TypeError` on the first request (the framework always passes all of them).
 
 ```python
-def handle_capture(request_id, body=None, settings=None, **_) -> dict:
+def handle_item(item_id, body=None, settings=None, **_) -> dict:
     """
     Injected keyword args (declare only what you need, then **_):
-        request_id:  path param extracted from {request_id}
+        item_id:     path param extracted from {item_id}
         body:        parsed JSON body (POST/PUT/DELETE — yes, DELETE bodies
                      are parsed; empty dict for GET, multipart, or non-object JSON)
         settings:    plugin settings from user/webui/plugins/{name}.json
@@ -77,11 +77,14 @@ All of the following are enforced automatically — you cannot disable them:
 
 ## Example: Webcam Capture Endpoint
 
+The shipped `core/plugins/webcam` plugin, trimmed: the `capture_webcam` tool blocks while the open browser tab polls for a pending capture, snaps a frame, and POSTs it back.
+
 ```
 core/plugins/webcam/
   plugin.json
   routes/capture.py
   tools/webcam.py
+  web/main.js
 ```
 
 **plugin.json:**
@@ -92,44 +95,76 @@ core/plugins/webcam/
   "capabilities": {
     "tools": ["tools/webcam.py"],
     "routes": [
-      {
-        "method": "POST",
-        "path": "capture/{request_id}",
-        "handler": "routes/capture.py:handle_capture"
-      }
+      {"method": "GET",  "path": "pending", "handler": "routes/capture.py:get_pending"},
+      {"method": "POST", "path": "capture", "handler": "routes/capture.py:handle_capture"}
     ]
   }
 }
 ```
 
-**routes/capture.py:**
+### Sharing state between files
+
+Route, hook and socket files are **exec'd, each into its own namespace** — they are not importable modules, relative imports don't work in them, and a module-level dict in `routes/capture.py` is invisible to `tools/webcam.py`. (Handlers from the *same* file do share that file's namespace.) To share state across files, park it in a named module in `sys.modules`; both files run the same helper:
+
 ```python
-import threading
+import sys, threading, types
 
-# Pending capture requests: {request_id: {"event": Event, "image": None}}
-_pending = {}
-_lock = threading.Lock()
+STATE_KEY = '_sapphire_webcam_state'
 
-def create_request(request_id, timeout=15):
-    """Called by the tool — blocks until browser POSTs the image."""
-    event = threading.Event()
-    with _lock:
-        _pending[request_id] = {"event": event, "image": None}
-    event.wait(timeout=timeout)
-    with _lock:
-        data = _pending.pop(request_id, {})
-    return data.get("image")
+def _get_shared_state():
+    if STATE_KEY not in sys.modules:
+        mod = types.ModuleType(STATE_KEY)
+        mod.lock = threading.Lock()
+        mod.pending = {"event": None, "nonce": None, "image": None}
+        sys.modules[STATE_KEY] = mod
+    return sys.modules[STATE_KEY]
+```
 
-def handle_capture(request_id: str, body: dict, **_) -> dict:
-    """Called by the browser — delivers the captured image."""
-    with _lock:
-        req = _pending.get(request_id)
-    if not req:
-        return {"error": "No pending request"}
-    req["image"] = body
-    req["event"].set()
+**tools/webcam.py** (the waiting half):
+```python
+import secrets
+
+def _capture():
+    state = _get_shared_state()
+    event, nonce = threading.Event(), secrets.token_urlsafe(16)
+    with state.lock:
+        state.pending.update(event=event, nonce=nonce, image=None)
+    event.wait(timeout=15)
+    with state.lock:
+        image = state.pending["image"]
+        state.pending.update(event=None, nonce=None, image=None)
+    if not image:
+        return "Webcam capture timed out — is the web UI open?", False
+    return {"text": "Webcam snapshot captured", "images": [image]}, True
+```
+
+**routes/capture.py** (the delivering half):
+```python
+def get_pending(**_):
+    """GET /api/plugin/webcam/pending — the browser polls this."""
+    state = _get_shared_state()
+    with state.lock:
+        event = state.pending["event"]
+        if event and not event.is_set():
+            return {"pending": True, "nonce": state.pending["nonce"]}
+    return {"pending": False}
+
+def handle_capture(body, **_):
+    """POST /api/plugin/webcam/capture — body {nonce, data (base64), media_type}."""
+    state = _get_shared_state()
+    with state.lock:
+        event = state.pending["event"]
+        if not event or event.is_set():
+            return {"error": "No pending capture request"}
+        if body.get("nonce") != state.pending["nonce"]:
+            return {"error": "Invalid nonce"}
+        state.pending["image"] = {"data": body.get("data"),
+                                  "media_type": body.get("media_type", "image/jpeg")}
+        event.set()
     return {"status": "ok"}
 ```
+
+The real plugin also validates image size and type, and lets the browser report errors (permission denied, insecure context) through the same POST.
 
 ## Notes
 
@@ -170,7 +205,7 @@ async def view(websocket, settings):
   plugin went away, 1011 the handler raised.
 - No bearer tokens and no CSRF token: the Origin check is the CSRF guard.
 - A socket handler file is its own namespace, separate from your routes'
-  files; share state through your plugin's own modules.
+  files; share state through `sys.modules` ([Sharing state between files](#sharing-state-between-files)).
 
 ## Reference for AI
 
@@ -182,4 +217,5 @@ async def view(websocket, settings):
 - Enforced, not disableable: session auth (`require_login`), CSRF on POST/PUT/DELETE from browser sessions, rate limit 60 GET / 30 non-GET per minute per plugin (GETs on `media: true` routes exempt — serve the file with a `FileResponse`, which does HTTP Range).
 - Bearer opt-in: `user/plugin_state/{plugin}_mcp_key.json` = `{"key": "..."}` lets a matching `Authorization: Bearer` header bypass session login (rate-bucketed by token hash). Additive only — session CSRF can't be weakened.
 - Routes register on load, drop on unload, re-register on hot reload.
+- Route, hook and socket files are exec'd, one namespace per file (handlers in the same file share it): not importable, no relative imports, no module state shared across files. Share state via a named module in `sys.modules` (the webcam plugin: `_sapphire_webcam_state`). Tool files are installed in sys.modules as `plugins.<name>.tools.<file>`.
 - Sockets: `capabilities.sockets` = `[{path, handler: "file.py:async_fn"}]` -> `/ws/plugin/{plugin_name}/{path}`; handler `async def fn(websocket, settings)` gets an ACCEPTED Starlette WebSocket; core does login+Origin, cap 8/plugin (4429), 4404 unknown, 4410 on plugin unload (handler task cancelled), 1011 on raise. No bearer, no CSRF header.

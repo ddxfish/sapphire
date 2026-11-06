@@ -17,7 +17,7 @@ Easy Install: [Download Sapphire Launcher and Installer](https://github.com/ddxf
 <video src="https://github.com/user-attachments/assets/1bc08408-0a7c-46a8-a68a-ee03496e4e81" controls width="100%"></video>
 
 ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
-![Windows 11+](https://img.shields.io/badge/Windows_11+-0078D6?logo=windows&logoColor=white)
+![Windows 10+](https://img.shields.io/badge/Windows_10+-0078D6?logo=windows&logoColor=white)
 ![Private AF](https://img.shields.io/badge/Private-AF-ff69b4)
 ![Self Hosted](https://img.shields.io/badge/Self_Hosted-100%25-informational)
 
@@ -38,11 +38,11 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 **Mind**
 - **Memory** - [MEMORY.md](docs/MEMORY.md) Semantic vector search across 100K+ labeled entries.
 - **Self Sheet** - A hand written sheet on a persona, info spiders to related memories, people, and images to return a web of who that persona is.
-- **Mind Palace** - [MIND-PALACE.md](docs/MIND-PALACE.md) Opt-in layered memory engine with a librarian that tends it nightly.
+- **Mind Palace** - [MEMORY.md](docs/MEMORY.md) The layered memory engine, on by default: memories, self, entities, library and goals in one connected graph.
 - **Knowledge** - [KNOWLEDGE.md](docs/KNOWLEDGE.md) Organized categories with file upload, image save and recall, folder watches, auto-chunking, and vector search.
 - **Goals** - [GOALS.md](docs/GOALS.md) Hierarchical with priority and a timestamped progress journal.
 - **Entities** - [PEOPLE.md](docs/PEOPLE.md) People, places, things and custom. Info on each with facts tagged to each.
-- **Librarian** - Runs nightly to sort and organize memories. Recorded in persona ledger so AI knows what changed. 
+- **Librarian** (Beta, off by default) - Runs nightly to sort and organize memories. Recorded in persona ledger so AI knows what changed. 
 
 **Integrations** (plugin docs available in Help → Plugins)
 - **Dashboard** - Plugins can add their custom widgets to dashboard.
@@ -54,11 +54,15 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - **Home Assistant** - Lights, scenes, thermostats, switches, phone notifications.
 - **SSH** - Remote command execution with safety blacklists.
 - **Bitcoin** - Balance, send, transaction history, multi-wallet.
-- **MCP** - Connect to Model Context Protocol servers and use their tools.
+- **MCP Server** - [MCP.md](docs/MCP.md) Claude Code, another Sapphire or any MCP client can ask her things, use her tools, and speak through a persona's voice.
+- **MCP Client** - Connect to Model Context Protocol servers and use their tools.
+- **Social** - Post, reply and read across social accounts through one toolset, with an approval outbox.
 - **Webcam** - Capture images for vision-capable LLMs.
 - **Image Gen** - ComfyUI and sd-server API access.
 - **Code Harness** - Simple read, edit, search and run command.
 - **ElevenLabs** - Switch from local Kokoro TTS to ElevenLabs.
+- **Devices** - [DEVICES.md](docs/DEVICES.md) Satellites (Pi, ESP32), this computer, phones, IP cameras, IR remotes, MIDI and other Sapphires, by name. Flash ESP32 boards from the browser.
+- **Wakeword Maker** - [WAKEWORD-MAKER.md](docs/WAKEWORD-MAKER.md) Train your own wake word in the app.
 - **Phone Calls** - [PHONE-CALLS.md](docs/PHONE-CALLS.md) A real phone number over Twilio SIP — she answers, converses, and calls whitelisted contacts.
 - **Images** - Sapphire can read images with vision model and display images in chat.
 - **3D Avatar** - Supports rigged GLB avatar files with animation tracks. 
@@ -67,18 +71,21 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - **Daemons & Webhooks** - [DAEMONS-WEBHOOKS.md](docs/DAEMONS-WEBHOOKS.md) Background listeners and HTTP triggers for any external service.
 - **Heartbeat** - [CONTINUITY.md](docs/CONTINUITY.md) Run in continuous mode with goals. Morning greetings, dream mode, alarms, random check-ins.
 - **Agents** - [AGENTS.md](docs/AGENTS.md) Spawn background AI workers that report back when done.
+- **Chat Room** - [CHAT-ROOM.md](docs/CHAT-ROOM.md) Group chat with several personas, other Sapphires, or an outside AI at the door.
+- **Slash Commands** - [SLASH-COMMANDS.md](docs/SLASH-COMMANDS.md) `/compact`, `/compact-daily`, `/context`, `/remove`, `/undo` and more; she can run some herself.
+- **Notifications** - [NOTIFICATIONS.md](docs/NOTIFICATIONS.md) One notification center for downloads, failures and events; errors in plain words with a Fix it button.
 - **Apps** - Plugins can ship full-page UIs that appear in the nav rail.
 - **Theme Plugins** - Plugin themes with custom CSS, animations, and per-theme settings.
 - **Avatar** - 3D animated avatar with environment scenes and SSE-driven reactions.
 - **Import/Export** - [IMPORT-EXPORT.md](docs/IMPORT-EXPORT.md) Share personas, prompts, toolsets, and more as JSON files.
 - **Dashboard** - [DASHBOARD.md](docs/DASHBOARD.md) Token metrics, auto-updater, system controls.
-- **Cloud LLM Support** (optional) - Claude, GPT, Gemini, Fireworks, or any OpenAI/Anthropic-compatible endpoint (Ollama and LM Studio plug in as local endpoints). Local-first by default.
+- **Cloud LLM Support** (optional) - Claude, GPT, Gemini, Fireworks, or any OpenAI/Anthropic-compatible endpoint (Ollama and LM Studio plug in as local endpoints). Local-first by default. Costs and caching: [COSTS.md](docs/COSTS.md), context budget: [CONTEXT.md](docs/CONTEXT.md).
 - **Privacy Vault** - [PRIVACY.md](docs/PRIVACY.md) Toggle privacy, unlocks vaulted prompt pieces so they can be used. Chats in this mode are encrypted and force models that are marked private.
 - **Network** - [NETWORK.md](docs/NETWORK.md) SOCKS proxy routing for the whole app, with bypass options. 
 - **Game Room** - [GAME-ROOM.md](docs/GAME-ROOM.md) Experimental, separate chat UI for games the AI and human can play. Story Engine also runs full AI stories like RPG tabletop.
 - **Chat Isolation** - [CHATS.md](docs/CHATS.md) Each chat carries its own prompt, tools, voice, and memory scopes; archive, trim, compress, repair.
 - **Appearance** - [APPEARANCE.md](docs/APPEARANCE.md) Themes, fonts, background scenes, and ambient motion — global and per-chat.
-- **Plugins** - [PLUGINS.md](docs/PLUGINS.md) Hooks, tools, voice commands, providers, daemons, apps, themes — install from GitHub in one click. Swap TTS, STT, LLM, prompts, embeddings model etc in plugins.
+- **Plugins** - [PLUGINS.md](docs/PLUGINS.md) ([signing](docs/SIGNING.md)) Hooks, tools, voice commands, providers, daemons, apps, themes — install from GitHub in one click. Swap TTS, STT, LLM, prompts, embeddings model etc in plugins.
 - **Desktop/Mobile/Voice** - Run on your local browser, open the same chat to your phone, then finish it on your mic.
 - **Tools** - [TOOLS.md](docs/TOOLS.md) Web search, Wikipedia, notes, and more. Mix and match via [TOOLSETS.md](docs/TOOLSETS.md).
 - **Backup and Restore** - Can back up from in the app and restore from in the app. All data in user/
@@ -92,7 +99,7 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 
 ## Requirements
 
-- Ubuntu 22.04+ or Windows 11+
+- Ubuntu 22.04+ or Windows 10 (1809+) / 11
 - Mac is Docker-only (Intel and Apple Silicon — the image is multi-arch)
 - Python 3.11+ (via conda)
 - 16GB+ system RAM with TTS STT
@@ -159,6 +166,7 @@ No conda, no pip, no dependencies. Web UI only — no wake word. Benefit is isol
 ```bash
 mkdir ~/sapphire && cd ~/sapphire
 curl -fsSL https://raw.githubusercontent.com/ddxfish/sapphire/main/docker-compose.yml -o docker-compose.yml
+mkdir -p sapphire-data sapphire-backups sapphire-config
 docker compose up -d
 ```
 
@@ -166,6 +174,7 @@ docker compose up -d
 ```powershell
 mkdir $HOME\sapphire; cd $HOME\sapphire
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ddxfish/sapphire/main/docker-compose.yml" -OutFile "docker-compose.yml"
+mkdir sapphire-data, sapphire-backups, sapphire-config
 docker compose up -d
 ```
 
@@ -191,10 +200,13 @@ Or use the in-app update button in Settings → Dashboard. See [INSTALLATION.md 
 | [Plugin Author Guide](docs/plugin-author/README.md) | Build plugins with hooks, tools, providers, apps, themes |
 | [API](docs/API.md) | The REST API surface |
 | [Voice](docs/VOICE.md) | STT, TTS, wake word, conversation mode |
+| [Devices](docs/DEVICES.md) | Satellites, ESP32 boards, cameras, IR, phones |
+| [MCP Server](docs/MCP.md) | Other AIs using Sapphire |
 | [Network](docs/NETWORK.md) | SOCKS proxy, LAN/WAN split, egress guarantees |
 | [Mastery Guide](docs/MASTERY-GUIDE.md) | The skill ladder through every system |
 | [Changelog](docs/CHANGELOG.md) | Release history |
 | [Backups](docs/BACKUPS.md) | Automatic and manual backup system |
+| [Signing](docs/SIGNING.md) | Plugin signatures and sideloading |
 | [Docker](docs/DOCKER.md) | Container deployment with GPU support |
 | [Technical](docs/TECHNICAL.md) | Architecture and internals |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes |
@@ -208,7 +220,7 @@ Or use the in-app update button in Settings → Dashboard. See [INSTALLATION.md 
 We opened core contributions, reach out to me on Discord or email first if you want to contribute. We only accept PRs for single bugs. We probably reject any bulk bug fixes.
 
 ## Sapphire Condensed Mastery Guide
-Sapphire is a wrapper for an LLM, so install Sapphire, load it in your web browser, link it to your LLM, say "hey sapphire" then hello to see it works. Go to Settings > Help and behold the search bar for all your needs. Then activate various prompts and LLM providers to see how they feel in Chat > sidebar > Provider. Change the text in any prompt or make a new one. Go to toolsets, make a new toolset and select what tools you want to use. Make your own Persona for your prompt + toolset with its own memory scopes and email etc. Expand AI tools via Plugins like Discord or Telegram. Install a Schedule > Events > Daemon for your email/discord/telegram. Set a scheduled task for your AI to wake you up. Have Sapphire spawn an agent to research swiss cheese. Load Sapphire web UI on your phone browser. Create a Sapphire system service to autostart. Final Boss: Have Sapphire use coding harness and run_command to create a plugin for her own system, upload it to github on your account per docs/plugin-author, submit it to the Sapphire store so the world can use it.
+Sapphire is a wrapper for an LLM, so install Sapphire, load it in your web browser, link it to your LLM, say "hey sapphire" then hello to see it works. Go to System > Help and behold the search bar for all your needs. Then activate various prompts and LLM providers to see how they feel in Chat > sidebar > Provider. Change the text in any prompt or make a new one. Go to toolsets, make a new toolset and select what tools you want to use. Make your own Persona for your prompt + toolset with its own memory scopes and email etc. Expand AI tools via Plugins like Discord or Telegram. Add a Triggers > Daemons task for your email/discord/telegram. Set a scheduled task for your AI to wake you up. Have Sapphire spawn an agent to research swiss cheese. Load Sapphire web UI on your phone browser. Create a Sapphire system service to autostart. Final Boss: Have Sapphire use coding harness and run_command to create a plugin for her own system, upload it to github on your account per docs/plugin-author (unsigned, see docs/SIGNING.md), submit it to the Sapphire store so the world can use it.
 
 ## Video Walkthrough
 

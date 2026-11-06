@@ -103,9 +103,9 @@ and the text as its mission** — `run()` should then resume rather than start o
   chat *now*, the chat it was spawned from. Private + `cloud` → refused. `self.privacy` tells a
   local kind to stay local. Unreadable counts as private.
 - **Chat-local lookups.** Her tools find your agent only from its own chat.
-- **Rows.** `user/plugin_state/agents.json` keeps metadata (id, name, kind, chat, status, times,
+- **Rows.** `user/plugin_state/core-agents.json` keeps metadata (id, name, kind, chat, status, times,
   `resume_token`, privacy). Mission, pending question and last report go to `plugin_chat_data`
-  under the chat — encrypted when vaulted, deleted with the chat. Don't persist content yourself.
+  under the chat (owner `core-agents` — core state, out of reach of any plugin card's Purge data) — encrypted when vaulted, deleted with the chat. Don't persist content yourself.
 - **Delivery.** Reports and questions ride the per-chat inbox (`core/chat/inbox.py`): they wait
   for her current message to end, fold with neighbours that land within 3 s, and never need a
   browser.
@@ -125,3 +125,12 @@ and the text as its mission** — `run()` should then resume rather than start o
 `tests/test_agents_engine.py` and the `agent_world` fixture in `tests/conftest.py` show the
 harness: register your kind in the fake registry, give the engine a fake module, and drive
 `spawn` → `ask`/`answer` → `report` with the inbox recorded.
+
+## Reference for AI
+
+- Manifest: `capabilities.agents` = [{kind ([a-z0-9][a-z0-9_-]{0,32}, unique), label, icon, description, module (plugin-relative .py defining `class Agent(core.agents.base.Agent)`), cloud (DEFAULT true = refused from private chats; false only if every network call honors self.privacy), conversational (bool), spawn_schema (plugin-settings field shape; may not redefine mission/name/model/context), names ([display names])}]. Registered at load, unregistered at unload.
+- Class: `__init__(row, engine)` (self.mission, self.options, self.chat, self.privacy, self.resume_token); `run(mission)` on its own thread under the chat's context. Doors: `self.ask(question, timeout=600)` blocks until answered (str | {question: label(s)} | None on timeout); `self.event(kind, data)` transcript line (text|tool_use|tool_result|note), never the chat; `self.report(text)` result into the chat via the inbox. Also `self.cancelled`, `self.status` (running|waiting|idle|resting), `self.warning`.
+- Conversational: override `say(text)` and `stop()` (call super); keep `self.resume_token`; status `resting` + token = next `say` rebuilds from the row and resumes.
+- Engine owns: privacy re-checks on spawn/say/answer/wake (private + cloud = refused; unreadable = private), chat-local lookups, rows in `user/plugin_state/core-agents.json` (metadata) + `plugin_chat_data` owner `core-agents` (mission/question/report; vault-encrypted, deleted with the chat), inbox delivery, events (agent_spawned/waiting/event/completed/dismissed — ids only), `max_concurrent` (running only).
+- Her core tools: `agent_spawn`, `agent_action` (answer | say | stop; agent alone = what it takes now), `agent_list`, `agent_peek`. Shipped kinds: `llm` (core/plugins/agents), `claude_code` (core/plugins/claude-code).
+- Don't: write chat/history/event bus from a kind, log mission/report text, import sibling modules by path (use importlib.import_module('plugins.<name>....')), accept free-form resume.

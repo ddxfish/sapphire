@@ -132,17 +132,10 @@ async function loadPluginLayerViews() {
 // index.html inline guard (pre-CSS, no reflow), theme re-assert lives in
 // core/theme.js initTheme() (the one apply path, themes-v2 B1).
 function initAppearance() {
-    // Clean up stale trim localStorage (now per-persona)
+    // Clean up stale trim localStorage (now per-persona; the send button is
+    // the privacy tint only, its trim option retired 2026-11-06)
     localStorage.removeItem('sapphire-trim');
-
-    // Send button trim preference
-    const sendBtnTrim = localStorage.getItem('sapphire-send-btn-trim');
-    if (sendBtnTrim === 'true') {
-        requestAnimationFrame(() => {
-            const sendBtn = document.getElementById('send-btn');
-            if (sendBtn) sendBtn.classList.add('use-trim');
-        });
-    }
+    localStorage.removeItem('sapphire-send-btn-trim');
 }
 
 // Boot awaits are BOUNDED: a wedged backend endpoint must degrade the page

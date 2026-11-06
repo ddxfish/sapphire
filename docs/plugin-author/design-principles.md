@@ -28,6 +28,9 @@ Use the underlying system instead of recreating separate subsystems. Things like
 | think-tag stripper; image store or describer | `core.think`; `core.images` and `core.image_describe` |
 | privacy rules | the `privacy_aware` flag and the resolver's local-only rule |
 | subprocess babysitter | `ProcessManager` |
+| notifications, toasts, progress bars | `core.notify` (`notify`, `flash`, `progress`); in the browser `shared/notify.js` |
+| file download links in the browser | `shared/download.js` (`saveBlob`, `saveJson`, `saveUrl`) |
+| a provider/model dropdown | `shared/llm-picker.js` |
 
 ## 4. If you need core
 If your code belongs in core and not a plugin, then make sure it is minimal and just what we need and nothing more. Most of my features I start as plugins, I test them for a few weeks while stripping out as much as I can and simplifying settings to the bare minimum. Then I test thoroughly on Windows and Linux and run the plugin some more. Only then is something a candidate for core. 
@@ -37,10 +40,10 @@ If your code belongs in core and not a plugin, then make sure it is minimal and 
 1. Would this be worse as a plugin? If not, it is a plugin.
 2. Does it call a model, schedule work, store memory, or hold secrets only through core?
 3. One sentence per feature, one toggle per feature, and truly gone when off?
-4. Tested on Windows and Linux? Tests beside the code? Signed? README current?
+4. Tested on Windows and Linux? Tests beside the code? Signed by a keyholder (never a self-made key — see [Signing](signing.md))? README current?
 5. New package? Declared in the manifest, not in `requirements.txt`?
 6. Any third party code or services? Keep it internal.
 
 ## Reference for AI
 
-DESIGN PRINCIPLES: core is minimal (pipeline + hooks + doors); features are plugins. Plugin over core when it is big, complex, costly to keep, or depends on anything outside Sapphire; core gets only what plugins cannot exist without. Core earns nothing but the repo name; featured plugins are shown more prominently. One system: never rebuild LLM, memory, scheduler, settings, secrets, agents, devices, games, or routes inside a plugin (table above). One sentence and one toggle per feature; add-ons import lazily and go dark. Ship cost: Windows + Linux, tests in `tests/`, signed, README, packages via manifest not `requirements.txt`, fail loud, store nothing unasked, outside text is data, scope errors return `None` never `'default'`.
+DESIGN PRINCIPLES: core is minimal (pipeline + hooks + doors); features are plugins. Plugin over core when it is big, complex, costly to keep, or depends on anything outside Sapphire; core gets only what plugins cannot exist without. Core earns nothing but the repo name; featured plugins are shown more prominently. One system: never rebuild LLM, memory, scheduler, settings, secrets, agents, devices, games, routes, notifications (core.notify / shared/notify.js), file downloads (shared/download.js) or the LLM picker (shared/llm-picker.js) inside a plugin (table above). One sentence and one toggle per feature; add-ons import lazily and go dark. Ship cost: Windows + Linux, tests in `tests/`, signed by a keyholder (a self-made key = failed = always blocked), README, packages via manifest not `requirements.txt`, fail loud, store nothing unasked, outside text is data, scope errors return `None` never `'default'`.

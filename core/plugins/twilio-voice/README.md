@@ -38,9 +38,20 @@ Twilio config changes can take a few minutes to propagate.
    The rule carries the call's persona/prompt, voice, chat, and an optional
    caller filter (rules are most-specific-wins: a "just my number" rule and an
    "everyone else" rule coexist on one number; no matching rule = call declined).
-3. **Outbound** — in Mind > People, give a person a phone number and check
-   **Allow AI to call**. Sapphire dials via her `phone_call` tool; she can only
-   call whitelisted people.
+3. **Outbound** — in Mind > Entities, give a person a **Phone** and tick
+   **Allow phone calls**. Sapphire dials via her `phone_call` tool; she can only
+   call whitelisted contacts.
+
+## Passphrase elevation
+
+A call rule's toolset is `none` unless you pick one. On the Realtime rule, check **Allow
+toolset elevation by passphrase**, set a **Passphrase** and the toolset it
+**Unlocks**. The call's chat then carries one hidden tool, `elevate_toolset(key,
+toolset?)`: you say the passphrase on the call, she passes it on, and the next
+turn has that toolset. The match tolerates transcription noise (case,
+punctuation, spoken digits); 3 tries per call, every failure gets the same
+answer. A configured unlock toolset always wins over one the caller names. The
+chat's own toolset comes back at hangup. Full detail: `docs/PHONE-CALLS.md`.
 
 ## Adding a second number (concurrent calls)
 

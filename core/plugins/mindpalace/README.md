@@ -19,7 +19,8 @@ Import tab's Scrub button (rows you already removed from the palace, on your
 typed confirm); nothing automatic, nothing of hers, ever touches them.
 
 Tools: `save_memory`, `search_memory`, `get_recent_memories`, `update_memory`,
-`delete_memory`, `read_self`, `update_self`, `read_ledger`, `create_goal`,
+`delete_memory`, `list_entities`, `read_self`, `update_self`, `read_ledger`,
+`librarian_instructions`, `create_goal`,
 `list_goals`, `update_goal`, `delete_goal`, `library`, `read_document`,
 `memory_view_image`, `local_view_images`, `memory_save_image`, `import_v2`, `run_librarian`, plus the librarian verbs below.
 
@@ -53,7 +54,7 @@ On top of that, **edges** — rows in the `edges` table — connect the graph:
 **How mention edges appear:** at save time the content is matched against all
 entity names in scope — **and their nicknames** (the comma-separated
 `nicknames` field on person entities). Saving "talked to the boss about the
-boat" auto-edges to Krem if "the boss" is one of Krem's nicknames. Matching is
+budget" auto-edges to Sam if "the boss" is one of Sam's nicknames. Matching is
 case-insensitive, word-boundary, longest-name-wins; real names always beat
 another entity's nickname on collision.
 
@@ -82,8 +83,8 @@ on a well-woven graph, 3 walks most of the mind (3+ silently clamps to 2).
   memories are discounted under the wire, so what penetrates a hub from a
   distance is exactly what she's rated as mattering.
 - Ties broken by importance, then recency — never storage order.
-The connected block is token-budgeted **per depth** via Settings → Plugins →
-Mind Palace (defaults: ~2K tokens of connections at depth 1, ~6K at depth 2 —
+The connected block is token-budgeted **per depth** via Mind → Settings →
+Recall (defaults: ~2K tokens of connections at depth 1, ~6K at depth 2 —
 roughly 4K / 8K total returns), so depth never floods the context. No
 duplicates by construction: the walk excludes its own seeds, so nothing in
 the connected block repeats the direct results or the self sheet.
@@ -141,8 +142,9 @@ Enabling the librarian pops a confirm (works in managed mode too —
 `allow_managed`). The nightly schedule runs whichever halves are enabled:
 decay rides Importance, review passes ride Librarian.
 
-**Maintenance** (Mind → Self → Dashboard → 🛠) — self-serve tester loop:
-import, inspect, reset, repeat.
+**Maintenance** (Mind → Settings → Maintenance) — self-serve tester loop:
+import, inspect, reset, repeat. Once the import is done, the bar on the
+Import tab (or the `import_finished` setting) hides the tab.
 - *Mind → Import* (its own tab since 2026-10-30) — counts per store × scope
   against what the palace holds, then one button runs `import_v2('all')` in
   the background with a progress row; a boot notification nags while

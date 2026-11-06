@@ -138,7 +138,7 @@
   },
   "WAKEWORD_THRESHOLD": {
     "short": "Detection confidence threshold (0.0-1.0)",
-    "long": "Minimum confidence score required to trigger wake word detection. Lower values (0.3-0.4) are more sensitive but may cause false positives. Higher values (0.6-0.8) require clearer pronunciation but reduce false triggers. Default 0.5 is a good balance for most environments."
+    "long": "Minimum confidence score required to trigger wake word detection. Lower values (0.3-0.4) are more sensitive but may cause false positives. Higher values (0.6-0.8) require clearer pronunciation but reduce false triggers. Default 0.6. Switching the wake word model sets this to that model's own threshold."
   },
   "CONVERSATION_DTLN": {
     "short": "Echo cancel: None (headphones) / 256 / 512 (open speakers)",
@@ -318,7 +318,7 @@
   },
   "TTS_FALLBACK_SERVER": {
     "short": "Fallback TTS server endpoint URL",
-    "long": "Backup TTS server URL used if primary server is unavailable. Provides redundancy for uninterrupted service. Set to same value as primary if you don't have a backup server. Format: http://hostname:port."
+    "long": "Backup TTS server URL (or pairing string) used when the primary doesn't answer its health check. Leave blank for no fallback. Read on every sentence, no restart. Format: http://hostname:port."
   },
   "TTS_FALLBACK_TIMEOUT": {
     "short": "Timeout before trying fallback server (seconds)",

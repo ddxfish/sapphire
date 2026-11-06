@@ -11,7 +11,7 @@ Open **Settings** — the Dashboard is the first tab. It's a widget-based comman
 The top of the dashboard shows at a glance:
 
 - **Status orb** — a mood ring (Online / Working / Issues / Error / Idle) derived from component health, update availability, and disk usage
-- **Display name** — click Sapphire's name to rename her; the name persists with the install
+- **Display name** — click Sapphire's name to rename her; the name persists with the install. It's drawn in Dancing Script, downloaded once from Google Fonts on first boot into `user/fonts/` (set `DASHBOARD_FONTS_AUTOFETCH` to `false` in `user/settings.json` to skip it; a system font stands in)
 - **Version and branch** — shown under the name
 - **Store / Help** quick links
 - **Component pills** — emb / tts / stt / ww (embeddings, text-to-speech, speech-to-text, wakeword) with health dots; idle just means a subsystem is configured off, not broken
@@ -110,6 +110,7 @@ DASHBOARD LOCATION:
 
 LAYOUT:
 - Hero: status orb (mood from component health/updates/disk), editable display name, version + branch, Store/Help links, emb/tts/stt/ww pills
+- Name font: Dancing Script fetched once from Google Fonts at first boot into user/fonts/; DASHBOARD_FONTS_AUTOFETCH (default true, JSON only) = false skips it, system cursive fallback
 - Widget panels: built-ins System / Updates / Backups / Maintenance / Plugin Spotlight, plus plugin-shipped widgets (sample-widgets = reference plugin)
 - "+ Add" = widget picker (grouped, sizes, multi-instance, Restore defaults); "✎ Edit" = drag reorder / resize / remove
 - Widgets with settings_schema get an auto ⚙ Settings... form in their Actions dropdown

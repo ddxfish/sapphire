@@ -15,9 +15,10 @@ One design line worth knowing: **local backups are plaintext by default.** They 
 | Data | Location | In Backup |
 |------|----------|-----------|
 | Chat history | `user/history/` | Yes |
-| Memories | `user/memory.db` | Yes |
-| Knowledge & People | `user/knowledge.db` | Yes |
-| Goals | `user/goals.db` | Yes |
+| Memory: the Mind (memories, self, entities, library, goals) | `user/memory/mind.db` | Yes |
+| Your entity templates | `user/mind_palace/templates/` | Yes |
+| Chat documents' PDF originals | `user/documents/` | Yes |
+| Legacy memory engine, if you ran it | `user/memory.db`, `user/knowledge.db`, `user/goals.db` | Yes |
 | Prompts | `user/prompts/` | Yes |
 | Personas | `user/personas/` | Yes |
 | Toolsets | `user/toolsets/` | Yes |
@@ -220,7 +221,7 @@ The **Remembrance** plugin (disabled by default) ships encrypted backups of `use
 
 - **Manual** — the "Back up now (offsite)" button on the plugin panel.
 - **AI tool** — `remembrance_backup`: called with no comment it reports vault status; with a comment it creates and uploads a labeled backup (kept long-term).
-- **Automatic** — with auto-backup on, an hourly check uploads once a day at your configured hour (default: one hour after the local backup run). Cadence mirrors the local rhythm: monthly on the 1st, weekly on Sunday, daily otherwise.
+- **Automatic** — with auto-backup on, it uploads once a day at your configured **Backup hour** (default 4). Cadence mirrors the local rhythm: monthly on the 1st, weekly on Sunday, daily otherwise.
 
 ### How it protects you
 
@@ -301,7 +302,7 @@ ROUTES: GET /api/backup/list, GET /api/backup/health (enabled, sentinels, halted
 OFFSITE (core/plugins/remembrance, default_enabled=false):
 - Zero-knowledge: scrypt-derived AES-256-GCM, framed format (magic SAPPHIREBAK, per-frame nonce + frame-index AAD, EOF marker → truncation/reorder/tamper all fail loudly), ext .sapphirebak. Password loss = unrecoverable.
 - Flow: core creates plain tar (plugin extra excludes + size cap offsite_max_mb=2048) → encrypt → verify-ciphertext-or-refuse (CRITICAL log) → upload. Download sha256-verified before decrypt.
-- Cron: hourly check, uploads at offsite_cron_hour (default BACKUPS_HOUR+1) when auto_enabled; cadence monthly (1st) / weekly (Sun) / daily. Failure surfaces to user; success silent.
+- Schedule: one daily run at offsite_cron_hour (default 4) when auto_enabled; cadence monthly (1st) / weekly (Sun) / daily. Failure surfaces to user; success silent.
 - Tool: remembrance_backup — no comment → vault status; comment → labeled manual backup (kept long-term).
 - Creds (server URL/tenant/API key) scrambled in ~/.config/sapphire/, never in backups; the backup password is core's (Settings > Backup). Gate = core export_encrypted; plugin owns account + cadence + upload + restore download. Restore: panel ↻ → same staged-restart flow.
 - Standalone recovery: tools/decrypt_backup.py (needs only python + cryptography pkg + password) → .tar.gz → tar -xzf.
