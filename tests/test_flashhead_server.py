@@ -200,5 +200,6 @@ def test_a_tap_on_her_face_names_the_stream_and_is_logged(server, monkeypatch, c
     h._json = lambda obj, code=200: replies.append(obj)
     with caplog.at_level("INFO"):
         h.do_POST()
-    assert replies == [{"ok": True}] and s.speech.empty() and not s.open
+    # dropped: how many slices went (screens.py reads it: did a stop hit anything)
+    assert replies == [{"ok": True, "dropped": 1}] and s.speech.empty() and not s.open
     assert any(r.message == "Stopped from the viewer (local)" for r in caplog.records)

@@ -159,10 +159,10 @@ def test_check_posts_and_clears_the_drift_row(n, monkeypatch):
 
 def test_a_round_trip_keeps_a_custom_toolset_whole():
     """Live test 2026-11-06: classic and back must not shed a custom toolset's tools."""
-    rook = ['web_search', 'save_memory', 'search_memory', 'update_memory', 'library', 'read_document']
-    to_classic = ed.apply(rook, ed.plan({'rook': {'functions': rook}}, 'memory')['rook'])
-    back = ed.apply(to_classic, ed.plan({'rook': {'functions': to_classic}}, 'mindpalace')['rook'])
-    assert set(back) == set(rook)
+    custom = ['web_search', 'save_memory', 'search_memory', 'update_memory', 'library', 'read_document']
+    to_classic = ed.apply(custom, ed.plan({'custom': {'functions': custom}}, 'memory')['custom'])
+    back = ed.apply(to_classic, ed.plan({'custom': {'functions': to_classic}}, 'mindpalace')['custom'])
+    assert set(back) == set(custom)
 
 
 def test_import_settle_runs_the_repairs_work_and_clears_the_row(n, monkeypatch, tmp_path):

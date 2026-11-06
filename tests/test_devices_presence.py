@@ -365,7 +365,10 @@ def test_a_refusal_is_said_once_per_reason(rig, caplog):
         refuse[0] = 'a different refusal'
         presence.poke()
         assert _until(lambda: len(rig.tends) >= 5)
-        assert len(said('was not tended')) == 2 and 'different' in said('was not tended')[1].getMessage()
+        # the fake records the tend BEFORE it raises; the log line follows on
+        # presence's thread - wait for the line, not the count (a race under load)
+        assert _until(lambda: len(said('was not tended')) == 2)
+        assert 'different' in said('was not tended')[1].getMessage()
         refuse.clear()
         presence.poke()
         assert _until(lambda: len(said('tended again')) == 1)

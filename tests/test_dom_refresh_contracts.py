@@ -53,7 +53,8 @@ def test_sidebar_bus_doors_are_soft_and_foreign_guarded():
     bus = _between(src, "eventBus.on('settings_changed'", "// Accordion behavior")
     assert bus.count("softSidebar()") >= 8, bus.count("softSidebar()")
     assert "loadSidebar()" not in bus.replace("() => loadSidebar()", ""), "a bus door calls loadSidebar() bare"
-    assert "if (s.llm_primary && !foreign) {" in src
+    # a model-only echo repaints too (send-badge hunt 2026-11-06); a foreign lane never does
+    assert "if (('llm_primary' in s || 'llm_model' in s) && !foreign) {" in src
     # the save reports in-flight and kicks the held refresh when it lands
     save = _between(src, "async function saveSettings(", "function collectSettings(")
     assert "_saveInFlight++;" in save and "_saveInFlight--;" in save and "softSidebar.kick();" in save
