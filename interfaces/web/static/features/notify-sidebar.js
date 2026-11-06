@@ -67,6 +67,7 @@ function rowHtml(r) {
                 ${active ? bar(r) : ''}
                 <div class="sb-notify-meta">
                     <span class="nc-meta">${esc(r.source)} · ${active ? 'in progress' : notify.ago(r.updated)}</span>
+                    ${notify.repairButtonHtml(r, 'nc-repair')}
                     ${r.go ? `<button type="button" class="sb-notify-open" data-go="${esc(r.id)}">Open →</button>` : ''}
                 </div>
             </div>
@@ -78,7 +79,8 @@ function rowHtml(r) {
 function shape(rows, red, yellow) {
     return JSON.stringify([open, red, yellow, rows.map(r => {
         const active = r.state === 'active';
-        return [r.id, r.state, r.level, r.title, r.source, !!r.go, active ? !!r.body : r.body, active ? 0 : r.updated];
+        return [r.id, r.state, r.level, r.title, r.source, !!r.go, active ? !!r.body : r.body, active ? 0 : r.updated,
+                notify.repairButtonHtml(r)];
     })]);
 }
 
@@ -164,6 +166,7 @@ async function onClick(e) {
         router.switchView('notifications');
         return;
     }
+    if (notify.handleRepairClick(e)) return;
     const x = e.target.closest('[data-x]');
     if (x) { notify.dismiss(x.dataset.x); return; }
     const go = e.target.closest('[data-go]');

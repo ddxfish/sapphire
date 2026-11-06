@@ -47,3 +47,19 @@ def test_active_refuses_dismiss_and_clear_keeps_it(api):
     assert c.get('/api/notifications').json()['counts'] == {'red': 1, 'yellow': 0, 'active': 1}
     assert c.delete('/api/notifications', headers=h).json()['cleared'] == 2
     assert [r['id'] for r in c.get('/api/notifications').json()['rows']] == [act]
+
+
+def test_repair_button_door(api, monkeypatch):
+    """POST /api/notifications/{id}/repair runs the row's registered fix."""
+    c, h, n = api
+    monkeypatch.setattr(n, '_repairs', {})
+    monkeypatch.setattr(n, '_repairing', set())
+    n.register_repair('fix-it', lambda: 'Fixed.')
+    rid = n.notify('Off', 'warning', action='fix-it')
+    r = c.post(f'/api/notifications/{rid}/repair', headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body['ok'] and body['message'] == 'Fixed.' and body['row']['level'] == 'success'
+    assert c.post(f'/api/notifications/{rid}/repair', headers=h).status_code == 404   # spent
+    plain = n.notify('no button')
+    assert c.post(f'/api/notifications/{plain}/repair', headers=h).status_code == 404

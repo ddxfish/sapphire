@@ -54,6 +54,9 @@ class ToolsetManager:
                 with open(user_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 self._toolsets = {k: v for k, v in data.items() if not k.startswith('_')}
+                # The ledger first: any save below writes it back, and a save
+                # before it was read dropped it - the once-adds then re-ran.
+                self._migrations = [m for m in (data.get('_migrations') or []) if isinstance(m, str)]
             except Exception as e:
                 # Fail-safe (2026-08-19): an unreadable file must not run the
                 # migrations below — they seed factory defaults and SAVE,
@@ -104,8 +107,7 @@ class ToolsetManager:
                 logger.info("Migrated renamed meta-tool references in user toolsets")
             # One-time additions, ledgered in the file's _migrations key: each
             # runs once per install, so a tool the user removes afterwards
-            # stays removed.
-            self._migrations = [m for m in (data.get('_migrations') or []) if isinstance(m, str)]
+            # stays removed. (The ledger is read before the first save above.)
             if self._apply_once_adds():
                 self._save_to_user()
             logger.info(f"Loaded {len(self._toolsets)} toolsets")
@@ -338,6 +340,21 @@ class ToolsetManager:
             del self._toolsets[name]
             return self._save_to_user()
     
+    def repair_engine_drift(self, engine: str) -> list:
+        """Bring every toolset in step with the memory engine that runs
+        (core/toolsets/engine_drift.py). Returns the toolsets it changed."""
+        from core.toolsets import engine_drift
+        with self._lock:
+            p = engine_drift.plan(self._toolsets, engine)
+            for name, entry in p.items():
+                ts = self._toolsets[name]
+                ts['functions'] = engine_drift.apply(ts['functions'], entry)
+                logger.info(f"Toolset '{name}': in step with {engine} "
+                            f"(swapped {sorted(entry['swap']) or '-'}, added {entry['add'] or '-'})")
+            if p and not self._save_to_user():
+                raise RuntimeError("the toolsets file could not be written")
+            return sorted(p)
+
     def _save_to_user(self) -> bool:
         """Save all toolsets to user file."""
         user_path = self.USER_DIR / "toolsets.json"

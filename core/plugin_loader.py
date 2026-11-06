@@ -510,6 +510,16 @@ class PluginLoader:
                                  HookEvent(metadata={"loaded": loaded, "reason": reason, "plugin": plugin}))
         except Exception as e:
             logger.warning(f"[PLUGINS] plugins_ready ({reason}) dispatch failed: {e}")
+        # Toolsets that still name the other memory engine's tools: a row with
+        # a Repair button (core/toolsets/engine_drift.py). Boot here; the engine
+        # switch checks after it records the new engine (routes/plugins.py).
+        if reason == "scan":
+            try:
+                from core.toolsets import engine_drift
+                engine_drift.register()
+                engine_drift.check()
+            except Exception as e:
+                logger.warning(f"[PLUGINS] toolset engine check failed: {e}")
         # Re-derive the NO_PROXY belt now that this (re)load wave changed the
         # set of registered direct hosts: unmigrated raw-requests plugins and
         # daemon subprocesses (which inherit env at spawn) need late-added LAN

@@ -9693,6 +9693,12 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
 .nc-row .nc-bar-track { margin: 6px 0 2px; }
 .nc-x { flex-shrink: 0; border: none; background: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; padding: 0 4px; border-radius: var(--radius-sm); }
 .nc-x:hover { color: var(--text); background: var(--bg-hover); }
+/* a row's one-click fix (core/notify.py register_repair) */
+.nc-repair { padding: 6px 18px; border: 1px solid var(--trim, var(--accent, #4a9eff)); border-radius: var(--radius-sm); background: var(--trim, var(--accent, #4a9eff)); color: #fff; font-size: var(--font-sm); font-weight: 600; cursor: pointer; }
+.nc-repair:hover:not(:disabled) { filter: brightness(1.1); }
+.nc-main > .nc-repair { margin: 8px 0 4px; }
+.sb-notify-meta .nc-repair { padding: 4px 14px; text-decoration: none; }
+.nc-repair:disabled { opacity: .6; cursor: progress; }
 .nc-empty { padding: var(--space-xl); text-align: center; color: var(--text-muted); }
 @media (max-width: 768px) { .nc-page { padding: var(--space-sm); } }
 

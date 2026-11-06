@@ -71,6 +71,7 @@ function render() {
         if (gearOpen) renderGear(panel);
     });
     container.querySelector('#nc-list')?.addEventListener('click', e => {
+        if (notify.handleRepairClick(e)) return;
         const x = e.target.closest('[data-x]');
         if (x) { e.stopPropagation(); notify.dismiss(x.dataset.x); return; }
         const row = e.target.closest('.nc-row');
@@ -164,6 +165,7 @@ function rowHtml(r) {
             <div class="nc-title">${esc(r.title)}${pct}</div>
             ${r.body ? `<div class="nc-body">${esc(r.body)}</div>` : ''}
             ${bar}
+            ${notify.repairButtonHtml(r)}
             <div class="nc-meta">${esc(r.source)} · ${notify.ago(r.updated)}${tail}</div>
         </div>
         ${r.state !== 'active' ? `<button type="button" class="nc-x" data-x="${esc(r.id)}" title="Remove">×</button>` : ''}

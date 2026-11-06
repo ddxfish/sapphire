@@ -78,6 +78,18 @@ def _clean_go(go):
     return None
 
 
+def _clean_action(action):
+    """A row's button: {repair, label} naming a registered repair. A bare
+    name is fine. Anything else is None. The name is checked when the button
+    is pressed, not here: rows outlive the process that registered it."""
+    if isinstance(action, str):
+        action = {'repair': action}
+    if not isinstance(action, dict) or not isinstance(action.get('repair'), str) or not action['repair']:
+        return None
+    label = action.get('label') if isinstance(action.get('label'), str) else ''
+    return {'repair': action['repair'][:64], 'label': (label.strip() or 'Repair')[:32]}
+
+
 def _load():
     global _loaded
     with _lock:
@@ -146,14 +158,16 @@ def _prune_locked():
 
 
 def notify(title, level='info', body='', source='core', go=None, key=None,
-           private=False, origin=None, state='open', progress=None, once=False):
+           private=False, origin=None, state='open', progress=None, once=False, action=None):
     """A row, and the toast its level earns. Returns the row id, or None for a
     flash (private=True). A key makes the row re-fire instead of piling up:
     the row with that key is updated, marked unread and moved to the front.
     once=True with a key: posted one time ever. The key goes on the ledger
     (user/notifications-once.json) and a key already there posts nothing, even
     after the ring, a dismiss or Clear all took the row (a boot result that
-    must say itself once, not once per boot its row is missing)."""
+    must say itself once, not once per boot its row is missing).
+    action: a one-click fix the row wears as a button - a name given to
+    register_repair(), or {repair, label}. See repair()."""
     level = level if level in LEVELS else 'info'
     title = _text(title, TITLE_MAX).strip() or 'Notification'
     body = _text(body, BODY_MAX)
@@ -182,11 +196,14 @@ def notify(title, level='info', body='', source='core', go=None, key=None,
                        source=_text(source or row.get('source') or 'core', 64))
             if go is not None:
                 row['go'] = _clean_go(go)
+            if action is not None:
+                row['action'] = _clean_action(action)
         else:
             row = {'id': uuid.uuid4().hex[:12], 'ts': now, 'updated': now, 'level': level,
                    'title': title, 'body': body, 'source': _text(source or 'core', 64),
                    'state': state if state in STATES else 'open', 'progress': progress,
-                   'go': _clean_go(go), 'key': key or None, 'read': False}
+                   'go': _clean_go(go), 'key': key or None, 'read': False,
+                   'action': _clean_action(action)}
         _rows[row['id']] = row
         _prune_locked()
         _save_locked()
@@ -458,6 +475,65 @@ def clear(origin=None):
             _save_locked()
     _publish('notifications_cleared', {'origin': origin})
     return len(gone)
+
+
+# ── repairs: a row's one-click fix ─────────────────────────────────────────
+# A part of the app that can see something wrong AND fix it registers the fix
+# once, by name, then posts a row wearing it: notify(..., action='name'). The
+# button runs it (POST /api/notifications/{id}/repair). A fix returns its
+# words (what it did) or raises with the reason; the row then says so - done
+# and quiet, or failed with the button still there to try again.
+
+_repairs: dict = {}               # name -> fn() -> str
+_repairing: set = set()           # names running now: a double click runs once
+
+
+def register_repair(name, fn):
+    """fn() -> words for what it did; raise to fail with the reason."""
+    _repairs[str(name)] = fn
+
+
+def repair(rid, origin=None):
+    """Run the fix a row wears. (ok, words). LookupError: no such row, no
+    button, or nobody registered that name. RuntimeError: already running."""
+    row = get(rid)
+    action = (row or {}).get('action')
+    if not action:
+        raise LookupError('no such notification, or it has nothing to repair')
+    name = action['repair']
+    fn = _repairs.get(name)
+    if fn is None:
+        raise LookupError(f"nothing can run the '{name}' repair right now")
+    with _lock:
+        if name in _repairing:
+            raise RuntimeError('already repairing')
+        _repairing.add(name)
+    try:
+        words = str(fn() or 'Repaired.')
+        ok = True
+    except Exception as e:
+        logger.warning(f"[NOTIFY] repair '{name}' failed: {e}")
+        words, ok = (str(e) or type(e).__name__), False
+    finally:
+        with _lock:
+            _repairing.discard(name)
+    with _lock:
+        r = _rows.get(rid)
+        if r is not None:
+            if ok:
+                r.update(level='success', state='done', body=_text(words, BODY_MAX), action=None,
+                         title='Repaired')
+            else:
+                r.update(level='error', body=_text(f"The repair failed: {words}", BODY_MAX))
+            r.update(updated=time.time(), read=False)
+            _save_locked()
+            out = dict(r)
+        else:
+            out = None
+    if out:
+        _publish('notification', dict(out, origin=origin))
+    logger.info(f"[NOTIFY] repair '{name}': {'ok' if ok else 'failed'} - {words}")
+    return ok, words
 
 
 # ── routing: the old events become rows here ───────────────────────────────

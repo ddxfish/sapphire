@@ -4,8 +4,10 @@
 # POST   /api/notifications            a row from a tab (it painted the toast already)
 # POST   /api/notifications/read       everything read (opening the page)
 # POST   /api/notifications/{id}/read  one row read (a toast or sidebar row clicked)
+# POST   /api/notifications/{id}/repair the row's one-click fix (notify.register_repair)
 # DELETE /api/notifications/{id}       one row gone; 409 while it is active
 # DELETE /api/notifications            every row that is not active
+import asyncio
 import logging
 from typing import Optional
 
@@ -54,6 +56,18 @@ async def read_one(rid: str, _=Depends(require_login)):
     if not notify.mark_read(rid, origin=session_origin.get()):
         raise HTTPException(status_code=404, detail="no such notification")
     return {"counts": notify.counts()}
+
+
+@router.post("/api/notifications/{rid}/repair")
+async def repair_one(rid: str, _=Depends(require_login)):
+    origin = session_origin.get()
+    try:
+        ok, words = await asyncio.to_thread(notify.repair, rid, origin)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": ok, "message": words, "row": notify.get(rid), "counts": notify.counts()}
 
 
 @router.delete("/api/notifications/{rid}")

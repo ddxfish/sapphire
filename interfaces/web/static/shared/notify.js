@@ -148,7 +148,14 @@ function _toastRow(row, seconds) {
     }
     if (!_rowToasts(row.level)) return;
     const sticky = row.level === 'critical';
-    _toast({ text: _textOf(row), level: row.level, seconds: sticky ? 0 : (seconds ?? _seconds), onClick });
+    // A row with a fix wears it on its toast too: the button, and an Open when it links somewhere.
+    const buttons = row.action && row.id ? [
+        { label: row.action.label || 'Repair', onClick: () => repair(row.id) },
+        ...(row.go ? [{ label: 'Open', onClick: () => _open(row) }] : []),
+        { label: '✕', title: 'Dismiss', dismiss: true },
+    ] : null;
+    _toast({ text: _textOf(row), level: row.level, seconds: sticky ? 0 : (seconds ?? _seconds),
+             onClick: buttons ? null : onClick, buttons });
 }
 
 // ── public: make one ────────────────────────────────────────────────────────
@@ -284,6 +291,48 @@ export async function clearAll() {
     for (const [id, r] of _rows) if (r.state !== 'active') _rows.delete(id);
     _emit();
     try { await fetchWithTimeout('/api/notifications', { method: 'DELETE' }, 10000); } catch {}
+}
+
+// ── a row's one-click fix (core/notify.py register_repair) ─────────────────
+const _repairing = new Set();
+
+/** Run the fix a row wears. The server updates the row (done, or failed with
+ *  the button kept) and the bus brings it back; the toast says the outcome. */
+export async function repair(id) {
+    if (!id || _repairing.has(id)) return null;
+    _repairing.add(id);
+    _emit();
+    try {
+        const res = await fetchWithTimeout(`/api/notifications/${encodeURIComponent(id)}/repair`,
+                                           { method: 'POST' }, 120000);
+        if (res?.row) _upsert(res.row);
+        flash(res?.message || (res?.ok ? 'Repaired.' : 'The repair failed.'), res?.ok ? 'success' : 'error');
+        return res;
+    } catch (e) {
+        flash(`The repair failed: ${e?.message || e}`, 'error');
+        return null;
+    } finally {
+        _repairing.delete(id);
+        _emit();
+    }
+}
+
+/** The button for a row's fix, for list renderers (page, sidebar): '' when it has none. */
+export function repairButtonHtml(row, cls = 'nc-repair') {
+    if (!row?.action || row.state === 'active') return '';
+    const busy = _repairing.has(row.id);
+    const label = String(busy ? 'Repairing…' : (row.action.label || 'Repair')).replace(/[&<>"']/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return `<button type="button" class="${cls}" data-repair="${encodeURIComponent(row.id)}"${busy ? ' disabled' : ''}>${label}</button>`;
+}
+
+/** A list's click delegate: true when the click was a repair button (handled). */
+export function handleRepairClick(e) {
+    const b = e.target.closest?.('[data-repair]');
+    if (!b) return false;
+    e.stopPropagation();
+    repair(decodeURIComponent(b.dataset.repair));
+    return true;
 }
 
 // ── where a row takes you ───────────────────────────────────────────────────

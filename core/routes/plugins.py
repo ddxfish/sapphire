@@ -628,6 +628,12 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
                     # loader makes the lists agree with it at every boot.
                     _pl2.write_engine(plugin_name if new_state else (_group_partner_on(plugin_name) or "none"),
                                       "toggle")
+                    try:                         # toolsets still naming the other engine's tools
+                        from core.toolsets import engine_drift
+                        engine_drift.register()
+                        engine_drift.check()
+                    except Exception as _derr:
+                        logger.warning(f"[PLUGINS] toolset engine check failed: {_derr}")
                 if new_state:
                     notify.forget(f"{group}-engine-off")
                 elif not _group_partner_on(plugin_name):
