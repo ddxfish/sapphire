@@ -42,6 +42,19 @@ def _hermetic_notify(tmp_path, monkeypatch):
     monkeypatch.setattr(_n, '_loaded', False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_toolset_repair(monkeypatch):
+    """Toolset engine drift (core/toolsets/engine_drift.py) reads the dev box's
+    real memory-engine.json and rewrites the real user/toolsets.json; the Mind
+    Palace import runs it at the end of every run. In tests no engine runs
+    unless a test says which (monkeypatch engine_drift._engine)."""
+    try:
+        from core.toolsets import engine_drift as _ed
+    except Exception:
+        return
+    monkeypatch.setattr(_ed, '_engine', lambda: None)
+
+
 class _AlwaysOld(dict):
     """Every key a board from before signing: it is sent Bearer, one call per request."""
     def get(self, k, default=None):

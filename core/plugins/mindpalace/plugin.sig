@@ -58,7 +58,7 @@
     "tools/dynamics.py": "sha256:71fb926e557a7660a35014ecbfb211760f4a3e536a35337565d570fa580e0fa6",
     "tools/geonames.py": "sha256:9b8b185fd41c715ca6969cd6194d2742f1098d4ee0a4ee2ffe244abe26636045",
     "tools/goal_tools.py": "sha256:07198b4a9fe40b7f3ef6d128c5ff18385054c822a9c8c0f7e1e8b1303f851844",
-    "tools/import_tools.py": "sha256:eff5d48dfde1a6b96adc4d0bd9234f25945ab1c8d433fcdcb56e426773218ca0",
+    "tools/import_tools.py": "sha256:bfffd54a8235c72888358270d6b7b4b69cea029e375fe2a8205b2db316591fbe",
     "tools/importance_report.py": "sha256:f9918c7da378d7890918d62caf8ecddf50718e65a93698868dcf85cba4f7313c",
     "tools/layer_api.py": "sha256:b82f6f782b03258540e8a605e59a7f4c508fce01331c8dbff5e76b24e4bff182",
     "tools/ledger.py": "sha256:648298c258d0d29d39dc87052143ec8360b97220156dda0c2e13a72273cb252f",
@@ -75,5 +75,5 @@
     "tools/temporal.py": "sha256:c68e63a2b23914fc594009ad5ffdf4c74e077ba89a440628ee86968dce535d6d",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "Hps36d6QuIYAUGSPLsUJNgJtEBg9GHTR13Ykrv00CfhoWSrA6Z8vceVEfW6sh1Eo4gw3Ds+PL79zTViB8IV9Aw=="
+  "signature": "/i6sBNpe/yn0hdM/ze2z9X8Hoj2alkoNh7Gw+5GkTevRA95swxm0u8wG2zvBleJMhGVUfLZJgC1YdwqZLFVDCQ=="
 }

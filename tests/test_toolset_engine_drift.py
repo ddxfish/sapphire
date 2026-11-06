@@ -163,3 +163,28 @@ def test_a_round_trip_keeps_a_custom_toolset_whole():
     to_classic = ed.apply(rook, ed.plan({'rook': {'functions': rook}}, 'memory')['rook'])
     back = ed.apply(to_classic, ed.plan({'rook': {'functions': to_classic}}, 'mindpalace')['rook'])
     assert set(back) == set(rook)
+
+
+def test_import_settle_runs_the_repairs_work_and_clears_the_row(n, monkeypatch, tmp_path):
+    """The Mind Palace import ends with settle(): the Repair button's own work."""
+    from core.toolsets import toolset_manager
+    state = {'personality': {'functions': list(MAIN_PERSONALITY)}}
+    monkeypatch.setattr(toolset_manager, 'get_all_toolsets', lambda: state)
+    monkeypatch.setattr(ed, '_engine', lambda: 'mindpalace')
+    rid = ed.check()
+    assert n.get(rid) is not None
+    ran = []
+
+    def fake_repair():
+        ran.append(1)
+        state['personality']['functions'] = ed.apply(
+            state['personality']['functions'], ed.plan(state, 'mindpalace')['personality'])
+        return '1 toolset now match Mind Palace.'
+    monkeypatch.setattr(ed, 'repair', fake_repair)
+    assert ed.settle() == '1 toolset now match Mind Palace.' and ran == [1]
+    assert n.get(rid) is None                                       # in step: the row is gone
+    assert ed.settle() is None and ran == [1]                       # nothing to do: no second run
+
+
+def test_tests_never_see_a_running_engine():
+    assert ed._engine() is None and ed.settle() is None

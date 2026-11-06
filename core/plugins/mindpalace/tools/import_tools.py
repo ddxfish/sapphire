@@ -1326,6 +1326,15 @@ def _run_import_locked(what: str, config, progress=None, scope=None,
         lines.append("  • left out: " + ", ".join(out)
                      + (" — removed-before rows come back only from the Import tab"
                         if left['removed'] else "") + ".")
+    # Toolsets still naming classic's tools follow the engine the user just
+    # imported into: the Repair button's own work (core/toolsets/engine_drift).
+    try:
+        from core.toolsets import engine_drift
+        tools = engine_drift.settle()
+        if tools:
+            lines.append(f"  • toolsets: {tools}")
+    except Exception as e:
+        logger.warning(f"[IMPORT] toolset repair skipped: {e}")
     lines.append("The old databases were opened read-only and were NOT modified — "
                  "they remain your switch-back path.")
     return "\n".join(lines)

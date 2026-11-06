@@ -169,6 +169,27 @@ def repair():
     return f"{len(changed)} toolset{'s' if len(changed) != 1 else ''} now match {_LABEL.get(engine, engine)}."
 
 
+def settle():
+    """The Repair button's work without the button, for a flow that already
+    says the user chose this engine (the Mind Palace import, 2026-11-06):
+    repair(), then the row is re-checked (gone when in step). Words for the
+    caller's summary, or None when nothing was out of step. Never raises."""
+    try:
+        from core.toolsets import toolset_manager
+        engine = _engine()
+        if engine not in SWAPS or not plan(toolset_manager.get_all_toolsets(), engine):
+            return None
+        words = repair()
+    except Exception as e:
+        logger.warning(f"[TOOLSETS] automatic repair failed: {e}")
+        words = f"not repaired ({e}); the Repair button in Notifications can try again"
+    try:
+        check()
+    except Exception as e:
+        logger.debug(f"[TOOLSETS] drift row not re-checked: {e}")
+    return words
+
+
 def register():
     from core import notify
     notify.register_repair(REPAIR, repair)
