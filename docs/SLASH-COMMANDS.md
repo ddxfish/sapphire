@@ -36,9 +36,9 @@ Typed with no number, `/remove` opens a dialog that warns it can't be undone. Wi
 
 ### /compact-daily
 
-One labelled summary per day, for the last **5** days (`COMPACT_DAILY_DAYS`). A day starts at **4 AM** (`DAY_START_HOUR`), so a late night counts toward the day it began. Older days roll off. Both settings are on **Settings → Tools → Daily Compact**.
+One labelled summary per day, for the last **5** days (`COMPACT_DAILY_DAYS`). A day starts at **4 AM** (`DAY_START_HOUR`), so a late night counts toward the day it began. Older days roll off. Today is never summarized: it stays as it is until it ends, so each day is always one summary. Both settings are on **Settings → Tools → Daily Compact**.
 
-- Size per day defaults to about 3K tokens; give a size to change it, e.g. `/compact-daily 4K` (500 to 20K).
+- Size per day defaults to about 2.5K tokens; give a size to change it, e.g. `/compact-daily 4K` (500 to 20K).
 - It runs in the background with the chat's own model and persona and keeps the last turn as it is.
 - A JSON backup is written first, except for private chats.
 - It's refused in rooms, game chats, live phone calls, and while she's replying.
@@ -69,4 +69,4 @@ USER COMMANDS: /compact, /compact-daily [tokens], /context, /status, /prompt, /c
 
 YOUR TOOL: slash_command(command) — only /remove N and /compact-daily are yours (ai=True). Toolset membership is the permission (ships in `personality`).
 - /remove N: runs after your turn ends; removes the N turns before this one AND this turn (the request and your reply go too). To undo the last exchange, /remove 1. Only when the user asks. The user is notified; /undo restores. Stopping the turn drops it. One pending at a time. Refused in agent runs.
-- /compact-daily [tokens]: one labelled summary per day for the last COMPACT_DAILY_DAYS (5) days, days start DAY_START_HOUR (4); default ~3K tokens/day (500-20K); background, chat's own model + persona; keeps the last turn; JSON backup unless private; refused in rooms, game chats, live calls, mid-reply.
+- /compact-daily [tokens]: one labelled summary per day for the last COMPACT_DAILY_DAYS (5) days, days start DAY_START_HOUR (4); today stays raw (one pair per day); default ~2.5K tokens/day (500-20K); background, chat's own model + persona; keeps the last turn; JSON backup unless private; refused in rooms, game chats, live calls, mid-reply.

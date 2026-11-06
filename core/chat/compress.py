@@ -7,7 +7,8 @@
 #             pair IN PLACE, chronological chain preserved.
 #   daily   — /compact-daily: one labelled pair per day for the last
 #             COMPACT_DAILY_DAYS calendar days (days start at DAY_START_HOUR);
-#             earlier runs' pairs pass through, older days roll off.
+#             earlier runs' pairs pass through, older days roll off, and today
+#             stays raw until it ends (one pair per day, never a split day).
 # target_tokens is the approximate total size of the compressed output
 # (whole, chunked) or of each day's summary (daily).
 #
@@ -372,12 +373,15 @@ def daily_plan(head: List[Dict[str, Any]], days: int, start_hour: int,
     The window is the last `days` calendar days, today included. Pairs an
     earlier run wrote pass through untouched while their day is inside it.
     Every other turn (an old whole/chunked summary too) is raw and lands on
-    its day by its first timestamp, else the turn before's day. Anything
-    older than the window rolls off, raw or summarized.
-    kept: [(day, index, rows)]  raw: {day: (index, rows)}  dropped: turns."""
+    its day by its first timestamp, else the turn before's day. Today's raw
+    turns are never summarized: a day still running would get a second pair
+    from the next run (Sapphire, 2026-11-06). Anything older than the window
+    rolls off, raw or summarized.
+    kept: [(day, index, rows)]  raw: {day: (index, rows)}  today: [(day, index, rows)]
+    dropped: turns."""
     today = day_of((now or datetime.now()).isoformat(), start_hour)
     first = today - timedelta(days=max(1, days) - 1)
-    kept, raw, dropped, last = [], {}, 0, None
+    kept, raw, today_rows, dropped, last = [], {}, [], 0, None
     for start, end in turn_spans(head):
         rows = head[start:end]
         day = _stamped_day(rows)
@@ -395,16 +399,19 @@ def daily_plan(head: List[Dict[str, Any]], days: int, start_hour: int,
         if day < first:
             dropped += 1
             continue
+        if day >= today:
+            today_rows.append((day, start, rows))
+            continue
         raw.setdefault(day, (start, []))[1].extend(rows)
-    return {"kept": kept, "raw": raw, "dropped": dropped}
+    return {"kept": kept, "raw": raw, "today": today_rows, "dropped": dropped}
 
 
 def daily_pairs(plan: Dict[str, Any], provider, target_tokens: int, on_progress=None,
                 instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
                 room: bool = False) -> List[Dict[str, Any]]:
-    """One new pair per day of raw turns, merged with the kept pairs in day
-    order. A second run on the same day adds a second pair for that day."""
-    items = list(plan["kept"])
+    """One new pair per finished day of raw turns, merged in day order with
+    the kept pairs and today's turns (raw, as they were)."""
+    items = list(plan["kept"]) + list(plan.get("today") or [])
     days = sorted(plan["raw"].items())
     for i, (day, (start, rows)) in enumerate(days):
         if on_progress:
@@ -467,7 +474,8 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
         plan = daily_plan(head, _int_setting(config, "COMPACT_DAILY_DAYS", 5, 1, 365),
                           _int_setting(config, "DAY_START_HOUR", 4, 0, 23))
         if not plan["raw"] and not plan["dropped"]:
-            raise ValueError("Nothing new to compact since the last run")
+            raise ValueError("Nothing new to compact since the last run "
+                             "(today stays as it is until it ends)")
     if backup and _private:
         logger.info(f"[COMPRESS] Skipping plaintext backup for private chat '{chat_name}'")
     backup_path = _write_backup(session_manager, chat_name, exported) if (backup and not _private) else None

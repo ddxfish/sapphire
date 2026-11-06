@@ -47,16 +47,17 @@ def test_plan_keeps_the_window_and_rolls_off_the_rest():
     plan = compress.daily_plan(head, days=5, start_hour=4, now=NOW)
     assert [d.isoformat() for d, _, _ in plan['kept']] == ['2026-10-30', '2026-11-01']
     assert plan['dropped'] == 1
-    assert sorted(d.isoformat() for d in plan['raw']) == ['2026-11-02', '2026-11-03']
+    assert sorted(d.isoformat() for d in plan['raw']) == ['2026-11-02']        # today is never summarized
+    assert [r[0]['content'] for _, _, r in plan['today']] == ['u3']
     assert [m['content'] for m in plan['raw'][date(2026, 11, 2)][1] if m['role'] == 'user'] == ['u1', 'u2']
 
 
 def test_plan_drops_raw_older_than_the_window_and_dates_undated_rows():
     head = (_turn('2026-10-20T10:00:00', 1)
             + [{'role': 'user', 'content': 'no time'}, {'role': 'assistant', 'content': 'x'}]
-            + _turn('2026-11-03T10:00:00', 2))
+            + _turn('2026-11-02T10:00:00', 2))
     plan = compress.daily_plan(head, days=3, start_hour=4, now=NOW)
-    assert plan['dropped'] == 2 and list(plan['raw']) == [date(2026, 11, 3)]   # undated: the turn before's day
+    assert plan['dropped'] == 2 and list(plan['raw']) == [date(2026, 11, 2)]   # undated: the turn before's day
 
 
 def test_an_old_undated_summary_becomes_a_day():
@@ -73,8 +74,9 @@ def test_pairs_come_out_in_day_order_with_labels():
     plan = compress.daily_plan(head, days=5, start_hour=4, now=NOW)
     p = Provider()
     out = compress.daily_pairs(plan, p, 3000)
-    days = [m['compressed_day'] for m in out if m['role'] == 'user']
-    assert days == ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-03']   # twice in a day: two entries
+    days = [m.get('compressed_day') for m in out if m['role'] == 'user']
+    assert days == ['2026-11-01', '2026-11-02', '2026-11-03', None]            # today's turn rides along raw
+    assert out[-2]['content'] == 'u2' and len(p.prompts) == 1
     assert out[2]['content'] == '[Day summary: Monday, November 2, 2026 (2 messages)]'
     assert out[3]['content'] == 'sum' and out[3]['compressed']
     assert out[0]['content'] == '[Day summary: 2026-11-01]'                    # earlier runs pass through untouched
@@ -101,6 +103,17 @@ def test_nothing_new_spends_nothing(monkeypatch):
     monkeypatch.setattr('config.DAY_START_HOUR', 4, raising=False)
     monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: pytest.fail('no provider for a no-op'))
     with pytest.raises(ValueError, match='Nothing new'):
+        compress._compress_chat(FakeSM(rows), 'c', 'daily', 'auto', '', 3000, 1, True)
+
+
+def test_today_alone_is_nothing_to_compact(monkeypatch):
+    """Sapphire, 2026-11-06: a noon compact split today into its own block."""
+    now = datetime.now().isoformat()
+    rows = _turn(now, 1) + _turn(now, 2)                                  # all today
+    monkeypatch.setattr('config.COMPACT_DAILY_DAYS', 5, raising=False)
+    monkeypatch.setattr('config.DAY_START_HOUR', 4, raising=False)
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: pytest.fail('today is not compacted'))
+    with pytest.raises(ValueError, match='today stays'):
         compress._compress_chat(FakeSM(rows), 'c', 'daily', 'auto', '', 3000, 1, True)
 
 

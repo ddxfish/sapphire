@@ -278,7 +278,7 @@ def test_compact_daily_starts_with_the_chats_own_model(sm, jobs):
     assert commands.run('/compact-daily', 'c')['ok']
     k = jobs[0]
     assert (k['mode'], k['target_tokens'], k['keep_last_turns'], k['provider_key'], k['backup']) == \
-        ('daily', 3000, 1, 'auto', True)
+        ('daily', 2500, 1, 'auto', True)
 
 
 @pytest.mark.parametrize('arg,tokens', [('4K', 4000), ('4k', 4000), ('2500', 2500), ('20K', 20000)])

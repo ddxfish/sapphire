@@ -212,7 +212,7 @@ def _undo(chat, args, by):
     return {'ok': not err, 'say': err or f'Put back {turns} turn(s).'}
 
 
-DAILY_TOKENS = 3000
+DAILY_TOKENS = 2500
 _TOKENS_RE = re.compile(r'(\d{1,5})(k?)')
 
 
@@ -262,7 +262,7 @@ def _compact_daily(chat, args, by):
 
     defer(chat, _apply)
     return {'ok': True, 'say': f'When this turn ends, the chat will be compacted into one summary '
-                               f'per day (about {tokens} tokens each), this turn kept as it is.'}
+                               f'per finished day (about {tokens} tokens each); today stays as it is.'}
 
 
 def _dialog(name, games=True):
@@ -319,7 +319,7 @@ def _context(chat, args, by):
 
 register('compact', _dialog('compact', games=False), description='summarize older history (opens the compress dialog)')
 register('compact-daily', _compact_daily, args='[tokens]', ai=True,
-         description='summarize history into one labelled summary per day for the last few days (default 3K tokens a day, e.g. /compact-daily 4K)')
+         description='summarize history into one labelled summary per day for the last few days, today left as it is (default 2.5K tokens a day, e.g. /compact-daily 4K)')
 register('context', _context, description="what's taking up this chat's context, biggest first")
 register('continue', _action('continue'), description='keep writing the last reply')
 register('help', _help, args='[command]', description='list the slash commands')
