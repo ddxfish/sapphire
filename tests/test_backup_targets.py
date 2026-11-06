@@ -196,6 +196,18 @@ def test_target_rotation_and_strangers(mgr):
     assert {"README.txt", "open-backup.sh", "open-backup.bat", "decrypt_backup.py"} <= set(t.store)
 
 
+def test_incomplete_backup_holds_target_rotation(mgr):
+    """Release hunt 2026-11-06: a nightly backup missing a DB must not age out
+    the remote copies that still hold it (the local rotation already held)."""
+    from core import backup_targets as T
+    t = Fake(remote=True, keep={"daily": 2, "weekly": 4, "monthly": 3, "manual": 3})
+    for d in ("01", "02", "03"):
+        t.store[f"sapphire_2026-10-{d}_030000_daily.sapphirebak"] = b"old"
+    res = T.ship(_plain(mgr), to=[t], hold=True)
+    assert res[0]["ok"] and "dropped 0" in res[0]["msg"], res
+    assert all(f"sapphire_2026-10-{d}_030000_daily.sapphirebak" in t.store for d in ("01", "02", "03"))
+
+
 def test_openers_not_re_put_when_present(mgr):
     from core import backup_targets as T
     t = Fake(remote=True)

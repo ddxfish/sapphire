@@ -138,6 +138,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "writes": True,
         "is_local": True,
         "function": {
             "name": "librarian_instructions",

@@ -133,7 +133,7 @@ def targets():
 # Shipping
 # ---------------------------------------------------------------------------
 
-def _ship_one(t: Target, plain: Path, sealed):
+def _ship_one(t: Target, plain: Path, sealed, hold=False):
     path = sealed if t.wants_encryption else plain
     if path is None:
         return {"target": t.label, "ok": False, "msg": "no sealed copy"}
@@ -177,7 +177,12 @@ def _ship_one(t: Target, plain: Path, sealed):
                 raise BackupRefused(f"{name} on {t.label} is {there[name]} bytes, sent {sent}: dropped it")
         if name in there:
             verb += ", verified"
-        doomed = select_doomed(list(t.names()), t.keep)
+        # An incomplete backup (a DB it could not copy) keeps every older one
+        # here too, as rotate_backups(hold=) does locally: a DB that fails each
+        # night must never age out the last remote copies that hold it.
+        doomed = [] if hold else select_doomed(list(t.names()), t.keep)
+        if hold:
+            logger.error(f"[BACKUP->{t.label}] rotation held: {name} is incomplete")
         for d in doomed:
             try:
                 t.delete(d)
@@ -196,7 +201,7 @@ def _ship_one(t: Target, plain: Path, sealed):
         return {"target": t.label, "ok": False, "msg": str(e)}
 
 
-def ship(filename: str, to=None):
+def ship(filename: str, to=None, hold=False):
     """Ship ONE existing local backup to every target (or `to`): seal once if
     any target wants encryption (GATE 1), one thread per target, rotation by
     names after. Returns [{target, ok, msg}]. Raises BackupRefused when the
@@ -211,7 +216,7 @@ def ship(filename: str, to=None):
             plain = backup_manager.get_backup_path(filename)
             if not plain:
                 raise BackupRefused(f"Backup not found: {filename}")
-            return _ship_locked(filename, plain, tl)
+            return _ship_locked(filename, plain, tl, hold)
         except BackupRefused as e:
             last_ship = {"ts": time.time(), "filename": filename, "results": [], "error": str(e)}
             raise
@@ -219,7 +224,7 @@ def ship(filename: str, to=None):
             shipping = None
 
 
-def _ship_locked(filename, plain, tl):
+def _ship_locked(filename, plain, tl, hold=False):
     global last_ship
     sealed, cleanup = None, (lambda: None)
     if any(t.wants_encryption for t in tl):
@@ -230,7 +235,7 @@ def _ship_locked(filename, plain, tl):
                         key=f"ship:{filename}", go={'view': 'settings', 'tab': 'backup'})
 
     def _run(t):
-        r = _ship_one(t, plain, sealed)
+        r = _ship_one(t, plain, sealed, hold)
         with rlock:
             results.append(r)
             n = len(results)
@@ -272,7 +277,7 @@ def pick_newest(files):
     return max(files, key=lambda f: (TIER_RANK.get(tier_of(f) or "", 0), f))
 
 
-def ship_async(files):
+def ship_async(files, hold=False):
     """Scheduler entry: ship the run's newest tier on a thread, never blocking
     the backup loop. Skips the seal entirely when no target exists."""
     fn = pick_newest(files)
@@ -281,7 +286,7 @@ def ship_async(files):
 
     def _go():
         try:
-            ship(fn)
+            ship(fn, hold=hold)
         except BackupRefused as e:
             logger.error(f"Backup targets: {e}")
             backup_manager._alert('backup_ship_refused', reason=str(e))

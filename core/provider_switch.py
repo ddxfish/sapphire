@@ -235,7 +235,12 @@ def _stt_ready(system, value):
     from core.stt.stt_null import NullWhisperClient
     client = getattr(system, 'whisper_client', None)
     if client is None or isinstance(client, NullWhisperClient):
-        return False, "the provider failed to initialize (fell back to null)"
+        # The registry swallowed the real reason (a dead worker, a missing
+        # model, CUDA) into last_error - say it, as the boot path does.
+        from core.stt.providers import stt_registry
+        err = getattr(stt_registry, 'last_error', None)
+        why = _words(err).removeprefix("Failed to initialize STT model: ") if err else ''
+        return False, why or "the provider failed to initialize (fell back to null)"
     try:
         if client.is_available():
             return True, ''

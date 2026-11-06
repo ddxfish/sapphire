@@ -1064,6 +1064,9 @@ class ConversationHistory:
 # it never kills anything. No legitimate op here should approach 30s; a rare
 # false positive (huge vault re-encrypt) costs one loud log block.
 _DB_WATCHDOG_SECS = 30.0
+# A chat room's landing lasts while its tab pings (every 20 s; a hidden tab's
+# timers can be throttled to once a minute, so the lease outlives that).
+LANDING_LEASE_S = 90.0
 _DB_WATCHDOG_POLL = 5.0
 _db_ops = {}                     # token -> {started, thread, dumped, beat}
 _db_ops_lock = threading.Lock()
@@ -3462,6 +3465,10 @@ class ChatSessionManager:
                     chats.append(entry)
         except Exception as e:
             logger.error(f"Error listing chats: {e}")
+            # Housekeeping sweeps delete whatever is missing from this list:
+            # a partial list must never pass for ground truth.
+            if include_hidden:
+                raise
 
         return chats
 
@@ -3856,13 +3863,25 @@ class ChatSessionManager:
             return False
         with self._lock:
             self.landing_chat_name = name
+            self._landing_seen = time.monotonic()
         return True
+
+    def touch_landing(self, chat_name):
+        """The surface holding the landing is still open (the room tab's voice
+        ping, views/rooms.js): renew its lease."""
+        with self._lock:
+            if chat_name and self.landing_chat_name == chat_name:
+                self._landing_seen = time.monotonic()
 
     def get_landing_chat_name(self) -> str:
         """The chat the person's voice lands on: the landing chat while one is
-        set and still exists, else the active chat."""
+        set, still exists, and its surface still pings (a closed or crashed tab
+        never says goodbye - release hunt 2026-11-06), else the active chat."""
         with self._lock:
             name = self.landing_chat_name
+            if name and time.monotonic() - getattr(self, '_landing_seen', 0) > LANDING_LEASE_S:
+                logger.info(f"[LANDING] '{name}' stopped pinging - voice lands on the active chat again")
+                self.landing_chat_name = name = None
         if name and self.chat_exists(name):
             return name
         return self.get_active_chat_name()

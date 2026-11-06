@@ -152,6 +152,11 @@ class StreamingChat:
         # the streaming-TTS drain may still be running. begin_stream(exclusive)
         # stops counting a stream as live once this is set. See _emit_llm_done.
         self.llm_done = False
+        # Every history write of this turn is behind it (end of chat_stream's
+        # finally). A STOPPED stream holds its chat until then, so a Send right
+        # after Stop can't land inside its open tool cycle (ChatManager._live).
+        self.writes_done = False
+        self._my_tool_ids = set()   # tool_call ids THIS stream wrote: cleanup closes only these
         self._typing_ended = False
         self.ephemeral = False
         self.is_streaming = False
@@ -305,11 +310,16 @@ class StreamingChat:
         """Inject dummy tool_results for tool_calls that never got one, so
         provider history stays valid (tool_use without tool_result -> 400).
         Idempotent; call while the tool cycle is still open. Shared by the
-        cancel partial-save and the finally (S1 #2, hunt 2026-08-30)."""
+        cancel partial-save and the finally (S1 #2, hunt 2026-08-30).
+        Only THIS stream's own cycle: when the open one belongs to a newer
+        turn, stamping "[Cancelled]" on its calls mangled that turn (release
+        hunt 2026-11-06). True when the open cycle was ours."""
         try:
             msgs = self.main_chat.session_manager._effective_chat().messages
             for msg in reversed(msgs):
                 if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    if not any(tc.get("id") in self._my_tool_ids for tc in msg["tool_calls"]):
+                        return False
                     existing = {m.get("tool_call_id") for m in msgs if m.get("role") == "tool"}
                     for tc in msg["tool_calls"]:
                         tc_id = tc.get("id", "")
@@ -318,9 +328,10 @@ class StreamingChat:
                                 tc_id, tc.get("function", {}).get("name", "unknown"),
                                 "[Cancelled by user]"
                             )
-                    break
+                    return True
         except Exception as e:
             logger.warning(f"[CLEANUP] Failed to inject cancel tool results: {e}")
+        return False
 
     def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None, continue_from: str = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
@@ -1119,6 +1130,7 @@ class StreamingChat:
                     })
 
                     # Save to history with new schema
+                    self._my_tool_ids.update(tc.get("id") for tc in tool_calls_to_execute if tc.get("id"))
                     self.main_chat.session_manager.add_assistant_with_tool_calls(
                         content=stored_content,
                         tool_calls=tool_calls_to_execute,
@@ -1680,9 +1692,9 @@ class StreamingChat:
             # (add_assistant_final precedes the emit) — an open cycle then
             # belongs to a NEWER stream admitted past this audio tail; don't
             # inject "[Cancelled…]" rows into its turn (E1#5).
-            if self.main_chat.session_manager._in_tool_cycle and not self.llm_done:
+            if self.main_chat.session_manager._in_tool_cycle and not self.llm_done \
+                    and self._close_dangling_tool_calls():
                 logger.info("[CLEANUP] Closing orphaned tool cycle from cancelled stream")
-                self._close_dangling_tool_calls()
                 self.main_chat.session_manager.add_assistant_final(
                     content="[Cancelled during tool execution]"
                 )
@@ -1721,3 +1733,4 @@ class StreamingChat:
             if not self._typing_ended:
                 self._typing_ended = True
                 publish(Events.AI_TYPING_END, self._typing_payload())
+            self.writes_done = True

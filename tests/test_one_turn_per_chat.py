@@ -10,8 +10,8 @@ turn (Claude/OpenAI-strict). Two tabs on one chat opened the same hole.
 Fix: `LLMChat.begin_stream(exclusive=True)` refuses (ChatBusy) while the
 chat has a live, un-cancelled stream; check + register are one critical
 section. `/api/chat/stream` opts in and answers 409 {"error"} before
-counting the request. Cancelled streams don't occupy — Stop→immediate-Send
-keeps working. The chat() consumer and the phone driver stay non-exclusive.
+counting the request. A cancelled stream occupies until its writes are done
+(2026-11-06) — Stop→immediate-Send waits in the inbox for it. The chat() consumer and the phone driver stay non-exclusive.
 """
 import threading
 from unittest.mock import MagicMock, patch
@@ -55,14 +55,28 @@ def test_exclusive_refuses_even_when_first_was_non_exclusive(llm):
         llm.begin_stream(exclusive=True)
 
 
-def test_cancelled_stream_does_not_occupy(llm):
-    """Stop→immediate-Send: handleStop awaits /api/cancel BEFORE aborting the
-    fetch, so the old stream is flagged by the time the new send arrives."""
-    llm.begin_stream(exclusive=True)
+def test_cancelled_stream_occupies_until_its_writes_are_done(llm, monkeypatch):
+    """Stop→immediate-Send (release hunt 2026-11-06): a stopped stream mid-tool
+    still writes its tool result and closes its cycle; a new turn admitted
+    before that landed between its call and its result. It holds the chat
+    until writes_done - the inbox requeues the Send - and a tool that never
+    returns holds it CANCEL_GRACE_S at most."""
+    import core.chat.chat as cc
+    from core.chat.chat import ChatBusy
+    s, _, _ = llm.begin_stream(exclusive=True)
     assert llm.cancel_streams(chat_name='trinity') == 1
+    with pytest.raises(ChatBusy):
+        llm.begin_stream(exclusive=True)             # still writing
+    s.writes_done = True
     stream2, sid2, _ = llm.begin_stream(exclusive=True)
-    assert sid2 in llm._streams_by_id
-    assert stream2.cancel_flag is False
+    assert sid2 in llm._streams_by_id and stream2.cancel_flag is False
+    # a hung tool: the grace lets the chat go
+    stream2.cancel_flag = True
+    now = [100.0]
+    monkeypatch.setattr(cc.time, 'monotonic', lambda: now[0])
+    assert llm.chat_free('trinity') is False
+    now[0] += cc.CANCEL_GRACE_S + 1
+    assert llm.chat_free('trinity') is True
 
 
 def test_exclusive_releases_after_end_stream(llm):
@@ -91,8 +105,8 @@ def test_non_exclusive_lanes_unaffected(llm):
 def test_chat_free_is_begin_streams_own_rule(llm):
     """The inbox's idle hint asks THIS (2026-10-08): a live stream occupies the
     chat; past llm_done it is an audio tail and the chat is free; cancelled is
-    free. The session counters it used to read stay up through the tail - the
-    line waited for her voice, not her words."""
+    free once its writes are done. The session counters it used to read stay
+    up through the tail - the line waited for her voice, not her words."""
     assert llm.chat_free('trinity') is True
     s, sid, _ = llm.begin_stream(exclusive=True)
     assert llm.chat_free('trinity') is False
@@ -101,6 +115,8 @@ def test_chat_free_is_begin_streams_own_rule(llm):
     assert llm.chat_free('other') is True
     s.llm_done = False
     s.cancel_flag = True
+    assert llm.chat_free('trinity') is False         # stopped, still writing
+    s.writes_done = True
     assert llm.chat_free('trinity') is True
 
 
@@ -284,3 +300,22 @@ def test_stream_route_opts_into_exclusive(client, mock_system):
     # still the active one, pinned once the pointer moved (2026-10-07)
     mock_system.llm_chat.begin_stream.assert_called_once_with(chat_name='trinity', exclusive=True, operator=True)
     mock_system.llm_chat.end_stream.assert_called_once_with('sid1', 'trinity')
+
+
+def test_stopped_stream_cleanup_never_stamps_a_newer_turns_tool_calls():
+    """Release hunt 2026-11-06: the finally's cleanup picked the LAST tool_calls
+    row - a newer turn's - and wrote '[Cancelled by user]' for its calls. It
+    closes only the ids this stream wrote."""
+    from core.chat.chat_streaming import StreamingChat
+    main = MagicMock()
+    msgs = [{'role': 'assistant', 'tool_calls': [{'id': 'old1', 'function': {'name': 'f'}}]},
+            {'role': 'user', 'content': 'next'},
+            {'role': 'assistant', 'tool_calls': [{'id': 'new1', 'function': {'name': 'g'}}]}]
+    main.session_manager._effective_chat.return_value.messages = msgs
+    s = StreamingChat(main)
+    s._my_tool_ids = {'old1'}
+    assert s._close_dangling_tool_calls() is False
+    main.session_manager.add_tool_result.assert_not_called()
+    s._my_tool_ids = {'new1'}
+    assert s._close_dangling_tool_calls() is True
+    main.session_manager.add_tool_result.assert_called_once_with('new1', 'g', '[Cancelled by user]')

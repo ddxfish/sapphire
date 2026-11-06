@@ -289,6 +289,7 @@ class Backup:
             # What this run produced — the scheduler ships the newest tier of
             # it to the backup targets (devices, paths) after the lock drops.
             self.last_scheduled_files = made
+            self.last_scheduled_incomplete = bool(incomplete)   # the remote rotation holds too
         # Honest report (X1 F8, negspace 2026-08-31): the old path appended
         # every tier unconditionally and logged "complete" right after
         # create_backup's own ERROR — success printed over failure.
@@ -1125,7 +1126,8 @@ class Backup:
                 # or this loop. 2026-10-06.
                 try:
                     from core import backup_targets
-                    backup_targets.ship_async(getattr(self, 'last_scheduled_files', None) or [])
+                    backup_targets.ship_async(getattr(self, 'last_scheduled_files', None) or [],
+                                              hold=getattr(self, 'last_scheduled_incomplete', False))
                 except Exception as e:
                     logger.warning(f"Backup targets ship failed to start: {e}")
 

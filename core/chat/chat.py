@@ -9,6 +9,7 @@
 import base64
 import logging
 import re
+import time
 from typing import Dict, Any, Optional, List
 
 import config
@@ -19,6 +20,10 @@ from .chat_streaming import StreamingChat
 from .chat_tool_calling import ToolCallingEngine
 
 logger = logging.getLogger(__name__)
+
+# Stop -> Send: the new turn waits for the stopped one's writes this long at
+# most (tools have no timeout of their own; one that hangs must not lock the chat).
+CANCEL_GRACE_S = 15.0
 
 
 def _detect_image_media_type(b64_data: str) -> str:
@@ -226,8 +231,8 @@ class LLMChat:
         cancelled — a second turn on a busy chat interleaves its rows into
         the first turn's history (user message inside an open tool cycle,
         a final landing between tool_use and tool_result → provider 400s
-        on the next turn). Cancelled streams don't count: Stop→immediate-
-        Send sets cancel_flag before the new send arrives. Check + register
+        on the next turn). A cancelled stream counts until its writes are
+        done, CANCEL_GRACE_S at most (see _live). Check + register
         are one critical section so two simultaneous sends can't both pass.
         2026-08-29.
         """
@@ -380,9 +385,21 @@ class LLMChat:
     @staticmethod
     def _live(s):
         """begin_stream(exclusive)'s one rule: a stream occupies its chat until
-        its LLM half is over or it is cancelled. Past llm_done it is an audio
-        tail - the row is written, the next turn preempts it."""
-        return not s.cancel_flag and not s.llm_done
+        its LLM half is over. Past llm_done it is an audio tail - the row is
+        written, the next turn preempts it. A STOPPED stream still occupies it
+        until its writes are done (a tool mid-run finishes, then the finally
+        closes its cycle): a Send right after Stop used to land between its
+        tool call and its result (release hunt 2026-11-06). The inbox re-asks
+        every sweep, so the Send just waits its turn. A tool that won't return
+        holds the chat at most CANCEL_GRACE_S."""
+        if s.llm_done:
+            return False
+        if not s.cancel_flag:
+            return True
+        if getattr(s, 'writes_done', True):
+            return False
+        seen = s.__dict__.setdefault('_cancel_seen', time.monotonic())
+        return time.monotonic() - seen < CANCEL_GRACE_S
 
     def chat_free(self, chat_name):
         """Would begin_stream(exclusive) take `chat_name` right now? The inbox's

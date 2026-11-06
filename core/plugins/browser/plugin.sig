@@ -13,7 +13,7 @@
     "routes/view.py": "sha256:fe5469347a6a6773926b50e167deb11e9a3d828981857625ce474c409de44260",
     "screen.py": "sha256:c8657dfc0bfc3021bd0021673ee8af43210e8d334e1b0b96d5b06d413af6d924",
     "tests/test_browser_plugin.py": "sha256:73e3c83d56c7131e2c8829df8838835ef4ce77aa53e952db9f98f11531598ca3",
-    "tools/browser.py": "sha256:c102ed8ee3cf36f35c315b2841e85bec7e1fb154f0942f8c5d97b29280af355a"
+    "tools/browser.py": "sha256:7db6c133773c1d04bde18bdcad2e51af4e4f52e4fab6182ad4a0adccfb0bb78a"
   },
-  "signature": "57FEeXMwdDsRqIJMssAubWGxOwk9wTltjEW69USJEFz4U7Wl4x2i+vTu70s3KZJd5YIjHNSGj+Lws5reTi+LBA=="
+  "signature": "pwBm4aUxtThC8FzHYEUCbborCBWm/PigHdn7K/6E3lw+RZcXYYH1DoJN2x9WvVuQega0D3dcb3chMQVi5hMeAg=="
 }

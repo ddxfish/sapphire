@@ -182,11 +182,11 @@ if _kokoro_device == 'cuda':
     try:
         import torch as _torch_check
         if not _torch_check.cuda.is_available():
-            _why = ("this torch build has no CUDA (the default Windows torch from PyPI)"
+            _cuda_why = ("this torch build has no CUDA (the default Windows torch from PyPI)"
                     if not _torch_check.version.cuda else
                     f"torch has CUDA {_torch_check.version.cuda} but cannot open the GPU "
                     "(no card, driver too old, or a build that does not know this card)")
-            logger.warning(f"KOKORO_DEVICE='cuda' but torch.cuda.is_available()=False: {_why} - using cpu. "
+            logger.warning(f"KOKORO_DEVICE='cuda' but torch.cuda.is_available()=False: {_cuda_why} - using cpu. "
                            "See docs/TROUBLESHOOTING.md 'Voice runs on the CPU'")
             _kokoro_device = 'cpu'
     except Exception as e:

@@ -216,6 +216,12 @@ def import_data(body=None, **_):
             # construction and dangerous by coincidence.
             meta.pop('derived_from', None)
             meta.pop('promoted_to', None)
+            # Import keys name the SOURCE install's classic rows (dense ids from
+            # 1 everywhere): carried in, they shadow this install's own classic
+            # rows as "already imported", and Scrub can then delete them.
+            # library_migrated points at a Library doc this file doesn't carry.
+            meta.pop('import_key', None)
+            meta.pop('library_migrated', None)
             meta['import_src'] = data.get('scope')
             # Section names pass through the sanitizer so a pre-rename
             # export ('projects') lands under its living alias ('growing')

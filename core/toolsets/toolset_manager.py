@@ -102,10 +102,18 @@ class ToolsetManager:
             if self._migrate_renamed_tools():
                 self._save_to_user()
                 logger.info("Migrated renamed meta-tool references in user toolsets")
+            # One-time additions, ledgered in the file's _migrations key: each
+            # runs once per install, so a tool the user removes afterwards
+            # stays removed.
+            self._migrations = [m for m in (data.get('_migrations') or []) if isinstance(m, str)]
+            if self._apply_once_adds():
+                self._save_to_user()
             logger.info(f"Loaded {len(self._toolsets)} toolsets")
             return
 
-        # First run — seed from core defaults
+        # First run — seed from core defaults (they already carry every
+        # one-time addition, so all are ledgered as done)
+        self._migrations = list(self._ONCE_ADDS)
         self._toolsets = {}
         try:
             with open(core_path, 'r', encoding='utf-8') as f:
@@ -145,6 +153,35 @@ class ToolsetManager:
         "trinity_list": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
         "trinity_close": ["agent_list", "agent_peek", "agent_spawn", "agent_action"],
     }
+
+    # Tools added to shipped toolsets after installs already seeded their own
+    # copy. key -> {toolset: [tools]}. A key never changes meaning: a new
+    # addition gets a new key.
+    _ONCE_ADDS = {
+        # Her docs tool, unreachable in a new chat (limited_web) before 2.16.2
+        "help_docs_2026_11": {"limited_web": ["search_help_docs"],
+                              "personality": ["search_help_docs"]},
+    }
+
+    def _apply_once_adds(self):
+        """Add each pending _ONCE_ADDS entry's tools to the user's toolsets of
+        that name (a toolset the user deleted is skipped), then ledger it.
+        Returns True if the ledger or a toolset changed (caller persists)."""
+        changed = False
+        for key, adds in self._ONCE_ADDS.items():
+            if key in self._migrations:
+                continue
+            for ts_name, tools in adds.items():
+                funcs = (self._toolsets.get(ts_name) or {}).get("functions")
+                if not isinstance(funcs, list):
+                    continue
+                new = [t for t in tools if t not in funcs]
+                if new:
+                    funcs.extend(new)
+                    logger.info(f"Toolset '{ts_name}': added {', '.join(new)} (one-time: {key})")
+            self._migrations.append(key)
+            changed = True
+        return changed
 
     def _migrate_renamed_tools(self):
         """Rewrite renamed tool references in every user toolset, order-preserving
@@ -309,6 +346,9 @@ class ToolsetManager:
             self.USER_DIR.mkdir(parents=True, exist_ok=True)
 
             data = {"_comment": "Your toolsets"}
+            migrations = getattr(self, "_migrations", None)
+            if migrations:
+                data["_migrations"] = migrations
             data.update(self._toolsets)
             
             tmp_path = user_path.with_suffix('.tmp')

@@ -222,6 +222,25 @@ def test_import_strips_foreign_lineage_ids(palace):
     assert out['retired_reworded'] == 0 and out['folded_identical'] == 0
 
 
+def test_import_strips_foreign_import_keys(palace):
+    """Release hunt 2026-11-06 (reproduced): import_key names the SOURCE
+    install's classic rows (ids dense from 1 everywhere). Carried across, it
+    shadows this install's own classic rows as 'already imported' and Scrub
+    could then delete them. library_migrated points at a doc the file lacks."""
+    data = {'format': 'mindpalace-export', 'version': 1, 'layer': 'self',
+            'scope': 'other-box',
+            'chunks': [{'content': 'imported note with a foreign import key',
+                        'created': '2026-03-01T00:00:00+00:00',
+                        'meta': {'import_key': 'v2:memories:1',
+                                 'library_migrated': 'v1-boot'}}]}
+    assert _import('dst', data, expect='self')['imported'] == 1
+    with pt._get_connection() as conn:
+        meta = json.loads(conn.execute(
+            "SELECT meta FROM chunks WHERE scope = 'dst' AND content LIKE "
+            "'imported note%'").fetchone()[0])
+    assert 'import_key' not in meta and 'library_migrated' not in meta
+
+
 def test_import_sanitizes_legacy_section_names(palace):
     """Lane-2 scout (2026-07-27, reproduced): a pre-rename export carries
     section='projects' — raw, it resurrects a live projects box beside

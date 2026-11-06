@@ -139,14 +139,22 @@ def _is_cert_expired():
         with open(CERT_FILE, "rb") as f:
             cert = x509.load_pem_x509_certificate(f.read())
 
+        try:
+            not_after = cert.not_valid_after_utc
+        except AttributeError:      # cryptography < 42 (requirements allow 41)
+            not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         # Consider expired if less than 30 days remaining
-        if cert.not_valid_after_utc < now + timedelta(days=30):
-            return True
-        return False
+        return not_after < now + timedelta(days=30)
+    except ValueError as e:
+        # Unparseable: it can't serve anyway, so a new one it is.
+        logger.warning(f"SSL certificate unreadable ({e}), regenerating")
+        return True
     except Exception as e:
-        logger.warning(f"Could not check cert expiry: {e}")
-        return True  # Regenerate if we can't read it
+        # Devices pin this cert: a new one cuts off every board until a USB
+        # reflash. Only a confirmed expiry (or garbage) may replace it.
+        logger.warning(f"Could not check cert expiry ({e}) - keeping it")
+        return False
 
 
 def cert_pem():

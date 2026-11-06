@@ -88,3 +88,22 @@ def test_the_edit_routes_take_the_rails_chat_by_name():
     assert routes._edit(system, 'default', 'remove_last', 2) == (False, 'not found')
     req.query_params = {}
     assert routes._edit_target(req, system) == 'default'
+
+
+def test_landing_lapses_when_its_tab_stops_pinging(tmp_path, monkeypatch):
+    """Release hunt 2026-11-06: a closed or crashed room tab never says goodbye,
+    so voice stayed in the room until restart. The landing is a lease now: the
+    room tab's voice ping renews it; silence past LANDING_LEASE_S hands voice back."""
+    import core.chat.history as h
+    sm = _sm(tmp_path)
+    assert sm.create_chat('salon') and sm.set_landing_chat('salon')
+    now = [1000.0]
+    monkeypatch.setattr(h.time, 'monotonic', lambda: now[0])
+    sm._landing_seen = now[0]
+    now[0] += h.LANDING_LEASE_S - 1
+    sm.touch_landing('salon')                                  # the tab still pings
+    now[0] += h.LANDING_LEASE_S - 1
+    assert sm.get_landing_chat_name() == 'salon'
+    sm.touch_landing('elsewhere')                              # another chat's ping renews nothing
+    now[0] += h.LANDING_LEASE_S + 1
+    assert sm.get_landing_chat_name() == 'default' and sm.landing_chat_name is None

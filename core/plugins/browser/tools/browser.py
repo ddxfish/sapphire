@@ -302,6 +302,11 @@ def _url(raw):
 async def _goto(lane, page, url):
     """Navigate; a rails refusal comes back as words, not Chromium's error."""
     eng = _engine()
+    # Every lane, railed or not: an unrailed MCP lane reading file:// would
+    # hand a persona key the credentials and session secret under user/.
+    from urllib.parse import urlsplit
+    if urlsplit(url).scheme.lower() not in ('http', 'https', 'data', 'blob', 'about'):
+        raise eng.Blocked(f"{url}: only web addresses can be opened.")
     if eng.guarded(lane.name):
         why = await eng.blocked_reason(url)
         if why:
