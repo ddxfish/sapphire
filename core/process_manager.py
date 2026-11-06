@@ -206,6 +206,7 @@ class ProcessManager:
                     )
             
             logger.info(f"Process for '{self.script_path.name}' started with PID: {self.process.pid}")
+            self._started_at = time.monotonic()
             return True
         except FileNotFoundError:
             logger.error(f"Manager Error: Command not found for '{self.script_path.name}'.")
@@ -287,6 +288,7 @@ class ProcessManager:
         def _monitor():
             logger.info(f"Monitor started for '{self.script_path.name}' (interval: {check_interval}s)")
             retry_warns = 0  # throttle for the never-started branch (wave-3 A2)
+            backoff = 2      # a child that dies young waits longer each time (to 60 s): a crash loop neither spins nor rotates its first error out of the log
 
             while self._monitor_running:
                 if self._stop_event.wait(check_interval):
@@ -312,7 +314,9 @@ class ProcessManager:
                                            f"(attempt {retry_warns})...")
 
                     # Brief delay before restart; stop() wakes us instead of waiting it out
-                    if self._stop_event.wait(2):
+                    lived = time.monotonic() - getattr(self, '_started_at', 0.0)
+                    backoff = 2 if lived > 60 else min(backoff * 2, 60)
+                    if self._stop_event.wait(backoff):
                         break
 
                     # Under the lock: stop() cannot slip between this check and the spawn

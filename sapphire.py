@@ -1065,7 +1065,7 @@ class VoiceChatSystem:
                 env_callback=_env_callback,
             )
             self.tts_server_manager.start()
-            self.tts_server_manager.monitor_and_restart(check_interval=10)
+            self.tts_server_manager.monitor_and_restart(check_interval=2)   # her voice: back within seconds of a restart
             # Don't block startup — Kokoro server loads model in subprocess.
             # KokoroTTSProvider.generate() handles connection errors gracefully
             # if the server isn't ready yet. Brief sleep to let the process bind the port.

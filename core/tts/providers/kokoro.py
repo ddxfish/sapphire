@@ -74,10 +74,12 @@ class KokoroTTSProvider(BaseTTSProvider):
     supports_streaming = True
     supports_pitch = True  # server resamples PCM pre-encode (pitch in payload)
 
+    # Read on each use: an edit in Settings reaches her next sentence, no restart.
+    primary_server = property(lambda self: config.TTS_PRIMARY_SERVER)
+    fallback_server = property(lambda self: (config.TTS_FALLBACK_SERVER or '').strip())
+    fallback_timeout = property(lambda self: config.TTS_FALLBACK_TIMEOUT)
+
     def __init__(self):
-        self.primary_server = config.TTS_PRIMARY_SERVER
-        self.fallback_server = config.TTS_FALLBACK_SERVER
-        self.fallback_timeout = config.TTS_FALLBACK_TIMEOUT
         self._doors = {}            # pairing string -> (session, base)
         self._ok = {}               # pairing string -> when it last answered: one TLS check per few seconds, not per sentence
         self.served_by = None       # the last call: {"lane": primary|fallback, "server", "why"}
@@ -238,7 +240,7 @@ class KokoroTTSProvider(BaseTTSProvider):
     def is_available(self) -> bool:
         """Check if Kokoro server is reachable."""
         return self._check_health(self.primary_server, timeout=self.fallback_timeout) or \
-               self._check_health(self.fallback_server, timeout=1.0)
+               bool(self.fallback_server) and self._check_health(self.fallback_server, timeout=1.0)
 
     def _get_server_url(self) -> str:
         """Get available server URL with fallback. Which one served, and why
@@ -247,6 +249,9 @@ class KokoroTTSProvider(BaseTTSProvider):
             self.served_by = {"lane": "primary", "server": _shown(self.primary_server)}
             return self.primary_server
         why = self._health_why
+        if not self.fallback_server:         # none set: stay on the primary, its own error says why (a blank one was a request to '/tts')
+            self.served_by = {"lane": "primary", "server": _shown(self.primary_server), "why": why}
+            return self.primary_server
         self.served_by = {"lane": "fallback", "server": _shown(self.fallback_server),
                           "primary": _shown(self.primary_server), "why": why}
         logger.info(f"Kokoro primary unavailable ({why}), using fallback: {_shown(self.fallback_server)}")

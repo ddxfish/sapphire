@@ -78,31 +78,67 @@ DEFAULT_SPEED = 1.0
 AUDIO_SAMPLE_RATE = 24000
 
 # --- Memory Management ---
-MAX_MEMORY_GB = 3.0
+# A leak guard, measured as growth past her warm size: a CUDA process's own
+# footprint differs by driver, VM and torch build (2.3 GB on one card, 2.6 on
+# another), so an absolute ceiling restarted one box every 10th request.
+MAX_GROWTH_GB = 2.0
 MAX_REQUESTS = 500
+QUIET_S = 5.0            # a restart waits until nothing was asked this long: a reply's next chunk comes sooner
 MAX_CONTENT_LENGTH = 1024 * 1024  # 1MB max request body
 request_count = 0
 request_count_lock = threading.Lock()
 pipeline_lock = threading.Lock()
+_busy = 0                # requests in flight
+_last_done = 0.0         # monotonic: when the last one ended
+_restart_why = None
+_rss_base = None         # GB, after her first word
 
-def check_memory():
-    """Return True if memory exceeds limit."""
+
+def _rss_gb():
     try:
-        process = psutil.Process(os.getpid())
-        mem_gb = process.memory_info().rss / (1024**3)
-        return mem_gb > MAX_MEMORY_GB
+        return psutil.Process(os.getpid()).memory_info().rss / (1024**3)
     except Exception as e:
         logger.error(f"Memory check failed: {e}")
-        return False
+        return None
+
 
 def schedule_restart(reason: str):
-    """Schedule graceful restart after current request completes."""
-    logger.warning(f"Scheduling restart: {reason}")
+    """Restart once she is quiet: nothing in flight and nothing asked for
+    QUIET_S. Never mid-sentence: the old exit fired a second after the
+    trigger, whatever was being said."""
+    global _restart_why
+    with request_count_lock:
+        if _restart_why:
+            return
+        _restart_why = reason
+    logger.warning(f"Restart wanted ({reason}): waiting until nothing is being said")
+
     def _exit():
-        time.sleep(1)
-        logger.info("Exiting for restart...")
-        os._exit(0)
+        while True:
+            time.sleep(0.5)
+            with request_count_lock:        # held through the exit: no request starts in between
+                if _restart_why is None:
+                    return
+                if _busy == 0 and time.monotonic() - _last_done >= QUIET_S:
+                    logger.info("Exiting for restart...")
+                    sys.stderr.flush()
+                    os._exit(0)
     threading.Thread(target=_exit, daemon=True).start()
+
+
+def _count_request():
+    """One more request: every 10th checks the leak guard and the cap."""
+    global request_count
+    with request_count_lock:
+        request_count += 1
+        n = request_count
+    if n % 10 == 0:
+        rss = _rss_gb()
+        if rss is not None and _rss_base is not None and rss - _rss_base > MAX_GROWTH_GB:
+            schedule_restart(f"grew from {_rss_base:.2f} to {rss:.2f} GB")
+        elif n >= MAX_REQUESTS:
+            schedule_restart(f"{n}/{MAX_REQUESTS} requests")
+    return n
 
 # --- CPU threading tuning (must happen before model load) ---
 # Inter-op threads: Kokoro's forward pass is sequential (ALBERT → predictor
@@ -291,6 +327,8 @@ if _warm is not None and _kokoro_device == 'cuda':
         logger.info(f"Kokoro spoke its first word on device='{_kokoro_device}'")
     except Exception as _e:
         logger.warning(f"Kokoro's first word failed: {_e}")
+_rss_base = _rss_gb()
+logger.info(f"Warm size {_rss_base or 0:.2f} GB: a restart (once quiet) past +{MAX_GROWTH_GB} GB or {MAX_REQUESTS} requests")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
@@ -382,12 +420,20 @@ class TTSHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path == '/tts':
-            self._handle_tts()
-        elif self.path == '/tts/stream':
-            self._handle_tts_stream()
-        else:
-            self.send_error(404)
+        global _busy, _last_done
+        with request_count_lock:
+            _busy += 1
+        try:
+            if self.path == '/tts':
+                self._handle_tts()
+            elif self.path == '/tts/stream':
+                self._handle_tts_stream()
+            else:
+                self.send_error(404)
+        finally:
+            with request_count_lock:
+                _busy -= 1
+                _last_done = time.monotonic()
 
     def _handle_health(self):
         try:
@@ -398,25 +444,13 @@ class TTSHandler(BaseHTTPRequestHandler):
 
         # Status only: this door may face the network, and a request counter
         # there tells a stranger when she talks. The rest goes to the log.
-        logger.debug(f"health: device={_kokoro_device} requests={request_count} memory={mem_gb:.2f}/{MAX_MEMORY_GB} GB")
+        logger.debug(f"health: device={_kokoro_device} requests={request_count} memory={mem_gb:.2f} GB (warm {_rss_base or 0:.2f}, +{MAX_GROWTH_GB} allowed)")
         # This computer's Status page shows the device; the shared door doesn't say.
         _json_response(self, {'status': 'ok'} if getattr(self, 'remote', False)
                        else {'status': 'ok', 'device': _kokoro_device})
 
     def _handle_tts(self):
-        global request_count
-        with request_count_lock:
-            request_count += 1
-            current_count = request_count
-
-        # Check memory/requests every 10 requests
-        if current_count % 10 == 0:
-            mem_exceeded = check_memory()
-            req_exceeded = current_count >= MAX_REQUESTS
-
-            if mem_exceeded or req_exceeded:
-                reason = f"Memory: {mem_exceeded}, Requests: {current_count}/{MAX_REQUESTS}"
-                schedule_restart(reason)
+        _count_request()
 
         # Read and parse JSON body
         try:
@@ -527,16 +561,7 @@ class TTSHandler(BaseHTTPRequestHandler):
         soon as each segment is encoded, instead of accumulating all first.
         """
         import io
-        global request_count
-        with request_count_lock:
-            request_count += 1
-            current_count = request_count
-
-        if current_count % 10 == 0:
-            mem_exceeded = check_memory()
-            req_exceeded = current_count >= MAX_REQUESTS
-            if mem_exceeded or req_exceeded:
-                schedule_restart(f"Memory: {mem_exceeded}, Requests: {current_count}/{MAX_REQUESTS}")
+        current_count = _count_request()
 
         # Parse + validate input (same shape as /tts)
         try:
@@ -757,7 +782,7 @@ def _open_shared_door():
 def main():
     """Main server function."""
     logger.info(f"Starting Kokoro TTS server on {HOST}:{PORT}")
-    logger.info(f"Memory limit: {MAX_MEMORY_GB}GB, Request limit: {MAX_REQUESTS}")
+    logger.info(f"Leak guard: +{MAX_GROWTH_GB} GB past warm size, request limit: {MAX_REQUESTS} (restarts wait for quiet)")
     logger.info(f"Temp directory: {TEMP_DIR}")
 
     server = ThreadedHTTPServer((HOST, PORT), TTSHandler)
