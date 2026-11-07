@@ -1,3 +1,6 @@
+# 2.16.2 - QoL for release
+- Improved UX when a chat is about to be put in private mode
+- Removed X-API-KEY from the app, use Settings > System > API key now
 # 2.16.1 - Social Media
 - Added a core social media plugin
 - Make profiles like "sapphire" with associated accounts

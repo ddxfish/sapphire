@@ -2041,18 +2041,15 @@ class ChatSessionManager:
                 logger.debug(f"Saved chat '{eff_name}' ({len(eff_chat.messages)} messages)")
                 return True
             except Exception as e:
-                # The vault-sealed refusal is EXPECTED at lock time: eviction
-                # switches away from the private chat and the switch-away
-                # flush finds the key already dropped (by design — key first,
-                # then evict). Rows are already at rest encrypted; the resync
-                # latch below rewrites any in-memory delta on the next save
-                # after unlock. Calm words, not a data-loss scare
-                # (Krem live-hit this 2026-08-15).
+                # Vault-sealed refusal: lock() flushes the private chat BEFORE
+                # dropping the key and evicts with flush=False (2026-11-07),
+                # so this is only a write racing the seal. Its delta is not
+                # kept (eviction replaces the buffer) — the toast says so.
                 sealed = "vault sealed" in str(e)
                 degraded = "chat degraded" in str(e)
                 if sealed:
-                    logger.info(f"Chat save deferred — vault sealed mid-switch; "
-                                f"re-syncs on next unlocked save")
+                    logger.warning("Chat save refused — vault sealed before a private "
+                                   "chat flushed; unsaved delta dropped")
                 elif degraded:
                     logger.error(f"Save refused — chat '{eff_name}' is degraded "
                                  f"(unreadable rows on disk); read-only until "
@@ -2085,9 +2082,13 @@ class ChatSessionManager:
                     else:
                         publish(Events.CONTINUITY_TASK_ERROR, {
                             "task": "Chat Save",
-                            "error": ("Chat sealed before its final flush — everything "
-                                      "already written is encrypted at rest; it re-syncs "
-                                      "on your next unlock." if sealed else
+                            # Rare since lock flushes first (flush_for_seal):
+                            # only a write racing the seal lands here, and
+                            # that delta is NOT kept — say so plainly.
+                            "error": ("The vault locked before a private chat's last "
+                                      "change was saved. Earlier messages are safe and "
+                                      "encrypted; check its latest message after you "
+                                      "unlock." if sealed else
                                       f"Failed to save chat: {e}. Messages may be lost on restart.")
                         })
                 except Exception:
@@ -3726,17 +3727,22 @@ class ChatSessionManager:
                 # the DELETED chat's messages — committing the name anyway
                 # would persist them INTO default after the next unlock.
                 if was_active:
-                    if self._load_chat("default"):
-                        self.active_chat_name = "default"
-                        logger.info("Switched to default after deleting active chat")
+                    # 'default' when it's readable, else THE landing pick —
+                    # a sealed default must never brick delete (Teri 2026-11-07).
+                    target = "default" if not self._vault_hidden("default") \
+                        else self._safe_landing(chat_name)
+                    if target and self._load_chat(target):
+                        self.active_chat_name = target
+                        self._save_last_active(target)
+                        logger.info(f"Switched to '{target}' after deleting active chat")
                     else:
                         # Keep the deleted name (the deleted-chat guard drops
                         # any save from this state) and empty the buffer.
                         self.current_chat.messages = []
                         self.current_settings = get_system_defaults()
-                        logger.error("Could not load 'default' after deleting the active "
-                                     "chat — in-memory state cleared; saves drop until a "
-                                     "chat loads")
+                        logger.error("Could not load a landing chat after deleting the "
+                                     "active chat — in-memory state cleared; saves drop "
+                                     "until a chat loads")
 
                 # Safe under self._lock (RLock; the scan re-enters it) — and
                 # no path acquires scheduler._lock before history's, so the
@@ -3807,8 +3813,14 @@ class ChatSessionManager:
         except Exception:
             pass
 
-    def set_active_chat(self, chat_name: str) -> bool:
+    def set_active_chat(self, chat_name: str, flush: bool = True) -> bool:
         """Switch to a different chat - loads messages AND settings.
+
+        flush=False skips saving the chat being left: only the vault
+        eviction passes it — prompt_vault.lock() already flushed the private
+        chat while the key was present (flush_for_seal), and a keyless
+        flush can only refuse (the old red 'sealed before its final flush'
+        toast on every lock).
 
         SWITCH MEANS APPLY (2026-08-22): every True return fires
         `on_switched(name, settings, gen)` — the runtime-apply hook the
@@ -3834,7 +3846,8 @@ class ChatSessionManager:
                     logger.warning(f"Cannot switch to '{chat_name}' — streaming in progress on '{self.active_chat_name}'")
                     return False
 
-                self._save_current_chat()
+                if flush:
+                    self._save_current_chat()
 
                 if not self._load_chat(chat_name):
                     logger.error(f"Failed to switch to chat: {chat_name}")
@@ -3891,6 +3904,74 @@ class ChatSessionManager:
         with self._lock:
             return self.active_chat_name
 
+    def flush_for_seal(self) -> bool:
+        """Vault lock, step 1 — BEFORE the key drops: save the active chat
+        if it's private, so nothing pending is lost and the eviction's
+        switch needn't flush keyless. True when there was nothing to do."""
+        with self._lock:
+            if not (self.current_settings or {}).get('private_chat'):
+                return True
+            return bool(self._save_current_chat())
+
+    def _safe_landing(self, leaving, chats=None) -> Optional[str]:
+        """THE landing pick — where the pointer goes when it must leave
+        `leaving` (vault eviction, deleting the active chat): 'default'
+        unless it's private, else the freshest public non-mode chat, else
+        the backrooms (made ready: limbo-stamped and wiped). None when no
+        landing is possible. One function so no path hardcodes 'default'
+        (Teri's lockout 2026-11-07: a sealed default bricked delete)."""
+        if chats is None:
+            chats = self.list_chat_files(include_hidden=True)
+        by_name = {c['name']: c for c in chats}
+        d = by_name.get('default')
+        if d is not None and not d.get('private_chat') and leaving != 'default':
+            return 'default'
+        for c in chats:   # updated_at DESC — freshest non-private wins
+            # mode-tagged chats (game/story/librarian/limbo) are
+            # plugin surfaces — never auto-land someone in one.
+            if not c.get('private_chat') and not c.get('mode') \
+                    and c['name'] != leaving:
+                return c['name']
+        # The backrooms: hidden limbo chat as the terminal landing
+        # (Krem's ruling 2026-08-15 — invisible everywhere: the
+        # dropdown picker skips mode-tagged chats, Chat Manager
+        # filters mode 'limbo', and the display name stays neutral).
+        # History is wiped on each landing: things left in the
+        # backrooms don't persist.
+        br = by_name.get('backrooms')
+        if br is not None and br.get('mode') != 'limbo':
+            # An existing USER chat (public, private, or sealed-
+            # unreadable) happens to be named 'backrooms' — only a
+            # chat WE previously stamped mode:limbo is ours to
+            # reclaim and wipe. Anything else: no landing.
+            return None
+        if br is None and not self.create_chat('backrooms'):
+            logger.warning("[VAULT] backrooms creation failed")
+            return None
+        # NULL ROOM (2026-09-03): limbo is a pointer parking space,
+        # not a conversation — chat_streaming refuses every turn in
+        # a mode:limbo chat. The quarantine stamp (toolset 'none')
+        # is belt-and-suspenders on top of that refusal; it also
+        # overwrites whatever loadout create_chat's user defaults
+        # stamped at creation (the old full-toolset trench coat).
+        self.set_named_chat_settings('backrooms', {
+            'mode': 'limbo', 'private_display_name': 'New Chat',
+            'private_chat': False, 'toolset': 'none'},
+            touch_updated=False)
+        # clear_chat-grade wipe, not just messages: tool_images and
+        # chat-scoped plugin rows accumulated across landings before
+        # (residue streams the messages-only wipe never touched).
+        self.clear_chat('backrooms')
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "DELETE FROM plugin_chat_data WHERE chat_name = ?",
+                    ('backrooms',))
+                conn.commit()
+        except Exception:
+            pass
+        return 'backrooms'
+
     def evict_private_active(self) -> Optional[str]:
         """Vaulted chats Phase 1 (ruling B): if the ACTIVE chat is private
         while the vault is sealed, land on a safe public chat and publish
@@ -3899,7 +3980,7 @@ class ChatSessionManager:
         marker may point at a private chat (lock-time eviction never ran if
         the app died unlocked; live-caught 2026-08-14). Landing: 'default'
         unless default itself is private, else the freshest non-private
-        chat, else a fresh 'scratch' chat. Returns the landing name, or
+        chat, else the backrooms (see _safe_landing). Returns the landing name, or
         None when no eviction was needed or possible."""
         try:
             if not _vault_sealed():
@@ -3909,65 +3990,14 @@ class ChatSessionManager:
             active = self.get_active_chat_name()
             if not by_name.get(active, {}).get('private_chat'):
                 return None
-            target = None
-            d = by_name.get('default')
-            if d is not None and not d.get('private_chat'):
-                target = 'default'
-            else:
-                for c in chats:   # updated_at DESC — freshest non-private wins
-                    # mode-tagged chats (game/story/librarian/limbo) are
-                    # plugin surfaces — never auto-land someone in one.
-                    if not c.get('private_chat') and not c.get('mode') \
-                            and c['name'] != active:
-                        target = c['name']
-                        break
-            wipe_landing = False
+            target = self._safe_landing(active, chats)
             if target is None:
-                # The backrooms: hidden limbo chat as the terminal landing
-                # (Krem's ruling 2026-08-15 — invisible everywhere: the
-                # dropdown picker skips mode-tagged chats, Chat Manager
-                # filters mode 'limbo', and the display name stays neutral).
-                # History is wiped on each landing: things left in the
-                # backrooms don't persist.
-                br = by_name.get('backrooms')
-                if br is not None and br.get('mode') != 'limbo':
-                    # An existing USER chat (public, private, or sealed-
-                    # unreadable) happens to be named 'backrooms' — only a
-                    # chat WE previously stamped mode:limbo is ours to
-                    # reclaim and wipe. Anything else: no landing.
-                    logger.warning("[VAULT] no safe landing for private active "
-                                   "chat — staying (sealed)")
-                    return None
-                if br is None and not self.create_chat('backrooms'):
-                    logger.warning("[VAULT] backrooms creation failed — "
-                                   "staying (sealed)")
-                    return None
-                # NULL ROOM (2026-09-03): limbo is a pointer parking space,
-                # not a conversation — chat_streaming refuses every turn in
-                # a mode:limbo chat. The quarantine stamp (toolset 'none')
-                # is belt-and-suspenders on top of that refusal; it also
-                # overwrites whatever loadout create_chat's user defaults
-                # stamped at creation (the old full-toolset trench coat).
-                self.set_named_chat_settings('backrooms', {
-                    'mode': 'limbo', 'private_display_name': 'New Chat',
-                    'private_chat': False, 'toolset': 'none'},
-                    touch_updated=False)
-                target = 'backrooms'
-                wipe_landing = True
-            if wipe_landing:
-                # clear_chat-grade wipe, not just messages: tool_images and
-                # chat-scoped plugin rows accumulated across landings before
-                # (residue streams the messages-only wipe never touched).
-                self.clear_chat(target)
-                try:
-                    with self._get_connection() as conn:
-                        conn.execute(
-                            "DELETE FROM plugin_chat_data WHERE chat_name = ?",
-                            (target,))
-                        conn.commit()
-                except Exception:
-                    pass
-            if not self.set_active_chat(target):
+                logger.warning("[VAULT] no safe landing for private active "
+                               "chat — staying (sealed)")
+                return None
+            # flush=False: lock() flushed while the key was present; at boot
+            # nothing is pending. A keyless flush here can only refuse.
+            if not self.set_active_chat(target, flush=False):
                 logger.warning("[VAULT] private-active eviction FAILED "
                                "(streaming?) — staying")
                 return None
@@ -5209,10 +5239,10 @@ class ChatSessionManager:
                 # chats may be private now — their journals/saves live in
                 # plugin_chat_data and seal with the chat.
                 if new_priv and not was_priv and _vault_sealed():
-                    # Vault hunt R4: the talk-stamp raced a seal. A locked
-                    # vault has no private mode — refusing here beats leaving
-                    # a plaintext chat wearing a private flag in a sealed
-                    # world. The stamp simply re-fires next unlocked turn.
+                    # Vault hunt R4: a make-private flip raced a seal. A
+                    # locked vault has no private mode — refusing here beats
+                    # leaving a plaintext chat wearing a private flag in a
+                    # sealed world. The person re-chooses after unlock.
                     logger.warning("[VAULT] refused private flip — vault sealed")
                     return False
                 if was_priv and not new_priv:
@@ -5234,7 +5264,7 @@ class ChatSessionManager:
                 if 'prompt' in settings:
                     _vault_ref_sync(settings.get('prompt'), old_prompt)
                 if new_priv and not was_priv:
-                    # Flip to private (the talk-stamp lands here): encrypt NOW —
+                    # Flip to private (the picker's make-private lands here): encrypt NOW —
                     # synchronous by ruling. Failure leaves the flag; Phase 1
                     # hiding holds and the unlock sweep retries.
                     ok, err = self.vault_chat(self.active_chat_name)

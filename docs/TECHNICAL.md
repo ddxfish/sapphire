@@ -383,7 +383,7 @@ Privacy is **per-chat**, not a global toggle. The old whitelist-based privacy mo
 
 **The vault** (`core/prompt_vault.py`) is one scrypt + AES-256-GCM encrypted store at `user/prompts/prompt_vault.enc`, guarded by one passphrase. Unlocked, its prompts merge into the prompt system and private mode is armed; locked, the key is dropped from memory and its contents exist nowhere. Idle auto-lock is `VAULT_IDLE_MINUTES` (default 30). Lifecycle routes: `POST /api/vault/setup | /unlock | /lock | /rekey | /move`; state rides `vault` on `/api/status`.
 
-**Private chats** carry `private_chat` in chat settings. Sending an operator turn while the vault is unlocked stamps the active chat private (`stamp_private_if_unlocked`, `core/chat/chat_streaming.py`) — skipped for mode-tagged (game/story/librarian/limbo) chats, already-private chats, and managed mode. Enforcement:
+**Private chats** carry `private_chat` in chat settings. Nothing stamps a chat private: with the vault unlocked, an operator turn in a public chat is refused (`private_gate`, `core/chat/chat_streaming.py`; voice hears the refusal, the web tab gets a `private_gate` SSE event and opens `shared/private-picker.js`). The picker flips the chat through the settings PUT, which encrypts it. The gate passes mode-tagged (game/story/librarian/limbo/room) chats, already-private chats, and managed mode. `lock()` flushes the private active chat while the key is present, then drops the key, then evicts with `set_active_chat(flush=False)`; every forced move lands via `ChatSessionManager._safe_landing` (eviction and deleting the active chat). Enforcement:
 
 - **Providers** — auto mode filters to `is_local: True`; an explicitly pinned non-local provider raises. Cloud STT/TTS refuse too (`core/voice_privacy.py`).
 - **Tools** — `_check_privacy_allowed` blocks any tool not flagged `is_local: True` (unflagged = blocked).
@@ -523,7 +523,7 @@ LLM PROVIDERS:
 
 PRIVACY (see docs/PRIVACY.md):
 - One vault: user/prompts/prompt_vault.enc (scrypt + AES-256-GCM), one passphrase, VAULT_IDLE_MINUTES auto-lock
-- Unlocked = private mode armed; an operator turn marks the active chat private (skips mode-tagged chats)
+- Unlocked = private mode on; a public-chat operator turn is refused (private_gate), the person picks via shared/private-picker.js (skips mode-tagged chats)
 - Private chat at rest: message rows, settings, tool images, plugin_chat_data as '@enc1:' values; names stay plaintext
 - Sealed vault: private chats absent from list/search/settings/messages/export/rename/delete; active one evicted at lock and boot
 - Plugin hooks withheld unless the manifest declares privacy_aware: true

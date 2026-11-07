@@ -303,9 +303,13 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - Click the 👁 eyeball and unlock. Everything comes back.
 - Raise the timeout in Settings > Privacy (`VAULT_IDLE_MINUTES`, default 30).
 
-**A chat became private and I didn't ask for it**
-- Talking in a chat while the vault is unlocked marks it private. Lock the vault when you don't want that.
-- To release one: Chat Manager > its row > 🔓. It decrypts back to normal storage.
+**"Private mode is on, but this chat isn't private"**
+- The vault is open and you're in an ordinary chat. Nothing was sent. Pick a private chat, create one, or make this one private in the picker.
+- To talk in an ordinary chat, lock the vault (the 🔓 button).
+
+**I'm stuck in a blank "New Chat" and can't get back to default**
+- Your chats (default included) are private and the vault is locked. Unlock it with the 🔒 button and they all come back.
+- To release a private chat: Chat Manager > its row > 🔓. It decrypts back to normal storage.
 
 **"Provider is not marked local/private-safe"**
 - The chat is private, so only providers ticked *Local / private server* are allowed.

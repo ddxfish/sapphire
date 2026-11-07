@@ -471,6 +471,8 @@ def lock(reason="") -> bool:
                 return False
     except Exception:
         pass
+    if vault_unlocked():
+        _flush_active_chat()   # key still present: the private chat saves encrypted
     with _lock:
         if _key is None:
             return False
@@ -609,6 +611,19 @@ def _reeval_degraded_chats():
         get_system().llm_chat.session_manager.reeval_degraded_chats()
     except Exception as e:
         logger.warning(f"[VAULT] degraded-chat re-eval skipped: {e}")
+
+
+def _flush_active_chat():
+    """Lock step 1, BEFORE the key drops (outside _lock — the save calls
+    back into chat_data_key): a private active chat saves encrypted now, so
+    the eviction switch after the drop has nothing to flush. A failure here
+    is a real save failure and the store's own toast says so."""
+    try:
+        from core.api_fastapi import get_system
+        if not get_system().llm_chat.session_manager.flush_for_seal():
+            logger.warning("[VAULT] pre-lock flush of the private chat failed")
+    except Exception as e:
+        logger.warning(f"[VAULT] pre-lock flush skipped: {e}")
 
 
 def _handoff_active_chat():

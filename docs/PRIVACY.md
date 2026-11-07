@@ -25,13 +25,20 @@ The padlock never changes any individual chat's privacy — see below for how a 
 
 ---
 
-## Talking makes a chat private
+## You choose which chats are private
 
-With the vault open, the moment you send a message in an ordinary chat, that chat is marked **private**. No dialog, no extra click.
+Nothing turns private on its own. When the vault opens while you're in an ordinary chat, or you send a message in one while the vault is open, a picker asks where to talk:
 
-It's one-way from the padlock's side: locking the vault doesn't un-mark anything. To release a chat, open **Chat Manager** and click the **🔓** on its row.
+- **Go to a private chat** you already have
+- **Create a new private chat**
+- **Make this chat private** (its whole history encrypts on the spot)
+- **Cancel**
 
-**Never auto-marked:** game, story, and librarian chats (they belong to plugin surfaces), chat rooms (a private room turns away its guest and door seats, so it is your choice: the key icon in Chat Manager), chats that are already private, and anything running in managed mode.
+None of these sends anything. Your text stays in the box and follows you to the chat you pick. While the vault is open, an ordinary chat never takes a message, and that includes voice. A spoken message there is refused aloud: *"Private mode is on, but this chat isn't private."* To talk in an ordinary chat, lock the vault.
+
+To release a chat, open **Chat Manager** and click the **🔓** on its row. Locking the vault doesn't un-mark anything.
+
+**The picker never asks about:** game, story, and librarian chats (they belong to plugin surfaces and stay public), chat rooms (a private room turns away its guest and door seats, so that's the key icon in Chat Manager), and anything in managed mode.
 
 You can tell a private chat by the glow on the chat area border, the 🗝 next to its name in the chat picker, and its badge in Chat Manager.
 
@@ -151,8 +158,8 @@ VAULT LIFECYCLE:
 - Disabled in managed mode
 
 PRIVATE CHATS:
-- Talking in a chat while the vault is UNLOCKED marks it `private_chat` automatically (one-way)
-- Skipped: mode-tagged chats (game/story/librarian/limbo/room), already-private, managed mode
+- Never automatic: with the vault UNLOCKED, an operator turn in a public chat is REFUSED (`private_gate`, core/chat/chat_streaming.py); the web picker (shared/private-picker.js) offers switch / create / make private
+- Gate passes: mode-tagged chats (game/story/librarian/limbo/room), already-private, managed mode
 - Release only via Chat Manager 🔓 (decrypts back to plaintext storage)
 - Enforcement: local-only LLM providers, network tools refuse, cloud STT/TTS refuse
 - At rest: message rows, chat settings, tool images, and plugin chat data stored as `@enc1:` AES-256-GCM under a chat data key wrapped inside the vault frame

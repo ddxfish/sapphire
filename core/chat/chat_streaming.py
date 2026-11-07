@@ -20,54 +20,40 @@ from core.tts.stream_pump import StreamingTTSPump
 logger = logging.getLogger(__name__)
 
 
-def stamp_private_if_unlocked(session_manager):
-    """Vaulted chats — 'messages control the private marker': an operator
-    turn in a chat while the vault is OPEN marks that chat private (one-way;
-    Chat Manager owns the unmark). Skips: no/locked vault (no private mode),
-    managed mode, already-private, and MODE-TAGGED chats (game/story/
-    librarian/limbo belong to plugin surfaces — talking in a game while
-    unlocked must not vault the game). A stamp failure logs and lets the
-    turn run public (systemic-error posture; matches voice_privacy).
-    Module-level (ruling RM3, 2026-08-15) so the non-streaming operator door
-    (REST /api/chat, wake, body) stamps through the same code."""
+PRIVATE_GATE_WORDS = ("🔒 Private mode is on, but this chat isn't private, so nothing "
+                      "was sent. Pick a private chat or make this one private. "
+                      "To talk here, lock the vault.")
+
+
+def private_gate(session_manager):
+    """THE gate (2026-11-07, replaces the talk-stamp): an operator turn in a
+    PUBLIC chat while the vault is OPEN is refused — returns the refusal
+    words, or None to let the turn run. A private expectation never routes
+    public, and nothing decides privacy for the person: they choose in the
+    app (shared/private-picker.js), which flips the chat through the
+    settings PUT (that encrypts it). Voice can't show a picker, so voice
+    hears these words. Skips: no/locked vault (no private mode), managed
+    mode, already-private, MODE-TAGGED chats (game/story/room/limbo are
+    plugin surfaces, public by nature — Krem 2026-11-07). Reads the
+    override-aware settings, so a by-name operator turn is gated on ITS
+    chat. Unreadable state REFUSES (fail closed)."""
     try:
         from core import prompt_vault
         vs = prompt_vault.vault_status()
         if not (vs.get('exists') and vs.get('unlocked')):
-            return
+            return None
         from core.settings_manager import settings as sm_settings
         if sm_settings.is_managed():
-            return
-        sm = session_manager
-        # Name captured BEFORE the write (vault hunt R5 family): if an
-        # eviction retargets the active chat mid-stamp, expected_active
-        # makes the store refuse rather than mark the landing chat.
-        # F1 (2026-09-08): a by-name operator turn stamps ITS chat — the
-        # override-aware name + settings, written by name when the pointer
-        # is elsewhere.
-        active = sm.get_active_chat_name()
-        # Minimal session managers (tests, doubles) may lack the override
-        # resolver — the stamp then means the active chat, as it always did.
-        _eff = getattr(sm, '_effective_chat_name', None)
-        name = _eff() if callable(_eff) else None
-        if not isinstance(name, str) or not name:
-            name = active
-        cur = sm.get_chat_settings()
+            return None
+        cur = session_manager.get_chat_settings() or {}
         if cur.get('private_chat') or cur.get('mode'):
-            return
-        if name and name != active:
-            ok = bool(sm.set_named_chat_settings(name, {'private_chat': True}))
-        else:
-            ok = bool(sm.update_chat_settings({'private_chat': True},
-                                              expected_active=name))
-        if ok:
-            # No name in the log — it just became a secret (ruling F3).
-            logger.info("[VAULT] chat marked private — spoke while vault open")
-            publish(Events.CHAT_SETTINGS_CHANGED,
-                    {"chat": name, "settings": {"private_chat": True},
-                     "origin": None})
+            return None
+        logger.info("[VAULT] turn refused — public chat while the vault is open")
+        return PRIVATE_GATE_WORDS
     except Exception as e:
-        logger.warning(f"[VAULT] talk-stamp failed — turn runs unstamped: {e}")
+        logger.warning(f"[VAULT] private gate couldn't check — turn refused: {e}")
+        return ("🔒 Couldn't check whether this chat is private, so nothing was "
+                "sent. Try again in a moment.")
 
 
 def _stash_pasted(images):
@@ -302,9 +288,9 @@ class StreamingChat:
             active = None
         return {"foreign": bool(tgt) and tgt != active, "chat": tgt or active}
 
-    def _stamp_private_if_unlocked(self):
-        """Streaming-lane wrapper — see stamp_private_if_unlocked below."""
-        stamp_private_if_unlocked(self.main_chat.session_manager)
+    def _private_gate(self):
+        """Streaming-lane wrapper — see private_gate (module level)."""
+        return private_gate(self.main_chat.session_manager)
 
     def _close_dangling_tool_calls(self):
         """Inject dummy tool_results for tool_calls that never got one, so
@@ -495,6 +481,7 @@ class StreamingChat:
             # Alfred greeting, Sapphire brain). Reset in the outer finally.
             _brain_token = None
             _tgt = getattr(self, "target_chat", None)
+            _gate_words = None   # phone/background targets never gate
             if _tgt:
                 _installed = False
                 try:
@@ -544,41 +531,50 @@ class StreamingChat:
                 if getattr(self, "operator_lane", False):
                     # A human typed this by name (a room's bound rail while
                     # the pointer is elsewhere): the operator rulings ride —
-                    # vault idle touch + talk-stamp on THIS chat (mode-
-                    # tagged sessions skip the stamp inside). Phone and
-                    # background lanes never reach here.
+                    # vault idle touch + the private gate on THIS chat (mode-
+                    # tagged sessions pass the gate). Phone and background
+                    # lanes never reach here.
                     try:
                         from core import prompt_vault as _pv_touch
                         _pv_touch.touch()
                     except Exception:
                         pass
-                    self._stamp_private_if_unlocked()
+                    _gate_words = self._private_gate()
             else:
-                # Talk-marks-private (Krem's ruling 2026-08-14): SPEAKING in a
-                # chat while the vault is open stamps it private — reading
-                # never does; the only unmark is Chat Manager. Operator lanes
-                # only: web typing and browser voice both ride target_chat=
-                # None, while phone/background streams carry an explicit
-                # target and never stamp. Runs BEFORE provider selection so
-                # THIS turn already enforces local-only (stamping after would
-                # leak the first turn to a cloud provider).
+                # THE private gate (2026-11-07, replaced talk-marks-private):
+                # an operator turn in a public chat while the vault is open
+                # is refused — the person chooses in the app, nothing
+                # decides for them. Operator lanes only: web typing, browser
+                # voice and wake word ride target_chat=None; phone/background
+                # streams carry an explicit target and never gate. Runs
+                # BEFORE the user row is written, so refused words never
+                # land in the public chat.
                 # An operator turn is USER ACTIVITY for the vault idle clock
                 # (Krem's ruling 2026-08-15): chatting in a private chat must
-                # not read as "idle" to the auto-lock. Phone/background
-                # streams ride the target_chat branch and never touch.
+                # not read as "idle" to the auto-lock.
                 try:
                     from core import prompt_vault as _pv_touch
                     _pv_touch.touch()
                 except Exception:
                     pass
-                self._stamp_private_if_unlocked()
+                _gate_words = self._private_gate()
+
+            if _gate_words:
+                # private_gate first: the web tab opens the picker and
+                # restores the draft; voice hears the words.
+                yield {"type": "private_gate"}
+                yield {"type": "content", "text": _gate_words}
+                yield self._emit_llm_done(tts_pump, refused=True)
+                yield {"type": "final", "text": _gate_words,
+                       "cancelled": False, "error": True}
+                return
 
             # NULL ROOM (2026-09-03): a mode:limbo chat ('backrooms') is the
             # vault-eviction holding room — a pointer parking space, not a
             # conversation. It only ever hosts the active pointer when EVERY
             # chat is private and sealed, so anything said in it is by
             # construction the continuation of a private life in a plaintext
-            # row (the talk-stamp skips mode chats). Refuse the turn — same
+            # row (the private gate passes mode chats). Refuse the turn — same
             # yield-refusal shape as the vault gates above; the outer finally
             # handles end_streaming/AI_TYPING_END. After the A1 install so a
             # stream pinned to the room reads its mode through the override.
@@ -589,9 +585,10 @@ class StreamingChat:
                 _mode = None
             if _mode == 'limbo':
                 logger.info("[LIMBO] turn refused — mode:limbo is a null room")
-                _refusal = ("🔒 Everything you have is in the vault right "
-                            "now. This is just a holding room — create a "
-                            "new chat (or unlock the vault) to talk.")
+                _refusal = ("🔒 Your chats are private and the vault is "
+                            "locked, so this is just a holding room. Unlock "
+                            "the vault with the 🔒 button to get them back, "
+                            "or create a new chat to talk.")
                 yield {"type": "content", "text": _refusal}
                 yield self._emit_llm_done(tts_pump, refused=True)
                 yield {"type": "final", "text": _refusal,

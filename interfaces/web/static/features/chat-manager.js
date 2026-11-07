@@ -144,28 +144,21 @@ export async function handleDeleteChat() {
     const displayName = chatSelect.options[chatSelect.selectedIndex].text;
     if (!confirm(`Delete "${displayName}"?\n\nThis will permanently remove the chat history AND any custom settings for this chat.`)) return;
     
-    let moved = false;
+    // No pre-move to 'default': the SERVER picks where the pointer lands
+    // (history._safe_landing) and publishes chat_switched. A hardcoded
+    // 'default' bricked delete whenever default was sealed in the vault
+    // (Teri 2026-11-07). A refused delete moved nothing, so there's nothing
+    // to roll back — the picker just re-adopts server truth.
     try {
-        await api.activateChat('default');
-        moved = true;
         await api.deleteChat(selectedChat);
-        await populateChatDropdown();
-        chatSelect.value = 'default';
+        await populateChatDropdown({ forceAdopt: true });
         const len = await refresh(false);
         setHistLen(len);
         ui.forceScrollToBottom();   // the user asked for this transcript — land at the bottom
     } catch (e) {
         console.error('Failed to delete chat:', e);
         ui.showToast(`Couldn't delete the chat. ${e.message}`, 'error');
-        // Refused after the move (a heartbeat or her voice still running in
-        // it): go back to it, so the picker, the transcript and the server
-        // agree - the picker said X while the server sat on default (hunt 21).
-        if (moved) {
-            try { await api.activateChat(selectedChat); } catch {}
-            await populateChatDropdown();
-            chatSelect.value = selectedChat;
-            setHistLen(await refresh(false));
-        }
+        await populateChatDropdown({ forceAdopt: true });
     }
 }
 

@@ -294,11 +294,11 @@ class TestBootEviction:
             assert "priv" not in {c["name"] for c in m2.list_chat_files()}
 
 
-class TestTalkStamp:
-    """'Messages control the private marker' (Krem's ruling 2026-08-14):
-    an operator turn while the vault is OPEN stamps the chat private —
-    reading never does; Chat Manager owns the unmark. Direct tests of
-    StreamingChat._stamp_private_if_unlocked."""
+class TestPrivateGate:
+    """THE private gate (2026-11-07, replaced the talk-stamp): an operator
+    turn in a PUBLIC chat while the vault is OPEN is refused — and nothing
+    is ever written for the person (no auto-stamp). Direct tests of
+    StreamingChat._private_gate."""
 
     def _run(self, monkeypatch, vault, settings, managed=False):
         import core.chat.chat_streaming as cs
@@ -306,9 +306,6 @@ class TestTalkStamp:
         from core.settings_manager import settings as sm_settings
         monkeypatch.setattr(pv, "vault_status", lambda: dict(vault))
         monkeypatch.setattr(sm_settings, "is_managed", lambda: managed)
-        published = []
-        monkeypatch.setattr(cs, "publish",
-                            lambda et, data=None: published.append((et, data)))
         written = {}
 
         class _SM:
@@ -319,45 +316,87 @@ class TestTalkStamp:
                 return "somechat"
 
             def update_chat_settings(self, patch, expected_active=None):
-                # expected_active (vault hunt R5): the stamp must pin its
-                # write to the name it captured — assert the contract here.
-                assert expected_active == "somechat"
+                written.update(patch)
+                return True
+
+            def set_named_chat_settings(self, name, patch):
                 written.update(patch)
                 return True
 
         stream = cs.StreamingChat.__new__(cs.StreamingChat)
         stream.main_chat = type("M", (), {"session_manager": _SM()})()
-        stream._stamp_private_if_unlocked()
-        return written, published
+        return stream._private_gate(), written
 
-    def test_stamps_when_unlocked(self, monkeypatch):
-        written, published = self._run(
+    def test_refuses_public_chat_when_unlocked(self, monkeypatch):
+        words, written = self._run(
             monkeypatch, {"exists": True, "unlocked": True}, {})
-        assert written == {"private_chat": True}
-        assert any(et == "chat_settings_changed" for et, _ in published)
+        assert words and "isn't private" in words
+        assert written == {}          # never decides privacy for the person
 
-    def test_no_stamp_when_locked_or_no_vault(self, monkeypatch):
+    def test_passes_when_locked_or_no_vault(self, monkeypatch):
         for vault in ({"exists": True, "unlocked": False},
                       {"exists": False, "unlocked": False}):
-            written, _ = self._run(monkeypatch, vault, {})
-            assert written == {}
+            words, written = self._run(monkeypatch, vault, {})
+            assert words is None and written == {}
 
-    def test_no_stamp_when_managed(self, monkeypatch):
-        written, _ = self._run(
+    def test_passes_when_managed(self, monkeypatch):
+        words, _ = self._run(
             monkeypatch, {"exists": True, "unlocked": True}, {}, managed=True)
-        assert written == {}
+        assert words is None
 
-    def test_no_restamp_when_already_private(self, monkeypatch):
-        written, _ = self._run(
+    def test_passes_private_chat(self, monkeypatch):
+        words, written = self._run(
             monkeypatch, {"exists": True, "unlocked": True},
             {"private_chat": True})
-        assert written == {}
+        assert words is None and written == {}
 
-    def test_no_stamp_on_mode_tagged_chats(self, monkeypatch):
-        """Game/story/librarian/limbo chats belong to plugin surfaces —
-        talking in a game while unlocked must not vault the game."""
-        for mode in ("game", "librarian", "limbo"):
-            written, _ = self._run(
+    def test_passes_mode_tagged_chats(self, monkeypatch):
+        """Game/story/room/limbo chats are plugin surfaces, public by
+        nature (Krem 2026-11-07: poker isn't private)."""
+        for mode in ("game", "librarian", "limbo", "room"):
+            words, _ = self._run(
                 monkeypatch, {"exists": True, "unlocked": True},
                 {"mode": mode})
-            assert written == {}, f"mode '{mode}' must not stamp"
+            assert words is None, f"mode '{mode}' must pass the gate"
+
+    def test_unreadable_state_refuses(self, monkeypatch):
+        import core.chat.chat_streaming as cs
+        from core import prompt_vault as pv
+
+        def boom():
+            raise RuntimeError("vault state unreadable")
+        monkeypatch.setattr(pv, "vault_status", boom)
+        stream = cs.StreamingChat.__new__(cs.StreamingChat)
+        stream.main_chat = type("M", (), {"session_manager": object()})()
+        assert stream._private_gate()      # fail closed
+
+
+class TestDeleteLanding:
+    """Teri's lockout (2026-11-07): deleting the active chat while 'default'
+    is sealed must land on THE landing pick (history._safe_landing), never
+    fail on a hardcoded 'default'."""
+
+    def _seal_default(self, sm, monkeypatch):
+        sm.set_named_chat_settings("default", {"private_chat": True})
+        _seal(monkeypatch, True)
+
+    def test_lands_on_public_chat_when_default_sealed(self, sm, monkeypatch):
+        sm.create_chat("other")
+        sm.set_active_chat("pub")
+        self._seal_default(sm, monkeypatch)
+        assert sm.delete_chat("pub") is True
+        assert sm.get_active_chat_name() == "other"
+
+    def test_lands_in_backrooms_when_nothing_public(self, sm, monkeypatch):
+        sm.set_active_chat("pub")
+        self._seal_default(sm, monkeypatch)
+        assert sm.delete_chat("pub") is True
+        assert sm.get_active_chat_name() == "backrooms"
+        assert (sm.get_settings_for("backrooms") or {}).get("mode") == "limbo"
+
+    def test_default_still_wins_when_readable(self, sm, monkeypatch):
+        sm.create_chat("other")
+        sm.set_active_chat("pub")
+        _seal(monkeypatch, True)
+        assert sm.delete_chat("pub") is True
+        assert sm.get_active_chat_name() == "default"

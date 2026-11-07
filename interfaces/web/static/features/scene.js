@@ -1,7 +1,8 @@
 // features/scene.js - Scene state polling, LLM indicator, spice status
 import * as api from '../api.js';
 import * as audio from '../audio.js';
-import { getElements, setTtsEnabled, setSttEnabled, setSttReady, setPromptPrivacyRequired } from '../core/state.js';
+import { getElements, setTtsEnabled, setSttEnabled, setSttReady, setPromptPrivacyRequired, setPrivateGate } from '../core/state.js';
+import { gateFrom } from '../shared/private-picker.js';
 
 // Provider meta (key → {display_name, is_local}) for the badge. The tint is
 // the privacy affordance: it used to key on a hardcoded name list
@@ -184,9 +185,11 @@ export async function updateScene() {
         const eye = document.getElementById('sb-privacy-eye');
         const vaultOpen = !!status?.vault?.exists && !!status?.vault?.unlocked;
         const vaultAsleep = priv && !!status?.vault?.exists && !status?.vault?.unlocked;
+        // The private gate's client half (server: chat_streaming.private_gate).
+        setPrivateGate(gateFrom(status));
         if (eye) {
             // Eyeball = VAULT STATE, one job (Krem's ruling 2026-08-14):
-            // blue = private mode armed (talking marks chats private);
+            // blue = private mode on (public chats ask before a send);
             // amber = standing in a private chat while sealed (the rare
             // failed-eviction edge). Per-CHAT privacy shows on the chatbg
             // border and the 🗝 in the dropdown, never on the toggle.
@@ -197,7 +200,7 @@ export async function updateScene() {
             // S3 #5, hunt 2026-08-30.)
             eye.textContent = vaultOpen ? '\u{1F513}︎' : '\u{1F512}︎';
             eye.title = vaultAsleep ? 'Private chat, vault locked — click to unlock'
-                : vaultOpen ? 'Private mode ON — talking marks the chat private; click to lock'
+                : vaultOpen ? 'Private mode ON — your private chats are visible; click to lock'
                 : 'Private mode off — click to unlock the vault';
         }
         // Privacy border on the chat area: blue glow = private + vault open

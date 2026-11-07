@@ -268,8 +268,8 @@ def _prompt_gate(prompt_name, private: bool) -> None:
         if required and not private:
             raise PrivacyRefused(
                 "This prompt is marked private — unlock the vault and "
-                "send a message (talking marks the chat private), or "
-                "use Chat Manager's \U0001F5DD on it first.")
+                "make this chat private (the picker opens when you send), "
+                "or use Chat Manager's \U0001F5DD on it first.")
     except ProviderRefused:
         raise
     except Exception as e:

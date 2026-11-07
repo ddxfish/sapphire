@@ -8,6 +8,7 @@ import {
     getIsProc,
     getTtsEnabled,
     getPromptPrivacyRequired,
+    getPrivateGate,
     setProc,
     setAbortController,
     setIsCancelling,
@@ -37,8 +38,17 @@ export async function handleRegen(idx, ask = true) {
     // Same guard as handleSend — and it must run BEFORE chat.handleRegen,
     // which deletes the old reply before streaming (a backend refusal after
     // that point loses the message).
+    // The private gate too: the server refuses a public-chat turn while the
+    // vault is open, and by then the old reply would already be gone.
+    {   // fresh status, not the painted flag: a stale flag here loses a reply
+        const { gateFrom, openPrivatePicker } = await import('../shared/private-picker.js');
+        if (getPrivateGate() || gateFrom(await api.fetchStatus().catch(() => null))) {
+            openPrivatePicker({ reason: 'send' });
+            return;
+        }
+    }
     if (getPromptPrivacyRequired()) {
-        ui.showToast('This prompt is marked private — toggle the eyeball to make this chat private', 'error');
+        ui.showToast('This prompt is marked private — unlock the vault (🔒) to talk with it', 'error');
         return;
     }
     console.log(`Regenerating message ${idx}`);
@@ -143,8 +153,15 @@ export async function handleContinue(idx, ask = true) {
         console.log('Continue blocked: isProc is true');
         return;
     }
+    {   // fresh status, not the painted flag: a stale flag here loses a reply
+        const { gateFrom, openPrivatePicker } = await import('../shared/private-picker.js');
+        if (getPrivateGate() || gateFrom(await api.fetchStatus().catch(() => null))) {
+            openPrivatePicker({ reason: 'send' });
+            return;
+        }
+    }
     console.log(`Continuing message ${idx}`);
-    
+
     const abortController = new AbortController();
     setAbortController(abortController);
     setIsCancelling(false);

@@ -10,11 +10,13 @@ import { focusUnlessEditing } from '../shared/dom-guard.js';
 import { getBoundChat } from '../core/bound-chat.js';
 import { isCommand, run as runCommand } from './commands.js';
 import { onCommandInput, onCommandKey } from './command-menu.js';
+import { openPrivatePicker } from '../shared/private-picker.js';
 import {
     getElements,
     getIsProc,
     getTtsEnabled,
     getPromptPrivacyRequired,
+    getPrivateGate,
     setProc,
     setAbortController,
     getAbortController,
@@ -94,10 +96,16 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         return;
     }
 
-    // Block send if the prompt is private but this chat isn't
-    // (status already computes: prompt private AND chat not private)
+    // THE private gate, client half: vault open + public chat → the picker,
+    // nothing sent, the words stay in the box (server refuses it too —
+    // chat_streaming.private_gate). Then the private-prompt rule, which with
+    // the vault open the gate already covers: locked, it needs an unlock.
+    if (getPrivateGate()) {
+        openPrivatePicker({ reason: 'send' });
+        return;
+    }
     if (getPromptPrivacyRequired()) {
-        ui.showToast('This prompt is marked private — toggle the eyeball to make this chat private', 'error');
+        ui.showToast('This prompt is marked private — unlock the vault (🔒) to talk with it', 'error');
         return;
     }
 
@@ -202,6 +210,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         }
     };
     const queueHooks = {
+        onPrivateGate: () => { ctl.gated = true; },   // the server's gate refused (see onPrivateGate below)
         onTicket: (ticket, chat) => {          // every send: its identity, from the first line
             ctl.ticket = ticket; ctl.chat = chat || null;
             pending.set(ticket, ctl);
@@ -260,6 +269,12 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             await refresh(false);
             return;
         }
+        if (ctl.gated) {
+            await ui.finishStreaming(true);
+            restoreDraft();
+            openPrivatePicker({ reason: 'send' });
+            return;
+        }
         if (!ctl.streamOk) return;
         if (refused) { await ui.finishStreaming(false, true); return; }   // nothing ran: keep its words, say nothing more
         await ui.finishStreaming();
@@ -296,6 +311,9 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         }
     };
     const onResync = () => { ctl.streamId = ui.getCurrentStreamId(); ctl.streamOk = true; };
+    // The server's private gate refused (this tab's flag was stale): the
+    // refusal bubble goes, the words come back, the picker explains.
+    const onPrivateGate = () => { ctl.gated = true; };
     const onError = async (e, statusCode, lastSeq) => {
         if (typeof lastSeq === 'number') ctl.lastSeq = lastSeq;
         if (e.message === 'Cancelled') {
@@ -333,7 +351,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         ui.showToast(e.message, 'error');
         if (!ctl.headless) { release(); await refresh(false); }
     };
-    const liveHandlers = { onChunk, onComplete, onError, onToolStart, onToolEnd, onStreamStarted, onIterationStart, onResync };
+    const liveHandlers = { onChunk, onComplete, onError, onToolStart, onToolEnd, onStreamStarted, onIterationStart, onResync, onPrivateGate };
 
     // Everything this send took from the composer goes back: the words (when
     // the box is still empty - never over a new draft) and the pictures and

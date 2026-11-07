@@ -220,7 +220,7 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                 chat_name=chat_key, exclusive=True, operator=True)
         else:
             stream, sid, active_chat = system.llm_chat.begin_stream(exclusive=True)
-        stream.operator_lane = True   # a human typed this (talk-stamp + vault touch ride)
+        stream.operator_lane = True   # a human typed this (private gate + vault touch ride)
         system.web_active_inc()
 
         # Release exactly once (end_stream is idempotent; web_active_dec is a

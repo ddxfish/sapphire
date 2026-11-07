@@ -294,9 +294,10 @@ export default {
         // "10 pounds of options in a 1 pound toggle switch" — no more).
         // Locked → unlock dialog. Unlocked → lock (server evicts a private
         // active chat itself). No vault → setup dialog. The eyeball NEVER
-        // touches any chat's private flag: membership is stamped by TALKING
-        // while the vault is open (server-side, chat_streaming) and unmade
-        // only in Chat Manager. Paint lives in scene.js (vault state).
+        // touches any chat's private flag itself: opening the vault while
+        // standing in a public chat opens the private picker (the person
+        // chooses — Teri's lockout 2026-11-07); unmade only in Chat Manager.
+        // Paint lives in scene.js (vault state).
         const eyeBtn = container.querySelector('#sb-privacy-eye');
         if (eyeBtn && window.__managed) eyeBtn.style.display = 'none';
 
@@ -318,7 +319,7 @@ export default {
                         validate: async (key) => { await vaultSetup(key); return ''; }
                     });
                     if (!res?.key) return;
-                    ui.showToast('Vault created — private mode ON. Talking in a chat marks it private.', 'success');
+                    ui.showToast('Vault created — private mode ON', 'success');
                 } else if (!v.unlocked) {
                     const res = await keyPrompt({
                         title: 'Unlock the vault',
@@ -326,7 +327,7 @@ export default {
                         validate: async (key) => { await vaultUnlock(key); return ''; }
                     });
                     if (!res?.key) return;
-                    ui.showToast('Private mode ON — talking in a chat marks it private', 'success');
+                    ui.showToast('Private mode ON', 'success');
                 } else {
                     await vaultLock();
                     ui.showToast('Vault locked', 'success');
@@ -334,6 +335,11 @@ export default {
                 const { populateChatDropdown } = await import('../features/chat-manager.js');
                 await populateChatDropdown();
                 await updateScene();
+                // Opened while standing in a public chat: choose where to talk.
+                // A fresh status, not the painted flag (updateScene may have
+                // been superseded by the vault_changed repaint).
+                const { gateFrom, openPrivatePicker } = await import('../shared/private-picker.js');
+                if (gateFrom(await api.fetchStatus())) openPrivatePicker({ reason: 'unlock' });
             } catch (err) {
                 console.error('Vault toggle failed:', err);
                 ui.showToast(err?.message || 'Vault toggle failed', 'error');

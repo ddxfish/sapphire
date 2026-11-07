@@ -29,7 +29,7 @@ import pytest
 
 from core.chat.chat import LLMChat, ChatBusy
 from core.chat.history import ChatSessionManager
-from core.chat.chat_streaming import StreamingChat, stamp_private_if_unlocked
+from core.chat.chat_streaming import StreamingChat, private_gate
 
 
 # ─── per-chat stream registry (ChatSessionManager) ──────────────────────────
@@ -174,7 +174,7 @@ def test_typing_payload_target_elsewhere_is_foreign():
     assert _stream('trinity', 'story_x')._typing_payload() == {"foreign": True, "chat": 'story_x'}
 
 
-# ─── talk-stamp goes to THIS turn's chat ────────────────────────────────────
+# ─── the private gate reads THIS turn's chat ──────────────────────────────
 
 def _vault_open(monkeypatch):
     from core import prompt_vault
@@ -183,40 +183,31 @@ def _vault_open(monkeypatch):
     monkeypatch.setattr(sm_settings, 'is_managed', lambda: False)
 
 
-def test_stamp_by_name_when_pointer_is_elsewhere(monkeypatch):
+def test_gate_reads_this_turns_chat_and_writes_nothing(monkeypatch):
+    """A by-name operator turn is gated on ITS chat (override-aware
+    settings), and the gate never writes — no stamp on any chat."""
     _vault_open(monkeypatch)
     sm = MagicMock()
     sm.get_active_chat_name.return_value = 'trinity'
     sm._effective_chat_name.return_value = 'story_x'
     sm.get_chat_settings.return_value = {}
-    sm.set_named_chat_settings.return_value = True
-    with patch('core.chat.chat_streaming.publish') as pub:
-        stamp_private_if_unlocked(sm)
-    sm.set_named_chat_settings.assert_called_once_with('story_x', {'private_chat': True})
-    sm.update_chat_settings.assert_not_called()
-    assert pub.call_args[0][1]['chat'] == 'story_x'
-
-
-def test_stamp_on_active_keeps_expected_active_guard(monkeypatch):
-    _vault_open(monkeypatch)
-    sm = MagicMock()
-    sm.get_active_chat_name.return_value = 'trinity'
-    sm._effective_chat_name.return_value = 'trinity'
-    sm.get_chat_settings.return_value = {}
-    sm.update_chat_settings.return_value = True
-    with patch('core.chat.chat_streaming.publish'):
-        stamp_private_if_unlocked(sm)
-    sm.update_chat_settings.assert_called_once_with({'private_chat': True}, expected_active='trinity')
+    assert private_gate(sm)
     sm.set_named_chat_settings.assert_not_called()
+    sm.update_chat_settings.assert_not_called()
 
 
-def test_stamp_skips_mode_tagged_sessions(monkeypatch):
+def test_gate_passes_private_target(monkeypatch):
     _vault_open(monkeypatch)
     sm = MagicMock()
-    sm.get_active_chat_name.return_value = 'trinity'
-    sm._effective_chat_name.return_value = 'poker_1'
+    sm.get_chat_settings.return_value = {'private_chat': True}
+    assert private_gate(sm) is None
+
+
+def test_gate_passes_mode_tagged_sessions(monkeypatch):
+    _vault_open(monkeypatch)
+    sm = MagicMock()
     sm.get_chat_settings.return_value = {'mode': 'game'}
-    stamp_private_if_unlocked(sm)
+    assert private_gate(sm) is None
     sm.set_named_chat_settings.assert_not_called()
     sm.update_chat_settings.assert_not_called()
 

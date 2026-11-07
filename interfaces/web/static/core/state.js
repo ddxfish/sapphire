@@ -37,6 +37,9 @@ let ttsEnabled = true;
 let sttEnabled = true;
 let sttReady = true;
 let promptPrivacyRequired = false;
+// Vault open + public, non-mode chat: a send opens the private picker
+// (shared/private-picker.js). Painted by scene.js off /api/status.
+let privateGate = false;
 let convMode = { enabled: false, source: null };   // written by features/convo.js only
 
 // State getters/setters
@@ -60,6 +63,8 @@ export const setIsCancelling = (val) => { isCancelling = val; };
 export const releaseOwnership = () => { currentAbortController = null; isCancelling = false; };
 export const getPromptPrivacyRequired = () => promptPrivacyRequired;
 export const setPromptPrivacyRequired = (val) => { promptPrivacyRequired = val; };
+export const getPrivateGate = () => privateGate;
+export const setPrivateGate = (val) => { privateGate = !!val; };
 export const getConvo = () => convMode;
 export const setConvo = (v) => { convMode = { enabled: !!v?.enabled, source: v?.source || null }; };
 

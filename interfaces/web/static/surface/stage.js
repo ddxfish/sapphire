@@ -10,7 +10,7 @@
 //
 // Rules this module holds so no tenant has to (privacy scout, 2026-10-25):
 // - A private chat never has a stage: the tenant is torn down when the chat
-//   beside it is or becomes private (switch, talk-stamp, vault, remote
+//   beside it is or becomes private (switch, private picker, vault, remote
 //   switch); the picker greys out. Unknown privacy counts as private.
 // - The stage never moves the active-chat pointer and never borrows the
 //   rail (surface/organs.js); tenants address their chat by name.

@@ -302,6 +302,13 @@ const processSSEData = (data, handlers) => {
         return { shouldReturn: true };
     }
 
+    if (data.type === 'private_gate') {
+        // The server's private gate refused this turn (vault open, public
+        // chat): the sender restores the draft and opens the picker.
+        if (handlers.onPrivateGate) handlers.onPrivateGate();
+        return {};
+    }
+
     if (data.type === 'notice') {
         // Transient UX signal from backend (dangling toolset, empty-content
         // fallback, etc). Dispatched via event-bus so any view can subscribe
@@ -474,7 +481,8 @@ const _readTurn = async (reader, handlers, onTurnDone, onError) => {
 const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
                                    onToolStart = null, onToolEnd = null,
                                    onStreamStarted = null, onIterationStart = null,
-                                   onQueued = null, onQueuedDropped = null, onMerged = null, onTicket = null }) => {
+                                   onQueued = null, onQueuedDropped = null, onMerged = null, onTicket = null,
+                                   onPrivateGate = null }) => {
     onChunk = _wrapChunkWithAvatarScan(onChunk);
     let res;
     // A half-dead socket can swallow the request and never answer: no
@@ -523,6 +531,7 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
         onQueuedDropped,
         onMerged,
         onTicket,
+        onPrivateGate,
         onReload: () => setTimeout(() => window.location.reload(), 500),
         onLegacyChunk: onChunk
     };
@@ -699,7 +708,8 @@ export const streamChat = (text, onChunk, onComplete, onError, signal = null, pr
     if (viewed) body.chat = viewed;   // the chat on screen, never wherever the pointer moved (hunt 21)
     return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart,
                                onQueued: queueHooks?.onQueued || null, onQueuedDropped: queueHooks?.onQueuedDropped || null,
-                               onMerged: queueHooks?.onMerged || null, onTicket: queueHooks?.onTicket || null });
+                               onMerged: queueHooks?.onMerged || null, onTicket: queueHooks?.onTicket || null,
+                               onPrivateGate: queueHooks?.onPrivateGate || null });
 };
 
 // Take a waiting typed turn out of the chat's inbox (the × on a queued bubble).
