@@ -1,0 +1,65 @@
+{
+  "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+  "version": "v1.1.0",
+  "entity": {
+    "type": "organisation",
+    "role": "owner",
+    "name": "SAPPHIRE BLUE AI LLC",
+    "email": "gregg.hingers@sapphireblue.dev",
+    "description": "Sapphire 1.0 was released December 2025. Sapphire Blue AI LLC is run by a small LLC owned by its two developers. They met early on in development, found they had similar interests and complimentary skills, and continued developing the company and project together. Chris focuses on core development to allow more features; Gregg is making tools for Sapphire to be usable by elderly and disabled people.",
+    "webpageUrl": {
+      "url": "https://github.com/ddxfish/sapphire"
+    }
+  },
+  "projects": [
+    {
+      "guid": "sapphire",
+      "name": "Sapphire",
+      "description": "Sapphire is a free, open-source AI interface: an easy, simple doorway to AI that runs on your own computer, with local or cloud models. It is built for everyone who isn't a technical expert — with elderly and disabled people a central part of it. She talks and listens (local voice and hearing), remembers (her own long-term memory), can see the screen and the room, and can work the computer by voice (PC Hands), so someone who can only speak can still search, email, shop and watch videos. Everything stays private on the user's own machine. Plugins (avatar, camera, hands-free control, email by voice and more) can be made by anyone — even by asking her to build one. Over 330 GitHub stars and 88 forks in its first year on GitHub. Funding would go to making hands-free control reliable for people who can't use a mouse or keyboard, to Windows and Linux support, and to keeping Sapphire free.",
+      "webpageUrl": {
+        "url": "https://github.com/ddxfish/sapphire"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/ddxfish/sapphire"
+      },
+      "licenses": [
+        "spdx:AGPL-3.0-only"
+      ],
+      "tags": [
+        "ai",
+        "llm",
+        "accessibility",
+        "assistive-technology",
+        "voice-assistant",
+        "local-first",
+        "privacy",
+        "self-hosted",
+        "python",
+        "elderly-care"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "bank",
+        "type": "bank",
+        "description": "Bank transfer to the LLC. Details are given privately on request — never published here."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "yearly-grant",
+        "status": "active",
+        "name": "Yearly development grant",
+        "description": "Development of Sapphire: reliable hands-free (voice-only) control for elderly and disabled users, Windows and Linux support, and keeping Sapphire free and open source.",
+        "amount": 25000,
+        "currency": "USD",
+        "frequency": "yearly",
+        "channels": [
+          "bank"
+        ]
+      }
+    ]
+  }
+}

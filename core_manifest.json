@@ -1008,6 +1008,7 @@
     "functions/slash_command.py": "186a3edfd3d358e16758a89d84f85610d2870c381e1a2114ffb550aa0a7c0740",
     "functions/stage.py": "b6d3029d6071dfac644c9c825fdf4efd1abc64f86913a847e9ee98cbdcae9005",
     "functions/web.py": "33f337ac494657b5a4130ebb65e7c6d682bc093f146929b3a18cbcba1aa6804f",
+    "funding.json": "14a624e5c1c7d1800fe9deb3dfe6bc4cccfb5bd29899fa2273fe72c1d7e59fe2",
     "install/requirements-flash.txt": "5f9202fc4fe6a9e2715b4c294bd12da3cd5f1582b6d9195b71bb80f4fab84318",
     "install/requirements-minimal.txt": "7226b0909b9951af8b3c1315e01e7b5ed6f3334d326ec3c9708b238545215d7d",
     "install/requirements-stt.txt": "922b1dbc633889b0f461c7e5525dd1af688e781ea0612590e22e0c08d49c8b53",
