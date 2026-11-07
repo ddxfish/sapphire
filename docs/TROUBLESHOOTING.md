@@ -323,6 +323,11 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 **Forgot the vault passphrase**
 - There is no recovery. The key is derived from the passphrase alone.
 - Restore `user/prompts/prompt_vault.enc` **and** `user/history/sapphire_history.db` together from a backup taken when you still knew it.
+- Or start over: Settings → Privacy → **Delete vault** (asks twice). It deletes the vault and every private chat in it; public chats are untouched. A private Default comes back as an empty public Default.
+
+**Default (or any chat) is stuck private**
+- Know the passphrase: unlock with the padlock, then Chat → Manage → 🔓 on the chat's row.
+- Forgot it: see above. Delete vault is the only way out.
 
 **"Vault file was corrupt — quarantined"**
 - The bad file is renamed `prompt_vault.enc.bad-<timestamp>` beside itself, never deleted.

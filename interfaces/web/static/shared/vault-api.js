@@ -15,6 +15,8 @@ const post = (url, body) => fetchWithTimeout(url, {
 export const vaultSetup = (key) => post('/api/vault/setup', { key });
 export const vaultUnlock = (key) => post('/api/vault/unlock', { key });
 export const vaultLock = () => post('/api/vault/lock');
+// Deletes the vault AND every private chat it encrypts. confirm = the typed words.
+export const vaultDelete = (confirm) => post('/api/vault/delete', { confirm });
 // Change passphrase — current required even while unlocked; lock state preserved.
 export const vaultRekey = (current, newKey) => post('/api/vault/rekey', { current, new: newKey });
 // {kind:'prompt', name, direction:'in'|'out'} or {kind:'piece', comp_type, key, direction}

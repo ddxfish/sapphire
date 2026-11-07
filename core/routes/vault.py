@@ -147,6 +147,27 @@ async def vault_move_batch(request: Request, _=Depends(require_login)):
     return result
 
 
+@router.post("/api/vault/delete")
+async def vault_delete(request: Request, _=Depends(require_login)):
+    """Delete the vault AND every private chat it encrypts — the forgotten-
+    passphrase exit. The client asks twice; the body must carry the typed
+    words too, so no stray POST can do this."""
+    _managed_guard()
+    data = await request.json()
+    if (data.get('confirm') or '').strip().upper() != 'I UNDERSTAND':
+        raise HTTPException(status_code=400, detail="Type I UNDERSTAND to delete the vault")
+    from starlette.concurrency import run_in_threadpool
+    ok, code = await run_in_threadpool(prompt_vault.destroy)
+    if ok:
+        return {"status": "success", "vault": prompt_vault.vault_status()}
+    if code == 'no_vault':
+        raise HTTPException(status_code=404, detail="There is no vault to delete")
+    if code == 'busy':
+        raise HTTPException(status_code=409,
+                            detail="A private chat is still answering — try again when it finishes")
+    raise HTTPException(status_code=500, detail=f"Vault delete failed ({code})")
+
+
 @router.post("/api/vault/lock")
 async def vault_lock(_=Depends(require_login)):
     """Lock NOW. Synchronous by contract (phase 0b): active-preset handoff

@@ -36,6 +36,12 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
             <div class="modal-base" style="max-width:440px;width:92vw;padding:18px">
                 <div style="font-weight:600;margin-bottom:8px">${esc(title)}</div>
                 ${message ? `<div style="font-size:var(--font-sm);margin-bottom:10px;line-height:1.5">${esc(message)}</div>` : ''}
+                ${setup ? `<ul style="font-size:var(--font-sm);line-height:1.5;margin:0 0 10px;padding-left:18px">
+                    <li>Private chats and prompts are encrypted here. Private chats use local models only.</li>
+                    <li><b>Open:</b> your private chats show up, and public chats won't send until you pick or make a private one.</li>
+                    <li><b>Locked:</b> private chats disappear completely until you unlock. Nothing is lost.</li>
+                </ul>
+                <div style="font-size:var(--font-sm);line-height:1.5;margin-bottom:10px">Open or lock it with the padlock in the chat sidebar. It also locks itself when idle.</div>` : ''}
                 <form id="kp-form" action="#">
                     <input type="text" name="username" autocomplete="username"
                         value="sapphire-vault" readonly hidden>

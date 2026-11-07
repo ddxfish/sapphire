@@ -55,6 +55,10 @@ export function openPrivatePicker({ reason = 'send' } = {}) {
                 </form>
                 <button type="button" class="btn-sm" id="pp-make" style="width:100%;margin-bottom:8px">Make “${esc(activeName)}” private</button>
                 <div id="pp-error" style="color:#ef4444;font-size:var(--font-xs);min-height:16px;margin-bottom:8px"></div>
+                <div style="font-size:var(--font-xs);color:var(--text-dim);line-height:1.5;border-top:1px solid var(--border);padding-top:8px;margin-bottom:8px">
+                    To talk in a public chat, lock the vault (the padlock).<br>
+                    To make a private chat public: Chat › Manage, 🔓 on its row.
+                </div>
                 <div class="modal-actions" style="display:flex;justify-content:flex-end">
                     <button type="button" class="btn-sm" id="pp-cancel">Cancel</button>
                 </div>

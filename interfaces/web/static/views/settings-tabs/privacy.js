@@ -5,7 +5,44 @@
 // with that one key rendered by nothing.
 import * as ui from '../../ui.js';
 import { keyPrompt } from '../../shared/key-prompt.js';
-import { vaultSetup, vaultUnlock, vaultLock, vaultRekey, vaultStatus } from '../../shared/vault-api.js';
+import { vaultSetup, vaultUnlock, vaultLock, vaultRekey, vaultStatus, vaultDelete } from '../../shared/vault-api.js';
+
+// Delete-vault's two asks (2026-11-07: a user who couldn't get Default out of
+// the vault even with a picture per click). typed: the words that arm the
+// button, or null for a plain "I understand". Resolves true / false.
+function understand({ title, html, typed = null, okLabel = 'I understand' }) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay active';
+        overlay.innerHTML = `
+            <div class="modal-base" style="max-width:460px;width:92vw;padding:18px">
+                <div style="font-weight:600;margin-bottom:8px">${title}</div>
+                <div style="font-size:var(--font-sm);line-height:1.5;margin-bottom:12px">${html}</div>
+                ${typed ? `<input type="text" id="pu-typed" autocomplete="off" placeholder="${typed}"
+                    style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:12px">` : ''}
+                <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end">
+                    <button type="button" class="btn-sm" id="pu-cancel">Cancel</button>
+                    <button type="button" class="btn-sm" id="pu-ok"
+                        style="background:#ef4444;color:#fff;border-color:#ef4444"${typed ? ' disabled' : ''}>${okLabel}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        const ok = overlay.querySelector('#pu-ok');
+        const input = overlay.querySelector('#pu-typed');
+        const done = (v) => { document.removeEventListener('keydown', onKey); overlay.remove(); resolve(v); };
+        const onKey = (e) => { if (e.key === 'Escape') done(false); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+        overlay.querySelector('#pu-cancel').onclick = () => done(false);
+        ok.onclick = () => done(true);
+        if (input) {
+            input.oninput = () => { ok.disabled = input.value.trim().toUpperCase() !== typed; };
+            input.focus();
+        } else {
+            overlay.querySelector('#pu-cancel').focus();   // the safe button holds focus
+        }
+    });
+}
 
 export default {
     id: 'privacy',
@@ -55,12 +92,13 @@ export default {
                     ${v.exists && !v.unlocked ? '<button class="btn-sm btn-primary" id="pv-unlock">Unlock</button>' : ''}
                     ${v.exists && v.unlocked ? '<button class="btn-sm" id="pv-lock">Lock now</button>' : ''}
                     ${v.exists ? '<button class="btn-sm" id="pv-rekey">Change key</button>' : ''}
+                    ${v.exists ? '<button class="btn-sm" id="pv-delete" style="margin-left:auto;color:#ef4444">Delete vault</button>' : ''}
                 </div>`;
 
             card.querySelector('#pv-setup')?.addEventListener('click', async () => {
                 const res = await keyPrompt({
                     title: 'Set up your prompt vault',
-                    message: 'Private prompts live behind an encrypted vault. Pick a passphrase.',
+                    message: 'Pick a passphrase for your vault.',
                     mode: 'setup',
                     validate: async (k) => { await vaultSetup(k); return ''; },
                 });
@@ -69,7 +107,7 @@ export default {
             card.querySelector('#pv-unlock')?.addEventListener('click', async () => {
                 const res = await keyPrompt({
                     title: 'Unlock the vault',
-                    message: 'Enter your vault passphrase.',
+                    message: "Enter your vault passphrase. Your private chats will show up, and public chats won't send while it's open.",
                     validate: async (k) => { await vaultUnlock(k); return ''; },
                 });
                 if (res?.key) { ui.showToast('Vault unlocked', 'success'); paint(); }
@@ -83,6 +121,35 @@ export default {
                     validate: async (k, current) => { await vaultRekey(current, k); return ''; },
                 });
                 if (res?.key) { ui.showToast('Vault passphrase changed', 'success'); paint(); }
+            });
+            card.querySelector('#pv-delete')?.addEventListener('click', async () => {
+                const first = await understand({
+                    title: 'Delete the vault?',
+                    html: `<ul style="margin:0 0 10px;padding-left:18px">
+                            <li><b>Every private chat is deleted</b>: messages, images, settings.
+                                That includes Default if it's private.</li>
+                            <li>Every private prompt in the vault is deleted.</li>
+                            <li>There is no undo.</li>
+                        </ul>
+                        Remember your passphrase? Don't delete. Unlock the vault instead,
+                        then make a chat public in Chat › Manage (🔓 on its row).`,
+                });
+                if (!first) return;
+                const second = await understand({
+                    title: 'Last check',
+                    html: 'This deletes the vault and all its private chats for good. '
+                        + 'Type <b>I UNDERSTAND</b> to go ahead.',
+                    typed: 'I UNDERSTAND',
+                    okLabel: 'Delete vault',
+                });
+                if (!second) return;
+                try {
+                    await vaultDelete('I UNDERSTAND');
+                    ui.showToast('Vault deleted. Private chats are gone; your public chats are untouched.', 'success');
+                } catch (e) {
+                    ui.showToast(e?.message || 'Vault delete failed', 'error');
+                }
+                paint();
             });
             card.querySelector('#pv-lock')?.addEventListener('click', async () => {
                 try {

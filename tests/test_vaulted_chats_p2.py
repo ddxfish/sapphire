@@ -372,5 +372,7 @@ class TestSealedSaveCalm:
         saves = [d for _, d in events if d and d.get("task") == "Chat Save"]
         assert saves, "expected a Chat Save event"
         msg = saves[-1]["error"]
-        assert "re-syncs" in msg and "lost" not in msg
+        # calm and honest (2026-11-07): earlier rows are safe, the last
+        # change may not be — never "lost", never a false "re-syncs"
+        assert "safe and encrypted" in msg and "lost" not in msg
         assert getattr(sm.current_chat, "_needs_full_resync", False)

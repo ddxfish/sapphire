@@ -19,7 +19,7 @@ The 🔒 button sits in the chat sidebar, right-aligned in the row with **+** an
 | 🔓 blue | Vault unlocked — private mode armed | Locks the vault now |
 | 🔒 amber | You're standing in a private chat while the vault is sealed (rare) | Unlocks so you can see it |
 
-**There is no key recovery.** A lost passphrase is a lost vault. Write it down somewhere safe.
+**There is no key recovery.** A lost passphrase is a lost vault. Write it down somewhere safe. If it's gone, Settings → Privacy → **Delete vault** starts over. That deletes every private chat with it.
 
 The padlock never changes any individual chat's privacy — see below for how a chat becomes private.
 
@@ -152,7 +152,7 @@ One vault, one passphrase (`user/prompts/prompt_vault.enc`, scrypt + AES-256-GCM
 
 VAULT LIFECYCLE:
 - Padlock (chat sidebar; 🔒 sealed / 🔓 open, blue while armed, amber when standing in a private chat while sealed) = vault toggle only: no vault → setup, locked → unlock, unlocked → lock
-- Settings → Privacy: create / unlock / lock now / change passphrase; `VAULT_IDLE_MINUTES` (default 30, min 1)
+- Settings → Privacy: create / unlock / lock now / change passphrase / delete vault (+ all private chats, typed confirm); `VAULT_IDLE_MINUTES` (default 30, min 1)
 - Idle timer auto-locks; user activity resets it; rekey preserves lock state; no key recovery
 - Endpoints: POST /api/vault/setup | /unlock | /lock | /rekey | /move; state rides `vault` on GET /api/status
 - Disabled in managed mode

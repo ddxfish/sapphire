@@ -341,7 +341,7 @@ def test_delete_chat_deletes_rag_scope():
     manager every path passes through: a room guest and a reaped phone chat use no route."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / 'core' / 'chat' / 'history.py').read_text(encoding='utf-8')
-    assert src.count("self._documents_follow('delete_chat'") == 2      # delete_chat, reap_ephemeral_chats
+    assert src.count("self._documents_follow('delete_chat'") == 3      # delete_chat, reap_ephemeral_chats, purge_vaulted_chats
     assert src.count("self._documents_follow('rename_chat'") == 1
 
 

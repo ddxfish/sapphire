@@ -4014,6 +4014,52 @@ class ChatSessionManager:
             logger.warning(f"[VAULT] private-active eviction failed: {e}")
             return None
 
+    def purge_vaulted_chats(self) -> Optional[int]:
+        """The vault is being deleted (prompt_vault.destroy): every vaulted
+        chat is ciphertext whose only key is about to go. Remove them all —
+        delete_chat's cleanup, minus anything that writes their names down
+        (logs, events, hooks: F3). One transaction, so a failure removes
+        nothing. Then the pointer leaves a purged chat or the backrooms for a
+        public landing (default comes back, public, if it was vaulted).
+        Count, or None on failure (the caller then keeps the vault)."""
+        self._ensure_db()
+        try:
+            with self._lock, self._get_connection() as conn:
+                names = [r["name"] for r in conn.execute(
+                    "SELECT name FROM chats WHERE vaulted = 1")]
+                for n in names:
+                    conn.execute("DELETE FROM chats WHERE name = ?", (n,))
+                    conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (n,))
+                    for table in ("tool_images", "plugin_chat_data",
+                                  "chat_messages_quarantine"):
+                        try:
+                            conn.execute(f"DELETE FROM {table} WHERE chat_name = ?", (n,))
+                        except sqlite3.OperationalError:
+                            pass   # table may not exist yet
+                conn.commit()
+        except Exception as e:
+            logger.error(f"[VAULT] vaulted-chat purge failed: {e}")
+            return None
+        for n in names:
+            _forget_fit(n)
+            _idle_moved(n)
+            self._documents_follow('delete_chat', n)
+            self._rows_state.pop(n, None)
+            self._rows_degraded.pop(n, None)
+            self._degraded_toasted.discard(n)
+            if n == self.landing_chat_name:
+                self.landing_chat_name = None
+        self._ensure_default_exists()
+        active = self.active_chat_name
+        if active in names or (self.current_settings or {}).get('mode') == 'limbo':
+            target = self._safe_landing(None)
+            if target and self.set_active_chat(target, flush=False):
+                try:
+                    publish(Events.CHAT_SWITCHED, {"name": target, "origin": None})
+                except Exception:
+                    pass
+        return len(names)
+
     # ── Vaulted-chat migrations (Phase 2, 2026-08-15) ──
 
     def vault_chat(self, chat_name: str):

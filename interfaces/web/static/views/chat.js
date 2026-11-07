@@ -314,7 +314,7 @@ export default {
                 if (!v.exists) {
                     const res = await keyPrompt({
                         title: 'Set up your vault',
-                        message: 'Private mode lives behind an encrypted vault. Pick a passphrase.',
+                        message: 'Pick a passphrase for your vault.',
                         mode: 'setup',
                         validate: async (key) => { await vaultSetup(key); return ''; }
                     });
@@ -323,7 +323,7 @@ export default {
                 } else if (!v.unlocked) {
                     const res = await keyPrompt({
                         title: 'Unlock the vault',
-                        message: 'Enter your vault passphrase.',
+                        message: "Enter your vault passphrase. Your private chats will show up, and public chats won't send while it's open.",
                         validate: async (key) => { await vaultUnlock(key); return ''; }
                     });
                     if (!res?.key) return;

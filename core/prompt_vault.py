@@ -511,6 +511,48 @@ def lock(reason="") -> bool:
     return True
 
 
+def destroy() -> tuple:
+    """Delete the vault for good (Settings › Privacy, behind two confirms) —
+    the way out of a forgotten passphrase. Its key is the ONLY key to every
+    vaulted chat, so those go first: chats, then the file. A failed chat
+    purge keeps the vault (ciphertext rows with no key are garbage forever;
+    a key with no rows is harmless). No passphrase asked — the person who
+    needs this is the one who lost it. (ok, code) — '' | 'no_vault' |
+    'busy' | 'purge_failed' | 'delete_failed'."""
+    global _refs, _refs_loaded, _piece_salt, _piece_hashes
+    if not vault_exists():
+        return False, 'no_vault'
+    lock(reason="deleting")       # flush, evict, hand off — the normal seal
+    if vault_unlocked():
+        return False, 'busy'      # lock deferred: a private reply is streaming
+    try:
+        from core.api_fastapi import get_system
+        n = get_system().llm_chat.session_manager.purge_vaulted_chats()
+    except Exception as e:
+        logger.error(f"[VAULT] delete: chat purge failed: {e}")
+        n = None
+    if n is None:
+        return False, 'purge_failed'
+    with _lock:
+        if _key is not None:      # unlocked again mid-delete: keep it
+            return False, 'busy'
+        try:
+            # the frame, its .tmp and any quarantined .bad-* copies; the refs
+            # sidecar and its .tmp
+            for p in [*VAULT_PATH.parent.glob(VAULT_PATH.name + '*'),
+                      *REFS_PATH.parent.glob(REFS_PATH.name + '*')]:
+                p.unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"[VAULT] delete: file removal failed: {e}")
+            return False, 'delete_failed'
+        _refs, _refs_loaded = {}, True
+        _piece_salt, _piece_hashes = None, set()
+    logger.warning(f"[VAULT] deleted by the user ({n} private chat(s) removed)")
+    _audit_row({'item': 'vault', 'action': 'deleted'})
+    _publish("vault_changed")
+    return True, ''
+
+
 def rekey(current, new) -> tuple:
     """Change the vault passphrase. (ok, code) — code '' | 'bad_passphrase'
     | 'no_vault' | 'wrong_key' | 'corrupt' | 'save_failed'.
