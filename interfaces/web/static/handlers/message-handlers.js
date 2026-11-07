@@ -24,6 +24,17 @@ export async function handleTrash(idx) {
     if (len !== null) setHistLen(len);
 }
 
+// The private gate, read off a FRESH status (a stale painted flag here loses
+// a reply: regen deletes before the server can refuse). Opens the picker.
+async function _gated() {
+    const { gateFrom, openPrivatePicker } = await import('../shared/private-picker.js');
+    if (getPrivateGate() || gateFrom(await api.fetchStatus().catch(() => null))) {
+        openPrivatePicker({ reason: 'send' });
+        return true;
+    }
+    return false;
+}
+
 // One regen at a time from this tab, from the click: busy is only set after
 // the history fetch, so a slow link let a second confirmed click start a
 // second flow that hid Stop for the first (hunt 21).
@@ -40,13 +51,7 @@ export async function handleRegen(idx, ask = true) {
     // that point loses the message).
     // The private gate too: the server refuses a public-chat turn while the
     // vault is open, and by then the old reply would already be gone.
-    {   // fresh status, not the painted flag: a stale flag here loses a reply
-        const { gateFrom, openPrivatePicker } = await import('../shared/private-picker.js');
-        if (getPrivateGate() || gateFrom(await api.fetchStatus().catch(() => null))) {
-            openPrivatePicker({ reason: 'send' });
-            return;
-        }
-    }
+    if (await _gated()) return;
     if (getPromptPrivacyRequired()) {
         ui.showToast('This prompt is marked private — unlock the vault (🔒) to talk with it', 'error');
         return;
@@ -59,6 +64,9 @@ export async function handleRegen(idx, ask = true) {
     // turn never flipped isProc and regen proceeded into a 409 AFTER
     // deleting the turn (S1 #3, hunt 2026-08-30).
     if (ask && !confirm('Regenerate this response?')) return;
+    // again AFTER the dialog: it can sit open while the vault opens in
+    // another tab, and the delete below runs before the server's refusal
+    if (ask && await _gated()) return;
 
     // Regen means "that answer was wrong" — cut its voice at the click, not
     // at the new turn's first chunk (a slow CPU = 10s+ of the wrong answer
@@ -153,13 +161,7 @@ export async function handleContinue(idx, ask = true) {
         console.log('Continue blocked: isProc is true');
         return;
     }
-    {   // fresh status, not the painted flag: a stale flag here loses a reply
-        const { gateFrom, openPrivatePicker } = await import('../shared/private-picker.js');
-        if (getPrivateGate() || gateFrom(await api.fetchStatus().catch(() => null))) {
-            openPrivatePicker({ reason: 'send' });
-            return;
-        }
-    }
+    if (await _gated()) return;
     console.log(`Continuing message ${idx}`);
 
     const abortController = new AbortController();

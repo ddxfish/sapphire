@@ -142,3 +142,22 @@ def test_route_requires_typed_words():
             asyncio.run(rv.vault_delete(Req()))
         assert e.value.status_code == 400
         d.assert_not_called()
+
+
+def test_failed_eviction_never_saves_private_rows_into_new_default(world):
+    """Scout 2026-11-07: Default private, the lock-time eviction never ran
+    (sealed by hand, as when no landing exists), its DECRYPTED rows still in
+    the buffer. The purge recreates 'default' under the same name — the
+    stale buffer must not save into the new public chat in plaintext."""
+    sm = world.sm
+    _make_private(sm, 'default')
+    sm._save_current_chat()
+    with pv._lock:
+        pv._key = pv._salt = pv._data = None          # sealed, no eviction
+    assert sm.get_active_chat_name() == 'default'
+    assert any(m.get('content') == 'in default' for m in sm.current_chat.messages)
+    assert pv.destroy()[0]
+    sm._save_current_chat()                            # any later save
+    assert sm.read_chat_messages('default') == []
+    assert not sm.get_chat_settings().get('private_chat')
+    assert sm.current_chat.messages == []

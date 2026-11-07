@@ -34,7 +34,8 @@ RING_CHARS = 256_000      # text held for reattach; past it the head drops → r
 RUN_CHARS = 4096          # a content run closes past this so eviction has granularity
 VIEWER_QUEUE = 4000       # a viewer this far behind is dropped; the turn never waits
 _RING_TYPES = {'stream_started', 'iteration_start', 'content', 'tool_pending',
-               'tool_start', 'tool_end', 'notice', 'reload', 'llm_done', 'turn_end'}
+               'tool_start', 'tool_end', 'notice', 'reload', 'llm_done', 'turn_end',
+               'private_gate'}   # a reattached tab still restores the draft + picker
 _AUDIO_TYPES = {'tts_stream_start', 'tts_chunk', 'tts_stream_end'}
 _END = object()
 

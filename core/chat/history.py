@@ -4017,8 +4017,10 @@ class ChatSessionManager:
     def purge_vaulted_chats(self) -> Optional[int]:
         """The vault is being deleted (prompt_vault.destroy): every vaulted
         chat is ciphertext whose only key is about to go. Remove them all —
-        delete_chat's cleanup, minus anything that writes their names down
-        (logs, events, hooks: F3). One transaction, so a failure removes
+        delete_chat's cleanup, minus the events, hooks and log lines of its
+        own that would write their names down (F3). Known gap: the documents
+        cleanup still logs each knowledge-scope name (memory plugin's
+        delete_scope; same as a single delete). One transaction, so a failure removes
         nothing. Then the pointer leaves a purged chat or the backrooms for a
         public landing (default comes back, public, if it was vaulted).
         Count, or None on failure (the caller then keeps the vault)."""
@@ -4051,14 +4053,36 @@ class ChatSessionManager:
                 self.landing_chat_name = None
         self._ensure_default_exists()
         active = self.active_chat_name
-        if active in names or (self.current_settings or {}).get('mode') == 'limbo':
+        if active in names:
+            # The buffer may still hold the purged chat's DECRYPTED rows (a
+            # lock-time eviction that couldn't land). Wipe it before anything
+            # can save, and load the landing explicitly: set_active_chat
+            # skips the reload on a same name, and 'default' comes back under
+            # the purged default's name — its old rows would save into the
+            # new public chat in plaintext (scout, 2026-11-07).
+            self.current_chat.messages = []
+            self.current_settings = get_system_defaults()
             target = self._safe_landing(None)
-            if target and self.set_active_chat(target, flush=False):
-                try:
-                    publish(Events.CHAT_SWITCHED, {"name": target, "origin": None})
-                except Exception:
-                    pass
+            # same name: reload by hand; set_active_chat then applies (it
+            # skips the reload on a same name but still fires on_switched)
+            ok = bool(target) and (target != active or self._load_chat(target)) \
+                and self.set_active_chat(target, flush=False)
+            if ok:
+                self._publish_landing(target)
+            else:
+                logger.error("[VAULT] no landing after the purge — in-memory state "
+                             "cleared; saves drop until a chat loads")
+        elif (self.current_settings or {}).get('mode') == 'limbo':
+            target = self._safe_landing(None)
+            if target and target != active and self.set_active_chat(target, flush=False):
+                self._publish_landing(target)
         return len(names)
+
+    def _publish_landing(self, target):
+        try:
+            publish(Events.CHAT_SWITCHED, {"name": target, "origin": None})
+        except Exception:
+            pass
 
     # ── Vaulted-chat migrations (Phase 2, 2026-08-15) ──
 
