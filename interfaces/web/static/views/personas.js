@@ -227,6 +227,7 @@ function render() {
             idPrefix: 'pa-s-',
             enabledPlugins,
             cssClasses: { field: 'pa-field', fieldRow: 'pa-field-row' },
+            unsetValue: 'none',   // a persona scope nobody picked is off, not 'default'
         };
         const settings = selectedData?.settings || {};
         renderScopeDropdowns(scopeContainer, scopeDeclarations, settings, rendererOptions);
@@ -859,7 +860,7 @@ function collectSettings() {
     // attribute discovery. Supports all 9 scopes dynamically — pre-existing silent
     // bug fixed for free (telegram_scope and discord_scope can now be saved on personas).
     const scopeContainer = container.querySelector('#pa-scope-dropdowns');
-    const scopeFields = readScopeSettingsFromDom(scopeContainer, { missingValue: 'default' });
+    const scopeFields = readScopeSettingsFromDom(scopeContainer, { missingValue: 'none' });
 
     // '' = "— not set —": left out, and the server's merge keeps the
     // record as it is instead of persisting whatever option 0 was.

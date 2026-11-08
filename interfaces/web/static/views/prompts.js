@@ -1258,11 +1258,12 @@ function createPrompt() {
         // A new assembled prompt gets FRESH story-specific pieces named after
         // it (character/location/scenario), so you land editing YOUR prompt —
         // not a body full of 'sapphire' and 'default'. Same-named existing
-        // pieces are referenced, never overwritten. Generic sections stay
-        // 'default'; extras/emotions start empty.
+        // pieces are referenced, never overwritten. Generic sections start on
+        // the shipped empty 'none' (stock has no 'default' piece — those refs
+        // dangled on every new prompt); extras/emotions start empty.
         const data = type === 'monolith'
             ? { type: 'monolith', content: '', privacy_required: false }
-            : { type: 'assembled', components: { character: name, location: name, goals: 'default', relationship: 'default', format: 'default', scenario: name, extras: [], emotions: [] }, privacy_required: false };
+            : { type: 'assembled', components: { character: name, location: name, goals: 'none', relationship: 'none', format: 'none', scenario: name, extras: [], emotions: [] }, privacy_required: false };
         try {
             // Prompt first, with create: a taken name 409s before any piece
             // is written (no orphans), and never replaces the existing one.
@@ -1417,7 +1418,7 @@ async function deleteDefinition(type, key) {
     const list = others.slice(0, 6).join(', ') + (others.length > 6 ? '…' : '');
     if (!confirm(others.length
         ? `Move "${key}" (${type}) to the trash?\n\nAlso used by ${others.length} other prompt(s): ${list}\n` +
-          `They'll show ⚠ missing until you restore it from 🧹 Cleanup.`
+          `They'll render without it until you restore it from 🧹 Cleanup.`
         : `Move "${key}" (${type}) to the trash?\n\nYou can restore it from 🧹 Cleanup.`)) return;
     try {
         const res = await trashPieces([{ type, key }]);

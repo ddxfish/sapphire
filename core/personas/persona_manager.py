@@ -30,6 +30,15 @@ def get_persona_settings_keys() -> list:
     return _STATIC_PERSONA_SETTINGS_KEYS + scope_setting_keys()
 
 
+def _scopes_off() -> dict:
+    """Every scope a persona can carry, set to 'none'. A NEW persona starts
+    with nothing bound: it used to copy the active chat's scopes (Sapphire's
+    memory, her email and bot) or read as 'default' — an account most
+    installs never made (Krem, 2026-11-08). The user picks what it gets."""
+    from core.chat.function_manager import scope_setting_keys
+    return {k: 'none' for k in scope_setting_keys()}
+
+
 def __getattr__(name):
     """Module-level backcompat shim for `from ... import PERSONA_SETTINGS_KEYS`.
 
@@ -232,7 +241,9 @@ class PersonaManager:
                 "tagline": data.get("tagline", ""),
                 "avatar": None,
                 "avatar_full": None,
-                "settings": self._clean_settings(data.get("settings", {}))
+                # Scopes the caller names win; the rest start off.
+                "settings": self._clean_settings(
+                    {**_scopes_off(), **(data.get("settings") or {})})
             }
             self._personas[safe_name] = persona
             ok = self._save_to_user()
@@ -338,7 +349,10 @@ class PersonaManager:
             return False
 
         with self._lock:
-            settings = self._clean_settings(chat_settings)
+            # The chat's prompt/voice/model come along; its scopes don't —
+            # including keys of a plugin that's off right now (goal/knowledge).
+            kept = {k: v for k, v in chat_settings.items() if not k.endswith('_scope')}
+            settings = self._clean_settings({**kept, **_scopes_off()})
             persona = {
                 "name": safe_name,
                 "tagline": "",

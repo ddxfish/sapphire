@@ -50,6 +50,10 @@ const DEFAULT_CSS = {
  *   @param {Function}  options.onNavigate(navTarget, scopeValue)  arrow ↗ button handler
  *   @param {Function}  options.onCreateScope(scopeKey)            + button handler
  *   @param {boolean}   options.includeNoneOption default true
+ *   @param {string}    options.unsetValue        what an absent setting shows as
+ *                                                (default 'default' = the runtime
+ *                                                fallback; the persona editor
+ *                                                passes 'none')
  */
 export function renderScopeDropdowns(container, declarations, settings, options = {}) {
     if (!container) return;
@@ -57,6 +61,7 @@ export function renderScopeDropdowns(container, declarations, settings, options 
     const enabledPlugins = options.enabledPlugins || null;
     const css = { ...DEFAULT_CSS, ...(options.cssClasses || {}) };
     const includeNone = options.includeNoneOption !== false;
+    const unsetValue = options.unsetValue || 'default';
 
     let html = '';
     for (const decl of (declarations || [])) {
@@ -66,7 +71,7 @@ export function renderScopeDropdowns(container, declarations, settings, options 
         const id = `${prefix}${decl.key}-scope`;
         const label = _esc(decl.label || decl.key);
         const settingKey = `${decl.key}_scope`;
-        const currentValue = (settings && settings[settingKey]) || 'default';
+        const currentValue = (settings && settings[settingKey]) || unsetValue;
 
         const navBtn = (options.onNavigate && decl.nav_target)
             ? `<button type="button" class="${css.navButton}" data-scope-nav="${_esc(decl.nav_target)}" data-scope-key="${_esc(decl.key)}" title="Open in Mind">&#x2197;</button>`
@@ -82,21 +87,14 @@ export function renderScopeDropdowns(container, declarations, settings, options 
             : '';
 
         // Seed with the current value so the dropdown reflects the saved setting
-        // immediately, even before populateScopeOptions runs. Three cases:
-        //   - current is 'default'      → mark default option selected
-        //   - current is 'none'         → mark none option selected
-        //   - current is something else → seed a synthetic option so value is preserved
-        // populateScopeOptions() will replace the body with real fetched data afterward,
-        // then re-select the current value against the real options.
-        const isDefault = currentValue === 'default';
+        // before populateScopeOptions swaps in the real list. No stock 'default'
+        // option: it read as a real scope where none existed, and the reader
+        // then saved it (personas pointed email/bitcoin at an account named
+        // 'default' that nobody made — 2026-11-08).
         const isNone = currentValue === 'none';
-        const noneSelected = isNone ? ' selected' : '';
-        const defaultSelected = isDefault ? ' selected' : '';
-        const noneOptSeeded = includeNone ? `<option value="none"${noneSelected}>None</option>` : '';
-        let seedOpt = `<option value="default"${defaultSelected}>default</option>`;
-        if (!isDefault && !isNone && currentValue) {
-            seedOpt += `<option value="${_esc(currentValue)}" selected>${_esc(currentValue)}</option>`;
-        }
+        const noneOptSeeded = includeNone ? `<option value="none"${isNone ? ' selected' : ''}>None</option>` : '';
+        const seedOpt = (!isNone && currentValue)
+            ? `<option value="${_esc(currentValue)}" selected>${_esc(currentValue)}</option>` : '';
 
         const pluginAttr = decl.plugin ? ` data-scope-plugin="${_esc(decl.plugin)}"` : '';
 
@@ -193,6 +191,7 @@ export async function populateScopeOptions(container, declarations, scopeData, s
     if (!container) return;
     const prefix = options.idPrefix || 'sb-';
     const includeNone = options.includeNoneOption !== false;
+    const unsetValue = options.unsetValue || 'default';
 
     // Pre-load format_js modules for declarations that have them
     const formatters = {};
@@ -220,7 +219,7 @@ export async function populateScopeOptions(container, declarations, scopeData, s
         const settingKey = `${decl.key}_scope`;
         // A live pick (touched during the fetch) outranks the seed value.
         const current = (sel.dataset.touched && sel.value)
-            || (settings && settings[settingKey]) || 'default';
+            || (settings && settings[settingKey]) || unsetValue;
         const valueField = decl.value_field || 'name';
         const formatter = formatters[decl.key];
         const labelTemplate = decl.label_template || '{name}';
@@ -244,18 +243,15 @@ export async function populateScopeOptions(container, declarations, scopeData, s
 
         sel.innerHTML = noneOpt + optsHtml;
 
-        // Try to select the current value. If it isn't in the options list,
-        // inject a 'default' option so the value is at least visible.
-        // (This matches existing behavior in chat.js where 'default' was always
-        // expected to be in the API response for memory/knowledge/goals/people.)
+        // Select the current value. One that doesn't exist (a deleted
+        // account, a 'default' nobody made) stays visible AND says so — kept
+        // as the value so nothing changes until the user picks.
         if (current && [...sel.options].some(o => o.value === current)) {
             sel.value = current;
         } else if (current && current !== 'none') {
-            // Inject the missing value as a visible option so the user can see
-            // their saved selection even if the API doesn't return it.
             const synthetic = document.createElement('option');
             synthetic.value = current;
-            synthetic.textContent = current;
+            synthetic.textContent = `${current} (missing)`;
             sel.appendChild(synthetic);
             sel.value = current;
         } else {

@@ -155,7 +155,7 @@ function _showOverwriteModal(info, doImport, onDone) {
         </div>`).join('');
 
     const pieceSection = (info.pieces || []).length
-        ? `<div class="pic-section-label">${info.pieces.length} existing prompt piece${info.pieces.length === 1 ? '' : 's'} differ — pieces are shared (overwriting affects other prompts that use them). Uncheck any to keep your local copy:</div>${pieceList}`
+        ? `<div class="pic-section-label">${info.pieces.length} existing prompt piece${info.pieces.length === 1 ? ' differs' : 's differ'} — pieces are shared (overwriting affects other prompts that use them). Uncheck any to keep your local copy:</div>${pieceList}`
         : '';
     const sameNote = info.identical
         ? `<div class="pic-sub">${info.identical} piece${info.identical === 1 ? '' : 's'} already match yours — nothing to change.</div>` : '';

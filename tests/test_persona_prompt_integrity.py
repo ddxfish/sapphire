@@ -300,3 +300,32 @@ def test_card_new_persona_installs_prompt_then_pieces(importer, piece_store, mgr
     assert prompt_manager._monoliths['nova']['content'] == 'You are Nova.'
     assert piece_store['character']['nova'] == 'Nova text'
     assert mgr._personas['nova']['settings']['prompt'] == 'nova'
+
+
+# ── New personas start with every scope off (Krem, 2026-11-08) ──
+
+@pytest.fixture
+def two_scopes(monkeypatch):
+    import core.chat.function_manager as fm
+    monkeypatch.setattr(fm, 'scope_setting_keys', lambda: ['memory_scope', 'email_scope'])
+
+
+def test_new_from_chat_drops_chat_scopes(mgr, two_scopes):
+    chat = {'prompt': 'ronnie', 'memory_scope': 'sapphire', 'email_scope': 'sapphire',
+            'goal_scope': 'default'}   # a scope whose plugin is off
+    assert mgr.create_from_settings('neo', chat)
+    s = mgr._personas['neo']['settings']
+    assert s['prompt'] == 'ronnie' and 'goal_scope' not in s
+    assert s['memory_scope'] == 'none' and s['email_scope'] == 'none'
+
+
+def test_create_scopes_off_unless_named(mgr, two_scopes):
+    assert mgr.create('neo', {'settings': {'memory_scope': 'neo'}})
+    s = mgr._personas['neo']['settings']
+    assert s['memory_scope'] == 'neo' and s['email_scope'] == 'none'
+
+
+def test_duplicate_keeps_source_scopes(mgr, two_scopes):
+    mgr._personas['zed']['settings']['memory_scope'] = 'zed'
+    assert mgr.duplicate('zed', 'zed2')
+    assert mgr._personas['zed2']['settings']['memory_scope'] == 'zed'
