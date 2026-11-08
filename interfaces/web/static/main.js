@@ -384,6 +384,7 @@ let _pluginLoadCounter = 0;
 
 function loadPluginScripts(plugins) {
     const currentNames = new Set();
+    const loads = [];
     for (const p of plugins) {
         if (!p.enabled || !p.has_script) continue;
         currentNames.add(p.name);
@@ -392,11 +393,15 @@ function loadPluginScripts(plugins) {
         _loadedPluginScripts.set(p.name, loadId);
         const cacheBust = _v ? `${_v}&t=${loadId}` : `?t=${loadId}`;
         const url = `/plugin-web/${p.name}/main.js${cacheBust}`;
-        import(url).then(mod => {
+        loads.push(import(url).then(mod => {
             if (mod.default?.init) mod.default.init();
             console.log(`[Plugins] Loaded script: ${p.name}`);
-        }).catch(() => {}); // Plugin has no main.js or it failed — that's fine
+        }).catch(() => {})); // Plugin has no main.js or it failed — that's fine
     }
+    // Theme self-heal waits on this before calling a saved id dead (legacy
+    // theme plugins paint from their main.js). Re-resolving is a no-op.
+    Promise.allSettled(loads).then(() => import('./core/theme.js'))
+        .then(m => m.pluginScriptsSettled()).catch(() => {});
     // Forget any plugins that are no longer enabled+has_script (uninstall /
     // toggle off). Lets a later re-enable / reinstall reload cleanly.
     for (const tracked of [..._loadedPluginScripts.keys()]) {

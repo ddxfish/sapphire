@@ -66,7 +66,8 @@
                         });
                     }
                 } else {
-                    // Core theme — load from static/themes/
+                    // Core theme — load from static/themes/. Legacy (pre-v2)
+                    // theme plugins hook this link's id + href: keep both.
                     var link = document.createElement('link');
                     link.id = 'theme-stylesheet';
                     link.rel = 'stylesheet';

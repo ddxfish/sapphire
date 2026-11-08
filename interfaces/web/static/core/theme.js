@@ -166,6 +166,33 @@ export function applyTheme(theme, opts = {}) {
     _current = theme;
 }
 
+// Legacy theme plugins (pre-v2: bare data-theme ids, no capabilities.themes)
+// paint themselves from their own main.js by hooking #theme-stylesheet. An
+// unknown saved id is only dead if, once plugin scripts settle, no loaded
+// sheet targets it — otherwise it has a painter and we stand aside.
+let _pluginsSettled;
+const _pluginsReady = new Promise(r => { _pluginsSettled = r; });
+export function pluginScriptsSettled() { _pluginsSettled(); }
+
+function _sheetTargets(id) {
+    const sel = `[data-theme="${id}"]`;
+    for (const sheet of document.styleSheets) {
+        let rules;
+        try { rules = sheet.cssRules; } catch { continue; }   // cross-origin
+        for (const r of rules) if (r.selectorText?.includes(sel)) return true;
+    }
+    return false;
+}
+
+async function _paintedByPlugin(id) {
+    await Promise.race([_pluginsReady, new Promise(r => setTimeout(r, 5000))]);
+    for (let i = 0; i < 10; i++) {   // their sheets land after their script runs
+        if (_sheetTargets(id)) return true;
+        await new Promise(r => setTimeout(r, 300));
+    }
+    return false;
+}
+
 // Boot: fetch the authoritative list, re-assert the saved theme through the
 // one apply path (bundle font/bg and settings the inline guard can't know),
 // self-heal a dead saved id (lifecycle #8), and wire multi-tab sync (#10).
@@ -176,6 +203,9 @@ export async function initTheme() {
     const theme = _themes.find(t => t.id === savedId);
     if (theme) {
         applyTheme(theme, { persist: false });
+    } else if (await _paintedByPlugin(savedId)) {
+        _current = { id: savedId, source: 'legacy' };
+        console.info(`[Theme] '${savedId}' is painted by a legacy theme plugin — leaving it alone`);
     } else {
         const fallback = _themes.find(t => t.id === _defaultId) || _themes[0];
         console.warn(`[Theme] saved theme '${savedId}' not available — falling back to '${fallback.id}'`);
