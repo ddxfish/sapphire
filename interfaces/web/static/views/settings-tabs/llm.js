@@ -213,7 +213,7 @@ export default {
                 .map(c => c.dataset.provider);
             if (renderedOrder.length && JSON.stringify(renderedOrder) !== JSON.stringify(storedOrder)) {
                 updateFallbackOrder(renderedOrder)
-                    .then(() => { ctx.commit('LLM_FALLBACK_ORDER', renderedOrder); })
+                    .then(r => _commitOrder(ctx, r, renderedOrder))
                     .catch(() => {});   // next drag persists it
             }
         }
@@ -221,8 +221,7 @@ export default {
         // Drag-drop reorder — the list IS the full fallback order (core + custom)
         initProviderDragDrop(el.querySelector('#providers-list'), async order => {
             try {
-                await updateFallbackOrder(order);
-                ctx.commit('LLM_FALLBACK_ORDER', order);   // tab switch re-renders from this snapshot (scout U4/S10)
+                _commitOrder(ctx, await updateFallbackOrder(order), order);   // tab switch re-renders from this snapshot (scout U4/S10)
             } catch (e) {
                 // Fire-and-forget left the UI showing an order the disk never
                 // got — surface the failure so the user re-drags.
@@ -284,7 +283,12 @@ export default {
 };
 
 // Setup wizard only: the Sapphire Launcher's LLM (core/launcher_llm.py). The
-// check also adds it when it came up after boot; then the rows repaint once.
+// check also adds it when it came up after boot. Whenever the server has the
+// provider and this page's data doesn't (boot added it after this page
+// loaded, another tab did), repaint once: a drag from the stale list would
+// otherwise save an order without it. Only while this tab is still the one
+// showing (the person may have clicked Next during the probe).
+let _launcherRepainted = false;
 async function _launcherBanner(el, ctx) {
     const box = el.querySelector('#launcher-llm-banner');
     if (!box) return;
@@ -292,16 +296,35 @@ async function _launcherBanner(el, ctx) {
     try {
         s = await fetchWithTimeout('/api/llm/launcher/check', { method: 'POST' }, 8000);
     } catch { return; }
-    if (!s) return;
-    if (s.added_now) { ctx.refreshTab(); return; }
-    if (!s.provider || !box.isConnected) return;
+    if (!s?.provider) return;
+    const known = s.provider in (ctx.getValue('LLM_CUSTOM_PROVIDERS') || {});
+    if (!known && !_launcherRepainted) {
+        _launcherRepainted = true;
+        if (ctx.isTabActive('llm')) ctx.refreshTab();
+        return;
+    }
+    if (!box.isConnected) return;
+    const name = _esc(s.name);
+    const place = s.first_in_auto ? ': it is first in Auto' : ': it is in Auto, after your other providers';
     const ctxK = s.n_ctx ? `, ${Math.round(s.n_ctx / 1024)}K context` : '';
-    box.innerHTML = s.running
-        ? `<strong>\u2714 ${_esc(s.name)} is running${s.model ? ` (${_esc(s.model)}${ctxK})` : ''}.</strong>
-           Her brain is already set${s.first_in_auto ? ': it is first in Auto' : ''}. Everything below is optional.`
-        : `<strong>${_esc(s.name)} is set up, but its LLM isn't running.</strong>
-           Start it in the launcher and she's ready to talk. Everything below is optional.`;
-    box.hidden = false;
+    box.innerHTML = {
+        running: `<strong>\u2714 ${name} is running${s.model ? ` (${_esc(s.model)}${ctxK})` : ''}.</strong>
+           Her brain is already set${place}. Everything below is optional.`,
+        loading: `<strong>${name} is loading its model.</strong>
+           Give it a moment and she's ready to talk${place}. Everything below is optional.`,
+        stopped: `<strong>${name} is set up, but its LLM isn't running.</strong>
+           Start it in the launcher and she's ready to talk. Everything below is optional.`,
+    }[s.state] || '';
+    box.hidden = !box.innerHTML;
+}
+
+// The server merges a sent order with providers this page didn't know
+// (core/routes/settings.py update_fallback_order): commit what it stored,
+// and repaint when that holds a row this page never drew.
+function _commitOrder(ctx, r, sent) {
+    const stored = Array.isArray(r?.order) ? r.order : sent;
+    ctx.commit('LLM_FALLBACK_ORDER', stored);
+    if (stored.some(k => !sent.includes(k)) && ctx.isTabActive('llm')) ctx.refreshTab();
 }
 
 function _esc(s) { return s ? s.replace(/</g, '&lt;').replace(/>/g, '&gt;') : ''; }
@@ -398,7 +421,7 @@ function _advancedFieldsHtml(prefix, v = {}) {
                     </label>
                 </div>
                 <div class="text-muted" style="font-size:0.8em;margin-left:24px;margin-top:2px">
-                    Tries the right switch per model — GLM/Z.AI, Qwen, Fireworks reasoning, Claude (incl. Anthropic-compatible), and Gemini (2.5 Flash stops; 3.x and 2.5 Pro can't, so they think the least they allow). OpenAI o-series/GPT-5 can't be disabled from here yet — hit 🧠 Thinking to see what a given model actually does. Cuts latency by skipping the reasoning phase.
+                    Any model name: llama.cpp (Sapphire Launcher), Ollama and vLLM get the shared open-server switches; GLM/Z.AI, DeepSeek, Fireworks reasoning, Claude (incl. Anthropic-compatible) and Gemini (2.5 Flash stops; 3.x and 2.5 Pro can't, so they think the least they allow) get their own. LM Studio ignores it: use its Enable Thinking switch when loading the model. OpenAI o-series/GPT-5 can't be disabled from here yet — hit 🧠 Thinking to see what a given model actually does. Cuts latency by skipping the reasoning phase.
                 </div>
                 <div class="field-row" style="margin-top:8px;align-items:flex-start">
                     <label style="padding-top:4px">Extra body (JSON)</label>

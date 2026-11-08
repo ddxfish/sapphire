@@ -41,7 +41,11 @@ logger = logging.getLogger(__name__)
 # cancel_check. Short enough to feel snappy on user-stop, long enough
 # to not burn CPU when synth is the normal-case bottleneck.
 _FLUSH_POLL_TIMEOUT_S = 0.1
-# Hard ceiling per future — if synth genuinely stalls (kokoro hung), bail.
+# Stall ceiling per chunk: no progress for this long = the engine hung, bail.
+# Counted from when the worker STARTED synth and reset on every segment, so
+# queue time behind earlier chunks and a slow-but-steady engine never trip it
+# (2026-11-08: a 746-char Audio8 chunk waited 18s for the GPU, synthesized in
+# 22s, and was dropped at 30s with its audio 11s from done).
 _FLUSH_HARD_TIMEOUT_S = 30.0
 
 
@@ -292,7 +296,7 @@ class StreamingTTSPump:
                 break
             seg_queue, done_evt, fut, meta = self.pending[0]
             chunk_idx = meta.get("index")
-            deadline = time.monotonic() + _FLUSH_HARD_TIMEOUT_S
+            waiting_since = time.monotonic()
             # Cumulative counter on meta — picks up any segments already
             # emitted by _drain_ready for this same chunk during prior
             # push() calls. Without this, flush_and_close would log only
@@ -312,7 +316,11 @@ class StreamingTTSPump:
                     # Empty + worker done = we're finished with this chunk.
                     if done_evt.is_set():
                         break
-                    if time.monotonic() > deadline:
+                    # Stalled = no progress since the worker's last sign of
+                    # life (start or segment). Not started yet counts from
+                    # when this chunk reached the head of the line.
+                    last = meta.get("progress_at") or waiting_since
+                    if time.monotonic() - last > _FLUSH_HARD_TIMEOUT_S:
                         logger.warning(
                             f"[TTS-STREAM] flush hard-timeout for chunk {chunk_idx} — "
                             f"the engine is behind: this stream asks it for nothing more"
@@ -453,9 +461,16 @@ class StreamingTTSPump:
     def _executor(self) -> concurrent.futures.ThreadPoolExecutor:
         if self.executor is None:
             # 2 workers = enough to pipeline against LLM token rate; more
-            # would just contend on Kokoro's single-process bottleneck.
+            # would just contend on Kokoro's single-process bottleneck. A
+            # provider whose engine runs one synth at a time declares
+            # synth_workers=1: a second worker only races it for the engine,
+            # and an unfair lock let chunk N+1 go first (2026-11-08).
+            try:
+                workers = max(1, int(getattr(self.provider, "synth_workers", 2)))
+            except (TypeError, ValueError):
+                workers = 2
             self.executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=2,
+                max_workers=workers,
                 thread_name_prefix="tts-stream",
             )
         return self.executor
@@ -578,13 +593,13 @@ class StreamingTTSPump:
         done_evt = threading.Event()
         fut = self._executor().submit(
             self._stream_synth, text_to_synth, voice, speed,
-            seg_queue, done_evt, chunk["index"],
+            seg_queue, done_evt, chunk["index"], meta,
         )
         self.pending.append((seg_queue, done_evt, fut, meta))
 
     def _stream_synth(self, text: str, voice: str, speed: float,
                       seg_queue: "queue.Queue", done_evt: threading.Event,
-                      chunk_index: int):
+                      chunk_index: int, meta: Optional[dict] = None):
         """Worker-thread body: iterate provider.generate_stream() and push
         each segment into the chunk's Queue. On a non-streaming provider,
         fall back to a single generate() call and push one blob.
@@ -594,22 +609,26 @@ class StreamingTTSPump:
         supports_streaming=True but ships the default impl."""
         n_segments = 0
         total_bytes = 0
+        progress = meta if meta is not None else {}
+
+        def _put(segment):
+            nonlocal n_segments, total_bytes
+            seg_queue.put(segment)
+            n_segments += 1
+            total_bytes += len(segment)
+            progress["progress_at"] = time.monotonic()      # alive: resets the stall clock
 
         def _run(v):
-            nonlocal n_segments, total_bytes
+            progress["progress_at"] = time.monotonic()      # synth started
             kw = {"pitch": self._pitch} if self._provider_pitch else {}
             if self._provider_streams:
                 for segment in self.provider.generate_stream(text, v, speed, **kw):
                     if segment:
-                        seg_queue.put(segment)
-                        n_segments += 1
-                        total_bytes += len(segment)
+                        _put(segment)
             else:
                 audio = self.provider.generate(text, v, speed, **kw)
                 if audio:
-                    seg_queue.put(audio)
-                    n_segments += 1
-                    total_bytes += len(audio)
+                    _put(audio)
 
         try:
             if self._abandoned.is_set():

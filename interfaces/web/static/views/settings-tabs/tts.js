@@ -7,8 +7,8 @@ import { responseError } from '../../shared/fetch.js';
 
 let _mergedConfig = null;
 
-// Streaming TTS (v2.7.0): kicks in only under a capable provider (Kokoro);
-// the others fall back to the whole-blob path, so the keys are harmless there.
+// Streaming TTS (v2.7.0): kicks in only under a provider that declares
+// supports_streaming; the others fall back to the whole-blob path, so the keys are harmless there.
 const STREAMING_KEYS = [
     'TTS_STREAMING_ENABLED',
     'TTS_STREAMING_SPLIT_MODE',
@@ -90,7 +90,7 @@ export default {
         // and only shown when `.active` is added; collided 2026-05-18.)
         html += `
             <details style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);" open>
-                <summary style="cursor: pointer; padding: 0.25rem 0;"><strong>Streaming (Kokoro)</strong></summary>
+                <summary style="cursor: pointer; padding: 0.25rem 0;"><strong>Streaming</strong></summary>
                 ${ctx.renderFields(STREAMING_KEYS)}
             </details>`;
 

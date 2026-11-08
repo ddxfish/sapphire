@@ -74,7 +74,10 @@ def test_no_hand_patches_of_the_snapshot_remain():
 def test_every_inventoried_site_commits():
     llm = _tab('llm')
     assert llm.count('ctx.commitMerge(') == 6     # core enable, field PUT, model select, custom model, custom enable, custom card autosave
-    assert llm.count("ctx.commit('LLM_FALLBACK_ORDER'") == 2 and "ctx.commit('MODEL_GENERATION_PROFILES'" in llm
+    # both order writers (straggler enroll, drag) commit through _commitOrder,
+    # which commits the order the server stored (2026-11-08)
+    assert llm.count("ctx.commit('LLM_FALLBACK_ORDER'") == 1 and '_commitOrder(ctx, r, renderedOrder)' in llm and '_commitOrder(ctx, await updateFallbackOrder(order), order)' in llm
+    assert "ctx.commit('MODEL_GENERATION_PROFILES'" in llm
     assert "function _mapFor(ctx, key)" in llm
     tools = _tab('tools')
     assert tools.count('ctx.commit(') == 5

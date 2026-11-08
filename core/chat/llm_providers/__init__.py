@@ -52,6 +52,21 @@ from core.provider_registry import BaseProviderRegistry as _BaseRegistry
 PROVIDER_MAP_LOCK = threading.Lock()
 
 
+def merge_order(sent, stored, providers):
+    """A page sends the order it DREW. A provider added after that page
+    loaded (the launcher's, another tab's) is not in it, and replacing the
+    stored list dropped it out of Auto (scouts 2026-11-08). Keep each such
+    provider where it stood: right after the nearest earlier key the page
+    did send, else first. Keys of providers that no longer exist go."""
+    out = list(dict.fromkeys(sent))
+    for i, k in enumerate(stored):
+        if k in out or k not in providers:
+            continue
+        prev = next((p for p in reversed(stored[:i]) if p in out), None)
+        out.insert(out.index(prev) + 1 if prev else 0, k)
+    return out
+
+
 # Template keys accepted from UI/config → class key. 'responses' was what the
 # "+ Add Provider" wizard, get_templates() and the legacy migration all used
 # for a class registered as 'openai_responses' — every manual Responses
@@ -272,9 +287,15 @@ class ProviderRegistry(_BaseRegistry):
         if config.get('is_local'):
             default_timeout = 0.3
 
+        base_url = config.get('base_url', '')
+        if provider_key == 'sapphire_launcher':
+            # the launcher's port can change: follow its llm-run.json (core/launcher_llm.py)
+            from core.launcher_llm import live_url
+            base_url = live_url(base_url)
+
         llm_config = {
             'provider': provider_type,
-            'base_url': config.get('base_url', ''),
+            'base_url': base_url,
             'api_key': api_key,
             'model': model,
             'timeout': config.get('timeout', default_timeout),

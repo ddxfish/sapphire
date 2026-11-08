@@ -334,6 +334,38 @@ class SettingsManager:
         'gemini-3.5-flash': (0.7, 0.9), 'gemini-3.5-flash-lite': (0.7, 0.9),
         'gemini-3.1-pro-preview': (0.65, 0.85)}
 
+    _PROVIDER_MAPS = ('LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS')
+
+    def _thin_providers(self, key, value):
+        """A provider map as only what the user changed: per stock provider,
+        the fields that differ from stock; a provider stock doesn't know is
+        the user's own and stays whole. Every writer hands set() the MERGED
+        map (read-modify-write), which used to freeze every stock value
+        (lmstudio's URL, a core card's model) into settings.json, so no
+        shipped change ever reached that install (scout 2026-11-08). Runtime
+        overrides never persist: an lmstudio base_url equal to
+        LMSTUDIO_BASE_URL is the env's, not the user's."""
+        stock = self._defaults.get(key) or {}
+        env_lms = os.environ.get('LMSTUDIO_BASE_URL') if key == 'LLM_CUSTOM_PROVIDERS' else None
+        out = {}
+        for name, p in (value or {}).items():
+            base = stock.get(name)
+            if not (isinstance(p, dict) and isinstance(base, dict)):
+                out[name] = p
+                continue
+            mine = {k: v for k, v in p.items() if base.get(k, object()) != v
+                    and not (name == 'lmstudio' and k == 'base_url' and env_lms and v == env_lms)}
+            out[name] = mine      # kept even when empty: the entry is still there
+        return out
+
+    def _persisted(self, key, value):
+        """What set()/set_many() store in the user layer for a key."""
+        if key == 'MODEL_GENERATION_PROFILES' and isinstance(value, dict):
+            return self._thin_profiles(value)
+        if key in self._PROVIDER_MAPS and isinstance(value, dict):
+            return self._thin_providers(key, value)
+        return value
+
     def _thin_profiles(self, user, legacy=False):
         """MODEL_GENERATION_PROFILES as only what the user changed: per model,
         the knobs that differ from stock. The core card used to PUT the whole
@@ -449,7 +481,8 @@ class SettingsManager:
         # LMSTUDIO_BASE_URL: the Docker/compose contract (docs/DOCKER.md
         # documents it as THE way to point a container at a host LM Studio)
         # — it was documented but read nowhere (hunt 2026-09-04 S8-1).
-        # Runtime-only: env is re-applied every boot, never persisted.
+        # Runtime-only: env is re-applied every boot; _thin_providers keeps
+        # it out of settings.json when a route persists the merged map.
         _lms = os.environ.get('LMSTUDIO_BASE_URL')
         if _lms:
             try:
@@ -570,8 +603,7 @@ class SettingsManager:
 
             if persist:
                 # profiles persist as the user's own knobs only (stock fills in at merge)
-                self._user[key] = (self._thin_profiles(value) if key == 'MODEL_GENERATION_PROFILES'
-                                   and isinstance(value, dict) else value)
+                self._user[key] = self._persisted(key, value)
                 self._runtime.pop(key, None)  # Now persisted, no need to preserve
                 self.save()
 
@@ -597,9 +629,7 @@ class SettingsManager:
 
         if persist:
             with self._lock:
-                self._user.update(settings_dict)
-                if isinstance(settings_dict.get('MODEL_GENERATION_PROFILES'), dict):
-                    self._user['MODEL_GENERATION_PROFILES'] = self._thin_profiles(settings_dict['MODEL_GENERATION_PROFILES'])
+                self._user.update({k: self._persisted(k, v) for k, v in settings_dict.items()})
                 for key in settings_dict:
                     self._runtime.pop(key, None)  # Now persisted
                 self.save()

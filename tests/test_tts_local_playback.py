@@ -31,6 +31,15 @@ def fresh_hooks():
     hook_runner._hooks.update(snapshot)
 
 
+@pytest.fixture(autouse=True)
+def _core_local_providers(monkeypatch):
+    """Pin core local providers: the voice-privacy gate reads the live
+    TTS/STT_PROVIDER, and a plugin provider (unregistered under pytest) reads
+    as cloud — these tests failed whenever the dev box ran Audio8 or Piper."""
+    monkeypatch.setattr(config, "TTS_PROVIDER", "kokoro", raising=False)
+    monkeypatch.setattr(config, "STT_PROVIDER", "faster_whisper", raising=False)
+
+
 @pytest.fixture
 def playback_off(monkeypatch):
     monkeypatch.setattr(config, "TTS_LOCAL_PLAYBACK", False, raising=False)

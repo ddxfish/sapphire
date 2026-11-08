@@ -21,6 +21,10 @@ class BaseTTSProvider(ABC):
     # default wrap-generate fallback). Used by TTSClient to decide whether
     # to expect chunked semantics or just one-shot bytes.
     supports_streaming: bool = False
+    # How many chunks the streaming pump may synthesize at once. 2 pipelines
+    # an engine that overlaps work; an engine that runs one synth at a time
+    # (one GPU lock) declares 1 so chunks reach it strictly in order.
+    synth_workers: int = 2
     # True when the provider applies pitch at synthesis time (pass pitch= as a
     # kwarg). When False, callers that want pitch fall back to the legacy
     # client-side decode→resample→re-encode — never both (double-shift).

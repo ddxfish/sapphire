@@ -578,7 +578,7 @@ def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_login)):
                                     detail = f"Plugin blocked: {verify_msg}"
                             raise HTTPException(status_code=403, detail=detail)
                     else:
-                        plugin_loader.unload_plugin(plugin_name)
+                        plugin_loader.unload_plugin(plugin_name, forget=True)
                         with plugin_loader._lock:
                             plugin_loader._plugins[plugin_name]["enabled"] = False
                 reload_required = False

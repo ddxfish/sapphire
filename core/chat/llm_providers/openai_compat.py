@@ -78,7 +78,10 @@ except Exception:
 # stream_options rides the same law (it used to re-pay the double request
 # on EVERY streaming call to an endpoint that refused it).
 OPTIONAL_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty',
-                   'top_k', 'stream_options')
+                   'top_k', 'stream_options',
+                   # the universal disable-thinking switches (_inject_thinking_control):
+                   # an endpoint that refuses one learns it once, like the rest
+                   'reasoning_effort', 'chat_template_kwargs')
 # Not in the OpenAI SDK's signature — passing them as kwargs is a TypeError,
 # so they ride extra_body (LM Studio / llama.cpp honor them there).
 EXTRA_BODY_PARAMS = ('repeat_penalty', 'top_k',
@@ -863,11 +866,11 @@ class OpenAICompatProvider(BaseProvider):
     def _inject_thinking_control(self, kwargs: dict, want_disable: bool = False) -> None:
         """Merge thinking-control + a raw extra_body passthrough into the request.
 
-        Universal, best-effort, per-provider "disable thinking" (replaces the old
-        Qwen-only /no_think trick). Family-GATED: a model's own off-switch is sent
-        ONLY to that family, so a strict endpoint never sees a param it 400s on.
-        Unknown models are a logged no-op — the user's raw `extra_body` config is the
-        escape hatch for those. OFF path (no flag, no extra_body config) leaves kwargs
+        Universal, best-effort, per-provider "disable thinking". Cloud families
+        with their own off-switch (Fireworks, DeepSeek, GLM) get exactly that;
+        every other server gets the shared open-server switches (see below), with
+        learn-once stripping as the net for a strict endpoint. The user's raw
+        `extra_body` config still wins. OFF path (no flag, no extra_body config) leaves kwargs
         untouched → byte-identical to a no-op.
 
         "Disable" comes from any of: the per-provider `disable_thinking` config (the
@@ -900,18 +903,25 @@ class OpenAICompatProvider(BaseProvider):
             elif model.startswith('glm') or any(h in base for h in ('z.ai', 'bigmodel', 'zhipu')):
                 extra['thinking'] = {'type': 'disabled'}          # GLM / Z.AI convention
                 fam = 'glm'
-            elif 'qwen' in model:
+            else:
+                # Everyone else gets the two switches the open servers share,
+                # whatever the model is called (the old `'qwen' in model` gate
+                # made the box a no-op for any other alias). Proven on
+                # llama-server b12198, 2026-11-08: either one alone stops
+                # Qwen3.5 thinking, and unknown fields are ignored.
+                #   reasoning_effort "none": llama.cpp, Ollama's /v1, OpenAI-style APIs
+                #   chat_template_kwargs:    llama.cpp --jinja, vLLM, SGLang (Qwen,
+                #                            GLM templates read enable_thinking;
+                #                            DeepSeek V3.1, Granite read thinking)
+                # A strict endpoint that refuses one is learned once and retried
+                # without it (OPTIONAL_PARAMS). LM Studio ignores both: its switch
+                # is the load-time "Enable Thinking" toggle.
+                kwargs['reasoning_effort'] = 'none'
                 ctk = dict(extra.get('chat_template_kwargs') or {})
-                ctk['enable_thinking'] = False                    # Qwen 3 (vLLM / LM Studio)
+                ctk.update(enable_thinking=False, thinking=False)
                 extra['chat_template_kwargs'] = ctk
-                fam = 'qwen'
-            else:
-                fam = None                                        # unknown → don't guess (avoid 400)
-            if fam:
-                logger.info(f"[OPENAI-COMPAT] disable_thinking ({fam}) → {self.model}")
-            else:
-                logger.info(f"[OPENAI-COMPAT] disable_thinking requested but no known switch "
-                            f"for {self.model}; set extra_body manually if it's a reasoning model")
+                fam = 'universal'
+            logger.info(f"[OPENAI-COMPAT] disable_thinking ({fam}) → {self.model}")
 
         if raw:
             try:

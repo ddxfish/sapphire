@@ -168,7 +168,11 @@ def test_custom_edit_form_exposes_the_health_timeout():
 
 def test_drag_reorder_writes_the_tab_snapshot():
     drag = LLM_JS[LLM_JS.index('initProviderDragDrop('):]
-    assert "ctx.commit('LLM_FALLBACK_ORDER', order)" in drag[:600]   # U1 (b): via the commit helper now
+    # U1 (b): via the commit helper; 2026-11-08 it commits the order the
+    # server STORED (merged with providers this page never drew)
+    assert "_commitOrder(ctx, await updateFallbackOrder(order), order)" in drag[:600]
+    helper = LLM_JS[LLM_JS.index('function _commitOrder('):][:400]
+    assert "ctx.commit('LLM_FALLBACK_ORDER', stored)" in helper
 
 
 def test_preset_switch_clears_the_typed_key():

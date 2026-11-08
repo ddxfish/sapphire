@@ -369,8 +369,9 @@ export function renderProviderToggles(key, config) {
   }
 
   // OpenAI-compatible providers (LM Studio, generic openai-compat) get the
-  // universal best-effort disable-thinking toggle (family-gated in the backend,
-  // so it's harmless on models that don't support it). Advanced extra_body lives
+  // universal best-effort disable-thinking toggle (openai_compat
+  // _inject_thinking_control: a family's own switch, else the open-server pair;
+  // a strict endpoint that refuses one is retried without it). Advanced extra_body lives
   // in the edit-provider modal.
   const isOpenAITemplate = config.template === 'openai';   // custom cards only — core OpenAI ignores it (scout U15)
   if (isOpenAITemplate) {
@@ -384,7 +385,7 @@ export function renderProviderToggles(key, config) {
             <span>Disable thinking (best effort)</span>
           </label>
           <div class="toggle-value-hint" style="margin-left: 12px;">
-            Tries the right switch per model (GLM, Qwen, …). Cuts latency by skipping the reasoning phase.
+            Works with llama.cpp (Sapphire Launcher), Ollama, vLLM and the GLM, DeepSeek and Fireworks APIs, any model name. LM Studio ignores it: use its own Enable Thinking switch when loading the model. Cuts latency by skipping the reasoning phase.
           </div>
         </div>
       </div>

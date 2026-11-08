@@ -417,7 +417,8 @@ def test_auto_skips_a_provider_that_cannot_name_a_model(monkeypatch):
     blank = _prov(model='')
     blank.ensure_model.return_value = False
     monkeypatch.setattr(lp.provider_registry, 'get_provider_by_key', lambda k, *a, **kw: blank)
-    with pytest.raises(NoProvidersAvailable, match='no model set'):
+    # 2026-11-08: a server that answered with no model is named first, as waiting
+    with pytest.raises(NoProvidersAvailable, match='no model ready yet'):
         resolve('auto')
 
 

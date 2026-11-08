@@ -531,6 +531,9 @@ class PluginLoader:
             apply_proxy_env()
         except Exception as e:
             logger.debug(f"[PLUGINS] belt re-derive after plugins_ready failed: {e}")
+        # A (re)load re-registered provider classes: bind the live TTS/STT
+        # provider to the new class (no-op when it already matches).
+        self._reactivate_plugin_providers()
 
     def _scan_dir(self, directory: Path, band: str, enabled_list: list, disabled_list: list = None):
         """Scan a directory for plugin.json manifests."""
@@ -1628,8 +1631,14 @@ class PluginLoader:
             logger.error(f"[PLUGINS] Failed to import {system_name} provider registry: {e}")
         return None
 
-    def unload_plugin(self, name: str):
-        """Unload a plugin — deregister all hooks, tools, routes, providers, schedule tasks, event sources, scopes, and dashboard widgets."""
+    def unload_plugin(self, name: str, forget: bool = False):
+        """Unload a plugin — deregister all hooks, tools, routes, providers, schedule tasks, event sources, scopes, and dashboard widgets.
+
+        forget=True means the user's intent is gone (disable, uninstall, unsigned
+        policy, folder deleted): an active provider it owned resets to 'none' on
+        disk. Default False is every unload that comes back or is merely broken
+        (reload, update, revert, failed-load cleanup): the choice is kept and the
+        live instance only detached, rebound by _reactivate_plugin_providers."""
         # User turned it off / it's going away — its load errors are moot
         # (and would otherwise toast forever now that the list is
         # non-destructive). (wave-3 A1)
@@ -1712,7 +1721,8 @@ class PluginLoader:
         for system_name, prov_key in info.get("registered_providers", []):
             registry = self._get_provider_registry(system_name)
             if registry:
-                if registry.get_active_key() == prov_key:
+                live = self._LIVE_PROVIDERS.get(system_name)
+                if registry.get_active_key() == prov_key and (forget or not live):
                     # Wrapped like every sibling leg: this used to import a
                     # name that doesn't exist (`settings_manager`) and blow
                     # the whole unload half-way whenever the disabled plugin
@@ -1723,6 +1733,20 @@ class PluginLoader:
                         logger.info(f"[PLUGINS] Reset {registry.setting_key} to 'none' (was '{prov_key}' from disabled plugin)")
                     except Exception as e:
                         logger.warning(f"[PLUGINS] {name}: failed to reset {registry.setting_key}: {e}")
+                elif registry.get_active_key() == prov_key:
+                    # Reload/update/revert/failed load: a reload used to persist
+                    # 'none' here and nothing put it back — every reload, env
+                    # build and dev-watcher tick silently turned her voice off
+                    # (2026-11-08). Keep the choice; detach the live instance so
+                    # nothing calls into unloaded code (silent until it loads).
+                    system = self._live_system()
+                    if system is not None:
+                        try:
+                            getattr(system, live[2])('none')
+                            logger.info(f"[PLUGINS] {name}: detached {system_name.upper()} provider "
+                                        f"'{prov_key}' (choice kept)")
+                        except Exception as e:
+                            logger.warning(f"[PLUGINS] {name}: failed to detach {system_name} provider: {e!r}")
                 registry.unregister_plugin(name)
 
         # Unregister memory layers (registered layers go dark in the memory
@@ -1852,7 +1876,7 @@ class PluginLoader:
             ]
         for name, info in candidates:
             if info.get("loaded"):
-                self.unload_plugin(name)
+                self.unload_plugin(name, forget=True)
             with self._lock:
                 info["enabled"] = False
             affected.append(name)
@@ -2062,7 +2086,7 @@ class PluginLoader:
 
         # Unload whatever it registered, "loaded" or not: a half-failed load
         # left live registrations on a plugin marked unloaded (hunt 21).
-        self.unload_plugin(name)
+        self.unload_plugin(name, forget=True)
 
         # Best-effort conda env cleanup in the background — multi-GB envs take
         # tens of seconds to remove and nothing else will ever reclaim them
@@ -2304,57 +2328,59 @@ class PluginLoader:
                     logger.error(f"[PLUGINS] Failed deferred schedule for {name}: {e}")
             info["schedule_task_ids"] = task_ids
 
-    def _reactivate_plugin_providers(self):
-        """Re-trigger provider switches for TTS/STT if they point to a now-available plugin provider.
+    # Systems whose live provider core hot-swaps without touching the saved
+    # setting: (setting key, live-instance getter, runtime switch on system).
+    # Embedding isn't here: its switch carries re-embed interlocks and no
+    # plugin provides one, so it keeps the persisted-'none' reset on unload.
+    _LIVE_PROVIDERS = {
+        "tts": ("TTS_PROVIDER", lambda s: getattr(getattr(s, "tts", None), "provider", None),
+                "switch_tts_provider"),
+        "stt": ("STT_PROVIDER", lambda s: getattr(s, "whisper_client", None),
+                "switch_stt_provider"),
+    }
 
-        At boot, system init runs before plugins load. If TTS_PROVIDER=elevenlabs
-        but the plugin hasn't registered yet, TTS falls back to null. After plugins
-        load and set_scheduler is called (from start_server), we re-check and switch
-        if the provider is now available.
-        """
+    @staticmethod
+    def _live_system():
+        """The running system, or None before it exists (boot scan, tests)."""
         try:
-            import config as cfg
             from core.api_fastapi import get_system
+            return get_system()
+        except Exception:
+            return None
+
+    def _reactivate_plugin_providers(self):
+        """Bind each live TTS/STT provider to the CURRENTLY registered class of
+        the plugin provider its setting names.
+
+        One rule for every leg: boot (system init runs before plugins load, so
+        the live provider starts null) and every out-of-scan (re)load through
+        _fire_plugins_ready — reload, env build, dev watcher, update, revert,
+        toggle-on. A reload re-execs provider.py into a NEW class while the
+        live instance is the old one or null (unload detached it). A provider
+        whose plugin isn't loaded stays unbound: silent, choice kept.
+        """
+        system = self._live_system()
+        if system is None:
+            logger.debug("[PLUGINS] Provider reactivation skipped: system not available yet")
+            return
+        import config as cfg
+        for system_name, (key_name, live_of, switch_name) in self._LIVE_PROVIDERS.items():
             try:
-                system = get_system()
-            except Exception:
-                logger.debug("[PLUGINS] Provider reactivation skipped: system not available yet")
-                return
-
-            # TTS
-            tts_key = getattr(cfg, 'TTS_PROVIDER', 'none')
-            if tts_key and tts_key != 'none':
-                from core.tts.providers import tts_registry
-                if tts_registry.has_key(tts_key):
-                    current = getattr(system.tts, 'provider', None)
-                    from core.tts.providers.null import NullTTSProvider
-                    if isinstance(current, NullTTSProvider) or current is None:
-                        logger.info(f"[PLUGINS] Re-activating TTS provider '{tts_key}' (was null at boot)")
-                        system.switch_tts_provider(tts_key)
-                        # switch_tts_provider now re-applies chat settings
-                        # internally (Wolf-Claude finding 2026-04-21), so the
-                        # persona voice survives plugin-driven late activation
-                        # without a second call here.
-                        # Notify frontend so voice dropdown and speed range refresh
-                        try:
-                            from core.event_bus import publish, Events
-                            publish(Events.SETTINGS_CHANGED, {"key": "TTS_PROVIDER", "value": tts_key})
-                        except Exception:
-                            pass
-
-            # STT
-            stt_key = getattr(cfg, 'STT_PROVIDER', 'none')
-            if stt_key and stt_key != 'none':
-                from core.stt.providers import stt_registry
-                if stt_registry.has_key(stt_key):
-                    from core.stt.stt_null import NullWhisperClient
-                    current = getattr(system, 'whisper_client', None)
-                    if isinstance(current, NullWhisperClient) or current is None:
-                        logger.info(f"[PLUGINS] Re-activating STT provider '{stt_key}' (was null at boot)")
-                        system.switch_stt_provider(stt_key)
-
-        except Exception as e:
-            logger.debug(f"[PLUGINS] Provider reactivation skipped: {e}")
+                key = getattr(cfg, key_name, 'none')
+                registry = self._get_provider_registry(system_name)
+                entry = registry.get_entry(key) if registry and key and key != 'none' else None
+                if not entry or not entry.get('plugin_name'):
+                    continue            # core provider (never unloads) or plugin not loaded
+                if type(live_of(system)) is entry['class']:
+                    continue
+                logger.info(f"[PLUGINS] Binding {system_name.upper()} provider '{key}' to its loaded class")
+                getattr(system, switch_name)(key)
+                # switch_tts_provider re-applies the chat's voice itself; tell
+                # the frontend so the voice dropdown and speed range refresh.
+                from core.event_bus import publish, Events
+                publish(Events.SETTINGS_CHANGED, {"key": key_name, "value": key})
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {system_name} provider rebind failed: {e!r}")
 
     def _start_pending_daemons(self):
         """Start daemon threads for plugins that were loaded before scheduler was ready."""
@@ -2721,7 +2747,7 @@ class PluginLoader:
 
         for name in removed:
             logger.info(f"[PLUGINS] Rescan: plugin '{name}' removed from disk, unloading")
-            self.unload_plugin(name)
+            self.unload_plugin(name, forget=True)
             with self._lock:
                 self._plugins.pop(name, None)
 

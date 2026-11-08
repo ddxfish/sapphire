@@ -733,10 +733,16 @@ async def update_fallback_order(request: Request, _=Depends(require_login)):
     _writable()
     from core.settings_manager import settings
     data = await request.json()
-    order = data.get('order', [])
+    sent = data.get('order', [])
+    if not isinstance(sent, list) or not all(isinstance(k, str) for k in sent):
+        raise HTTPException(status_code=400, detail="order must be a list of provider keys")
     with _PROVIDER_MAP_LOCK:
+        from core.chat.llm_providers import merge_order
+        order = merge_order(sent, settings.get('LLM_FALLBACK_ORDER', []) or [],
+                            {**settings.get('LLM_PROVIDERS', {}), **settings.get('LLM_CUSTOM_PROVIDERS', {})})
         settings.set('LLM_FALLBACK_ORDER', order, persist=True)
     return {"status": "success", "order": order}
+
 
 
 def _probe_budget_note(probe_ok: bool, probe_s: float, configured: float) -> str:

@@ -175,6 +175,15 @@ def auto_words(trail, private=False) -> str:
     if left_out:
         return (f"Auto skips {', '.join(left_out)} because \"Include in Auto fallback\" is unticked. "
                 f"Tick it in Settings › LLM › {left_out[0]}, or pick it as this chat's provider.")
+    # A server that answered with no model ready (llama-server loading, LM
+    # Studio with none loaded) is the one to name: it is the brain, waiting.
+    # Leading with the unreachable rows blamed a stock LM Studio the person
+    # never installed while the launcher's model loaded (scout 2026-11-08).
+    waiting = named(lambda w: w.startswith('has no model'))
+    if waiting:
+        return (f"{' and '.join(waiting)} answered, but {'has' if len(waiting) == 1 else 'have'} no model "
+                f"ready yet (still loading, or none loaded). Give it a moment and send again, or set a "
+                f"model on its card in Settings › LLM.")
     if sick:
         return "No LLM that's turned on answered: " + '; '.join(
             f"{display_name(k)} {_sick_words(w)}" for k, w in sick) + "."
