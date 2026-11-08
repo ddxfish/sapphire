@@ -1578,6 +1578,10 @@ def run():
         except Exception as e:
             logger.warning(f"room seat-chat sweep failed: {e}")
 
+        # The Sapphire Launcher's LLM joins Auto, first, the first boot it is seen
+        from core import launcher_llm
+        launcher_llm.adopt_in_background()
+
         # Wire scheduler into plugin loader for plugin schedule tasks
         from core.plugin_loader import plugin_loader
         plugin_loader.set_scheduler(continuity_scheduler)

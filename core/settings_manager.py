@@ -423,8 +423,9 @@ class SettingsManager:
 
         # Managed mode: lock down for Docker resale
         if os.environ.get('SAPPHIRE_MANAGED'):
-            providers = self._config.get('LLM_PROVIDERS', {})
-            providers.pop('lmstudio', None)
+            # lmstudio is a CUSTOM provider (it left LLM_PROVIDERS long ago):
+            # popping it from the core map removed nothing
+            self._config.get('LLM_CUSTOM_PROVIDERS', {}).pop('lmstudio', None)
             self._config['WAKE_WORD_ENABLED'] = False
             if not os.environ.get('SAPPHIRE_UNRESTRICTED'):
                 self._config['ALLOW_UNSIGNED_PLUGINS'] = False
@@ -452,9 +453,12 @@ class SettingsManager:
         _lms = os.environ.get('LMSTUDIO_BASE_URL')
         if _lms:
             try:
-                _prov = self._config.get('LLM_PROVIDERS') or {}
+                # the CUSTOM map (where lmstudio lives); a copy, because the
+                # merge hands out the stock defaults dict itself when the
+                # user file has no lmstudio entry
+                _prov = self._config.get('LLM_CUSTOM_PROVIDERS') or {}
                 if 'lmstudio' in _prov:
-                    _prov['lmstudio']['base_url'] = _lms
+                    _prov['lmstudio'] = {**_prov['lmstudio'], 'base_url': _lms}
                     logger.info(f"LMSTUDIO_BASE_URL override applied: {_lms}")
             except Exception as e:
                 logger.warning(f"LMSTUDIO_BASE_URL override failed: {e}")
@@ -893,6 +897,7 @@ class SettingsManager:
             'DEVICE_FIRMWARE_SOURCE', 'DEVICE_FIRMWARE_SOURCES', 'DEVICE_FIRMWARE_SOURCES_OFF',   # read when the Devices page's flasher opens
             # Setup wizard state (core/routes/setup.py) - read per request
             'SETUP_COMPLETE', 'SETUP_STEP', 'SETUP_CONSENT',
+            'LAUNCHER_LLM_ADOPTED',   # core/launcher_llm.py's once-only marker
             # Conversation (true speech) mode tunables — read fresh on each activation
             'CONVERSATION_VAD_THRESHOLD', 'CONVERSATION_BARGE_HOLD_MS',
             'CONVERSATION_MIN_SPEECH_MS', 'CONVERSATION_ENDPOINT_SILENCE_MS',

@@ -353,6 +353,7 @@
   "setup": {
     "SETUP_COMPLETE": false,
     "SETUP_STEP": "",
-    "SETUP_CONSENT": null
+    "SETUP_CONSENT": null,
+    "LAUNCHER_LLM_ADOPTED": false
   }
 }

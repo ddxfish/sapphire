@@ -19,8 +19,9 @@ from core import prompts
 # The LLM provider maps are read-modify-written whole by every provider
 # route (PUT field, add, delete, reorder). Two overlapping PUTs — the UI
 # fires one per field change — deep-copied the same map and the second
-# write silently reverted the first (scouts S15/F10, 2026-09-20).
-_PROVIDER_MAP_LOCK = threading.Lock()
+# write silently reverted the first (scouts S15/F10, 2026-09-20). The lock
+# lives with the registry: core writers (core/launcher_llm.py) share it.
+from core.chat.llm_providers import PROVIDER_MAP_LOCK as _PROVIDER_MAP_LOCK
 from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
@@ -1033,6 +1034,19 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
 
     publish(Events.SETTINGS_CHANGED, {"key": "LLM_CUSTOM_PROVIDERS", "value": name})
     return {"status": "success", "name": name, "config": provider_config}
+
+
+@router.post("/api/llm/launcher/check")
+async def launcher_llm_check(request: Request, _=Depends(require_login)):
+    """The wizard's Brain step: add the Sapphire Launcher's LLM if it came up
+    after boot (core/launcher_llm.py, once only), then say how it stands."""
+    _writable()
+    from core import launcher_llm
+
+    def _work():
+        added = launcher_llm.adopt()
+        return {**launcher_llm.status(), 'added_now': bool(added)}
+    return await asyncio.to_thread(_work)
 
 
 @router.delete("/api/llm/custom-providers/{provider_key}")

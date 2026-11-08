@@ -366,6 +366,51 @@ class PersonaManager:
             self._vault_ref_sync(settings.get("prompt"), None)
         return ok
 
+    # === One-time: phantom 'default' scopes ===
+
+    # Scopes where 'default' is a real bucket memories land in (created on
+    # first write) — never released here.
+    _STORE_SCOPES = ('memory', 'people', 'goal', 'knowledge')
+    PHANTOM_MARKER = ".scope_phantoms_released"
+
+    def release_phantom_scopes(self, lists: dict) -> dict | None:
+        """Set account scopes stuck on 'default' to 'none' where that account
+        doesn't exist. The old dropdown offered a 'default' option for every
+        scope and saved it, so personas pointed email/bitcoin/github at an
+        account nobody made (Krem, 2026-11-08). `lists` = {scope_key: [real
+        values]} as the scope endpoints return them. An empty or missing list
+        is skipped (a failed fetch must not look like "no accounts"). Runs once
+        per install (marker file); backs up personas.json first. Returns
+        {persona: [setting keys]} changed, or None when already done."""
+        marker = self.USER_DIR / self.PHANTOM_MARKER
+        if marker.exists():
+            return None
+        changed = {}
+        with self._lock:
+            for key, values in (lists or {}).items():
+                if key in self._STORE_SCOPES or not values or 'default' in values:
+                    continue
+                setting = f"{key}_scope"
+                for name, p in self._personas.items():
+                    st = p.get("settings") or {}
+                    if st.get(setting) == 'default':
+                        changed.setdefault(name, []).append(setting)
+            if changed:
+                src = self.USER_DIR / "personas.json"
+                if src.exists():
+                    import shutil
+                    shutil.copy2(src, src.with_name("personas.json.pre-scope-release.bak"))
+                for name, keys in changed.items():
+                    for k in keys:
+                        self._personas[name]["settings"][k] = 'none'
+                if not self._save_to_user():
+                    raise RuntimeError("personas.json save failed")
+            self.USER_DIR.mkdir(parents=True, exist_ok=True)
+            marker.write_text("phantom 'default' scopes released\n", encoding='utf-8')
+        if changed:
+            logger.warning(f"[PERSONAS] released phantom 'default' scopes: {changed}")
+        return changed
+
     # === Avatar ===
 
     def delete_avatar(self, name: str) -> bool:

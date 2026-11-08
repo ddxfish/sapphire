@@ -9730,6 +9730,8 @@ body.setup-mode #nav-rail { display: none; }
 body.setup-mode #app-content { margin-left: 0; margin-bottom: 0; width: 100%; height: 100%; }
 
 .setup-view { height: 100%; overflow-y: auto; background: var(--bg); }
+.launcher-llm-banner { border: 1px solid var(--warning-border); border-radius: 8px; padding: 10px 14px; margin: 0 0 14px; font-size: var(--font-sm); line-height: 1.5; }
+.launcher-llm-banner strong { color: var(--warning-text); }
 .setup-wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px 48px; width: 100%; box-sizing: border-box; }
 .setup-brand { display: flex; align-items: center; gap: 10px; font-size: var(--font-sm); color: var(--text-muted); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 12px; }
 .setup-brand-gem { color: var(--trim, var(--accent)); font-size: 1.1em; }

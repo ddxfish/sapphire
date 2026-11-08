@@ -8,7 +8,7 @@ import {
     handleModelSelectChange, runTestConnection
 } from '../../shared/llm-providers.js';
 import { showToast } from '../../shared/toast.js';
-import { responseError } from '../../shared/fetch.js';
+import { responseError, fetchWithTimeout } from '../../shared/fetch.js';
 
 let generationProfiles = {};
 let providerMetadata = {};
@@ -39,6 +39,7 @@ export default {
         ).join('');
 
         return `
+            ${ctx.wizard ? '<div id="launcher-llm-banner" class="launcher-llm-banner" hidden></div>' : ''}
             <h4 style="margin:0 0 4px">Providers</h4>
             <p class="text-muted" style="margin:0 0 12px;font-size:var(--font-sm)">Drag to reorder \u2014 Auto tries top to bottom. Core providers toggle off but can't be removed.</p>
             <div id="providers-list">${rows}</div>
@@ -277,8 +278,31 @@ export default {
         el.querySelector('#add-custom-provider')?.addEventListener('click', async () => {
             _showAddWizard(el, ctx);
         });
+
+        if (ctx.wizard) _launcherBanner(el, ctx);
     }
 };
+
+// Setup wizard only: the Sapphire Launcher's LLM (core/launcher_llm.py). The
+// check also adds it when it came up after boot; then the rows repaint once.
+async function _launcherBanner(el, ctx) {
+    const box = el.querySelector('#launcher-llm-banner');
+    if (!box) return;
+    let s;
+    try {
+        s = await fetchWithTimeout('/api/llm/launcher/check', { method: 'POST' }, 8000);
+    } catch { return; }
+    if (!s) return;
+    if (s.added_now) { ctx.refreshTab(); return; }
+    if (!s.provider || !box.isConnected) return;
+    const ctxK = s.n_ctx ? `, ${Math.round(s.n_ctx / 1024)}K context` : '';
+    box.innerHTML = s.running
+        ? `<strong>\u2714 ${_esc(s.name)} is running${s.model ? ` (${_esc(s.model)}${ctxK})` : ''}.</strong>
+           Her brain is already set${s.first_in_auto ? ': it is first in Auto' : ''}. Everything below is optional.`
+        : `<strong>${_esc(s.name)} is set up, but its LLM isn't running.</strong>
+           Start it in the launcher and she's ready to talk. Everything below is optional.`;
+    box.hidden = false;
+}
 
 function _esc(s) { return s ? s.replace(/</g, '&lt;').replace(/>/g, '&gt;') : ''; }
 

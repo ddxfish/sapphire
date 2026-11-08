@@ -160,6 +160,10 @@ async function loadData() {
             llmMetadata = llmData.metadata || {};
         }
         scopeFetchedData = scopeResp.status === 'fulfilled' ? scopeResp.value : {};
+        if (await releasePhantomScopes()) {
+            try { personas = (await listPersonas())?.personas || personas; } catch {}
+            personas.sort((a, b) => a.name.localeCompare(b.name));
+        }
         voicesData = ttsResp.status === 'fulfilled' ? ttsResp.value : null;
 
         if (!selectedName && personas.length) selectedName = personas[0].name;
@@ -957,6 +961,36 @@ async function doSave() {
         _saveInFlight--;
         softRender.kick();   // a repaint held by this save catches up now
     }
+}
+
+// One-time per install (server marker): account scopes saved as a 'default'
+// that doesn't exist become None — the old dropdown offered 'default' on every
+// scope and saved it. Lists are the ones this view just fetched; an empty list
+// (failed fetch or no accounts) is skipped server-side. True = personas changed.
+let _phantomChecked = false;
+async function releasePhantomScopes() {
+    if (_phantomChecked) return false;
+    _phantomChecked = true;
+    const lists = {};
+    for (const d of scopeDeclarations) {
+        const items = scopeFetchedData[d.key];
+        if (!Array.isArray(items) || !items.length) continue;
+        const vf = d.value_field || 'name';
+        lists[d.key] = items.map(i => i?.[vf]).filter(v => v != null).map(String);
+    }
+    try {
+        const r = await fetch('/api/personas/release-phantom-scopes', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lists }),
+        });
+        const res = r.ok ? await r.json() : null;
+        const names = Object.keys(res?.changed || {});
+        if (names.length) {
+            ui.showToast(`Set ${names.length} persona(s) to None on scopes pointing at a 'default' account that doesn't exist`, 'info');
+            return true;
+        }
+    } catch { /* next page load tries again */ _phantomChecked = false; }
+    return false;
 }
 
 // Quote-safe: imported persona values land inside value="..." (hunt 19).

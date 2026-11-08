@@ -869,6 +869,25 @@ async def list_personas(request: Request, _=Depends(require_login)):
     return {"personas": persona_manager.get_list(), "default": getattr(config, 'DEFAULT_PERSONA', '') or ''}
 
 
+@router.post("/api/personas/release-phantom-scopes")
+async def release_phantom_scopes(request: Request, _=Depends(require_login)):
+    """One-time: account scopes saved as a 'default' that doesn't exist → none.
+    Body: {lists: {scope_key: [values]}} from the scope endpoints the editor
+    already fetched. Idempotent — a marker makes every later call a no-op."""
+    from core.personas import persona_manager
+    body = await request.json()
+    lists = body.get("lists") if isinstance(body, dict) else None
+    if not isinstance(lists, dict):
+        raise HTTPException(status_code=400, detail="lists required")
+    lists = {str(k): [str(v) for v in vs] for k, vs in lists.items() if isinstance(vs, list)}
+    try:
+        changed = persona_manager.release_phantom_scopes(lists)
+    except Exception as e:
+        logger.error(f"Phantom scope release failed: {e}")
+        raise HTTPException(status_code=500, detail="Couldn't update personas")
+    return {"done": changed is None, "changed": changed or {}}
+
+
 @router.get("/api/personas/{name}")
 async def get_persona(name: str, request: Request, _=Depends(require_login)):
     """Get single persona with full details."""

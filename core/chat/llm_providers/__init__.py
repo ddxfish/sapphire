@@ -19,6 +19,7 @@ Usage:
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 
@@ -44,6 +45,11 @@ _SAMPLING = ('temperature', 'top_p', 'max_tokens')
 
 
 from core.provider_registry import BaseProviderRegistry as _BaseRegistry
+
+# Held by every read-modify-write of LLM_PROVIDERS / LLM_CUSTOM_PROVIDERS /
+# LLM_FALLBACK_ORDER (core/routes/settings.py, core/launcher_llm.py): the
+# maps are written whole, so two unlocked writers revert each other.
+PROVIDER_MAP_LOCK = threading.Lock()
 
 
 # Template keys accepted from UI/config → class key. 'responses' was what the

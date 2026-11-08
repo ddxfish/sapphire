@@ -329,3 +329,34 @@ def test_duplicate_keeps_source_scopes(mgr, two_scopes):
     mgr._personas['zed']['settings']['memory_scope'] = 'zed'
     assert mgr.duplicate('zed', 'zed2')
     assert mgr._personas['zed2']['settings']['memory_scope'] == 'zed'
+
+
+# ── One-time release of phantom 'default' scopes (Krem, 2026-11-08) ──
+
+def test_phantom_default_released_once_with_backup(mgr):
+    (mgr.USER_DIR / 'personas.json').write_text('{"before": true}')
+    mgr._personas['zed']['settings'].update({
+        'email_scope': 'default',      # no such account → none
+        'twilio_scope': 'default',     # twilio HAS a 'default' → kept
+        'github_scope': 'default',     # empty list (failed fetch) → kept
+        'memory_scope': 'default',     # store scope → never touched
+        'bitcoin_scope': 'het'})       # a real pick → kept
+    lists = {'email': ['sapphire'], 'twilio': ['default', 'b'], 'github': [],
+             'memory': ['sapphire'], 'bitcoin': ['het']}
+    assert mgr.release_phantom_scopes(lists) == {'zed': ['email_scope']}
+    s = mgr._personas['zed']['settings']
+    assert s['email_scope'] == 'none' and s['twilio_scope'] == 'default'
+    assert s['github_scope'] == 'default' and s['memory_scope'] == 'default'
+    assert s['bitcoin_scope'] == 'het'
+    bak = mgr.USER_DIR / 'personas.json.pre-scope-release.bak'
+    assert bak.read_text() == '{"before": true}'
+    # Second run is a no-op, even with a fresh phantom.
+    s['email_scope'] = 'default'
+    assert mgr.release_phantom_scopes(lists) is None
+    assert s['email_scope'] == 'default'
+
+
+def test_phantom_release_nothing_to_do_still_marks(mgr):
+    assert mgr.release_phantom_scopes({'email': ['sapphire']}) == {}
+    assert (mgr.USER_DIR / mgr.PHANTOM_MARKER).exists()
+    assert not (mgr.USER_DIR / 'personas.json.pre-scope-release.bak').exists()
