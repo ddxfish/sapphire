@@ -12,6 +12,7 @@ import { switchView, getCurrentView } from '../core/router.js';
 import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
 import { initAgentStatus } from '../features/agent-status.js';
 import { initDocBar, refreshDocBar } from '../features/doc-bar.js';
+import { initGhostLast } from '../features/ghost-last.js';
 import { mountScenePicker } from '../shared/scene-picker.js';
 import { setupModalClose, escapeHtml as quoteSafe } from '../shared/modal.js';
 import { getMotions, setChatMotion, chatMotionId } from '../core/motions.js';
@@ -65,6 +66,7 @@ export default {
         // Agent pill bar
         initAgentStatus();
         initDocBar();
+        initGhostLast();
         // The stage: an app beside the chat (surface/stage.js)
         initStage(container);
 

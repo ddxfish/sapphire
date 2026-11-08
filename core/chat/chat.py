@@ -654,6 +654,9 @@ class LLMChat:
             user_input or "",
             chat_name=_ghost_chat if isinstance(_ghost_chat, str) else None,
         )
+        if isinstance(_ghost_chat, str):
+            from core import ghost_messages as _gm
+            _gm.remember(_ghost_chat, ghost_text)     # the sidebar's "last ghost" (private: never kept)
 
         messages = [
             {"role": "system", "content": system_prompt},

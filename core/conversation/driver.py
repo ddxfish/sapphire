@@ -210,6 +210,15 @@ class ConversationDriver:
         my_gen = None
         _foreign = False
         try:
+            # stt_audio: plugins read the voice while Whisper reads the words.
+            # Skipped when Discord's per-speaker bridge already holds the text
+            # (pcm is a second of placeholder silence then). A call carries
+            # someone else's voice: its own lane, so plugins can tell.
+            utterance = None
+            if not getattr(self, '_discord_pending_text', None):
+                from core.stt.utterance import heard
+                utterance = heard(pcm, rate=self.sample_rate, chat=self._chat_name,
+                                  lane='call' if self._chat_name else 'conversation')
             text = self._transcribe_fn(pcm)
             if not (text and text.strip()):
                 logger.info("[CONV] turn: no usable speech, skipping")
@@ -223,7 +232,11 @@ class ConversationDriver:
             if hook_runner.has_handlers("post_stt"):
                 import config as _config
                 stt_event = HookEvent(input=text, config=_config,
-                                      metadata={"system": self.system})
+                                      metadata={"system": self.system, "utterance": utterance})
+                if self._chat_name:
+                    # A call's own chat, not whatever the UI has open: privacy
+                    # is resolved for the chat this turn runs in.
+                    stt_event.chat_name = self._chat_name
                 hook_runner.fire("post_stt", stt_event)
                 text = stt_event.input
                 if not (text and text.strip()):

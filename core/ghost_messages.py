@@ -188,6 +188,10 @@ def build_ghost_message(
             metadata={"system": system},
             surface=_surface_for(chat_settings),   # F1: derived from mode when unstamped
         )
+        if chat_name:
+            # The chat this call is FOR (a task's target, a seat's chat), not
+            # the active one: privacy and per-chat plugin state resolve here.
+            ghost_event.chat_name = chat_name
         try:
             hook_runner.fire("ghost_inject", ghost_event)
         except Exception as e:
@@ -250,3 +254,58 @@ def is_ghost_message(content: str) -> bool:
     if not content or not isinstance(content, str):
         return False
     return content.startswith(_ENVELOPE_HEADER[:32])
+
+
+# --- the last ghost each chat actually sent (sidebar "Last ghost message") ---
+# In memory only, never on disk. Written at the real send sites (chat lane,
+# task lane), never by the prompt preview (that is a prediction). A private
+# chat is never kept; the route re-checks privacy at read time, so a chat
+# vaulted after its turn shows nothing. Vault lock wipes it all.
+import threading as _threading
+import time as _time
+
+_last_lock = _threading.Lock()
+_last: dict = {}            # chat -> (epoch, envelope text, '' = no ghost that turn)
+
+
+def _is_private(chat) -> bool:
+    """Fail closed: unknown chat or a resolver error counts as private."""
+    try:
+        resolver = hook_runner._privacy_resolver
+        if resolver is None:
+            return False
+        return bool(resolver(chat)[1])
+    except Exception:
+        return True
+
+
+def remember(chat, text) -> None:
+    if not chat:
+        return
+    private = _is_private(chat)
+    with _last_lock:
+        if private:
+            _last.pop(chat, None)
+        else:
+            _last[chat] = (_time.time(), text or "")
+
+
+def last(chat):
+    """(epoch, text) of this chat's last sent ghost, or None."""
+    if not chat or _is_private(chat):
+        return None
+    with _last_lock:
+        return _last.get(chat)
+
+
+def forget(chat, new_name=None) -> None:
+    """A chat cleared or deleted (it goes), or renamed (it moves)."""
+    with _last_lock:
+        v = _last.pop(chat, None)
+        if new_name and v:
+            _last[new_name] = v
+
+
+def forget_all() -> None:
+    with _last_lock:
+        _last.clear()

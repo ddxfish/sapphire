@@ -506,6 +506,11 @@ def lock(reason="") -> bool:
         _prompts.clear_transients()
     except Exception:
         pass
+    try:
+        from core import ghost_messages
+        ghost_messages.forget_all()       # the sidebar's "last ghost" memory, every chat
+    except Exception:
+        pass
     _fire_plugin_hook("vault_locked")
     _publish("vault_changed")
     return True

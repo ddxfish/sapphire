@@ -286,3 +286,26 @@ def test_unclaimed_early_return_still_ends_the_turn():
     for _ in range(3):
         d.push_frame(*frame(100, False))
     assert d.engine.state == IDLE
+
+
+@patch("core.conversation.driver.publish")
+def test_call_driver_stamps_its_chat_and_lane(pub):
+    import numpy as np
+    from core.hooks import hook_runner
+    PLUGIN = "test-stt-audio"
+    d, system, fs, sink = _driver()
+    d._chat_name = "phone-call"
+    system.llm_chat.session_manager.get_settings_for.return_value = {}
+    stamps, lanes = [], []
+    hook_runner.register("post_stt", lambda e: stamps.append((e.chat_name, e.metadata.get("utterance"))),
+                         plugin_name=PLUGIN)
+    hook_runner.register("stt_audio", lambda e: lanes.append((e.chat_name, e.metadata["lane"])),
+                         plugin_name=PLUGIN)
+    try:
+        resolver = MagicMock(side_effect=lambda name=None: (name, False))
+        with patch.object(hook_runner, "_privacy_resolver", resolver):
+            d._run_turn(np.zeros(3200, "<i2").tobytes())
+    finally:
+        hook_runner.unregister_plugin(PLUGIN)
+    assert lanes == [("phone-call", "call")]
+    assert stamps and stamps[0][0] == "phone-call" and stamps[0][1]

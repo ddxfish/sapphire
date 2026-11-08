@@ -215,6 +215,10 @@ export const chatMode = {
                                     <label for="sb-ghost-context">Ghost Message</label>
                                     <textarea id="sb-ghost-context" rows="3" placeholder="Injected as a per-turn ghost message (empty = none)..."></textarea>
                                 </div>
+                                <div class="sb-field sb-field-stack">
+                                    <label>Last Ghost Sent <span id="sb-ghost-last-at" class="sb-ghost-last-at"></span></label>
+                                    <pre id="sb-ghost-last" class="sb-ghost-last"></pre>
+                                </div>
                             </div>
                         </div>
 

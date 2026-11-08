@@ -6,7 +6,8 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 
 | Hook | When | Key Fields | Use |
 |------|------|-----------|-----|
-| `post_stt` | After voice transcription | `input` (mutable) | Correct STT errors, translate, normalize |
+| `stt_audio` | Utterance audio, BEFORE transcription | `metadata`: `audio` (16 kHz mono float32), `sample_rate`, `utterance`, `lane` | Voice tone, speaker ID. Observational: return fast, analyze on your own thread (runs alongside Whisper). Lanes: `wake`, `browser`, `conversation`, `call` (someone else's voice), `device` |
+| `post_stt` | After voice transcription | `input` (mutable) | Correct STT errors, translate, normalize. `metadata['utterance']` pairs with `stt_audio` |
 | `pre_chat` | Before LLM | `input`, `skip_llm`, `response` | Filter input, bypass LLM |
 | `prompt_inject` | System prompt build | `context_parts` | Append context strings (system prompt — long-lived, breaks cache) |
 | `ghost_inject` | Per-turn ephemeral context | `ghost_text` | Add operator-metadata visible to assistant only, cache-friendly. **See dedicated section below — this hook has elevated review requirements.** |
@@ -102,6 +103,7 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 
 | Hook | `metadata["system"]`? | `config`? | Mutable Fields |
 |------|-----------------------|-----------|----------------|
+| `stt_audio` | No | No | none (observational; `chat_name` pre-stamped when the lane knows it) |
 | `post_stt` | **Yes** | Yes | `input` (transcribed text) |
 | `pre_chat` | **Yes** | Yes | `input`, `skip_llm`, `response`, `ephemeral` |
 | `prompt_inject` | No | Yes | `context_parts` (list — append to it) |
@@ -652,7 +654,7 @@ The ghost rail is **labeled operator metadata**, not invisible puppetry. If you 
 ## Reference for AI
 
 - Register: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`; never `def run` (schedule-only, silently fails to register).
-- Pipeline hooks: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason`/`plugin`), `vault_unlocked` / `vault_locked` (no meta; re-derive/drop anything cached from vault contents; withheld from non-privacy_aware plugins while the active chat is private). Plugins also fire their own hooks (e.g. discord_*, `twilio_call_ended`) — see each plugin's README.
+- Pipeline hooks: `stt_audio`, `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason`/`plugin`), `vault_unlocked` / `vault_locked` (no meta; re-derive/drop anything cached from vault contents; withheld from non-privacy_aware plugins while the active chat is private). Plugins also fire their own hooks (e.g. discord_*, `twilio_call_ended`) — see each plugin's README.
 - `plugins_ready` fires on the boot scan AND on hot reload, rescan, and toggle-on — handlers must be idempotent and re-check their plugin is still loaded.
 - Voice elsewhere (avatar, game, robot): listen on `pre_tts` (text, whole-blob lanes incl. the browser's non-streaming playback and Telegram voice notes) and `tts_chunk_audio` (her audio, streaming only); the user mutes this computer with Settings > TTS > Play speech here (`TTS_LOCAL_PLAYBACK`, hooks keep firing). Per turn: `skip_tts` in `pre_tts`/`tts_stream_start` cancels; `skip_tts` in `tts_chunk_audio` = consumed (not played here, counted as voiced, no drop notice; nulling `audio_bytes` = dropped, notice shown). Page: voice-routing.md.
 - `tools_filter`: `event.tools` = final tool-schema list for this turn; subtract-only (additions discarded by intersection); handler errors fail open (unfiltered list ships); no `system`/`config` on the event; `chat_name` pre-stamped.

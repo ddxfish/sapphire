@@ -1919,6 +1919,23 @@ async def chat_prompt_preview(chat_name: str, request: Request, _=Depends(requir
             stream_brain.reset_override(token)
 
 
+@router.get("/api/chats/{chat_name}/ghost-last")
+async def chat_ghost_last(chat_name: str, _=Depends(require_login), system=Depends(get_system)):
+    """The ghost envelope this chat's last turn actually sent (in memory since
+    boot; prompt-preview is the prediction of the next one). ghost None = no
+    turn since boot, "" = the last turn had none. A private chat is never
+    kept; a sealed or unknown one answers 404 like every other chat route."""
+    from core import ghost_messages
+    settings = system.llm_chat.session_manager.get_settings_for(chat_name)
+    if settings is None:
+        raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+    if settings.get('private_chat'):
+        return {"chat": chat_name, "private": True, "ghost": None, "at": None}
+    got = ghost_messages.last(chat_name)
+    return {"chat": chat_name, "private": False,
+            "ghost": got[1] if got else None, "at": got[0] if got else None}
+
+
 @router.put("/api/chats/{chat_name}/settings")
 async def update_chat_settings(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Update settings for active chat."""

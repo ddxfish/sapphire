@@ -248,11 +248,16 @@ def stt_refusal(chat_settings=None):
     return stt_gate_reason(chat_settings) or ''
 
 
-def transcribe(audio, suffix='.wav'):
-    """(what was said, '') or ('', the problem). Silence is ('', '')."""
-    stt = getattr(_system(), 'whisper_client', None)
+def transcribe(audio, suffix='.wav', chat=None):
+    """(what was said, '') or ('', the problem). Silence is ('', '').
+    Shows plugins the voice (stt_audio) and the words (post_stt) like every
+    other STT lane; `chat` is the chat the words are for, when known."""
+    system = _system()
+    stt = getattr(system, 'whisper_client', None)
     if stt is None:
         return '', "Speech recognition is not available right now."
+    from core.stt.utterance import heard
+    utterance = heard(audio, chat=chat, lane='device')
     fd, path = tempfile.mkstemp(suffix=suffix)
     try:
         with os.fdopen(fd, 'wb') as f:
@@ -268,7 +273,21 @@ def transcribe(audio, suffix='.wav'):
             os.unlink(path)
         except OSError:
             pass
-    return (text or '').strip(), ''
+    text = (text or '').strip()
+    if text:
+        try:
+            from core.hooks import hook_runner, HookEvent
+            if hook_runner.has_handlers("post_stt"):
+                import config
+                event = HookEvent(input=text, config=config,
+                                  metadata={"system": system, "utterance": utterance})
+                if chat:
+                    event.chat_name = chat
+                hook_runner.fire("post_stt", event)
+                text = str(event.input or '').strip()
+        except Exception as e:
+            logger.debug(f"post_stt hook fire failed: {e}")
+    return text, ''
 
 
 # --- which device, which chat --------------------------------------------------
@@ -1543,7 +1562,7 @@ def hear(device_id, audio, suffix='.wav'):
         if mine and not wake.holds(row['id']):      # a device that claimed at its wake holds it already
             wake.claim(row['id'])
         try:
-            heard, problem = transcribe(audio, suffix)
+            heard, problem = transcribe(audio, suffix, chat=chat)
             if problem:
                 return {'ok': False, 'error': problem, 'chat': chat}
             if not heard:

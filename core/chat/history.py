@@ -284,10 +284,17 @@ def _landed(chat_name, role):
         pass
 
 
-def _idle_moved(chat_name, new_name=None):
+def _chat_moved(chat_name, new_name=None):
+    """A chat cleared or deleted (its per-chat memory goes) or renamed (it
+    moves): the idle clock and the last ghost it sent."""
     try:
         from core import idle
         idle.forget(chat_name, new_name)
+    except Exception:
+        pass
+    try:
+        from core import ghost_messages
+        ghost_messages.forget(chat_name, new_name)
     except Exception:
         pass
 
@@ -2389,7 +2396,7 @@ class ChatSessionManager:
         too. Total wipe regardless of storage format: blob nulled, rows
         deleted, tool images swept. Route layer refuses live-call chats."""
         _forget_fit(chat_name)
-        _idle_moved(chat_name)
+        _chat_moved(chat_name)
         if self._vault_hidden(chat_name):
             # Vault hunt G2: the one by-name op that lacked this gate — a
             # sealed chat must be indestructible by stale name (bulk-clear
@@ -2539,7 +2546,7 @@ class ChatSessionManager:
                 if old_name == self.landing_chat_name:
                     self.landing_chat_name = safe_name
             logger.info(f"Renamed chat '{old_name}' -> '{safe_name}'")
-            _idle_moved(old_name, safe_name)
+            _chat_moved(old_name, safe_name)
             self._documents_follow('rename_chat', old_name, safe_name)
             return True, safe_name
         except Exception as e:
@@ -3652,7 +3659,7 @@ class ChatSessionManager:
     def delete_chat(self, chat_name: str) -> bool:
         """Delete chat. Recreates default if deleted, switches active if needed."""
         _forget_fit(chat_name)
-        _idle_moved(chat_name)
+        _chat_moved(chat_name)
         self._ensure_db()
 
         if self._vault_hidden(chat_name):
@@ -4044,7 +4051,7 @@ class ChatSessionManager:
             return None
         for n in names:
             _forget_fit(n)
-            _idle_moved(n)
+            _chat_moved(n)
             self._documents_follow('delete_chat', n)
             self._rows_state.pop(n, None)
             self._rows_degraded.pop(n, None)

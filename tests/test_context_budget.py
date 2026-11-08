@@ -582,7 +582,7 @@ def test_her_ghost_line_tells_a_long_quiet(monkeypatch):
 def test_history_stamps_the_clock_where_messages_land():
     src = (ROOT / 'core' / 'chat' / 'history.py').read_text()
     assert src.count('_landed(') >= 5                              # the helper + user, assistant, pair, by-name append
-    assert '_idle_moved(old_name, safe_name)' in src and 'def last_activity(self' in src
+    assert '_chat_moved(old_name, safe_name)' in src and 'def last_activity(self' in src
 
 
 def browsing(n_views, extra=0, size=300):

@@ -516,8 +516,11 @@ class ExecutionContext:
             from core.ghost_messages import build_ghost_message
             settings = {'inject_datetime': bool(self.task_settings.get('inject_datetime')),
                         'spice_enabled': False}
-            text = build_ghost_message(None, settings, user_input or '',
-                                       chat_name=self.task_settings.get('chat_target') or None)
+            target = self.task_settings.get('chat_target') or None
+            text = build_ghost_message(None, settings, user_input or '', chat_name=target)
+            if target:
+                from core import ghost_messages
+                ghost_messages.remember(target, text)   # the sidebar's "last ghost" (private: never kept)
         except Exception as e:
             logger.warning(f"[ExecCtx] ghost row skipped: {e}")
             return None

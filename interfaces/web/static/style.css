@@ -972,6 +972,23 @@ body {
     width: auto;
 }
 
+/* System Prompt accordion: the last ghost envelope a turn actually sent */
+.sb-ghost-last {
+    margin: 0;
+    padding: 6px 8px;
+    max-height: 160px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: var(--font-xs, 11px);
+    color: var(--text);
+    background: var(--input-bg, transparent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.sb-ghost-last.empty { color: var(--text-muted); font-style: italic; }
+.sb-ghost-last-at { color: var(--text-muted); font-weight: normal; margin-left: 4px; }
+
 .sb-field select:focus,
 .sb-field input:focus,
 .sb-field textarea:focus {

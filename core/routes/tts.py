@@ -516,6 +516,9 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
             raise HTTPException(status_code=413, detail="Audio file too large (max 25MB)")
         with open(temp_path, 'wb') as f:
             f.write(contents)
+        # stt_audio: plugins read the voice while Whisper reads the words.
+        from core.stt.utterance import heard
+        utterance = await asyncio.to_thread(heard, contents, lane='browser')
         try:
             transcribed_text = await asyncio.wait_for(
                 asyncio.to_thread(system.whisper_client.transcribe_file, temp_path),
@@ -552,7 +555,7 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
         if hook_runner.has_handlers("post_stt"):
             import config as _cfg
             stt_event = HookEvent(input=transcribed_text, config=_cfg,
-                                  metadata={"system": system})
+                                  metadata={"system": system, "utterance": utterance})
             hook_runner.fire("post_stt", stt_event)
             transcribed_text = stt_event.input
     except Exception as e:

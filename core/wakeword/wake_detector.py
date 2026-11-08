@@ -302,6 +302,16 @@ class WakeWordDetector:
                 self.system.speak_error(reason)
                 return
 
+            # stt_audio: plugins read the voice while Whisper reads the words.
+            # Stamped with the chat the turn lands in (a room, when one is open).
+            from core.stt.utterance import heard
+            try:
+                from core.chat.history import landing_chat
+                _landing = landing_chat(self.system.llm_chat.session_manager)
+            except Exception:
+                _landing = None
+            utterance = heard(audio_file, chat=_landing, lane='wake')
+
             process_time = time.time()
             try:
                 text = self.system.whisper_client.transcribe_file(audio_file)
@@ -327,7 +337,7 @@ class WakeWordDetector:
             from core.hooks import hook_runner, HookEvent
             if hook_runner.has_handlers("post_stt"):
                 stt_event = HookEvent(input=text, config=config,
-                                      metadata={"system": self.system})
+                                      metadata={"system": self.system, "utterance": utterance})
                 hook_runner.fire("post_stt", stt_event)
                 text = stt_event.input
 
