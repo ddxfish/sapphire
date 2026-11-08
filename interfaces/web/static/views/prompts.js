@@ -1,6 +1,7 @@
 // views/prompts.js - Prompt editor view (accordion-based inline editing)
-import { listPrompts, getPrompt, getComponentsWithSources, savePrompt, deletePrompt,
-         saveComponent, deleteComponent, loadPrompt, renamePiece } from '../shared/prompt-api.js';
+import { listPrompts, getPrompt, getComponentsWithSources, savePrompt,
+         saveComponent, loadPrompt, renamePiece, renamePrompt,
+         importPromptBundle, getPieceUsage, trashPieces } from '../shared/prompt-api.js';
 import { PERSONA_TABS } from '../shared/persona-tabs.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
@@ -123,7 +124,7 @@ export default {
         if (window._viewSelect) { selected = window._viewSelect; delete window._viewSelect; }
         await loadAll(); render();
     },
-    hide() { viewVisible = false; }
+    hide() { viewVisible = false; flushPromptSave(); }
 };
 
 // ── Origin stamps (finding 6: a save of vault-loaded content must SAY so,
@@ -313,8 +314,10 @@ function render() {
                     const tokenStr = tokens ? formatCount(tokens) + ' tokens' : '';
                     const typeName = p.type === 'monolith' ? 'Monolith' : 'Assembled';
                     const character = d?.components?.character;
-                    const meta = [typeName, character ? '👤 ' + character : '',
-                                  p.source ? '🧩 Plugin: ' + p.source : '',
+                    // Names/keys can arrive in imported files, packs and her own
+                    // tools — every one is escaped (hunt 2026-11-08).
+                    const meta = [typeName, character ? '👤 ' + esc(character) : '',
+                                  p.source ? '🧩 Plugin: ' + esc(p.source) : '',
                                   p.vault ? '\u{1F5DD} Vault' : ''].filter(Boolean).join(' · ');
                     const isActive = p.name === activePromptName;
                     const check = rosterCheck
@@ -341,7 +344,7 @@ function render() {
                         }
                     }
                     return `<div class="pr-item-info">
-                        <span class="pr-item-name">${check}${p.privacy_required ? '🔒 ' : ''}${p.name}${isActive ? ' (Active)' : ''}</span>
+                        <span class="pr-item-name">${check}${p.privacy_required ? '🔒 ' : ''}${esc(p.name)}${isActive ? ' (Active)' : ''}</span>
                         ${tokenStr ? `<span class="pr-item-tokens">${tokenStr}</span>` : ''}
                         <span class="pr-item-meta">${meta}</span>
                         ${dangList.length ? `<span class="pr-item-meta" style="color:#f59e0b" title="Missing: ${escAttr(dangList.join(', '))}">⚠ ${dangList.length} missing ref${dangList.length > 1 ? 's' : ''}</span>` : ''}
@@ -418,10 +421,10 @@ function renderEditor() {
         <div class="pr-header">
             <div class="pr-header-left">
                 <div style="display:flex;align-items:center;gap:6px">
-                    <h2 id="pr-prompt-name" style="margin:0">${p.privacy_required ? '\u{1F512} ' : ''}${selected}</h2>
+                    <h2 id="pr-prompt-name" style="margin:0">${p.privacy_required ? '\u{1F512} ' : ''}${esc(selected)}</h2>
                     <button class="btn-icon" id="pr-rename-prompt" title="Rename prompt" style="font-size:0.875rem;opacity:0.5">\u270F</button>
                 </div>
-                <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}${(prompts.find(x => x.name === selected)?.source) ? ' \u00B7 \u{1F9E9} Plugin: ' + prompts.find(x => x.name === selected).source : ''}${vaultNames.has(selected) ? ' \u00B7 \u{1F5DD} Vault' : ''}</span>
+                <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}${(prompts.find(x => x.name === selected)?.source) ? ' \u00B7 \u{1F9E9} Plugin: ' + esc(prompts.find(x => x.name === selected).source) : ''}${vaultNames.has(selected) ? ' \u00B7 \u{1F5DD} Vault' : ''}</span>
             </div>
             <div class="pr-header-actions">
                 ${!isActive ? '<button class="btn-primary" id="pr-activate">Activate</button>' : '<span class="badge badge-active">Active</span>'}
@@ -502,7 +505,7 @@ function renderSingleAccordion(type, comps) {
                 <span class="pr-acc-icon">${ICONS[type]}</span>
                 <div class="pr-acc-text">
                     <span class="pr-acc-label">${cap(type)}</span>
-                    <span class="pr-acc-value">${current ? current + vKey(type, current) : 'none'}</span>
+                    <span class="pr-acc-value">${current ? esc(current) + vKey(type, current) : 'none'}</span>
                 </div>
                 <span class="pr-acc-arrow">${isOpen ? '\u25BE' : '\u25B8'}</span>
             </div>
@@ -511,19 +514,19 @@ function renderSingleAccordion(type, comps) {
                     <div class="pr-piece-row">
                         <select class="pr-piece-select" data-type="${type}">
                             <option value="">None</option>
-                            ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</option>`).join('')}
+                            ${keys.map(k => `<option value="${escAttr(k)}"${k === current ? ' selected' : ''}>${esc(k)}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</option>`).join('')}
                         </select>
-                        ${current ? `<button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${current}" title="Rename">\u270F</button>` : ''}
+                        ${current ? `<button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${escAttr(current)}" title="Rename">\u270F</button>` : ''}
                     </div>
                     ${current ? `
-                        <textarea class="pr-def-text" data-type="${type}" data-key="${current}" rows="4" placeholder="Definition text...">${esc(currentText)}</textarea>
+                        <textarea class="pr-def-text" data-type="${type}" data-key="${escAttr(current)}" rows="4" placeholder="Definition text...">${esc(currentText)}</textarea>
                         <div class="pr-def-actions">
                             <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
-                            <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${current}">Duplicate</button>
-                            <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${current}">Delete</button>
+                            <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${escAttr(current)}">Duplicate</button>
+                            <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${escAttr(current)}">Delete</button>
                             ${vaultState.unlocked && !componentSources[type]?.[current] ? `
                             <label style="font-size:var(--font-xs);display:flex;gap:5px;align-items:center;margin-left:auto">
-                                <input type="checkbox" class="pr-piece-vault" data-key="${current}" ${vaultPieces[type]?.has(current) ? 'checked' : ''}> \u{1F5DD} In vault
+                                <input type="checkbox" class="pr-piece-vault" data-key="${escAttr(current)}" ${vaultPieces[type]?.has(current) ? 'checked' : ''}> \u{1F5DD} In vault
                             </label>` : ''}
                         </div>
                     ` : `<p class="text-muted" style="font-size:var(--font-sm)">Select a piece above or click + New.</p>
@@ -542,7 +545,7 @@ function renderMultiAccordion(type, comps) {
     const target = editTarget[type] || current[0] || keys[0] || '';
     const targetText = defs[target] || '';
     const headerValue = current.length
-        ? current.slice().sort().map(k => k + vKey(type, k)).join(', ') : 'none';
+        ? current.slice().sort().map(k => esc(k) + vKey(type, k)).join(', ') : 'none';
 
     return `
         <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
@@ -560,26 +563,26 @@ function renderMultiAccordion(type, comps) {
                     <div class="pr-chips">
                         ${keys.map(k => `
                             <label class="pr-chip${current.includes(k) ? ' active' : ''}" title="${escAttr((componentSources[type]?.[k] ? `[Plugin: ${componentSources[type][k]}] ` : '') + (vaultPieces[type]?.has(k) ? '[Vault] ' : '') + (defs[k] || ''))}">
-                                <input type="checkbox" data-type="${type}" data-key="${k}" ${current.includes(k) ? 'checked' : ''}>
-                                <span>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</span>
+                                <input type="checkbox" data-type="${type}" data-key="${escAttr(k)}" ${current.includes(k) ? 'checked' : ''}>
+                                <span>${esc(k)}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</span>
                             </label>
                         `).join('')}
                     </div>
                     ${keys.length ? `
                         <div class="pr-piece-row">
                             <select class="pr-piece-select" data-type="${type}">
-                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</option>`).join('')}
+                                ${keys.map(k => `<option value="${escAttr(k)}"${k === target ? ' selected' : ''}>${esc(k)}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</option>`).join('')}
                             </select>
-                            <button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${target}" title="Rename">\u270F</button>
+                            <button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${escAttr(target)}" title="Rename">\u270F</button>
                         </div>
-                        <textarea class="pr-def-text" data-type="${type}" data-key="${target}" rows="3" placeholder="Definition text...">${esc(targetText)}</textarea>
+                        <textarea class="pr-def-text" data-type="${type}" data-key="${escAttr(target)}" rows="3" placeholder="Definition text...">${esc(targetText)}</textarea>
                         <div class="pr-def-actions">
                             <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
-                            <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${target}">Duplicate</button>
-                            <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${target}">Delete</button>
+                            <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${escAttr(target)}">Duplicate</button>
+                            <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${escAttr(target)}">Delete</button>
                             ${vaultState.unlocked && !componentSources[type]?.[target] ? `
                             <label style="font-size:var(--font-xs);display:flex;gap:5px;align-items:center;margin-left:auto">
-                                <input type="checkbox" class="pr-piece-vault" data-key="${target}" ${vaultPieces[type]?.has(target) ? 'checked' : ''}> \u{1F5DD} In vault
+                                <input type="checkbox" class="pr-piece-vault" data-key="${escAttr(target)}" ${vaultPieces[type]?.has(target) ? 'checked' : ''}> \u{1F5DD} In vault
                             </label>` : ''}
                         </div>
                     ` : `<div class="pr-def-actions"><button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button></div>`}
@@ -648,6 +651,7 @@ function bindEvents() {
                 render();
                 return;
             }
+            await flushPromptSave();
             selected = name;
             openAccordion = null;
             editTarget = {};
@@ -739,33 +743,37 @@ function bindEvents() {
             pencil.hidden = false;
 
             if (cancelled || !newName || newName === selected) return;
+            await flushPromptSave();
 
             try {
-                // Save under new name, delete old. Origin stamped by the OLD
-                // name — renamed vault content must stay vault-routed.
-                const wasActive = selected === activePromptName;
-                await savePrompt(newName, promptSaveData(selected, selectedData));
-                await deletePrompt(selected);
-                selected = newName;
-                if (wasActive) {
-                    await loadPrompt(newName);
-                    activePromptName = newName;
-                }
+                // ONE server call: moves the prompt in its own store (vault
+                // stays vault), repoints chats/personas/tasks, 409s on a
+                // taken name. The old save-new + delete-old overwrote a
+                // same-named prompt and stranded every referrer.
+                const res = await renamePrompt(selected, newName);
+                selected = res?.name || newName;
                 await loadAll();
                 render();
-                ui.showToast(`Renamed to "${newName}"`, 'success');
+                ui.showToast(res?.message || `Renamed to "${selected}"`, 'success');
             } catch (e) {
                 ui.showToast(`Rename failed: ${e.message}`, 'error');
             }
         }, { once: true });
     });
 
-    layout.querySelector('#pr-export')?.addEventListener('click', () => {
+    layout.querySelector('#pr-export')?.addEventListener('click', async () => {
         if (!selected || !selectedData) return;
+        await flushPromptSave();
         // Vault export gates (finding 8): content never leaves the vault in
         // a shareable bundle — neither the prompt nor any harvested piece.
         if (vaultNames.has(selected)) {
             ui.showToast(`'${selected}' is a vault prompt — export is blocked to keep it encrypted.`, 'error');
+            return;
+        }
+        // Same gate as the persona card export (content.py): a privacy-
+        // required prompt never leaves byte-complete in a shareable file.
+        if (selectedData.privacy_required) {
+            ui.showToast(`'${selected}' is marked privacy-required — export is blocked to keep it local.`, 'error');
             return;
         }
         const vaultUsed = Object.entries(getUsedPieces())
@@ -797,11 +805,13 @@ function bindEvents() {
 
     layout.querySelector('#pr-import')?.addEventListener('click', () => {
         showImportDialog({
-            type: 'Prompt or Persona',
+            type: 'Prompt (.json — persona cards import in Personas)',
             overwrites: [
                 { key: 'overwrite', label: 'Overwrite existing prompt and pieces' },
             ],
-            existingNames: prompts.map(p => p.name),
+            // The server owns collisions (409 → ask for another name, retry);
+            // the dialog's own prompt fired even with Overwrite ticked.
+            existingNames: [],
             validate: (d) => {
                 // Standard prompt export
                 if (d.prompt) return null;
@@ -816,6 +826,7 @@ function bindEvents() {
             },
             onImport: async (data, { name, overwrites }) => {
                 const overwrite = overwrites.overwrite || false;
+                await flushPromptSave();   // import switches the selection
 
                 // Extract prompt data — handle persona bundles
                 let promptData, importPieces;
@@ -827,32 +838,34 @@ function bindEvents() {
                     importPieces = data.components || data.pieces;
                 }
 
-                // Import pieces
-                let skipped = 0, imported = 0;
-                if (importPieces) {
-                    for (const [type, defs] of Object.entries(importPieces)) {
-                        for (const [key, value] of Object.entries(defs)) {
-                            if (!overwrite && components[type]?.[key]) { skipped++; continue; }
-                            // Import lane pins the regular store — installing
-                            // shared content must not route by lock state.
-                            await saveComponent(type, key, value, null, 'regular');
-                            imported++;
-                        }
+                // ONE server funnel (same as persona cards): name checks incl.
+                // sealed vault names, prompt saved before any piece, pieces by
+                // key membership. The old client loop wrote pieces first and
+                // overwrote a same-named prompt with Overwrite unticked.
+                let res;
+                for (;;) {
+                    try {
+                        res = await importPromptBundle({ name, prompt: promptData,
+                                                         components: importPieces, overwrite });
+                        break;
+                    } catch (e) {
+                        if (e?.status !== 409 || overwrite || !/already exists/.test(e.message || '')) throw e;
+                        const next = prompt(`"${name}" already exists. Import under another name\n` +
+                                            `(or tick "Overwrite" to replace it):`, name + '-imported');
+                        if (!next?.trim()) { ui.showToast('Import cancelled', 'info'); return false; }
+                        name = next.trim();
                     }
                 }
-
-                await savePrompt(name, { ...promptData, origin: 'regular' });
-                if (name === activePromptName) await loadPrompt(name);
-                selected = name;
+                selected = res?.name || name;
                 await loadAll();
                 render();
                 updateScene();
 
-                const parts = [`Imported: ${name}`];
-                if (imported) parts.push(`${imported} pieces`);
-                if (skipped) parts.push(`${skipped} skipped`);
+                const parts = [`Imported: ${selected}`];
+                if (res?.pieces && !/^Wrote 0 /.test(res.pieces)) parts.push(res.pieces.replace(/^Wrote /, '').toLowerCase());
                 if (data.sapphire_export && data.type === 'persona') parts.push('(from persona)');
                 ui.showToast(parts.join(' \u2014 '), 'success');
+                return false;   // this toast is the one — skip the dialog's
             },
         });
     });
@@ -1008,7 +1021,7 @@ function bindEvents() {
         if (!selected || !selectedData) return;
         const why = liveReason('prompt');
         await savePrompt(selected, promptSaveData(selected,
-            why ? { ...selectedData, reason: why } : selectedData));
+            why ? { ...selectedData, reason: why } : selectedData), { update: true });
     };
     layout.querySelector('#pr-content')?.addEventListener('input', e => {
         if (selectedData) {
@@ -1124,7 +1137,7 @@ function bindAccordionBodyEvents(body, type) {
     const commitPieceReason = async () => {
         const k = defText.dataset.key;
         await saveComponent(type, k, defText.value, liveReason(`${type}:${k}`),
-                            pieceOrigin(type, k));
+                            pieceOrigin(type, k), { update: true });
     };
     defText?.addEventListener('input', e => {
         const key = e.target.dataset.key;
@@ -1241,6 +1254,7 @@ function createPrompt() {
     async function create(type) {
         const name = modal.querySelector('#pr-new-name').value.trim();
         if (!name) { modal.querySelector('#pr-new-name').focus(); return; }
+        await flushPromptSave();
         // A new assembled prompt gets FRESH story-specific pieces named after
         // it (character/location/scenario), so you land editing YOUR prompt —
         // not a body full of 'sapphire' and 'default'. Same-named existing
@@ -1250,22 +1264,32 @@ function createPrompt() {
             ? { type: 'monolith', content: '', privacy_required: false }
             : { type: 'assembled', components: { character: name, location: name, goals: 'default', relationship: 'default', format: 'default', scenario: name, extras: [], emotions: [] }, privacy_required: false };
         try {
+            // Prompt first, with create: a taken name 409s before any piece
+            // is written (no orphans), and never replaces the existing one.
+            await savePrompt(name, data, { create: true });
             if (type === 'assembled') {
+                // create: a same-named piece anywhere (incl. hidden pack
+                // scaffolding) is referenced, never blanked — 409 = keep it.
                 for (const t of ['character', 'location', 'scenario']) {
-                    if (!components[t]?.[name]) {
-                        await saveComponent(t, name, '', `piece for new prompt "${name}"`);
+                    try {
+                        await saveComponent(t, name, '', `piece for new prompt "${name}"`, undefined, { create: true });
+                    } catch (err) {
+                        if (err?.status !== 409) throw err;
                     }
                 }
             }
-            await savePrompt(name, data);
             selected = name;
             openAccordion = type === 'assembled' ? 'character' : null;
             editTarget = {};
             await loadAll();
             render();
             ui.showToast(`Created: ${name}`, 'success');
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
-        close();
+            close();
+        } catch (e) {
+            // Keep the modal: the usual failure is a taken name — fix and retry.
+            ui.showToast(e.message || 'Failed', 'error');
+            modal.querySelector('#pr-new-name')?.select();
+        }
     }
 
     modal.querySelector('#pr-new-assembled').addEventListener('click', () => create('assembled'));
@@ -1276,10 +1300,11 @@ async function duplicatePrompt() {
     if (!selected || !selectedData) return;
     const name = prompt(`Duplicate "${selected}" as:`, selected + '-copy');
     if (!name?.trim() || name.trim() === selected) return;
+    await flushPromptSave();   // the copy carries the latest edits
     try {
         const data = { ...selectedData };
         delete data.name;
-        await savePrompt(name.trim(), data);
+        await savePrompt(name.trim(), data, { create: true });
         selected = name.trim();
         openAccordion = null;
         editTarget = {};
@@ -1290,6 +1315,7 @@ async function duplicatePrompt() {
 }
 
 async function activateCurrentPrompt() {
+    await flushPromptSave();
     try {
         await loadPrompt(selected);
         activePromptName = selected;
@@ -1320,12 +1346,14 @@ async function afterPromptDelete() {
 // pieces move to the restorable trash alongside the record delete.
 async function deleteCurrentPrompt() {
     if (!selected) return;
+    await flushPromptSave();
     openDeleteModal({ names: [selected], componentSources, vaultPieces, stockPieces,
                       details: promptDetails, onDone: afterPromptDelete });
 }
 
-function bulkDeletePrompts() {
+async function bulkDeletePrompts() {
     if (!checkedPrompts.size) return;
+    await flushPromptSave();
     openDeleteModal({ names: [...checkedPrompts], componentSources, vaultPieces, stockPieces,
                       details: promptDetails, onDone: afterPromptDelete });
 }
@@ -1335,7 +1363,7 @@ async function newDefinition(type) {
     const name = prompt(`New ${type} name:`);
     if (!name?.trim()) return;
     try {
-        const res = await saveComponent(type, name.trim(), '');
+        const res = await saveComponent(type, name.trim(), '', null, undefined, { create: true });
         noteVaultRouted(type, name.trim(), res);
         if (!components[type]) components[type] = {};
         components[type][name.trim()] = '';
@@ -1359,7 +1387,7 @@ async function duplicateDefinition(type, key) {
     const newName = prompt(`Duplicate "${key}" as:`, key + '-copy');
     if (!newName?.trim() || newName.trim() === key) return;
     try {
-        const res = await saveComponent(type, newName.trim(), text);
+        const res = await saveComponent(type, newName.trim(), text, null, undefined, { create: true });
         noteVaultRouted(type, newName.trim(), res);
         if (!components[type]) components[type] = {};
         components[type][newName.trim()] = text;
@@ -1378,9 +1406,24 @@ async function duplicateDefinition(type, key) {
 }
 
 async function deleteDefinition(type, key) {
-    if (!confirm(`Delete "${key}" from ${type}?`)) return;
+    // Same care as prompt delete: say who else uses it, and move it to the
+    // restorable trash — this was a hard delete that silently dangled every
+    // other prompt using the piece (scout S4, 2026-11-08).
+    let others = [];
     try {
-        await deleteComponent(type, key);
+        const u = await getPieceUsage();
+        others = (u?.usage?.[type]?.[key] || []).filter(n => n !== selected);
+    } catch { /* usage unknown — the confirm just won't list them */ }
+    const list = others.slice(0, 6).join(', ') + (others.length > 6 ? '…' : '');
+    if (!confirm(others.length
+        ? `Move "${key}" (${type}) to the trash?\n\nAlso used by ${others.length} other prompt(s): ${list}\n` +
+          `They'll show ⚠ missing until you restore it from 🧹 Cleanup.`
+        : `Move "${key}" (${type}) to the trash?\n\nYou can restore it from 🧹 Cleanup.`)) return;
+    try {
+        const res = await trashPieces([{ type, key }]);
+        if (!res?.trashed?.length) {
+            throw new Error(res?.skipped?.[0]?.why || `"${key}" couldn't be moved to the trash`);
+        }
         delete components[type][key];
         vaultPieces[type]?.delete(key);
 
@@ -1389,11 +1432,11 @@ async function deleteDefinition(type, key) {
             if (MULTI_TYPES.includes(type)) {
                 const arr = selectedData.components[type] || [];
                 const idx = arr.indexOf(key);
-                if (idx >= 0) { arr.splice(idx, 1); await savePrompt(selected, selectedData); }
+                if (idx >= 0) { arr.splice(idx, 1); await savePrompt(selected, promptSaveData(selected, selectedData), { update: true }); }
             } else {
                 if (selectedData.components[type] === key) {
                     selectedData.components[type] = '';
-                    await savePrompt(selected, selectedData);
+                    await savePrompt(selected, promptSaveData(selected, selectedData), { update: true });
                 }
             }
         }
@@ -1403,7 +1446,7 @@ async function deleteDefinition(type, key) {
         editTarget[type] = remaining[0] || '';
         renderAccordionBody(type);
         refreshPreview();
-        ui.showToast('Deleted', 'success');
+        ui.showToast('Moved to trash', 'success');
     } catch (e) { ui.showToast(errWords(e), 'error'); }
 }
 
@@ -1436,26 +1479,55 @@ async function renameDefinition(type, oldKey, newKey) {
 }
 
 // ── Auto-save ──
+// The pending save holds `selected`/`selectedData`, which belong to the
+// current prompt only until the next switch. Every switch awaits
+// flushPromptSave() first — a timer firing mid-switch wrote one prompt's
+// pieces into the other (playwright hunt 2026-11-08).
+let _promptSavePromise = null;
+
 function debouncedSavePrompt() {
     clearTimeout(saveTimer);
     promptSaveInFlight = true;
-    saveTimer = setTimeout(async () => {
-        if (!selected || !selectedData) { promptSaveInFlight = false; return; }
-        try {
-            const why = liveReason('prompt');
-            await savePrompt(selected, promptSaveData(selected,
-                why ? { ...selectedData, reason: why } : selectedData));
-            if (selected === activePromptName) await loadPrompt(selected);
-            updateScene();
-            refreshPreview();
-        } catch (e) {
-            ui.showToast('Save failed', 'error');
-        } finally {
-            promptSaveInFlight = false;
-            // Catch up the refresh this save deferred (guard above).
-            if (pendingRefresh && viewVisible && !_editableFocused()) doBusRefresh();
-        }
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        queuePromptSave();
     }, 600);
+}
+
+// One save at a time: overlapping saves let the first's finally drop the
+// in-flight guard while the second still ran (scout S4, 2026-11-08).
+function queuePromptSave() {
+    _promptSavePromise = (_promptSavePromise || Promise.resolve()).then(runPromptSave);
+    return _promptSavePromise;
+}
+
+async function flushPromptSave() {
+    if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        queuePromptSave();
+    }
+    if (_promptSavePromise) await _promptSavePromise;
+}
+
+async function runPromptSave() {
+    const name = selected, data = selectedData;   // bound before any await
+    if (!name || !data) { promptSaveInFlight = !!saveTimer; return; }
+    try {
+        const why = liveReason('prompt');
+        await savePrompt(name, promptSaveData(name, why ? { ...data, reason: why } : data), { update: true });
+        if (name === activePromptName) await loadPrompt(name);
+        updateScene();
+        if (name === selected) refreshPreview();
+    } catch (e) {
+        ui.showToast(errWords(e) || 'Save failed', 'error');
+        if (e?.status === 404) pendingRefresh = true;   // gone elsewhere — re-sync below
+    } finally {
+        // A newer edit re-armed the timer meanwhile — its save still pends.
+        promptSaveInFlight = !!saveTimer;
+        // Catch up the refresh this save deferred (guard above).
+        if (!promptSaveInFlight && pendingRefresh && viewVisible && !_editableFocused()) doBusRefresh();
+    }
 }
 
 function debouncedSaveComponent(type, key, value) {
@@ -1466,7 +1538,7 @@ function debouncedSaveComponent(type, key, value) {
             // pieceOrigin: THE stale-editor site (finding 6) — this debounced
             // save fires after an idle-lock too; the stamp lets the server
             // 409 it instead of writing vault text to the plaintext store.
-            await saveComponent(type, key, value, liveReason(timerId), pieceOrigin(type, key));
+            await saveComponent(type, key, value, liveReason(timerId), pieceOrigin(type, key), { update: true });
             if (components[type]) components[type][key] = value;
             // If this component is used by the current prompt, refresh preview
             if (selectedData?.components) {
@@ -1478,7 +1550,7 @@ function debouncedSaveComponent(type, key, value) {
                 if (isUsed) refreshPreview();
             }
         } catch (e) {
-            ui.showToast('Save failed', 'error');
+            ui.showToast(errWords(e) || 'Save failed', 'error');
         }
     }, 600);
 }

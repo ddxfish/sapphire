@@ -121,7 +121,7 @@ def test_persona_rename_repaint_is_deferred_and_roster_scroll_carried():
     src = _src("views/personas.js")
     assert ("const softRender = deferWhileEditing(() => container, () => render(),\n"
             "    { busy: () => !!saveTimer || _saveInFlight > 0 });") in src
-    rename = _between(src, "if (data.name && data.name !== selectedName) {", "} else {")
+    rename = _between(src, "if (finalName !== name) {", "} else {")
     assert "softRender();" in rename and "render();" not in rename.replace("softRender();", "")
     assert "snapScroll(container, ['.panel-list-items', '.view-body'])" in src
     for v in ("toolsets", "spices"):

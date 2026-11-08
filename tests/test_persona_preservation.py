@@ -17,6 +17,20 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_referrers(monkeypatch):
+    """Persona delete/rename walk core/referrers.py — keep its real-file
+    steps (settings, API keys, rooms, new-chat defaults) off the user dir.
+    Chats stay live: the D3 tests assert on reset_chat_scope_ref.
+    2026-11-08: D3 now resets chats to '' (was the dangling 'default')."""
+    import core.referrers as refs
+    for step in ('_tasks', '_chat_defaults', '_setting'):
+        monkeypatch.setattr(refs, step, lambda *a, **k: [])
+    monkeypatch.setattr(refs, '_favorites', lambda *a, **k: [])
+    monkeypatch.setattr(refs, '_tokens', lambda *a, **k: [])
+    monkeypatch.setattr(refs, '_seats', lambda *a, **k: [])
+
+
 @pytest.fixture
 def isolated_persona_manager(tmp_path, monkeypatch):
     """Spin up a PersonaManager with user/personas/ at tmp_path."""
@@ -153,7 +167,7 @@ def test_d3_delete_active_persona_rewrites_chat_settings(isolated_persona_manage
     assert result is True
     # reset_chat_scope_ref must have been called with the persona setting key
     mock_sm.reset_chat_scope_ref.assert_called_once_with(
-        'persona', 'anita', reset_to='default'
+        'persona', 'anita', reset_to=''
     )
 
 
@@ -178,5 +192,5 @@ def test_d3_delete_unused_persona_still_calls_reset_ref(isolated_persona_manager
 
     # The helper is still called — it scans all chats but affects none.
     mock_sm.reset_chat_scope_ref.assert_called_once_with(
-        'persona', 'unused', reset_to='default'
+        'persona', 'unused', reset_to=''
     )

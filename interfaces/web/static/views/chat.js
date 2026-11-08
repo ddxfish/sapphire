@@ -1123,6 +1123,10 @@ function initPersonaStrip(container) {
                 const res = await createFromChat(name.trim());
                 if (res?.name) {
                     ui.showToast(`Persona "${res.name}" created`, 'success');
+                    // The pending slot survives a Personas view that hasn't
+                    // been opened yet (its listener registers on first show);
+                    // the event alone was lost and personas[0] got edited.
+                    window._pendingPersonaSelect = res.name;
                     window.dispatchEvent(new CustomEvent('persona-select', { detail: { name: res.name } }));
                     switchView('personas');
                 }
@@ -1213,6 +1217,7 @@ function renderPersonaStrip(container, settings, init) {
     // the faces. Empty list = show all (fresh installs unchanged). The ⭐
     // default and the ACTIVE persona always show even when unfavorited.
     const favs = init?.settings?.PERSONA_FAVORITES || [];
+    _stripFavs = favs;
     let shown = personasList;
     if (favs.length) {
         const byName = new Map(personasList.map(p => [p.name, p]));
@@ -1248,6 +1253,7 @@ function renderPersonaStrip(container, settings, init) {
 // mode a drag adopts the full roster in your order; stars later prune it.
 let _stripDragName = null;
 let _stripDragFrom = null;
+let _stripFavs = [];   // the curation the strip was drawn from
 function _bindStripDnD(gridEl) {
     gridEl.querySelectorAll('.sb-pgrid-cell[data-name]').forEach(cell => {
         // Browsers native-drag <img> — that would hijack the cell drag
@@ -1280,8 +1286,11 @@ function _bindStripDnD(gridEl) {
         gridEl.querySelector('.sb-pgrid-cell.dragging')?.classList.remove('dragging');
         if (!_stripDragName) return;
         _stripDragName = null;
-        const names = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]')].map(c => c.dataset.name);
+        let names = [...gridEl.querySelectorAll('.sb-pgrid-cell[data-name]')].map(c => c.dataset.name);
         if (names.join(',') === _stripDragFrom) return;   // no-op drag: don't adopt the roster
+        // Curated mode: the default and active faces ride along unstarred —
+        // reordering must not star them (scout S3, 2026-11-08).
+        if (_stripFavs.length) names = names.filter(n => _stripFavs.includes(n));
         try {
             await updateSettingsBatch({ PERSONA_FAVORITES: names });
             await refreshInitData();

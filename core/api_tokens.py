@@ -167,6 +167,24 @@ class ApiTokensManager:
                     return True
         return False
 
+    def repoint_persona(self, old: str, new: Optional[str]) -> List[str]:
+        """Persona rename (new) or delete (None) upkeep — the persona is
+        "fixed for the token's life" by NAME, so a rename silently stripped
+        the key's voice and memory tools, and a delete left the name for the
+        next persona to take over, memory scope and all (hunt 2026-11-08).
+        Returns the touched token names."""
+        with self._lock:
+            hit = [t for t in self._tokens if t.get('persona') == old]
+            if not hit:
+                return []
+            for t in hit:
+                t['persona'] = new or None
+            if not self._save():
+                for t in hit:
+                    t['persona'] = old
+                raise RuntimeError("Failed to persist token persona change")
+        return [t.get('name', '?') for t in hit]
+
     def verify(self, candidate_token: str) -> Optional[dict]:
         """Constant-time check across all tokens. Returns the record (with the
         plaintext token field included — caller must not log it) or None.

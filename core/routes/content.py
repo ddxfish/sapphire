@@ -312,6 +312,12 @@ async def get_prompt(name: str, request: Request, _=Depends(require_login)):
     return {"name": name, "data": pdata}
 
 
+def _problem_status(msg: str) -> int:
+    """A name-check refusal → HTTP status: taken (incl. asleep in the
+    vault) is a conflict, everything else a bad request."""
+    return 409 if ('already exists' in msg or 'asleep' in msg) else 400
+
+
 @router.put("/api/prompts/{name}")
 async def save_prompt(name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Save a prompt. Optional 'reason' in the body rides the prompt ledger
@@ -319,7 +325,23 @@ async def save_prompt(name: str, request: Request, _=Depends(require_login), sys
     data = await request.json()
     reason = (data.pop('reason', None) or '').strip() or None
     origin = (data.pop('origin', None) or '').strip() or None
-    success, msg = prompts.save_prompt(name, data, reason=reason, origin=origin)
+    # The client states intent — this PUT is both the create and the edit
+    # path (hunt 2026-11-08): create = must be a NEW usable name (409/400);
+    # update = must still exist (404) — a late debounced save used to
+    # resurrect a prompt deleted or renamed elsewhere.
+    create = bool(data.pop('create', False))
+    update = bool(data.pop('update', False))
+    if create:
+        bad = prompts.prompt_name_problem(name)
+        if bad:
+            raise HTTPException(status_code=_problem_status(bad), detail=bad)
+    elif update and not prompts.get_prompt(name):
+        if origin == 'vault':
+            raise HTTPException(status_code=409, detail=prompts.VAULT_LOCKED_MSG)
+        raise HTTPException(status_code=404, detail=f"Prompt '{name}' no longer exists "
+                                                   f"(deleted or renamed elsewhere)")
+    success, msg = prompts.save_prompt(name, data, allow_overwrite=not create,
+                                       reason=reason, origin=origin)
     if success:
         if prompts.is_vault_prompt(name):
             # Name-free on purpose: SSE replays recent events to every new
@@ -343,6 +365,30 @@ async def save_prompt(name: str, request: Request, _=Depends(require_login), sys
         if msg == prompts.VAULT_LOCKED_MSG:
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=400, detail=msg or "Failed to save prompt")
+
+
+@router.post("/api/prompts/{name}/rename")
+async def rename_prompt(name: str, request: Request, _=Depends(require_login),
+                        system=Depends(get_system)):
+    """Safe rename: moves the prompt in its own store and repoints chats,
+    personas and continuity tasks. 409 when the new name is taken."""
+    data = await request.json()
+    new = (data.get('new_name') or '').strip()
+    was_vault = prompts.is_vault_prompt(name)
+    ok, msg = prompts.rename_prompt(name, new)
+    if not ok:
+        raise HTTPException(status_code=_problem_status(msg), detail=msg)
+    publish(Events.PROMPT_DELETED, {"name": "" if was_vault else name})
+    publish(Events.PROMPT_CHANGED, {"name": "" if was_vault else new,
+                                    "action": "vault_changed" if was_vault else "saved"})
+    # The active chat now points at the new name — re-apply so the live
+    # prompt and active-preset tracking follow.
+    try:
+        if (system.llm_chat.session_manager.get_chat_settings() or {}).get('prompt') == new:
+            prompts.activate_prompt(new, system)
+    except Exception as e:
+        logger.warning(f"[PROMPTS] rename re-activate of '{new}' failed: {e}")
+    return {"status": "success", "name": new, "message": msg}
 
 
 @router.delete("/api/prompts/{name}")
@@ -379,6 +425,18 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
         raise HTTPException(status_code=400, detail="Component value must be a string")
     reason = (data.get('reason') or '').strip() or None
     origin = (data.get('origin') or '').strip() or None
+    # Intent, as for prompts: create = new usable key (editor + New /
+    # Duplicate overwrote a same-named piece — + New blanked it); update =
+    # must still exist (a late save resurrected a deleted/renamed piece).
+    if data.get('create'):
+        bad = prompts.piece_key_problem(comp_type, key)
+        if bad:
+            raise HTTPException(status_code=_problem_status(bad), detail=bad)
+    elif data.get('update') and key not in prompts.prompt_manager.components.get(comp_type, {}):
+        if origin == 'vault':
+            raise HTTPException(status_code=409, detail=prompts.VAULT_LOCKED_MSG)
+        raise HTTPException(status_code=404, detail=f"Piece '{comp_type}/{key}' no longer "
+                                                   f"exists (deleted or renamed elsewhere)")
     ok, msg = prompts.save_component(comp_type, key, value, reason=reason,
                                      origin=origin)
     if not ok:
@@ -862,6 +920,11 @@ async def update_persona(name: str, request: Request, _=Depends(require_login), 
     if not persona_manager.exists(name):
         raise HTTPException(status_code=404, detail="Persona not found")
     data = await request.json()
+    if "name" in data:
+        problem = persona_manager.rename_problem(name, data["name"])
+        if problem:
+            raise HTTPException(status_code=409 if "exists" in problem else 400,
+                                detail=problem)
     if not persona_manager.update(name, data):
         raise HTTPException(status_code=500, detail="Failed to update persona")
     # On rename, reapply must target the NEW name -- update() moved the
@@ -870,7 +933,8 @@ async def update_persona(name: str, request: Request, _=Depends(require_login), 
     final_name = name if persona_manager.exists(name) \
         else persona_manager._sanitize_name(data.get("name", name))
     reapply_if_active(system, 'persona', final_name)
-    return {"status": "success"}
+    # The server owns the name: the client adopts this, never its own guess.
+    return {"status": "success", "name": final_name}
 
 
 @router.delete("/api/personas/{name}")
@@ -908,9 +972,8 @@ async def upload_persona_avatar(name: str, request: Request, file: UploadFile = 
 
     # Resize to 512x512 square (center crop) and convert to webp
     data = _process_avatar(raw)
-    filename = f"{name}.webp"
-
-    if not persona_manager.set_avatar(name, filename, data):
+    filename = persona_manager.set_avatar(name, data)
+    if not filename:
         raise HTTPException(status_code=500, detail="Failed to save avatar")
     return {"status": "success", "avatar": filename}
 
@@ -1108,7 +1171,10 @@ async def export_persona_card(name: str, request: Request, _=Depends(require_log
     }
 
     prompt_name = settings.get("prompt", "")
-    if prompt_name and prompt_name != "__story__":
+    # 'default' is the live-assembled-state SENTINEL, not a portable prompt:
+    # exporting it snapshotted whatever pieces were worn right now (temporary
+    # emotions included), and the import kept the receiver's own anyway.
+    if prompt_name and prompt_name not in ("__story__", "default"):
         prompt_data = get_prompt(prompt_name)
         if isinstance(prompt_data, dict) and prompt_data.get('privacy_required'):
             # The card embeds the full prompt text — a privacy_required
@@ -1168,10 +1234,15 @@ async def export_persona_card(name: str, request: Request, _=Depends(require_log
     meta.add_text("sapphire_persona", base64.b64encode(json.dumps(bundle).encode("utf-8")).decode("ascii"))
     buf = io.BytesIO()
     img.save(buf, format="PNG", pnginfo=meta)
+    # Headers are latin-1: a Cyrillic/CJK persona name 500'd here. ASCII
+    # fallback + RFC 5987 UTF-8 name (scouts S1/S5, 2026-11-08).
+    from urllib.parse import quote
+    ascii_name = name.encode('ascii', 'ignore').decode() or 'persona'
     return Response(
         content=buf.getvalue(),
         media_type="image/png",
-        headers={"Content-Disposition": f'attachment; filename="{name}.png"'},
+        headers={"Content-Disposition": f'attachment; filename="{ascii_name}.png"; '
+                                        f"filename*=UTF-8''{quote(name)}.png"},
     )
 
 
@@ -1182,140 +1253,213 @@ async def import_persona(request: Request, _=Depends(require_login)):
     return await _import_persona_from_bundle(data)
 
 
+# ── Import funnel (hunt 2026-11-08) ──
+# ONE server path installs a shared prompt + pieces, for the persona import
+# (JSON + PNG card + store) and the Prompts view alike. Everything a bundle
+# carries is third-party data: validated BEFORE the first write, prompt
+# saved before any piece, pieces by key membership, values checked.
+
+def _card_number(v, lo=0.25, hi=4.0):
+    """A finite float in range, or None — NaN/Infinity from json.loads made
+    every /api/status for the chat 500 (allow_nan=False on the way out)."""
+    import math
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) and lo <= f <= hi else None
+
+
+def _clean_prompt_data(pd) -> dict:
+    """Only the fields a prompt has, shape-checked. HTTP 400 otherwise."""
+    from core.prompt_crud import PIECE_TYPES
+    if not isinstance(pd, dict):
+        raise HTTPException(status_code=400, detail="Invalid prompt data")
+    kind = pd.get("type") or ("monolith" if "content" in pd and "components" not in pd else "assembled")
+    private = bool(pd.get("privacy_required"))
+    if kind == "monolith":
+        if not isinstance(pd.get("content"), str):
+            raise HTTPException(status_code=400, detail="Monolith prompt requires text content")
+        return {"type": "monolith", "content": pd["content"], "privacy_required": private}
+    if kind != "assembled":
+        raise HTTPException(status_code=400, detail=f"Unknown prompt type '{kind}'")
+    comps = pd.get("components")
+    if not isinstance(comps, dict):
+        raise HTTPException(status_code=400, detail="Assembled prompt requires a components dict")
+    out = {}
+    for t, v in comps.items():
+        if t not in PIECE_TYPES:
+            continue
+        if isinstance(v, str):
+            out[t] = v
+        elif isinstance(v, list):
+            out[t] = [k for k in v if isinstance(k, str)]
+    return {"type": "assembled", "components": out, "privacy_required": private}
+
+
+def _install_prompt_bundle(prompt_name, prompt_data, components, *, overwrite=False,
+                           keep=frozenset(), use_existing=False) -> dict:
+    """Install a shared prompt (+ its pieces). Validates the name with THE
+    name check (reserved, route words, sealed vault names — a locked-vault
+    import used to plant a plaintext copy that won after unlock). A taken
+    name: overwrite replaces it; use_existing (persona cards) points at the
+    local one and writes nothing; otherwise 409. Returns
+    {'prompt', 'kept_existing', 'pieces': "Wrote N pieces"}."""
+    from core import prompts
+    from core.prompt_crud import save_prompt, save_components_batch
+    bad = prompts.prompt_name_problem(prompt_name)
+    taken = bool(bad) and "already exists" in bad
+    if bad and not taken:
+        raise HTTPException(status_code=_problem_status(bad), detail=bad)
+    data = _clean_prompt_data(prompt_data)
+    if components is not None and not isinstance(components, dict):
+        raise HTTPException(status_code=400, detail="Invalid components format")
+    if taken and not overwrite:
+        if use_existing:
+            logger.info(f"[IMPORT] Prompt '{prompt_name}' exists, keeping existing")
+            return {"prompt": prompt_name, "kept_existing": True, "pieces": "Wrote 0 pieces"}
+        raise HTTPException(status_code=409, detail=bad)
+    # Prompt FIRST (DR-8): the door most likely to refuse (cross-type,
+    # store latch) refuses before any shared piece is touched.
+    # origin='regular': installing shared content never routes by lock state.
+    ok, msg = save_prompt(prompt_name, data, allow_overwrite=overwrite, origin='regular')
+    if not ok:
+        raise HTTPException(status_code=409, detail=f"Prompt import refused: {msg}")
+    pieces = "Wrote 0 pieces"
+    if components:
+        ok, pieces = save_components_batch(components, keep=keep, overwrite=overwrite)
+        if not ok:
+            raise HTTPException(status_code=409, detail=f"Component save refused: {pieces}")
+    if prompt_name == prompts.get_active_preset_name():
+        prompts.revalidate_active(reason="import replaced the active prompt")
+    logger.info(f"[IMPORT] Saved prompt '{prompt_name}' ({pieces})")
+    return {"prompt": prompt_name, "kept_existing": False, "pieces": pieces}
+
+
+def _keep_set(raw) -> set:
+    """keep_components → {(type, key)}. A JSON list (new clients) or the old
+    comma string — piece keys may hold commas, which split them in two."""
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if raw.startswith("["):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        else:
+            raw = [x for x in raw.split(",") if x]
+    out = set()
+    for kc in (raw or []):
+        if isinstance(kc, str) and "/" in kc:
+            out.add(tuple(kc.split("/", 1)))
+    return out
+
+
+@router.post("/api/prompts/import")
+async def import_prompt_bundle(request: Request, _=Depends(require_login)):
+    """Prompts-view import — the same funnel as persona cards. Body: {name,
+    prompt: {type, content|components, privacy_required}, components?,
+    overwrite?, keep_components?}. 409 on a taken name unless overwrite —
+    the client asks for another name and retries."""
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Invalid import")
+    name = data.get("name")
+    res = _install_prompt_bundle(name if isinstance(name, str) else "", data.get("prompt"),
+                                 data.get("components"),
+                                 overwrite=bool(data.get("overwrite")),
+                                 keep=_keep_set(data.get("keep_components")))
+    publish(Events.PROMPT_CHANGED, {"name": res["prompt"], "action": "saved"})
+    return {"status": "success", "name": res["prompt"], "pieces": res["pieces"]}
+
+
 async def _import_persona_from_bundle(data):
-    """Shared persona-import logic. `data` is the bundle dict; a data-URI
-    `avatar` (if present) is stored as the persona's avatar (→ webp)."""
+    """Shared persona-import logic (JSON bundle, PNG card, store). `data` is
+    the bundle dict; a data-URI `avatar` (if present) becomes the avatar.
+    Every refusal happens BEFORE the first write — a card whose name had no
+    usable characters used to leave its prompt and pieces behind, then 500."""
     import base64
     from core.personas import persona_manager
-    from core.prompt_crud import get_prompt, save_prompt, save_components_batch
 
-    # Validate
-    if not data.get("sapphire_export") or data.get("type") != "persona":
+    if not isinstance(data, dict) or not data.get("sapphire_export") or data.get("type") != "persona":
         raise HTTPException(status_code=400, detail="Invalid persona export format")
 
-    name = data.get("name", "imported")
-    overwrite_prompt = data.get("overwrite_prompt", False)
-    overwrite_avatar = data.get("overwrite_avatar", False)
-    overwrite_persona = data.get("overwrite_persona", False)
+    name = data.get("name") if isinstance(data.get("name"), str) else "imported"
+    overwrite_prompt = bool(data.get("overwrite_prompt", False))
+    overwrite_avatar = bool(data.get("overwrite_avatar", False))
+    overwrite_persona = bool(data.get("overwrite_persona", False))
+    keep = _keep_set(data.get("keep_components"))
 
-    # Per-piece keep-list ("type/key" strings the user unchecked) — even with
-    # overwrite_prompt, these specific components keep their local value.
-    _keep = set()
-    for kc in (data.get("keep_components") or []):
-        if isinstance(kc, str) and "/" in kc:
-            t, k = kc.split("/", 1)
-            _keep.add((t, k))
-
-    # Collision: a persona with this (sanitized) name already exists. Block with
-    # 409 unless the caller explicitly opted into overwrite — the import-confirm
-    # UI shows what will be replaced before setting this flag.
     safe_name = persona_manager._sanitize_name(name)
+    if not safe_name:
+        raise HTTPException(status_code=400,
+                            detail="This card's name has no usable characters (letters, digits, space, - or _)")
     persona_exists = persona_manager.exists(safe_name)
     if persona_exists and not overwrite_persona:
-        raise HTTPException(status_code=409, detail=f"Persona '{name}' already exists")
+        raise HTTPException(status_code=409, detail=f"Persona '{safe_name}' already exists")
 
-    # Import prompt + components first
-    prompt_name = None
-    if data.get("prompt"):
-        prompt_info = data["prompt"]
-        if not isinstance(prompt_info, dict):
-            raise HTTPException(status_code=400, detail="Invalid prompt data format")
-        prompt_name = prompt_info.get("name", name)
-        if not isinstance(prompt_name, str) or not prompt_name.strip() or re.search(r'[<>"\'`&\x00-\x1f]', prompt_name):
-            raise HTTPException(status_code=400, detail="The prompt's name in this file has characters a name can't hold")
-        prompt_data = prompt_info.get("data", {})
-        if not isinstance(prompt_data, dict):
-            raise HTTPException(status_code=400, detail="Invalid prompt data")
-
-        # Validate required fields based on type
-        prompt_type = prompt_data.get("type", "assembled")
-        if prompt_type == "monolith" and "content" not in prompt_data:
-            raise HTTPException(status_code=400, detail="Monolith prompt requires 'content' field")
-
-        existing = get_prompt(prompt_name)
-        if existing and not overwrite_prompt:
-            # Don't overwrite — use existing prompt by name
-            logger.info(f"[IMPORT] Prompt '{prompt_name}' exists, keeping existing")
-        else:
-            # Save the prompt FIRST (DR-8): it's the door most likely to
-            # refuse (reserved name, cross-type collision, store latch).
-            # Refusing before any component commit keeps a failed import
-            # side-effect-free — the old order persisted the pieces, then
-            # ignored save_prompt's return entirely.
-            # origin='regular': installing a shared card must never route by
-            # invisible vault lock state (and vaulted imports would break
-            # the card's own re-export).
-            ok, msg = save_prompt(prompt_name, prompt_data,
-                                  allow_overwrite=overwrite_prompt, origin='regular')
-            if not ok:
-                raise HTTPException(status_code=409,
-                                    detail=f"Prompt import refused: {msg}")
-            logger.info(f"[IMPORT] Saved prompt '{prompt_name}'")
-
-            # Import components if present
-            if data.get("components"):
-                components = data["components"]
-                if not isinstance(components, dict):
-                    raise HTTPException(status_code=400, detail="Invalid components format")
-                ok, msg = save_components_batch(components, keep=_keep,
-                                                overwrite=overwrite_prompt)
-                if not ok:
-                    raise HTTPException(status_code=409,
-                                        detail=f"Component save refused: {msg}")
-
-    # Build persona settings
+    # Persona values — checked, not just keys (hunt 19 + 2026-11-08).
     voice_data = data.get("voice") if isinstance(data.get("voice"), dict) else {}
     persona_settings = {}
-    if prompt_name:
-        persona_settings["prompt"] = prompt_name
-    if isinstance(voice_data.get("voice"), str) and not re.search(r'[<>"\'`]', voice_data["voice"]):
-        persona_settings["voice"] = voice_data["voice"]
-    if "speed" in voice_data:
-        persona_settings["speed"] = voice_data["speed"]
-    if "pitch" in voice_data:
-        persona_settings["pitch"] = voice_data["pitch"]
-    # Values from a shared file are checked, not just keys (hunt 19): a
-    # trim_color of `"><img onerror=…>` drew script in Personas.
+    v = voice_data.get("voice")
+    if isinstance(v, str) and v and not re.search(r'[<>"\'`&\x00-\x1f]', v):
+        persona_settings["voice"] = v
+    for k in ("speed", "pitch"):
+        if k in voice_data:
+            f = _card_number(voice_data[k])
+            if f is None:
+                raise HTTPException(status_code=400, detail=f"This card's voice {k} isn't a usable number")
+            persona_settings[k] = f
     trim = data.get("trim_color")
     if isinstance(trim, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", trim):
         persona_settings["trim_color"] = trim
+    tagline = data.get("tagline") if isinstance(data.get("tagline"), str) else ""
+    tagline = re.sub(r"[\x00-\x1f\x7f]", " ", tagline).strip()[:300]
 
-    # Create or overwrite the persona record
-    persona_data = {
-        "name": name,
-        "tagline": data.get("tagline", ""),
-        "settings": persona_settings,
-    }
+    prompt_info = data.get("prompt")
+    if prompt_info is not None and not isinstance(prompt_info, dict):
+        raise HTTPException(status_code=400, detail="Invalid prompt data format")
+    prompt_name = None
+    if prompt_info:
+        prompt_name = prompt_info.get("name", name)
+        if not isinstance(prompt_name, str) or re.search(r'[<>"\'`&\x00-\x1f]', prompt_name):
+            raise HTTPException(status_code=400, detail="The prompt's name in this file has characters a name can't hold")
+        if prompt_name == "default":
+            prompt_name = None     # the live-state sentinel — never a shipped prompt
+    if prompt_name:
+        _install_prompt_bundle(prompt_name, prompt_info.get("data", {}), data.get("components"),
+                               overwrite=overwrite_prompt, keep=keep, use_existing=True)
+        persona_settings["prompt"] = prompt_name
+
+    # Overwrite MERGES (persona_manager.update): only the fields a card
+    # carries change — toolset, model, scopes, scene stay the receiver's.
     if persona_exists:
-        # Update in place — no "name" key so update() doesn't trigger a rename.
-        if not persona_manager.update(safe_name, {"tagline": persona_data["tagline"], "settings": persona_settings}):
+        if not persona_manager.update(safe_name, {"tagline": tagline, "settings": persona_settings}):
             raise HTTPException(status_code=500, detail="Failed to overwrite persona")
-    elif not persona_manager.create(name, persona_data):
+    elif not persona_manager.create(name, {"tagline": tagline, "settings": persona_settings}):
         raise HTTPException(status_code=500, detail="Failed to create persona")
 
-    # Import avatar
+    warnings = []
     if data.get("avatar") and isinstance(data["avatar"], str) and data["avatar"].startswith("data:"):
-        existing_avatar = persona_manager.get_avatar_path(name)
-        if existing_avatar and not overwrite_avatar:
-            logger.info(f"[IMPORT] Avatar exists for '{name}', keeping existing")
+        if persona_manager.get_avatar_path(safe_name) and not overwrite_avatar:
+            logger.info(f"[IMPORT] Avatar exists for '{safe_name}', keeping existing")
         else:
             try:
-                # Parse data URI: data:image/webp;base64,XXXX
                 header, b64data = data["avatar"].split(",", 1)
-                if len(b64data) > 5 * 1024 * 1024:  # 5MB base64 ≈ 3.75MB decoded
-                    raise ValueError("Avatar data too large")
+                if len(b64data) > 9 * 1024 * 1024:   # a 6 MB card's base64
+                    raise ValueError("avatar image too large")
                 mime = header.split(":")[1].split(";")[0]
                 if mime not in ('image/webp', 'image/png', 'image/jpeg', 'image/gif'):
-                    raise ValueError(f"Unsupported image type: {mime}")
+                    raise ValueError(f"unsupported image type {mime}")
                 avatar_bytes = _process_avatar(base64.b64decode(b64data))
-                filename = f"{persona_manager._sanitize_name(name)}.webp"
-                persona_manager.set_avatar(persona_manager._sanitize_name(name), filename, avatar_bytes)
-                logger.info(f"[IMPORT] Saved avatar for '{name}' ({len(avatar_bytes)} bytes)")
+                if not persona_manager.set_avatar(safe_name, avatar_bytes):
+                    raise ValueError("avatar could not be saved")
+                logger.info(f"[IMPORT] Saved avatar for '{safe_name}' ({len(avatar_bytes)} bytes)")
             except Exception as e:
                 logger.warning(f"[IMPORT] Failed to import avatar: {e}")
+                warnings.append(f"Avatar not imported: {e}")
 
-    sanitized = persona_manager._sanitize_name(name)
-    return {"status": "success", "name": sanitized}
+    return {"status": "success", "name": safe_name, "warnings": warnings}
 
 
 async def _import_persona_card_bytes(raw: bytes, overwrite_prompt: bool = False,
@@ -1332,6 +1476,9 @@ async def _import_persona_card_bytes(raw: bytes, overwrite_prompt: bool = False,
 
     if len(raw) > 6 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Card too large (max 6MB)")
+    # Reading .text decodes the whole image — the bomb guard must hold here
+    # too, not only after someone's first avatar upload set it (scout S1).
+    Image.MAX_IMAGE_PIXELS = 4096 * 4096
     try:
         img = Image.open(io.BytesIO(raw))
         chunk = (getattr(img, "text", None) or {}).get("sapphire_persona") \
@@ -1353,7 +1500,7 @@ async def _import_persona_card_bytes(raw: bytes, overwrite_prompt: bool = False,
     data["overwrite_prompt"] = overwrite_prompt
     data["overwrite_avatar"] = overwrite_avatar
     data["overwrite_persona"] = overwrite_persona
-    data["keep_components"] = keep_components or []
+    data["keep_components"] = keep_components or []   # list or JSON/comma string — _keep_set
     return await _import_persona_from_bundle(data)
 
 
@@ -1366,8 +1513,8 @@ async def import_persona_card(request: Request, file: UploadFile = File(...),
                               _=Depends(require_login)):
     """Import a persona from an uploaded PNG character card."""
     raw = await file.read()
-    keep = [s for s in keep_components.split(",") if s]
-    return await _import_persona_card_bytes(raw, overwrite_prompt, overwrite_avatar, overwrite_persona, keep)
+    return await _import_persona_card_bytes(raw, overwrite_prompt, overwrite_avatar, overwrite_persona,
+                                            keep_components)
 
 
 # =============================================================================

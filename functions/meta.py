@@ -131,21 +131,21 @@ TOOLS = [
         "function": {
             "name": "prompt_pieces",
             "description": "Manage assembled-prompt pieces. Actions: list (all types, or one type's keys), view, set (activate),"
-                           " remove (deactivate; single-value components reset to default), create (save to the library, does "
-                           "NOT activate), delete (from the library).",
+                           " remove (deactivate; single-value components reset to default), create (add a NEW piece to the "
+                           "library, does NOT activate), edit (replace an existing piece's text), delete (from the library).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "view", "set", "remove", "create", "delete"]
+                        "enum": ["list", "view", "set", "remove", "create", "edit", "delete"]
                     },
                     "component": {
                         "type": "string",
                         "description": "character | location | relationship | goals | format | scenario | emotions | extras"
                     },
                     "key": {"type": "string"},
-                    "value": {"type": "string", "description": "create only"},
+                    "value": {"type": "string", "description": "create / edit only"},
                     "minutes": {"type": "integer", "description": "set only: activate for N minutes, then auto-revert"},
                     "reason": {"type": "string", "description": "Recorded in your memory ledger"}
                 },
@@ -450,6 +450,16 @@ def _save_and_activate_assembled(system, state=None) -> str:
                      for k, v in _assembled_state.items()}
 
     preset_name = _get_current_preset_name(state)
+    # Forking from a generic state (e.g. right after the active prompt was
+    # deleted → 'default') names the preset after the character. That name
+    # may belong to ANOTHER user prompt — the save used to overwrite it
+    # (scout S4, 2026-11-08). A fork always takes a free name.
+    forking = prompts.get_active_preset_name() in (None, '', 'assembled', 'unknown', 'random', 'default')
+    if forking:
+        base, n = preset_name, 2
+        while prompts.get_prompt(preset_name):
+            preset_name = f"{base}-{n}"
+            n += 1
     components = {}
     for k in ['character', 'location', 'relationship', 'goals', 'format', 'scenario']:
         if state.get(k):
@@ -470,7 +480,7 @@ def _save_and_activate_assembled(system, state=None) -> str:
     # change on the next diff.
     ok, msg = prompts.save_prompt(preset_name, {"type": "assembled", "components": components,
                                                 "privacy_required": privacy_required},
-                                  audit=False)
+                                  allow_overwrite=not forking, audit=False)
     if not ok:
         raise MetaError(f"Failed to save preset: {msg}")
     ok, msg = prompts.activate_prompt(preset_name, system)
@@ -609,6 +619,9 @@ def _prompt_create(args):
     existing = _resolve_name(args.get('name', ''), prompts.list_prompts())
     if existing:
         return f"Prompt '{existing}' already exists — pick another name, or prompt_switch to it and use prompt_edit.", False
+    bad = prompts.prompt_name_problem(name)   # hidden packs, sealed vault names, reserved
+    if bad:
+        return bad, False
 
     ok, msg = prompts.save_prompt(name, {"type": "monolith", "content": content},
                                   reason=_reason(args))
@@ -769,11 +782,21 @@ def _prompt_pieces(args):
             _act(prev, False)
         return f"Reset {component} to '{default}'. {_status_string()}", True
 
-    if action == 'create':
+    if action in ('create', 'edit'):
         _require_component(component)
         value = args.get('value', '')
         if not key or not value:
-            return "Both key and value are required for create.", False
+            return f"Both key and value are required for {action}.", False
+        # create used to resolve "Sapphire" onto the existing 'sapphire'
+        # piece and silently replace its text, reporting "Created" (scout
+        # S4, 2026-11-08). New vs replace is now her explicit choice.
+        exists = key in comps.get(component, {})
+        if action == 'create' and exists:
+            return (f"{component}/'{key}' already exists. To replace its text use "
+                    f"prompt_pieces(action='edit', component='{component}', key='{key}', value=...); "
+                    f"to keep both, create it under another key."), False
+        if action == 'edit' and not exists:
+            return _unknown_key_msg(component, key), False
         # Item-level funnel (phase 0 of the vault): lock discipline, private-
         # dict write, refusal propagation, and the COMPONENTS_CHANGED publish
         # all live in prompt_crud.save_component now.
@@ -783,6 +806,8 @@ def _prompt_pieces(args):
         # Routing note so she knows where it landed (vault-routed while the
         # vault is unlocked — the funnel's message carries the marker).
         where = " (vault)" if msg.endswith("(vault)") else ""
+        if action == 'edit':
+            return f"Updated {component}/'{key}'{where} ({len(value)} chars).", True
         return (f"Created {component}/'{key}' in the library{where}. Not active — "
                 f"prompt_pieces(action='set', component='{component}', key='{key}') to wear it."), True
 
@@ -816,7 +841,7 @@ def _prompt_pieces(args):
             return _unknown_key_msg(component, key), False
         return f"Deleted {component}/{key} from the library.", True
 
-    return f"Unknown action '{action}'. Valid: list, view, set, remove, create, delete.", False
+    return f"Unknown action '{action}'. Valid: list, view, set, remove, create, edit, delete.", False
 
 
 def _set_voice(args):

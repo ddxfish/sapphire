@@ -85,9 +85,14 @@ export const importPersonaCard = async (file, { overwrite_prompt = false, overwr
     formData.append('overwrite_prompt', overwrite_prompt ? 'true' : 'false');
     formData.append('overwrite_avatar', overwrite_avatar ? 'true' : 'false');
     formData.append('overwrite_persona', overwrite_persona ? 'true' : 'false');
-    formData.append('keep_components', (keep_components || []).join(','));
+    formData.append('keep_components', JSON.stringify(keep_components || []));   // keys may hold commas
     const res = await fetch('/api/personas/import-card', { method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: formData });
-    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || 'Import failed'); }
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const e = new Error(err.detail || 'Import failed');
+        e.status = res.status;   // the confirm flow branches on a 409
+        throw e;
+    }
     const data = await res.json();
     refreshInitData();  // import creates a prompt server-side — bust cache so the persona's prompt shows
     return data;

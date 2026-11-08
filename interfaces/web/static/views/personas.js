@@ -38,6 +38,7 @@ import * as eventBus from '../core/event-bus.js';
 import { saveUrl } from '../shared/download.js';
 
 let container = null;
+let viewVisible = false;
 let personas = [];
 let selectedName = null;
 let selectedData = null;
@@ -67,6 +68,15 @@ export default {
         window.addEventListener('persona-select', e => {
             if (e.detail?.name) selectedName = e.detail.name;
         });
+        // A prompt renamed/deleted elsewhere re-points personas server-side;
+        // an open editor still held the old name and its next save wrote it
+        // back (scout S4, 2026-11-08). Refresh — deferred while editing.
+        const promptMoved = () => {
+            if (!viewVisible) return;
+            loadData().then(() => softRender());
+        };
+        eventBus.on(eventBus.Events.PROMPT_CHANGED, promptMoved);
+        eventBus.on(eventBus.Events.PROMPT_DELETED, promptMoved);
         eventBus.on('settings_changed', async (data) => {
             if (data?.key !== 'TTS_PROVIDER') return;
             try {
@@ -76,17 +86,15 @@ export default {
             // Re-render voice select if persona editor is visible
             const voiceSel = container?.querySelector('#pa-s-voice');
             if (voiceSel && voicesData) {
-                const current = voiceSel.value;
-                const voices = voicesData.voices || [];
-                const validCurrent = voices.some(v => v.voice_id === current);
-                voiceSel.innerHTML = renderVoiceOptions(validCurrent ? current : (voicesData.default_voice || ''));
-                if (!validCurrent && voicesData.default_voice) {
-                    voiceSel.value = voicesData.default_voice;
-                }
+                // Re-list for the new provider; a saved voice it doesn't know
+                // stays visible as "(not in this TTS provider)" — swapping in
+                // the provider default here got saved on the next edit.
+                voiceSel.innerHTML = renderVoiceOptions(selectedData?.settings?.voice || '');
             }
         });
     },
     async show() {
+        viewVisible = true;
         if (window._pendingPersonaSelect) {
             selectedName = window._pendingPersonaSelect;
             delete window._pendingPersonaSelect;
@@ -96,6 +104,8 @@ export default {
         render();
     },
     hide() {
+        viewVisible = false;
+        flushSave();   // reads the DOM synchronously, before the next show() wipes it
         // Restore active chat's trim color when leaving persona view
         fetch('/api/status').then(r => r.ok ? r.json() : null).then(d => {
             applyTrimColor(d?.chat_settings?.trim_color || '');
@@ -417,9 +427,13 @@ function _refsVaultPrompt(p) {
 
 // value isn't in the (possibly stale) list, show it as a synthetic selected
 // option rather than letting the <select> silently fall to the first option.
-function _withMissing(opts, list, current, keyFn) {
+function _withMissing(opts, list, current, keyFn, why = 'missing') {
     if (current && !list.some(keyFn)) {
-        opts.unshift(`<option value="${esc(current)}" selected>${esc(current)}</option>`);
+        opts.unshift(`<option value="${esc(current)}" selected>${esc(current)} (${why})</option>`);
+    } else if (!current && opts.length) {
+        // Unset (e.g. an imported card never carried it): say so instead of
+        // showing option 0 as if chosen. collectSettings leaves '' out.
+        opts.unshift('<option value="" selected>— not set —</option>');
     }
     return opts;
 }
@@ -442,6 +456,7 @@ function renderPromptOptions(current) {
         opts.unshift(`<option value="${esc(current)}" selected>${esc(label)}</option>`);
         return opts.join('');
     }
+    if (!current && opts.length) opts.unshift('<option value="" selected>— not set —</option>');
     return opts.join('')
         || `<option value="${esc(current || 'default')}">${esc(current || 'default')}</option>`;
 }
@@ -470,9 +485,12 @@ function renderVoiceOptions(current) {
         // Fallback: show current saved voice as placeholder
         return current ? `<option value="${esc(current)}" selected>${esc(current)}</option>` : '<option value="">No TTS active</option>';
     }
-    return voices.map(v =>
+    const opts = voices.map(v =>
         `<option value="${esc(v.voice_id)}"${v.voice_id === current ? ' selected' : ''}>${esc(v.name)}${v.category ? ' (' + esc(v.category) + ')' : ''}</option>`
-    ).join('');
+    );
+    // A voice from another TTS provider (or a shared card) used to show as
+    // option 0 and get saved on the next unrelated edit.
+    return _withMissing(opts, voices, current, v => v.voice_id === current, 'not in this TTS provider').join('');
 }
 
 // THE picker (shared/llm-picker.js): the same list, model rule and read as
@@ -552,6 +570,7 @@ function bindEvents() {
     bindPanelList(container, {
         onSelect: async (name, e) => {
             if (e?.target?.closest('.pa-fav-star')) { await toggleFavorite(name); return; }
+            await flushSave();
             selectedName = name;
             try { selectedData = await getPersona(selectedName); } catch { selectedData = null; }
             render();
@@ -559,16 +578,19 @@ function bindEvents() {
         onAdd: async () => {
             const name = prompt('New persona name (from current chat settings):');
             if (!name?.trim()) return;
+            await flushSave();
             try {
-                await createFromChat(name.trim());
-                selectedName = name.trim().replace(/\s+/g, '_').toLowerCase();
+                const res = await createFromChat(name.trim());
+                selectedName = res?.name || selectedName;   // the server's name, never a guess
                 await loadData();
                 render();
-                ui.showToast(`Created: ${name.trim()}`, 'success');
+                ui.showToast(`Created: ${selectedName}`, 'success');
             } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
         },
         onDelete: async () => {
             if (!confirm(`Delete persona "${selectedName}"?`)) return;
+            if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }   // edits to a doomed persona
+            if (_savePromise) await _savePromise;
             try {
                 await deletePersona(selectedName);
                 selectedName = null;
@@ -583,6 +605,7 @@ function bindEvents() {
     // Load persona
     container.querySelector('#pa-load')?.addEventListener('click', async () => {
         if (!selectedName) return;
+        await flushSave();   // activate what the editor shows, not the last save
         try {
             await loadPersona(selectedName);
             ui.showToast(`Loaded: ${selectedName}`, 'success');
@@ -596,11 +619,13 @@ function bindEvents() {
     container.querySelector('#pa-set-default')?.addEventListener('click', async () => {
         if (!selectedName) return;
         try {
-            await fetch('/api/personas/default', {
+            const r = await fetch('/api/personas/default', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: selectedName })
             });
+            if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'Default not saved');
+            await refreshInitData();   // loadData reads the default from the init cache — the ⭐ snapped back
             defaultPersona = selectedName;
             render();
             ui.showToast(`${selectedName} set as default`, 'success');
@@ -611,7 +636,9 @@ function bindEvents() {
     container.querySelector('#pa-clear-default')?.addEventListener('click', async () => {
         try {
             const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-            await fetch('/api/personas/default', { method: 'DELETE', headers: { 'X-CSRF-Token': csrf } });
+            const r = await fetch('/api/personas/default', { method: 'DELETE', headers: { 'X-CSRF-Token': csrf } });
+            if (!r.ok) throw new Error('Default not cleared');
+            await refreshInitData();
             defaultPersona = '';
             render();
             ui.showToast('Default cleared', 'success');
@@ -622,9 +649,10 @@ function bindEvents() {
     container.querySelector('#pa-duplicate')?.addEventListener('click', async () => {
         const newName = prompt(`Duplicate "${selectedName}" as:`, selectedName + '-copy');
         if (!newName?.trim()) return;
+        await flushSave();
         try {
-            await duplicatePersona(selectedName, newName.trim());
-            selectedName = newName.trim().replace(/\s+/g, '_').toLowerCase();
+            const res = await duplicatePersona(selectedName, newName.trim());
+            selectedName = res?.name || selectedName;
             await loadData();
             render();
             ui.showToast(`Duplicated`, 'success');
@@ -632,13 +660,18 @@ function bindEvents() {
     });
 
     // Export — downloads a PNG character card (avatar pixels + embedded bundle)
-    container.querySelector('#pa-export')?.addEventListener('click', () => {
+    container.querySelector('#pa-export')?.addEventListener('click', async () => {
         if (!selectedName) return;
+        await flushSave();
         saveUrl(`/api/personas/${encodeURIComponent(selectedName)}/export.png`, `${selectedName}.png`);
+        // The card is deliberately partial (privacy) — say so, it was silent.
+        ui.showToast('Card carries the prompt, its pieces, voice, colour and tagline. '
+                   + 'Toolset, model, scopes, scene and custom context stay here.', 'info');
     });
 
     // Import (accepts both persona bundles and plain prompt exports)
-    container.querySelector('#pa-import')?.addEventListener('click', () => {
+    container.querySelector('#pa-import')?.addEventListener('click', async () => {
+        await flushSave();   // import's onDone switches the selection
         // Collision + overwrite (with the piece-preview) is handled by
         // confirmPersonaImport — the dialog is just the file picker now.
         // onImport/onImportFile return false so the dialog skips its own toast.
@@ -672,8 +705,8 @@ function bindEvents() {
                 await confirmPersonaImport({
                     bundle,
                     doImport: (flags) => importPersona({ ...bundle, ...flags }),
-                    onDone: async () => {
-                        selectedName = name.replace(/\s+/g, '_').toLowerCase();
+                    onDone: async (res) => {
+                        if (res?.name) selectedName = res.name;
                         await loadData(); render();
                     },
                 });
@@ -684,8 +717,8 @@ function bindEvents() {
                 await confirmPersonaImport({
                     bundle,
                     doImport: (flags) => importPersonaCard(file, flags),
-                    onDone: async () => {
-                        selectedName = (bundle.name || '').replace(/\s+/g, '_').toLowerCase();
+                    onDone: async (res) => {
+                        if (res?.name) selectedName = res.name;
                         await loadData(); render();
                     },
                 });
@@ -703,7 +736,10 @@ function bindEvents() {
             const file = e.target.files[0];
             if (!file || !selectedName) return;
             try {
-                await uploadAvatar(selectedName, file);
+                const res = await uploadAvatar(selectedName, file);
+                if (selectedData) selectedData.avatar = res?.avatar || true;
+                const row = personas.find(p => p.name === selectedName);
+                if (row) row.avatar = res?.avatar || true;
                 const bust = '?t=' + Date.now();
                 // Refresh main avatar
                 const img = container.querySelector('#pa-avatar');
@@ -825,11 +861,15 @@ function collectSettings() {
     const scopeContainer = container.querySelector('#pa-scope-dropdowns');
     const scopeFields = readScopeSettingsFromDom(scopeContainer, { missingValue: 'default' });
 
+    // '' = "— not set —": left out, and the server's merge keeps the
+    // record as it is instead of persisting whatever option 0 was.
+    const picked = {};
+    for (const k of ['prompt', 'toolset', 'spice_set', 'voice']) {
+        const v = get(k);
+        if (v) picked[k] = v;
+    }
     return {
-        prompt: get('prompt'),
-        toolset: get('toolset'),
-        spice_set: get('spice_set') || 'default',
-        voice: get('voice'),
+        ...picked,
         pitch: parseFloat(get('pitch')) || 0.98,
         speed: parseFloat(get('speed')) || 1.3,
         spice_enabled: getChecked('spice_enabled'),
@@ -844,42 +884,78 @@ function collectSettings() {
     };
 }
 
+// The pending save reads the editor DOM, which belongs to selectedName only
+// until the next selection. Every path that switches (or acts on) the
+// selection awaits flushSave() first — a timer firing mid-switch wrote one
+// persona's settings into the other (playwright hunt 2026-11-08).
+let _savePromise = null;
+
 function debouncedSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
+    saveTimer = setTimeout(() => {
         saveTimer = null;   // the softRender hold reads this — never nulled before = held forever
-        if (!selectedName || !selectedData) return;
-        const data = {
-            tagline: container.querySelector('#pa-tagline')?.value || '',
-            settings: collectSettings()
-        };
-        // Check for name change
-        const nameInput = container.querySelector('#pa-name');
-        if (nameInput && nameInput.value.trim() && nameInput.value.trim() !== selectedName) {
-            data.name = nameInput.value.trim();
-        }
-        _saveInFlight++;
-        try {
-            await updatePersona(selectedName, data);
-            // Update local state
-            if (data.name && data.name !== selectedName) {
-                selectedName = data.name.replace(/\s+/g, '_').toLowerCase();
-                await loadData();
-                // Rename repaints the roster — but the user has usually tabbed on
-                // to the tagline by now; a full render() here yanked the cursor.
-                // Deferred until they leave the field (DOM-refresh hunt 2026-09-08).
-                softRender();
-            } else {
-                selectedData.tagline = data.tagline;
-                selectedData.settings = data.settings;
-            }
-        } catch (e) {
-            console.warn('Persona save failed:', e);
-        } finally {
-            _saveInFlight--;
-            softRender.kick();   // a repaint held by this save catches up now
-        }
+        queueSave();
     }, 600);
+}
+
+// Saves run one at a time: a second save started while a rename was in
+// flight bound the OLD name, 404'd, and its catch wrote the old name back
+// into the field — the next edit renamed it back (scout S3, 2026-11-08).
+function queueSave() {
+    _savePromise = (_savePromise || Promise.resolve()).then(doSave);
+    return _savePromise;
+}
+
+async function flushSave() {
+    if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        queueSave();
+    }
+    if (_savePromise) await _savePromise;
+}
+
+async function doSave() {
+    const name = selectedName;   // bound before any await
+    if (!name || !selectedData) return;
+    const data = {
+        tagline: container.querySelector('#pa-tagline')?.value || '',
+        settings: collectSettings()
+    };
+    // Check for name change
+    // Name commits on blur only — a tagline/slider save firing while the
+    // user is mid-typing in Name renamed the persona to the half-typed text.
+    const nameInput = container.querySelector('#pa-name');
+    if (nameInput && document.activeElement !== nameInput
+            && nameInput.value.trim() && nameInput.value.trim() !== name) {
+        data.name = nameInput.value.trim();
+    }
+    _saveInFlight++;
+    try {
+        const res = await updatePersona(name, data);
+        // Update local state
+        const finalName = res?.name || name;   // the server owns the name
+        if (nameInput && data.name) nameInput.value = finalName;
+        if (finalName !== name) {
+            selectedName = finalName;
+            await loadData();
+            // Rename repaints the roster — but the user has usually tabbed on
+            // to the tagline by now; a full render() here yanked the cursor.
+            // Deferred until they leave the field (DOM-refresh hunt 2026-09-08).
+            softRender();
+        } else {
+            selectedData.tagline = data.tagline;
+            selectedData.settings = data.settings;
+        }
+    } catch (e) {
+        // A refused rename (409/400) refuses the whole save — put the real
+        // name back so the next edit doesn't resend the bad one.
+        if (nameInput && data.name) nameInput.value = name;
+        ui.showToast(e.message || 'Persona not saved', 'error');
+    } finally {
+        _saveInFlight--;
+        softRender.kick();   // a repaint held by this save catches up now
+    }
 }
 
 // Quote-safe: imported persona values land inside value="..." (hunt 19).

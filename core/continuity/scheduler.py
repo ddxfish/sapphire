@@ -721,6 +721,17 @@ class ContinuityScheduler:
         self._vault_ref_sync(None, old_prompt)
         return True
 
+    def repoint_ref(self, key: str, old: str, new: str) -> List[str]:
+        """Rename upkeep: every task whose `key` ('prompt', 'persona') holds
+        `old` now holds `new`. Returns the touched task names."""
+        with self._lock:
+            hit = [t for t in self._tasks.values() if t.get(key) == old]
+            for t in hit:
+                t[key] = new
+            if hit:
+                self._save_tasks()
+        return [t.get('name', '?') for t in hit]
+
     # ── Cancel (⏹ / toggle-off / delete) ──
 
     def _cancel_events(self) -> Dict[str, threading.Event]:

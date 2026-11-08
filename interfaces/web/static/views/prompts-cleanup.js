@@ -109,19 +109,24 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, st
         onSave: async (chosen) => {
         let moved = 0;
         const failed = [];
-        if (chosen.length) {
+        // Prompts FIRST: trashing pieces before a delete that then failed
+        // left the surviving prompt pointing at trashed pieces (scout S4).
+        let gone = 0;
+        const kept = new Set();
+        for (const name of names) {
+            try { await deletePrompt(name); gone++; }
+            catch { failed.push(`${name}: prompt delete failed`); kept.add(name); }
+        }
+        const usage = usageResp?.usage || {};
+        const pieces = chosen.filter(c => !(usage[c.type]?.[c.key] || []).some(n => kept.has(n)));
+        if (pieces.length) {
             // One funnel: the server trashes plaintext pieces to the sidecar
             // store and vault pieces to the vault's own encrypted trash.
             try {
-                const res = await trashPieces(chosen);
+                const res = await trashPieces(pieces);
                 moved += (res.trashed || []).length;
                 (res.skipped || []).forEach(s => failed.push(`${s.type}/${s.key}: ${s.why}`));
             } catch (e) { failed.push(`trash: ${e?.message || 'failed'}`); }
-        }
-        let gone = 0;
-        for (const name of names) {
-            try { await deletePrompt(name); gone++; }
-            catch { failed.push(`${name}: prompt delete failed`); }
         }
         const msg = `Deleted ${gone} prompt${gone === 1 ? '' : 's'}`
             + (moved ? `, ${moved} piece${moved === 1 ? '' : 's'} removed` : '');

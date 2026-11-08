@@ -47,13 +47,40 @@ export async function getPrompt(name) {
 }
 
 // Mutations - use fetchWithTimeout for session ID header
-export async function savePrompt(name, data) {
+// Intent: { create: true } = a NEW name (409 if taken); { update: true } =
+// an edit (404 if it was deleted/renamed elsewhere — never resurrects).
+export async function savePrompt(name, data, { create = false, update = false } = {}) {
   const res = await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
+    body: JSON.stringify({ ...data, ...(create ? { create: true } : {}), ...(update ? { update: true } : {}) })
   });
   refreshInitData();  // bust cached prompt list so persona/chat dropdowns see the new/renamed prompt
+  return res;
+}
+
+// Install a shared prompt bundle through the server's import funnel (the
+// same one persona cards use): name checks, prompt-before-pieces, key
+// membership. 409 = name taken (overwrite false) — ask and retry.
+export async function importPromptBundle(body) {
+  const res = await fetchWithTimeout('/api/prompts/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  refreshInitData();
+  return res;
+}
+
+// Server-side rename: moves the prompt and repoints chats, personas and
+// tasks; 409 when the new name is taken.
+export async function renamePrompt(name, newName) {
+  const res = await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName })
+  });
+  refreshInitData();
   return res;
 }
 
@@ -65,12 +92,15 @@ export async function deletePrompt(name) {
   return res;
 }
 
-export async function saveComponent(type, key, value, reason, origin) {
+export async function saveComponent(type, key, value, reason, origin, { create = false, update = false } = {}) {
   // origin='vault': the editor loaded this piece from the vault — the server
   // refuses the save (409) if the vault has locked since (stale-editor guard).
+  // create / update: same intent flags as savePrompt.
   const body = { value };
   if (reason) body.reason = reason;
   if (origin) body.origin = origin;
+  if (create) body.create = true;
+  if (update) body.update = true;
   return await fetchWithTimeout(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

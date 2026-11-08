@@ -95,7 +95,7 @@ export async function installPersonaFromStore(slug, { overwrite_prompt = false, 
     if (overwrite_prompt) qs.set('overwrite_prompt', 'true');
     if (overwrite_avatar) qs.set('overwrite_avatar', 'true');
     if (overwrite_persona) qs.set('overwrite_persona', 'true');
-    if (keep_components && keep_components.length) qs.set('keep_components', keep_components.join(','));
+    if (keep_components && keep_components.length) qs.set('keep_components', JSON.stringify(keep_components));   // keys may hold commas
     const q = qs.toString();
     return fetchWithTimeout(`/api/store/personas/${encodeURIComponent(slug)}/install${q ? '?' + q : ''}`, {
         method: 'POST',

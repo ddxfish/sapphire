@@ -111,14 +111,16 @@ class TestDeleteComponent:
 
 class TestBatch:
     def test_one_save_many_writes(self, fake_pm):
+        # Two REAL piece types — the batch drops unknown ones since
+        # 2026-11-08 (the renderer only reads the eight; "mood" was junk).
         ok, msg = pc.save_components_batch({
             "character": {"a": "1", "b": "2"},
-            "mood": {"c": "3"},
+            "extras": {"c": "3"},
         })
         assert ok
         assert fake_pm.save_calls == 1
         assert fake_pm._components["character"] == {"a": "1", "b": "2"}
-        assert fake_pm._components["mood"] == {"c": "3"}
+        assert fake_pm._components["extras"] == {"c": "3"}
 
     def test_keep_set_skips(self, fake_pm):
         fake_pm._components["character"] = {"keepme": "LOCAL"}

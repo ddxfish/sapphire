@@ -194,44 +194,17 @@ class PersonaManager:
 
     # === CRUD ===
 
-    @staticmethod
-    def _favorites_sync(old_name, new_name):
-        """Keep the PERSONA_FAVORITES settings list honest across rename
-        (new_name set) and delete (new_name None). Same referrer-upkeep
-        pattern as _vault_ref_sync — the list is the chat sidebar strip's
-        curation and must never dangle silently. 2026-08-29."""
-        try:
-            from core.settings_manager import settings as app_settings
-            favs = list(app_settings.get('PERSONA_FAVORITES') or [])
-            if old_name not in favs:
-                return
-            if new_name:
-                out = [new_name if n == old_name else n for n in favs]
-            else:
-                out = [n for n in favs if n != old_name]
-            app_settings.set('PERSONA_FAVORITES', out, persist=True)
-        except Exception as e:
-            logger.warning(f"[PERSONAS] favorites sync failed for '{old_name}': {e}")
-
-    @staticmethod
-    def _chat_ref_sync(old_name, new_name):
-        """Rename: re-point every chat whose persona setting references the
-        old name. delete() has its own inline handoff (reset to 'default');
-        without this, a rename left chats holding a dead persona ref -- the
-        strip lost its active face and the hot-reload reapply silently
-        no-op'd (S3 #1, hunt 2026-08-30). Called OUTSIDE self._lock."""
-        try:
-            from core.api_fastapi import get_system
-            sm = getattr(getattr(get_system(), 'llm_chat', None), 'session_manager', None)
-            if sm is None or not hasattr(sm, 'reset_chat_scope_ref'):
-                return
-            affected = sm.reset_chat_scope_ref('persona', old_name, reset_to=new_name) or []
-            if affected:
-                logger.info(f"[PERSONA] Rename '{old_name}' -> '{new_name}' re-pointed "
-                            f"{len(affected)} chat(s): {affected}")
-        except Exception as e:
-            logger.warning(f"[PERSONA] chat ref sync failed for rename "
-                           f"'{old_name}' -> '{new_name}': {e}")
+    def repoint_prompt(self, old_prompt: str, new_prompt: str) -> list:
+        """Prompt-rename upkeep: personas whose prompt was `old_prompt`
+        now use `new_prompt`. Returns the touched persona names."""
+        with self._lock:
+            hit = [n for n, p in self._personas.items()
+                   if (p.get('settings') or {}).get('prompt') == old_prompt]
+            for n in hit:
+                self._personas[n]['settings']['prompt'] = new_prompt
+            if hit:
+                self._save_to_user()
+        return hit
 
     @staticmethod
     def _vault_ref_sync(new_prompt, old_prompt):
@@ -252,11 +225,13 @@ class PersonaManager:
             return False
 
         with self._lock:
+            # avatar is server-owned (set_avatar) — a client-supplied
+            # filename was later joined onto the avatars dir and unlinked.
             persona = {
                 "name": safe_name,
                 "tagline": data.get("tagline", ""),
-                "avatar": data.get("avatar"),
-                "avatar_full": data.get("avatar_full"),
+                "avatar": None,
+                "avatar_full": None,
                 "settings": self._clean_settings(data.get("settings", {}))
             }
             self._personas[safe_name] = persona
@@ -265,9 +240,24 @@ class PersonaManager:
             self._vault_ref_sync(persona["settings"].get("prompt"), None)
         return ok
 
+    def rename_problem(self, name: str, new_name) -> str | None:
+        """Why renaming `name` to `new_name` can't happen, or None when it
+        can (a same-name no-op is fine). The route turns it into a 400/409."""
+        safe = self._sanitize_name(new_name or '')
+        if not safe:
+            return "That name has no usable characters (letters, digits, space, - or _)"
+        if safe != name and safe in self._personas:
+            return f"A persona named '{safe}' already exists"
+        return None
+
     def update(self, name: str, data: dict) -> bool:
-        """Update an existing persona."""
+        """Update an existing persona. A rename that can't land refuses the
+        WHOLE update — it used to save the settings, skip the rename, and
+        report success, so the editor chased the other persona's name and
+        the next edit overwrote it (playwright hunt 2026-11-08)."""
         if name not in self._personas:
+            return False
+        if "name" in data and self.rename_problem(name, data["name"]):
             return False
 
         with self._lock:
@@ -276,16 +266,17 @@ class PersonaManager:
                 if "settings" in data else None
             if "tagline" in data:
                 persona["tagline"] = data["tagline"]
-            if "avatar" in data:
-                persona["avatar"] = data["avatar"]
-            if "avatar_full" in data:
-                persona["avatar_full"] = data["avatar_full"]
             if "settings" in data:
-                persona["settings"] = self._clean_settings(data["settings"])
-            if "name" in data and data["name"] != name:
-                # Rename
+                # MERGE, never replace: the editor only sends what it renders
+                # and imports only what a card carries — a replace wiped motion,
+                # disabled plugins' scopes, and on card overwrite every scope
+                # (memory then landed in 'default'). Hunt 2026-11-08.
+                persona["settings"] = self._clean_settings(
+                    {**(persona.get("settings") or {}), **(data["settings"] or {})})
+            if "name" in data:
+                # Rename (validated above; same-name is a no-op)
                 new_name = self._sanitize_name(data["name"])
-                if new_name and new_name not in self._personas:
+                if new_name != name:
                     persona["name"] = new_name
                     self._personas[new_name] = persona
                     del self._personas[name]
@@ -293,77 +284,33 @@ class PersonaManager:
         if ok and "settings" in data:
             self._vault_ref_sync(persona["settings"].get("prompt"), old_prompt)
         if ok and persona.get("name") != name:
-            self._favorites_sync(name, persona.get("name"))
-            self._chat_ref_sync(name, persona.get("name"))
+            from core import referrers
+            referrers.persona_renamed(name, persona.get("name"))
         return ok
 
     def delete(self, name: str) -> bool:
-        """Delete a persona.
-
-        2026-04-22 fix D3 — detect chats that have this persona set as their
-        active persona, rewrite them to 'default' BEFORE we delete, and log
-        a WARN + publish SETTINGS_CHANGED event. Pre-fix: chats silently
-        pointed at a now-missing persona; next load fell through to whatever
-        default behavior the resolver chose — the silent-default class we've
-        been closing all week.
-        """
+        """Delete a persona. Every holder of the name is released through
+        core/referrers.persona_deleted (fix D3, 2026-04-22, moved there and
+        corrected 2026-11-08: chats reset to '' — 'default' was a dangling
+        name the next persona called "default" would have adopted)."""
         if name not in self._personas:
             return False
 
         with self._lock:
-            # Remove avatar file if it's user-uploaded
             persona = self._personas[name]
-            avatar = persona.get("avatar")
-            if avatar:
-                avatar_path = self.USER_AVATARS / avatar
-                if avatar_path.exists():
-                    try:
-                        avatar_path.unlink()
-                    except Exception as e:
-                        logger.warning(f"Failed to delete avatar {avatar}: {e}")
-
-            # Active-persona handoff. Rewrite every chat whose persona setting
-            # points at this persona to 'default' so activation doesn't
-            # silently no-op. Uses the existing `reset_chat_scope_ref` helper
-            # which does a SQL-level UPDATE by chat name — not the active-chat-
-            # only `update_chat_settings`. Original implementation of this
-            # fix called update_chat_settings(chat_name, {...}) which raised
-            # TypeError (signature is `(settings)` only) — regression scout
-            # 2026-04-22 caught this; fix D3 was silently inert until now.
-            try:
-                from core.api_fastapi import get_system
-                system = get_system()
-                sm = getattr(getattr(system, 'llm_chat', None), 'session_manager', None)
-                affected_chats = []
-                if sm is not None and hasattr(sm, 'reset_chat_scope_ref'):
-                    affected_chats = sm.reset_chat_scope_ref(
-                        'persona', name, reset_to='default'
-                    ) or []
-                if affected_chats:
-                    logger.warning(
-                        f"[PERSONA] Deleted persona '{name}' was active in "
-                        f"{len(affected_chats)} chat(s): {affected_chats}. "
-                        f"Each was reset to 'default'."
-                    )
-                    try:
-                        from core.event_bus import publish, Events
-                        publish(Events.SETTINGS_CHANGED, {
-                            "key": "chat_persona_fallback",
-                            "value": "default",
-                            "reason": f"deleted_persona:{name}",
-                            "affected_chats": affected_chats,
-                        })
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.debug(f"[PERSONA] Active-persona handoff check skipped: {e}")
 
             old_prompt = (persona.get("settings") or {}).get("prompt")
             del self._personas[name]
             ok = self._save_to_user()
+            if ok:
+                self._unlink_avatar_if_orphan(persona.get("avatar"))
         self._vault_ref_sync(None, old_prompt)
         if ok:
-            self._favorites_sync(name, None)
+            # Chats, defaults, favorites, API keys — core/referrers.py. Runs
+            # AFTER the save: the old inline handoff reset chats first, so a
+            # failed save left chats pointing nowhere.
+            from core import referrers
+            referrers.persona_deleted(name)
         return ok
 
     def duplicate(self, name: str, new_name: str) -> bool:
@@ -414,33 +361,54 @@ class PersonaManager:
 
         with self._lock:
             avatar = self._personas[name].get("avatar")
-            if avatar:
-                avatar_path = self.USER_AVATARS / avatar
-                if avatar_path.exists():
-                    try:
-                        avatar_path.unlink()
-                    except Exception as e:
-                        logger.warning(f"Failed to delete avatar file {avatar}: {e}")
             self._personas[name]["avatar"] = None
             self._personas[name]["avatar_full"] = None
-            return self._save_to_user()
+            ok = self._save_to_user()
+            if ok:
+                self._unlink_avatar_if_orphan(avatar)
+            return ok
 
-    def set_avatar(self, name: str, filename: str, data: bytes) -> bool:
-        """Save avatar file for a persona."""
+    def set_avatar(self, name: str, data: bytes) -> str | None:
+        """Save a new avatar for a persona; returns its filename (None on
+        failure). One fresh filename per upload: keyed by the persona name,
+        a rename left the file behind and the next persona to take that
+        name overwrote — then on delete removed — the renamed persona's
+        picture (playwright hunt 2026-11-08). The replaced file goes only
+        when no other persona still holds it."""
         if name not in self._personas:
-            return False
-
+            return None
+        import secrets
+        filename = f"{name}-{secrets.token_hex(4)}.webp"
+        path = self.USER_AVATARS / filename
         try:
-            filepath = self.USER_AVATARS / filename
-            with open(filepath, 'wb') as f:
-                f.write(data)
-
+            path.write_bytes(data)
             with self._lock:
+                if name not in self._personas:      # deleted meanwhile
+                    path.unlink(missing_ok=True)
+                    return None
+                old = self._personas[name].get("avatar")
                 self._personas[name]["avatar"] = filename
-                return self._save_to_user()
+                if not self._save_to_user():
+                    self._personas[name]["avatar"] = old
+                    path.unlink(missing_ok=True)
+                    return None
+                self._unlink_avatar_if_orphan(old)
+            return filename
         except Exception as e:
             logger.error(f"Failed to save avatar for {name}: {e}")
-            return False
+            return None
+
+    def _unlink_avatar_if_orphan(self, filename):
+        """Remove a user avatar file no persona references anymore. Caller
+        holds self._lock. Built-in avatars (static dir) are never touched."""
+        if not self._is_bare_filename(filename) \
+                or any(p.get("avatar") == filename for p in self._personas.values()):
+            return
+        path = self.USER_AVATARS / filename
+        try:
+            path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"Failed to delete avatar {filename}: {e}")
 
     def get_avatar_path(self, name: str) -> Path | None:
         """Get filesystem path to persona's avatar."""
@@ -449,6 +417,8 @@ class PersonaManager:
             return None
 
         avatar_file = persona["avatar"]
+        if not self._is_bare_filename(avatar_file):
+            return None
 
         # Check user avatars first
         user_path = self.USER_AVATARS / avatar_file
@@ -506,6 +476,13 @@ class PersonaManager:
         return added
 
     # === Helpers ===
+
+    @staticmethod
+    def _is_bare_filename(f) -> bool:
+        """A plain file name — no separators, no '..'. Legacy records may
+        hold anything; never join one onto a directory unchecked."""
+        return isinstance(f, str) and bool(f) and f not in ('.', '..') \
+            and Path(f).name == f and '\\' not in f
 
     def _sanitize_name(self, name: str) -> str:
         """Sanitize persona name."""

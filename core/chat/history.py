@@ -86,6 +86,31 @@ _STATIC_SYSTEM_DEFAULTS = {
 }
 
 
+def _user_chat_defaults_path() -> Path:
+    return Path(__file__).parent.parent.parent / "user" / "settings" / "chat_defaults.json"
+
+
+def repoint_chat_defaults(key: str, old: str, new: str) -> bool:
+    """Rename/delete upkeep for the new-chat defaults file: `key`
+    ('prompt' / 'persona') holding `old` now holds `new`. A prompt rename
+    left every NEW chat on a dead name (fell back to 'default', log only —
+    hunt 2026-11-08). True when the file changed."""
+    path = _user_chat_defaults_path()
+    if not path.exists():
+        return False
+    with open(path, 'r', encoding='utf-8-sig') as f:
+        data = json.load(f)
+    if not isinstance(data, dict) or data.get(key) != old:
+        return False
+    data[key] = new
+    from core.fs_utils import replace_with_retry
+    tmp = path.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    replace_with_retry(tmp, path)
+    return True
+
+
 def get_system_defaults() -> dict:
     """Return the current system defaults dict, including dynamic scope defaults
     from SCOPE_REGISTRY. This is the source of truth for chat setting defaults.
@@ -130,7 +155,7 @@ def get_user_defaults() -> Dict[str, Any]:
     merged = get_system_defaults()
 
     # User chat_defaults.json as base layer (if it exists)
-    user_defaults_path = Path(__file__).parent.parent.parent / "user" / "settings" / "chat_defaults.json"
+    user_defaults_path = _user_chat_defaults_path()
     if user_defaults_path.exists():
         try:
             # utf-8-sig: a Notepad-added BOM must not silently revert the

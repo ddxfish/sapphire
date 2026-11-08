@@ -107,6 +107,21 @@ Personal or sensitive prompts go in the **vault** — an encrypted store guarded
 
 Full details, including private chats: [PRIVACY.md](PRIVACY.md).
 
+## Sharing: Export & Import
+
+**Export** (Prompts → Export) saves a `.prompt.json` with the prompt and,
+optionally, the pieces it uses. Vault prompts, prompts using vault pieces and
+privacy-required prompts can't be exported.
+
+**Import** (Prompts → ⬇) takes that file, or a persona JSON bundle's prompt.
+Persona PNG cards import in Personas.
+- A name you already have asks for another name, unless **Overwrite** is ticked.
+- The prompt is saved before any piece; a refused prompt writes nothing.
+- Pieces you already have are kept unless Overwrite is ticked. Pieces are
+  shared, so an overwritten piece changes every prompt that uses it.
+- Renaming a prompt (✏) updates every chat, persona, task and the new-chat
+  default that uses it.
+
 ---
 
 ## Reference for AI
@@ -148,7 +163,8 @@ AI TOOLS FOR PROMPTS (assembled mode only):
   - view: full text of a piece
   - set: activate a piece; minutes=N makes it temporary (auto-reverts)
   - remove: deactivate; single-value components reset to default
-  - create: save new piece to library (does NOT activate)
+  - create: save a NEW piece to library (does NOT activate; refuses an existing key)
+  - edit: replace an existing piece's text
   - delete: remove from library
 
 AI TOOLS FOR PROMPTS (monolith mode only):

@@ -94,10 +94,10 @@ export function renderAIConfig(t, data, opts = {}) {
                                          { includeNone: false, autoLabel: 'Auto (default)' });
 
     let voiceOpts = voices.map(v =>
-        `<option value="${v.voice_id}" ${t.voice === v.voice_id ? 'selected' : ''}>${v.name}${v.category ? ' (' + v.category + ')' : ''}</option>`
+        `<option value="${_esc(v.voice_id)}" ${t.voice === v.voice_id ? 'selected' : ''}>${_esc(v.name)}${v.category ? ' (' + _esc(v.category) + ')' : ''}</option>`
     ).join('');
     if (t.voice && !voices.some(v => v.voice_id === t.voice)) {
-        voiceOpts = `<option value="${t.voice}" selected>${t.voice} (other provider)</option>` + voiceOpts;
+        voiceOpts = `<option value="${_esc(t.voice)}" selected>${_esc(t.voice)} (other provider)</option>` + voiceOpts;
     }
 
     return `
@@ -108,7 +108,7 @@ export function renderAIConfig(t, data, opts = {}) {
             <select id="ed-persona">
                 <option value="">None (manual settings)</option>
                 ${missingOpt(t.persona, personas.map(p => p.name))}
-                ${personas.map(p => `<option value="${p.name}" ${t.persona === p.name ? 'selected' : ''}>${p.name}${p.tagline ? ' \u2014 ' + p.tagline : ''}</option>`).join('')}
+                ${personas.map(p => `<option value="${_esc(p.name)}" ${t.persona === p.name ? 'selected' : ''}>${_esc(p.name)}${p.tagline ? ' \u2014 ' + _esc(p.tagline) : ''}</option>`).join('')}
             </select>
         </div>
 
@@ -132,7 +132,7 @@ export function renderAIConfig(t, data, opts = {}) {
                                     ? '\u{1F5DD} vault prompt (locked)' : `${_esc(t.prompt)} (missing)`;
                                 return `<option value="${_esc(t.prompt)}" selected>${label}</option>`;
                             })()}
-                            ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}${p.vault ? ' \u{1F5DD}' : ''}</option>`).join('')}
+                            ${prompts.map(p => `<option value="${_esc(p.name)}" ${t.prompt === p.name ? 'selected' : ''}>${_esc(p.name)}${p.vault ? ' \u{1F5DD}' : ''}</option>`).join('')}
                         </select>
                     </div>
                     <div class="sched-field">
@@ -141,7 +141,7 @@ export function renderAIConfig(t, data, opts = {}) {
                             <option value="none" ${t.toolset === 'none' ? 'selected' : ''}>none</option>
                             <option value="default" ${t.toolset === 'default' ? 'selected' : ''}>default</option>
                             ${missingOpt(t.toolset, ['none', 'default', ...toolsets.map(ts => ts.name)])}
-                            ${toolsets.map(ts => `<option value="${ts.name}" ${t.toolset === ts.name ? 'selected' : ''}>${ts.name}</option>`).join('')}
+                            ${toolsets.map(ts => `<option value="${_esc(ts.name)}" ${t.toolset === ts.name ? 'selected' : ''}>${_esc(ts.name)}</option>`).join('')}
                         </select>
                     </div>
                 </div>

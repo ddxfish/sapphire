@@ -1141,8 +1141,11 @@ class ContinuityExecutor:
             from core.personas import persona_manager
             persona = persona_manager.get(persona_name)
             if not persona:
-                logger.warning(f"[Continuity] Persona '{persona_name}' not found, skipping")
-                return task
+                # Running on bare task settings put a deleted persona's task
+                # on default scopes — the silent-default class the except
+                # below exists to stop (scout S3, hunt 2026-11-08).
+                raise LookupError(f"persona '{persona_name}' no longer exists — "
+                                  f"edit this task to pick another persona")
 
             ps = persona.get("settings", {})
             resolved = dict(task)

@@ -132,6 +132,13 @@ for backward compatibility, the older JSON bundles.
 
 The PNG itself is the avatar — the bundle carries **no** avatar field.
 
+**What a card carries — and what stays home.** A card holds the name,
+tagline, trim colour, voice (id, speed, pitch), the prompt and the pieces it
+uses. It deliberately does **not** carry toolset, spice settings, model,
+scopes, scene/motion, date/time or custom context — those can name private
+accounts or machine-specific setup. A persona whose prompt is `default` (the
+live assembled state) exports without a prompt.
+
 ### Bundle schema (the decoded chunk)
 
 ```json
@@ -174,9 +181,21 @@ The PNG itself is the avatar — the bundle carries **no** avatar field.
 3. Apply the bundle (create persona + prompt + components).
 
 **Import** (`POST /api/personas/import-card`, multipart): field `file` = the PNG,
-optional `overwrite_prompt` / `overwrite_avatar` booleans. Name collisions return
-`409` (the caller renames and retries). Legacy JSON bundles still import via
-`POST /api/personas/import`.
+optional `overwrite_persona` / `overwrite_prompt` / `overwrite_avatar` booleans and
+`keep_components` (a JSON list of `"type/key"` pieces to keep local). A persona
+name collision returns `409` and the UI shows the overwrite preview. Legacy JSON
+bundles still import via `POST /api/personas/import`.
+
+Import rules (one server funnel, shared with the Prompts view's
+`POST /api/prompts/import`):
+- Everything is checked **before** the first write: name (needs usable
+  characters), voice speed/pitch (finite numbers), prompt name (no reserved
+  names, and never a name asleep in a locked vault).
+- The prompt is saved before any piece. An existing prompt with the same name
+  is used as-is unless you choose to replace it.
+- A piece you already have is kept unless you replace it — empty pieces count.
+- **Overwriting a persona updates only what the card carries.** Your toolset,
+  model, scopes, scene and custom context stay.
 
 ---
 

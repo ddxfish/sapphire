@@ -151,6 +151,68 @@ def get_prompt(name: str):
 VAULT_LOCKED_MSG = "Vault is locked — unlock the vault to save this item."
 
 
+PIECE_TYPES = ('character', 'location', 'relationship', 'goals', 'format',
+               'scenario', 'emotions', 'extras')
+# Single-segment GET/POST routes under /api/prompts/ — a prompt wearing one
+# of these names can't be fetched, renamed or edited (scout S4, 2026-11-08).
+_ROUTE_NAMES = ('pieces', 'components', 'piece-usage')
+
+
+def _name_shape_problem(name, what) -> str | None:
+    if not isinstance(name, str) or not name.strip():
+        return f"{what} name required"
+    if name != name.strip():
+        return f"{what} names can't start or end with spaces"
+    if name.startswith('_'):
+        return f"{what} names starting with '_' are reserved"
+    if '/' in name or '\\' in name:
+        return f"{what} names can't contain / or \\"
+    return None
+
+
+def prompt_name_problem(name) -> str | None:
+    """Why `name` can't become a NEW prompt, or None. THE check for every
+    lane that mints a prompt name — editor New/Duplicate, rename, both
+    imports, the AI's create. Taken means anywhere visible (user, pack,
+    unlocked vault) or a referenced name asleep in the locked vault: a
+    plaintext copy there shadowed the private prompt after unlock (four
+    scouts, hunt 2026-11-08). Unreferenced sealed names stay invisible by
+    design — the vault never reveals them while locked."""
+    bad = _name_shape_problem(name, "Prompt")
+    if bad:
+        return bad
+    if name in ('default', 'assembled'):
+        return f"'{name}' is a reserved name — it refers to the current assembled state"
+    if name in _ROUTE_NAMES:
+        return f"'{name}' is reserved by the app — pick another name"
+    if get_prompt(name):
+        return f"A prompt named '{name}' already exists"
+    try:
+        from core.chat.history import sealed_prompt_name
+        if sealed_prompt_name(name):
+            return (f"'{name}' belongs to a prompt asleep in the locked vault — "
+                    f"unlock it or pick another name")
+    except Exception:
+        pass
+    return None
+
+
+def piece_key_problem(comp_type, key) -> str | None:
+    """Why `comp_type/key` can't become a NEW piece, or None. Taken checks
+    the FULL merge (hidden pack scaffolding included — a blank user shadow
+    of one blanked the story engine's character)."""
+    if comp_type not in PIECE_TYPES:
+        return f"Unknown piece type '{comp_type}'"
+    bad = _name_shape_problem(key, "Piece")
+    if bad:
+        return bad
+    if ',' in key:
+        return "Piece names can't contain commas"
+    if key in prompt_manager.components.get(comp_type, {}):
+        return f"'{comp_type}/{key}' already exists"
+    return None
+
+
 def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
                 reason: str = None, audit: bool = True,
                 origin: str = None) -> tuple[bool, str]:
@@ -443,6 +505,7 @@ def save_component(comp_type: str, key: str, value: str,
                 publish(Events.COMPONENTS_CHANGED, {"action": "vault_changed"})
             except Exception:
                 pass
+            _revalidate_if_active_uses([(comp_type, key)])
             return True, f"Saved {comp_type}/{key} (vault)"
     with prompt_manager._lock:
         prompt_manager._components.setdefault(comp_type, {})[key] = value
@@ -455,6 +518,7 @@ def save_component(comp_type: str, key: str, value: str,
         publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
     except Exception:
         pass
+    _revalidate_if_active_uses([(comp_type, key)])
     return True, f"Saved {comp_type}/{key}"
 
 
@@ -803,20 +867,25 @@ def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
     skips keys already present in the MERGED view (pack pieces count —
     matches the import UI's "existing" notion).
     """
-    wrote = 0
+    wrote, written = 0, []
     with prompt_manager._lock:
         for comp_type, defs in (items or {}).items():
-            if not isinstance(defs, dict):
+            if comp_type not in PIECE_TYPES or not isinstance(defs, dict):
+                logger.warning(f"Skipping piece group '{comp_type}' in batch")
                 continue
             for key, value in defs.items():
-                if not isinstance(value, str):
-                    logger.warning(f"Skipping non-string piece {comp_type}/{key} in batch")
+                if not isinstance(value, str) or not isinstance(key, str) \
+                        or _name_shape_problem(key, "Piece") or ',' in key:
+                    logger.warning(f"Skipping malformed piece {comp_type}/{key!r} in batch")
                     continue
                 if (comp_type, key) in keep:
                     continue
-                if not overwrite and prompt_manager.components.get(comp_type, {}).get(key):
+                # KEY MEMBERSHIP, never text truthiness: an empty local piece
+                # is still a piece, and "don't overwrite" must keep it.
+                if not overwrite and key in prompt_manager.components.get(comp_type, {}):
                     continue
                 prompt_manager._components.setdefault(comp_type, {})[key] = value
+                written.append((comp_type, key))
                 wrote += 1
         saved = prompt_manager.save_components(reason=reason) if wrote else True
     if not saved:
@@ -830,6 +899,7 @@ def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
             publish(Events.COMPONENTS_CHANGED, {"action": "imported", "count": wrote})
         except Exception:
             pass
+        _revalidate_if_active_uses(written)
     return True, f"Wrote {wrote} pieces"
 
 
@@ -890,6 +960,24 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
     system.llm_chat.set_system_prompt(content)
     prompt_state.set_active_preset_name(name)
     return True, f"Activated '{name}'"
+
+
+def _revalidate_if_active_uses(pairs) -> None:
+    """Re-render the live prompt when a piece the ACTIVE preset wears just
+    changed. Piece writes only published COMPONENTS_CHANGED; the live chat
+    kept the old text until the next activation (scout S2, 2026-11-08)."""
+    try:
+        active = prompt_state.get_active_preset_name()
+        preset = prompt_manager.scenario_presets.get(active) if active else None
+        if not isinstance(preset, dict):
+            return
+        for t, k in pairs:
+            v = preset.get(t)
+            if v == k or (isinstance(v, list) and k in v):
+                revalidate_active(reason=f"piece {t}/{k} changed")
+                return
+    except Exception as e:
+        logger.debug(f"[PROMPTS] active re-render check skipped: {e}")
 
 
 def revalidate_active(system=None, reason: str = "") -> bool:
@@ -1242,18 +1330,82 @@ def rewrite_piece_refs(ctype, old_key, new_key=None, reason=None) -> dict:
             'assembled': assembled, 'vault_locked': vault_locked}
 
 
+def rename_prompt(old: str, new: str, reason: str = None) -> tuple[bool, str]:
+    """Safe rename: move the prompt IN ITS OWN STORE, then repoint every
+    referrer (chats, personas, continuity tasks). Refuses when the new name
+    already resolves (user, pack, unlocked vault) — no silent overwrite.
+    Replaces the editor's save-new + delete-old, which stranded every
+    referrer on the dead name (playwright hunt 2026-11-08)."""
+    from core import prompt_vault
+    new = (new or '').strip()
+    if new == old:
+        return False, "That's the same name"
+    bad = prompt_name_problem(new)
+    if bad:
+        return False, bad
+
+    why = reason or f"renamed {old} -> {new}"
+    moved = False
+    # Resolve the store dicts INSIDE the lock: a watcher reload() rebinds
+    # them, and a pop on the abandoned dict would save the un-renamed one.
+    with prompt_manager._lock:
+        for attr, saver in (('_monoliths', prompt_manager.save_monoliths),
+                            ('_scenario_presets', prompt_manager.save_scenario_presets)):
+            store = getattr(prompt_manager, attr)
+            if old in store:
+                store[new] = store.pop(old)
+                if not saver(reason=why):
+                    store[old] = store.pop(new)
+                    return False, "Store save failed — nothing renamed"
+                moved = True
+                break
+    if not moved:
+        if not prompt_vault.vault_has_prompt(old):
+            from core import prompt_packs
+            if old in prompt_packs.get_sources():
+                return False, (f"'{old}' is shipped by a plugin — read-only. "
+                               f"Duplicate it to make your own copy.")
+            return False, f"Prompt '{old}' not found"
+        mono = prompt_vault.overlay_monoliths()
+        if old in mono:
+            ok, code = prompt_vault.set_monolith(new, (mono[old] or {}).get('content', ''))
+            gone = prompt_vault.delete_monolith
+        else:
+            preset = {k: v for k, v in prompt_vault.overlay_presets()[old].items()
+                      if k != '_privacy_required'}
+            ok, code = prompt_vault.set_preset(new, preset)
+            gone = prompt_vault.delete_preset
+        if not ok:
+            return False, f"Vault refused the rename ({code})"
+        gone(old)
+
+    # Referrers (chats, tasks, personas, new-chat defaults) — core/referrers.py.
+    from core import referrers
+    touched = referrers.prompt_renamed(old, new)
+    with prompt_state._state_lock:
+        if prompt_state._assembled_state.get("active_preset") == old:
+            prompt_state._assembled_state["active_preset"] = new
+    if getattr(prompt_manager, '_active_preset_name', None) == old:
+        prompt_manager._active_preset_name = new
+    # The refs index is the ONLY vault-name surface while locked and holds
+    # referenced names only — stamping an unreferenced new name wrote a
+    # private prompt's name to plaintext (scout S4, 2026-11-08).
+    vault_ref_sync(new if touched else None, old)
+    logger.info(f"Renamed prompt '{old}' -> '{new}' ({len(touched)} referrer(s): {touched})")
+    return True, f"Renamed to '{new}'" + (f" — updated {len(touched)} reference(s)" if touched else "")
+
+
 def rename_piece(ctype, old_key, new_key, reason=None) -> tuple[bool, str]:
     """Safe rename: move the piece text to the new key IN ITS OWN STORE,
     then repoint every reference. Refuses when the new key exists anywhere
     in the merged view (no silent shadowing)."""
     from core import prompt_vault
     new_key = (new_key or '').strip()
-    if not new_key or new_key.startswith('_'):
-        return False, "Invalid new name"
     if new_key == old_key:
         return False, "That's the same name"
-    if new_key in prompt_manager.components.get(ctype, {}):
-        return False, f"'{ctype}/{new_key}' already exists"
+    bad = piece_key_problem(ctype, new_key)
+    if bad:
+        return False, bad
     with prompt_manager._lock:
         store = prompt_manager._components.get(ctype, {})
         in_plain = old_key in store

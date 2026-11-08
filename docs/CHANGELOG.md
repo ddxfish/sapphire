@@ -1,3 +1,6 @@
+# 2.16.3 - Personas and Prompts upgrades
+- Ghost messages show in Chat > Sidebar > System prompt
+- Full actual speech is in the STT hook
 # 2.16.2 - QoL for release
 - Improved UX when a chat is about to be put in private mode
 - Removed X-API-KEY from the app, use Settings > System > API key now

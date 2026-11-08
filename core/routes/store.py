@@ -430,5 +430,5 @@ async def store_personas_install(slug: str,
     if not raw:
         raise HTTPException(status_code=502, detail="Could not download persona card.")
     from core.routes.content import _import_persona_card_bytes
-    keep = [s for s in keep_components.split(",") if s]
-    return await _import_persona_card_bytes(raw, overwrite_prompt, overwrite_avatar, overwrite_persona, keep)
+    return await _import_persona_card_bytes(raw, overwrite_prompt, overwrite_avatar, overwrite_persona,
+                                            keep_components)

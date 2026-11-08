@@ -10,11 +10,12 @@ const _esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-// Mirror persona_manager._sanitize_name for best-effort collision detection.
-// The backend 409 is the real gate — this only drives the preview.
+// Mirror persona_manager._sanitize_name (str.isalnum is unicode-aware —
+// "Zoë" keeps its ë) for best-effort collision detection. The backend 409
+// is the real gate — this only drives the preview.
 function _sanitize(name) {
-    return (name || '').split('')
-        .filter(c => /[a-z0-9 _-]/i.test(c)).join('')
+    return Array.from(name || '')
+        .filter(c => /[\p{L}\p{N} _-]/u.test(c)).join('')
         .trim().replace(/ /g, '_').toLowerCase();
 }
 
@@ -40,7 +41,11 @@ export async function extractBundleFromPng(file) {
                     if (kw === 'sapphire_persona') {
                         let b64 = '';
                         for (let i = nul + 1; i < seg.length; i++) b64 += String.fromCharCode(seg[i]);
-                        return JSON.parse(atob(b64));
+                        // The server wrote UTF-8 JSON — atob gives bytes, not
+                        // text; decoding as latin-1 garbled every accent and
+                        // flagged identical pieces "changed".
+                        const bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
+                        return JSON.parse(new TextDecoder().decode(bytes));
                     }
                 }
             }
@@ -64,6 +69,7 @@ async function _computeCollisions(bundle) {
     const personaExists = personaNames.includes(safe);
     const promptExists = (init?.prompts?.list || []).some(p => p.name === promptName);
     const pieces = [];
+    let identical = 0;
     const incoming = bundle?.components || {};
     for (const [type, defs] of Object.entries(incoming)) {
         if (!defs || typeof defs !== 'object') continue;
@@ -71,10 +77,13 @@ async function _computeCollisions(bundle) {
             const localVal = localComps?.[type]?.[key];
             if (localVal === undefined) continue; // brand-new piece — nothing to clobber
             const oldStr = _pieceVal(localVal), newStr = _pieceVal(val);
-            pieces.push({ type, key, changed: oldStr !== newStr, oldStr, newStr });
+            // Identical pieces aren't collisions — stock pieces every card
+            // carries (location/default…) put nearly every import here.
+            if (oldStr === newStr) { identical++; continue; }
+            pieces.push({ type, key, changed: true, oldStr, newStr });
         }
     }
-    return { rawName, promptName, personaExists, promptExists, pieces };
+    return { rawName, promptName, personaExists, promptExists, pieces, identical };
 }
 
 /**
@@ -86,7 +95,7 @@ export async function confirmPersonaImport({ bundle, doImport, onDone }) {
     let info;
     try { info = await _computeCollisions(bundle); }
     catch (_) {
-        info = { rawName: bundle?.name, promptName: bundle?.prompt?.name, personaExists: false, promptExists: false, pieces: [] };
+        info = { rawName: bundle?.name, promptName: bundle?.prompt?.name, personaExists: false, promptExists: false, pieces: [], identical: 0 };
     }
 
     const collision = info.personaExists || info.promptExists || info.pieces.length;
@@ -94,12 +103,14 @@ export async function confirmPersonaImport({ bundle, doImport, onDone }) {
         // Optimistic import. If the backend finds a collision the preview missed
         // (name-sanitize edge), it 409s → fall back to the overwrite modal.
         try {
-            await doImport({ overwrite_persona: false, overwrite_prompt: false, overwrite_avatar: false });
-            onDone?.();
-            ui.showToast(`Imported "${info.rawName || 'persona'}"`, 'success');
+            const res = await doImport({ overwrite_persona: false, overwrite_prompt: false, overwrite_avatar: false });
+            onDone?.(res);   // res.name = the server's final name
+            _doneToast(res, info);
             return;
         } catch (e) {
-            if (!/already exists/i.test(e.message || '')) {
+            // Only the PERSONA collision opens the overwrite modal — a prompt
+            // or piece refusal also says "already exists" but isn't one.
+            if (!(e.status === 409 && /^Persona '.*' already exists$/.test(e.message || ''))) {
                 ui.showToast(`Import failed: ${e.message}`, 'error');
                 return;
             }
@@ -107,6 +118,12 @@ export async function confirmPersonaImport({ bundle, doImport, onDone }) {
         }
     }
     _showOverwriteModal(info, doImport, onDone);
+}
+
+function _doneToast(res, info) {
+    const name = res?.name || info.rawName || 'persona';
+    const warn = (res?.warnings || []).join(' · ');
+    ui.showToast(`Imported "${name}"${warn ? ` — ${warn}` : ''}`, warn ? 'warning' : 'success');
 }
 
 function _row(label, value, action) {
@@ -138,23 +155,32 @@ function _showOverwriteModal(info, doImport, onDone) {
         </div>`).join('');
 
     const pieceSection = (info.pieces || []).length
-        ? `<div class="pic-section-label">${info.pieces.length} existing prompt piece${info.pieces.length === 1 ? '' : 's'} — pieces are shared (overwriting affects other prompts that use them). Uncheck any to keep your local copy:</div>${pieceList}`
+        ? `<div class="pic-section-label">${info.pieces.length} existing prompt piece${info.pieces.length === 1 ? '' : 's'} differ — pieces are shared (overwriting affects other prompts that use them). Uncheck any to keep your local copy:</div>${pieceList}`
         : '';
+    const sameNote = info.identical
+        ? `<div class="pic-sub">${info.identical} piece${info.identical === 1 ? '' : 's'} already match yours — nothing to change.</div>` : '';
+    // What a persona overwrite touches — the card only carries these; the
+    // rest of the persona (toolset, model, scopes, scene…) is kept.
+    const personaRow = info.personaExists
+        ? _row('Persona', name, 'update tagline, voice, colour, prompt') : '';
+    const keepsPrompt = info.promptExists || (info.pieces || []).length;
 
     overlay.innerHTML = `
     <div class="modal pic-dialog">
         <h2>Import "${_esc(name)}"</h2>
-        <p class="pic-sub">You already have some of this. Overwriting replaces it:</p>
-        ${info.personaExists ? _row('Persona', name, 'will replace') : ''}
-        ${info.promptExists ? _row('Prompt', info.promptName || name, 'will replace') : ''}
+        <p class="pic-sub">You already have some of this.</p>
+        ${personaRow}
+        ${info.promptExists ? _row('Prompt', info.promptName || name, 'replace with the card\'s') : ''}
         ${pieceSection}
+        ${sameNote}
+        ${info.personaExists ? '<p class="pic-sub">Your persona keeps its toolset, model, scopes, scene and custom context.</p>' : ''}
         <label class="pic-avatar-opt"><input type="checkbox" id="pic-avatar"> Replace avatar too</label>
         <div class="modal-actions">
             <button class="store-btn store-btn-secondary" data-pic="cancel">Cancel</button>
-            ${(info.promptExists || (info.pieces || []).length)
-                ? `<button class="store-btn store-btn-secondary" data-pic="keep" title="Import the persona but keep your existing prompt + pieces">Import, Don't Overwrite</button>`
+            ${keepsPrompt
+                ? `<button class="store-btn store-btn-secondary" data-pic="keep" title="Import the persona${info.personaExists ? ' (updating yours)' : ''} but keep your existing prompt and pieces">${info.personaExists ? 'Update Persona, Keep My Prompt' : 'Import, Keep My Prompt'}</button>`
                 : ''}
-            <button class="store-btn store-btn-install" data-pic="overwrite">Overwrite &amp; Import</button>
+            <button class="store-btn store-btn-install" data-pic="overwrite">${keepsPrompt ? 'Import &amp; Replace Prompt' : 'Update Persona'}</button>
         </div>
     </div>`;
     document.body.appendChild(overlay);
@@ -183,10 +209,12 @@ function _showOverwriteModal(info, doImport, onDone) {
             ? Array.from(overlay.querySelectorAll('.pic-piece-cb')).filter(cb => !cb.checked).map(cb => cb.dataset.picKey)
             : [];
         try {
-            await doImport({ overwrite_persona: true, overwrite_prompt, overwrite_avatar, keep_components });
+            // overwrite_persona only when there IS one to update — a prompt
+            // collision alone must not imply consent to replace a persona.
+            const res = await doImport({ overwrite_persona: !!info.personaExists, overwrite_prompt, overwrite_avatar, keep_components });
             close();
-            onDone?.();
-            ui.showToast(`Imported "${name}"`, 'success');
+            onDone?.(res);
+            _doneToast(res, info);
         } catch (e) {
             ui.showToast(`Import failed: ${e.message}`, 'error');
             btns.forEach(b => b.disabled = false);
