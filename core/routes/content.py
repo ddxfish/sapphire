@@ -973,9 +973,18 @@ async def duplicate_persona(name: str, request: Request, _=Depends(require_login
     new_name = data.get("name")
     if not new_name:
         raise HTTPException(status_code=400, detail="New name required")
+    src_prompt = ((persona_manager.get(name) or {}).get("settings") or {}).get("prompt")
     if not persona_manager.duplicate(name, new_name):
         raise HTTPException(status_code=409, detail="Source not found or target name already exists")
-    return {"status": "success", "name": persona_manager._sanitize_name(new_name)}
+    safe = persona_manager._sanitize_name(new_name)
+    prompt = ((persona_manager.get(safe) or {}).get("settings") or {}).get("prompt")
+    forked = bool(prompt) and prompt != src_prompt
+    if forked:
+        from core import prompt_crud
+        vault = prompt_crud.is_vault_prompt(prompt)
+        publish(Events.PROMPT_CHANGED, {"name": "" if vault else prompt,
+                                        "action": "vault_changed" if vault else "saved"})
+    return {"status": "success", "name": safe, "prompt": prompt if forked else None}
 
 
 @router.post("/api/personas/{name}/avatar")

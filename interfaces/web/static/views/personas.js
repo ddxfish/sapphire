@@ -660,7 +660,9 @@ function bindEvents() {
             selectedName = res?.name || selectedName;
             await loadData();
             render();
-            ui.showToast(`Duplicated`, 'success');
+            ui.showToast(res?.prompt
+                ? `Duplicated, with its own prompt "${res.prompt}". Edit its character piece to make it yours.`
+                : 'Duplicated', 'success');
         } catch (e) { ui.showToast(e.message || "That didn't work. Try again.", 'error'); }
     });
 

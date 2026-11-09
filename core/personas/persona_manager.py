@@ -332,15 +332,81 @@ class PersonaManager:
         if not safe_new or safe_new in self._personas:
             return False
 
+        import copy
+        persona = copy.deepcopy(self._personas[name])
+        # A copy starts with every mind scope off, like a new persona: a
+        # shared memory scope had her reading the original's memories.
+        kept = {k: v for k, v in (persona.get("settings") or {}).items()
+                if not k.endswith("_scope")}
+        persona["settings"] = self._clean_settings({**kept, **_scopes_off()})
+        src_prompt = persona["settings"].get("prompt")
+        fork = self._fork_prompt(src_prompt, safe_new)
+        if fork:
+            persona["settings"]["prompt"] = fork
         with self._lock:
-            import copy
-            persona = copy.deepcopy(self._personas[name])
             persona["name"] = safe_new
             # Don't copy avatar — let user upload their own
             persona["avatar"] = None
             persona["avatar_full"] = None
             self._personas[safe_new] = persona
-            return self._save_to_user()
+            ok = self._save_to_user()
+            if not ok:
+                del self._personas[safe_new]
+        if not ok and fork:
+            from core import prompt_crud
+            prompt_crud.delete_prompt(fork, reason="persona duplicate failed")
+        if ok:
+            self._vault_ref_sync(persona["settings"].get("prompt"), None)
+        return ok
+
+    @staticmethod
+    def _fork_prompt(src, base):
+        """A duplicate gets its OWN prompt and character piece. Sharing the
+        source's made the copy introduce itself as the original, an edit to
+        'her' character rewrote the original, and her card shipped under the
+        original's prompt name (Teri's Seraphina, 2026-11-08). Other pieces
+        stay shared. Returns the fork's name, or None to keep the pointer
+        (no prompt, a sentinel, or one the locked vault hides)."""
+        if not src or src in ("default", "__story__"):
+            return None
+        from core import prompt_crud as pc
+        from core.prompt_manager import prompt_manager
+        data = pc.get_prompt(src)
+        if not data:
+            return None
+
+        def free(problem):
+            return next((n for n in [base] + [f"{base}-{i}" for i in range(2, 100)]
+                         if not problem(n)), None)
+
+        name = free(pc.prompt_name_problem)
+        if not name:
+            return None
+        new = {"type": data["type"], "privacy_required": data.get("privacy_required", False)}
+        piece = None
+        if data["type"] == "monolith":
+            new["content"] = data["content"]
+        else:
+            comps = dict(data["components"])
+            char = comps.get("character")
+            text = prompt_manager.components.get("character", {}).get(char) \
+                if isinstance(char, str) else None
+            if isinstance(text, str):
+                piece = free(lambda k: pc.piece_key_problem("character", k))
+                if piece and pc.save_component("character", piece, text,
+                                               reason=f"copied from '{char}' for '{base}'")[0]:
+                    comps["character"] = piece
+                else:
+                    piece = None
+            new["components"] = comps
+        ok, msg = pc.save_prompt(name, new, allow_overwrite=False,
+                                 reason=f"forked from '{src}' for persona '{base}'")
+        if not ok:
+            logger.warning(f"Duplicate kept the shared prompt '{src}': {msg}")
+            if piece:
+                pc.delete_component("character", piece, reason="prompt fork failed")
+            return None
+        return name
 
     def create_from_settings(self, name: str, chat_settings: dict) -> bool:
         """Create a persona from current chat settings."""

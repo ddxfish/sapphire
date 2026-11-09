@@ -33,11 +33,15 @@ export const deletePersona = async (name) => {
     return res;
 };
 
-export const duplicatePersona = (name, newName) => fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}/duplicate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: newName })
-});
+export const duplicatePersona = async (name, newName) => {
+    const res = await fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}/duplicate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+    });
+    await refreshInitData();  // the copy's forked prompt joins the prompt list
+    return res;
+};
 
 export const loadPersona = (name) => fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}/load`, {
     method: 'POST'

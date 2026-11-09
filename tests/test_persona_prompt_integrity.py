@@ -325,10 +325,60 @@ def test_create_scopes_off_unless_named(mgr, two_scopes):
     assert s['memory_scope'] == 'neo' and s['email_scope'] == 'none'
 
 
-def test_duplicate_keeps_source_scopes(mgr, two_scopes):
-    mgr._personas['zed']['settings']['memory_scope'] = 'zed'
+def test_duplicate_starts_with_scopes_off(mgr, two_scopes, presets, piece_store):
+    mgr._personas['zed']['settings'].update(
+        memory_scope='zed', email_scope='zed', goal_scope='zed')  # goal: plugin off
     assert mgr.duplicate('zed', 'zed2')
-    assert mgr._personas['zed2']['settings']['memory_scope'] == 'zed'
+    s = mgr._personas['zed2']['settings']
+    assert s['memory_scope'] == 'none' and s['email_scope'] == 'none'
+    assert 'goal_scope' not in s
+    assert mgr._personas['zed']['settings']['memory_scope'] == 'zed'
+
+
+# ── Duplicate forks the prompt (Teri's Seraphina, 2026-11-08) ──
+
+def test_duplicate_forks_prompt_and_character(mgr, presets, piece_store):
+    piece_store['character']['ronnie'] = 'You are Ronnie.'
+    presets.ps['ronnie']['extras'] = ['beach']
+    assert mgr.duplicate('zed', 'Seraphina')
+    s = mgr._personas['seraphina']['settings']
+    assert s['prompt'] == 'seraphina'
+    fork = presets.ps['seraphina']
+    assert fork['character'] == 'seraphina' and fork['extras'] == ['beach']
+    assert piece_store['character']['seraphina'] == 'You are Ronnie.'
+    # The original is untouched — its prompt and its character piece.
+    assert presets.ps['ronnie']['character'] == 'ronnie'
+    assert mgr._personas['zed']['settings']['prompt'] == 'ronnie'
+
+
+def test_duplicate_fork_takes_a_free_name(mgr, presets, piece_store):
+    piece_store['character']['ronnie'] = 'You are Ronnie.'
+    piece_store['character']['nova'] = 'someone else'
+    presets.ps['nova'] = {'character': 'x', 'extras': []}
+    assert mgr.duplicate('zed', 'nova')
+    assert mgr._personas['nova']['settings']['prompt'] == 'nova-2'
+    assert presets.ps['nova-2']['character'] == 'nova-2'
+    assert piece_store['character']['nova'] == 'someone else'
+
+
+def test_duplicate_forks_monolith(mgr, presets, piece_store, monkeypatch):
+    from core.prompt_manager import prompt_manager
+    monos = {'solo': {'content': 'You are Solo.', 'privacy_required': True}}
+    monkeypatch.setattr(prompt_manager, '_monoliths', monos)
+    monkeypatch.setattr(prompt_manager, 'save_monoliths', lambda reason=None, audit=True: True)
+    mgr._personas['zed']['settings']['prompt'] = 'solo'
+    assert mgr.duplicate('zed', 'duo')
+    assert mgr._personas['duo']['settings']['prompt'] == 'duo'
+    assert monos['duo'] == {'content': 'You are Solo.', 'privacy_required': True}
+
+
+@pytest.mark.parametrize('src', ['default', '', 'no_such_prompt'])
+def test_duplicate_keeps_pointer_without_a_real_prompt(mgr, presets, piece_store, src):
+    mgr._personas['zed']['settings']['prompt'] = src
+    before = dict(presets.ps)
+    assert mgr.duplicate('zed', 'zed2')
+    assert mgr._personas['zed2']['settings']['prompt'] == src
+    assert presets.ps == before
 
 
 # ── One-time release of phantom 'default' scopes (Krem, 2026-11-08) ──
