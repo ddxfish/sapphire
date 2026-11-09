@@ -113,7 +113,7 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
                                           'question_max_s': 30, 'wake_model': 'keep', 'flip': False, 'camera_turn': '0', 'volume_step': '10',
                                           'browse': False, 'home': 'chat', 'invert': False, 'mirror': False, 'rotation': '0',
                                           'brightness': 80, 'dim': 15, 'dim_after_s': 120, 'off_after_min': 0,
-                                          'sleep_after_min': 60, 'beat': 25, 'face_lag_ms': 700, 'av_buffer': 2,
+                                          'sleep_after_min': 0, 'beat': 25, 'face_lag_ms': 700, 'av_buffer': 2,
                                           'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1',
                                           'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',
                                           'look_tool': 'purple pulse', 'look_speaking': 'cyan solid',

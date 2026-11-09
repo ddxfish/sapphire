@@ -145,12 +145,10 @@ async def room_state(chat: str, _=Depends(require_login)):
 
 @router.post("/api/rooms/{chat}/voice")
 async def room_voice(chat: str, request: Request, _=Depends(require_login)):
-    """The room tab that reads the lines aloud: {on} while it reads (a ping),
-    {mid} when that line is read, {flush} when it went quiet (Stop, the mic).
-    The rounds wait on it (one line ahead), so the voices keep pace."""
-    await _room_or_404(chat)     # a ping for any other name would mint a runtime for it
-    body = await _json(request)
-    touch = getattr(rooms._sm(), 'touch_landing', None)   # the open tab renews where voice lands
+    """The open room tab's heartbeat (every 20 s): it renews where voice lands.
+    The rounds never wait on the reading (Krem 2026-11-08)."""
+    await _room_or_404(chat)
+    touch = getattr(rooms._sm(), 'touch_landing', None)
     if callable(touch):
         touch(chat)
-    return rooms.voice(chat, on=body.get('on') is not False, mid=body.get('mid'), flush=bool(body.get('flush')))
+    return {'ok': True}

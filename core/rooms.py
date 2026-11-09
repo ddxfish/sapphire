@@ -80,8 +80,6 @@ WAIT_MAX = 120                  # the longest one room_wait parks
 PASS_MARK = '<<PASS>>'          # anywhere in a line: she passes (Krem 2026-10-13, after the phone's <<HANG UP>>)
 SEAT = 'seat'                   # the mode of a local seat's own chat: her tools, her memory, her rows
 TOOL_NOTE_CAP = 8000            # characters of one tool result on a room line's footnote
-VOICE_TAB_S = 45.0              # a room tab reading aloud pings every 20 s; quiet this long = nobody is reading
-READ_MAX_S = 300.0              # one line's reading is waited for at most this long (15 s + ~12 chars a second)
 CUE_CAP = 7000                  # characters of a guest's cue (her door takes 8000 with the header)
 CUE_IMAGES = 6                  # the newest pictures a cue carries (the rest are still on the rows)
 # The rules, with their defaults. human_every: the seats go this many rounds
@@ -1184,7 +1182,7 @@ def _door_line(chat, seat, text, images=None):
     publish(Events.VOICE_TURN_START, {'message_id': mid, **tag})
     append_line(chat, 'assistant', text, seat['id'], seat.get('name'), persona=seat.get('persona'), kind=DOOR,
                 images=images)
-    _read_aloud(rt, seat, text, mid)
+    _read_aloud(rt, seat, text)
     publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign'], 'source': SOURCE})
     publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text,
                                     'why': '', 'heard': rt.heard, 'tools': [], **tag})
@@ -1260,9 +1258,6 @@ class _Runtime:
         self.voice = queue.Queue()   # (device id, text, voice, speed, pitch): lines waiting to be read on that satellite
         self.reader = None       # the thread reading them, one line at a time, in order
         self.doors = {}          # door seat id -> _Door: the cue parked for her key's holder, her line back
-        self.voice_seen = 0.0    # when a room tab reading aloud last pinged (monotonic): the rounds keep pace with it
-        self.reading = []        # [mid, seconds it may take, since] lines handed to that tab, not yet read
-        self.read_evt = threading.Event()
 
 
 def _rt(chat):
@@ -1324,9 +1319,6 @@ def stop(chat):
     rt.stop_flag.set()
     rt.skip = 0
     rt.mentions.clear()
-    with _lock:
-        rt.reading.clear()                           # the tab hushes its queue too: nothing left to wait for
-    rt.read_evt.set()
     _cut_all(rt)
     rt.user_turn.set()
     return state(chat)
@@ -1350,7 +1342,7 @@ def _cut_all(rt):
             logger.debug(f"[ROOM] '{rt.chat}': halt on {rt.heard}: {e}")
 
 
-def _read_aloud(rt, seat, text, mid=None):
+def _read_aloud(rt, seat, text):
     """Her line read on the satellite the person last spoke from (rt.heard),
     in the seat's own voice, lines in order, the round never waiting: one
     reader thread per room, voice.say one line at a time. The browser's queue
@@ -1360,11 +1352,8 @@ def _read_aloud(rt, seat, text, mid=None):
     if not text or seat.get('tts', True) is False:
         return
     if not dev:
-        # the room tab reads it (rooms.js speakLine): the rounds keep pace with that reading
-        # (Krem 2026-11-04: a 6-minute room was read for 15+ minutes after)
-        if mid and time.monotonic() - rt.voice_seen < VOICE_TAB_S:
-            with _lock:
-                rt.reading.append([mid, min(READ_MAX_S, 15.0 + len(text) / 12.0), None])
+        # the room tab reads it (rooms.js speakLine), in its own time: the rounds never wait on
+        # the voices (the 11-04 backlog was a 4090 flapping its link, not the design - Krem 2026-11-08)
         return
     st = seat.get('settings') or {}
     rt.voice.put((dev[len('device:'):], text, st.get('voice'), st.get('speed'), st.get('pitch')))
@@ -1387,46 +1376,6 @@ def _reader(rt):
                 logger.warning(f"[ROOM] '{rt.chat}': a line was not read on {dev}: {said}")
         except Exception as e:
             logger.warning(f"[ROOM] '{rt.chat}': reading a line on {dev} failed: {e}")
-
-
-def voice(chat, on=True, mid=None, flush=False):
-    """The room tab reading the lines aloud: a ping while it reads (`on`), the
-    line it just finished (`mid`: that line and every one before it are read,
-    in order), or quiet (`flush`: Stop, the mic's stop - nothing left to wait for)."""
-    rt = _rt(chat)
-    with _lock:
-        rt.voice_seen = time.monotonic() if on else 0.0
-        if flush or not on:
-            rt.reading.clear()
-        elif mid:
-            i = next((n for n, r in enumerate(rt.reading) if r[0] == mid), None)
-            if i is not None:
-                del rt.reading[:i + 1]
-        left = len(rt.reading)
-    rt.read_evt.set()
-    return {'reading': left}
-
-
-def _await_reading(rt, ahead=1):
-    """Before a seat's turn: wait until at most `ahead` line is still to be read in
-    the room tab, so the next seat writes while the last is read and the voices
-    never fall minutes behind (Krem's vote, 2026-11-04). Stop, a tab gone quiet,
-    or a line read past its time ends the wait."""
-    while not rt.stop_flag.is_set():
-        with _lock:
-            now = time.monotonic()
-            if now - rt.voice_seen > VOICE_TAB_S:
-                rt.reading.clear()                   # nobody is reading any more
-            if len(rt.reading) <= ahead:
-                return
-            head = rt.reading[0]
-            if head[2] is None:
-                head[2] = now                        # it is being read now (they go in order)
-            elif now - head[2] > head[1]:
-                rt.reading.pop(0)                    # read past its time: given up, never wedged
-                continue
-        rt.read_evt.wait(0.5)
-        rt.read_evt.clear()
 
 
 def _uncued(rt):
@@ -1496,9 +1445,6 @@ def _loop(rt):
                     if not fresh and room['pause_s'] and rt.stop_flag.wait(room['pause_s']):
                         break
                     fresh = False
-                    _await_reading(rt)
-                    if rt.stop_flag.is_set():
-                        break
                     rt.turn, rt.waiting = seat['id'], False
                     _publish_state(rt)
                     if _item(rt, lambda s=seat: _turn(chat, s, rt), seat.get('name')):
@@ -1609,9 +1555,6 @@ def _mention_run(chat, rt, room):
         if seat is None:
             continue
         rt.mention_turns += 1
-        _await_reading(rt)
-        if rt.stop_flag.is_set():
-            break
         rt.turn, rt.waiting = sid, False
         _publish_state(rt)
         if _item(rt, lambda x=seat: _turn(chat, x, rt), seat.get('name')):
@@ -1660,9 +1603,6 @@ def _blind_round(chat, seats, rt, pause_s=0.0):
     spoke = False
     for i, (seat, prep) in enumerate(preps):
         if rt.stop_flag.is_set() or (i and pause_s and rt.stop_flag.wait(pause_s)):
-            break
-        _await_reading(rt)
-        if rt.stop_flag.is_set():
             break
         rt.turn, rt.waiting = seat['id'], False
         _publish_state(rt)
@@ -1759,7 +1699,7 @@ def _seat_turn(chat, seat, rt, prep=None):
         append_line(rt.chat, 'assistant', f"{thought}\n\n{text}" if thought else text, seat['id'], seat.get('name'),
                     persona=seat.get('persona'), tools=_tools_of(own, before), seen=prep['seen'],
                     turn=_rows(own)[before + 1:])              # past the cue: what her turn saved, for her view
-        _read_aloud(rt, seat, text, mid)
+        _read_aloud(rt, seat, text)
     if started:
         publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': '' if passed else text, 'speak': None,
                                         'dropped': passed or not text, 'why': why, 'heard': rt.heard,
@@ -1851,7 +1791,7 @@ def _guest_turn(chat, seat, rt, prep=None):
     if text:
         append_line(rt.chat, 'assistant', text, seat['id'], name, kind=GUEST,      # rt.chat: the room may have been renamed meanwhile
                     tools=[{'name': n} for n in shared], seen=prep['seen'])        # her row is in before her END (see _seat_turn)
-        _read_aloud(rt, seat, text, mid)
+        _read_aloud(rt, seat, text)
         publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign'], 'source': SOURCE})
     publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': text, 'speak': None, 'dropped': not text, 'heard': rt.heard,
                                     'why': why, 'tools': shared, **tag})
@@ -2113,7 +2053,7 @@ def _door_turn(chat, seat, rt, prep=None):
     if not why:
         append_line(rt.chat, 'assistant', text, seat['id'], name, persona=seat.get('persona'), kind=DOOR,
                     seen=prep['seen'])                   # her row is in before her END (see _seat_turn)
-        _read_aloud(rt, seat, text, mid)
+        _read_aloud(rt, seat, text)
         publish(Events.VOICE_TURN_CHUNK, {'message_id': mid, 'text': text, 'chat': chat, 'foreign': tag['foreign'], 'source': SOURCE})
     publish(Events.VOICE_TURN_END, {'message_id': mid, 'text': '' if why else text, 'speak': None, 'dropped': bool(why),
                                     'why': why, 'heard': rt.heard, 'tools': [], **tag})

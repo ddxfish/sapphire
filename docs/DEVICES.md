@@ -392,7 +392,7 @@ The device window has more, each shown only on a board that has the part:
 | Listens for | Wake word | A wake word from the library (Settings > Wakeword), or the board's own. Save sends it; the board restarts, about half a minute; an offline board gets it when next seen |
 | Brightness in use / when left alone | Screen | Percent (80 / 15) |
 | Dims after / Screen dark after | Screen | Seconds (120) / minutes (0 = never) |
-| Sleeps after | Screen | Minutes (60) on a board that sleeps, the pendant: everything off but its brain; its BOOT key wakes it |
+| Sleeps after | Screen | Minutes (0 = never, the default) on a board that sleeps, the pendant: everything off but its brain; its BOOT key wakes it |
 | Face frames a second, Stream slack, Face sync delay | Screen | Her face as a stream on the glass: the beat (25), packets held (1 to 3, 2), how long her voice waits for her face (700 ms) |
 | Rotation, Invert colors, Mirror image, Upside down | Screen | How the glass sits and a wrong variant put right |
 | Opens on | Screen | The page a board with pages starts on: the chat, Backups, Status, Board or Actions |
@@ -629,7 +629,7 @@ A satellite to wear: the Elecrow ESP32-S3 AI Camera board, set up like any
 board with **+ Add Satellite** > **Dev board**. It hears, speaks, sees and
 shows her face, and it runs on a battery, so it sleeps:
 
-- **Sleeps after** (Screen tab, 60 minutes; 0 = never) turns off its
+- **Sleeps after** (Screen tab, minutes; 0 = never, the default) turns off its
   screen, camera, mic and WiFi when it is left alone. It goes offline here
   until its BOOT key wakes it. `device_action("pendant","power","sleep")`
   puts it to sleep now.

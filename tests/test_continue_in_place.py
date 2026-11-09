@@ -33,7 +33,7 @@ PREFILL = "Half a sent"
 
 def _run(provider_events=(), *, continue_from="T1", prefill=PREFILL, raise_exc=None,
          cancel_on=None, cancel_at_start=False, hook_stub=None, provider_side_effect=None,
-         continues=True):
+         continues=True, resumes=True):
     mock_main = MagicMock()
     mock_main.system = None
     fm = mock_main.function_manager
@@ -55,6 +55,7 @@ def _run(provider_events=(), *, continue_from="T1", prefill=PREFILL, raise_exc=N
     provider = MagicMock()
     provider.provider_name = "test"
     provider.model = "test-model"
+    provider.continues_reply.return_value = resumes   # the server's own answer to the probe
     if raise_exc is not None:
         provider.chat_completion_stream.side_effect = raise_exc
     elif provider_side_effect is not None:
@@ -198,6 +199,22 @@ class TestEngine:
         notices = [e for e in out if isinstance(e, dict) and e.get("type") == "notice"]
         assert notices and "can't continue a reply in place" in notices[0]["message"]
         assert _final(out)["error"] is True
+
+    def test_refused_when_the_server_answers_the_probe_fresh(self):
+        """A local server that opens a new turn instead of resuming (vLLM
+        without its flags, an engine that ignores them) is refused with
+        words: its fresh reply would be spliced onto the row."""
+        _, out, main, provider = _run([{"type": "done", "response": None}], resumes=False)
+        provider.chat_completion_stream.assert_not_called()
+        main.session_manager.continue_assistant.assert_not_called()
+        notices = [e for e in out if isinstance(e, dict) and e.get("type") == "notice"]
+        assert notices and "starts a new reply" in notices[0]["message"]
+        assert _final(out)["error"] is True
+
+    def test_no_evidence_from_the_probe_still_attempts(self):
+        _, out, _, provider = _run([{"type": "content", "text": " more"},
+                                    {"type": "done", "response": None}], resumes=None)
+        provider.chat_completion_stream.assert_called_once()
 
     def test_refused_when_the_turn_is_not_the_last_prose_row(self):
         _, out, main, provider = _run([{"type": "done", "response": None}], prefill=None)

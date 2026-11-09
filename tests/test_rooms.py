@@ -1225,7 +1225,7 @@ def test_a_room_change_reaches_a_guests_box_and_a_seat_can_be_muted(world, monke
     static = Path(__file__).resolve().parent.parent / 'interfaces' / 'web' / 'static'
     js = (static / 'views' / 'rooms.js').read_text(encoding='utf-8')
     assert js.count('data-f="tts"') == 3 and "SEAT_SECTIONS = ['prompt', 'toolset', 'brain', 'voice', 'mind']" in js
-    assert 'speakLine(seatOf(d.speaker), d.text, d.heard, d.message_id);' in js and 'audio.isTtsPlaying()' in js and 'hush();' in js
+    assert 'speakLine(seatOf(d.speaker), d.text, d.heard);' in js and 'audio.isTtsPlaying()' in js and 'hush();' in js
     assert 'R = { chat, info, placeholder: null, mute: 0, voiceGen: 0 };' in js     # undefined === 0 kept every line silent (2026-10-13)
     assert "audio.playTextStreaming(text, voice, me.chat, { speed: st.speed, pitch: st.pitch })" in js
     assert '<textarea data-f="context" rows="3" placeholder="Goes to her box' in js     # a guest\'s brief is editable now
@@ -1365,7 +1365,7 @@ def test_a_satellites_line_is_read_back_there_and_the_chat_view_never_moves(worl
     js = (static / 'views' / 'rooms.js').read_text(encoding='utf-8')
     assert 'await api.setLanding(chat, true);' in js and 'api.setLanding(was, false)' in js
     assert 'pointerBefore' not in js and 'api.activateChat(' not in js
-    assert 'speakLine(seatOf(d.speaker), d.text, d.heard, d.message_id);' in js and 'if (heard) return;' in js
+    assert 'speakLine(seatOf(d.speaker), d.text, d.heard);' in js and 'if (heard) return;' in js
     assert "export const setLanding = (name, on = true)" in (static / 'api.js').read_text(encoding='utf-8')
     route = (Path(__file__).resolve().parent.parent / 'core' / 'routes' / 'chat.py').read_text(encoding='utf-8')
     assert '@router.post("/api/chats/{chat_name}/landing")' in route and '_bound_belt' not in route
@@ -1750,37 +1750,6 @@ def test_a_line_a_skipped_seat_never_read_is_answered_next(world, monkeypatch):
     monkeypatch.setattr(rooms, '_seat_turn', lambda c, s, r, prep=None: 'spoke')
     rooms._turn(chat, rooms._room(chat)[1]['seats'][0], rt)
     assert rt.read == 2
-
-
-def test_the_rounds_keep_pace_with_the_reading(world):
-    """Krem's vote 2026-11-04: a 6-minute room was read aloud for 15+ minutes after.
-    A room tab reading aloud pings; each line it is handed is waited for, one line
-    ahead, before the next seat goes. Stop, a quiet tab, or a line past its time end it."""
-    chat, a, b = _salon()
-    rt = rooms._rt(chat)
-    seat = rooms._room(chat)[1]['seats'][0]
-    rooms._read_aloud(rt, seat, 'nobody reads this', 'm0')
-    assert rt.reading == []                       # no tab reading aloud: nothing to wait for
-    rooms.voice(chat, on=True)
-    rooms._read_aloud(rt, seat, 'one', 'm1')
-    rooms._read_aloud(rt, seat, 'two', 'm2')
-    assert [r[0] for r in rt.reading] == ['m1', 'm2']
-    done = threading.Event()
-    th = threading.Thread(target=lambda: (rooms._await_reading(rt), done.set()), daemon=True)
-    th.start()
-    assert not done.wait(0.7)                     # two unread: the next seat waits
-    assert rooms.voice(chat, mid='m1') == {'reading': 1}
-    assert done.wait(2)                           # one line ahead is fine
-    rooms._read_aloud(rt, seat, 'three', 'm3')
-    assert rooms.voice(chat, mid='m3') == {'reading': 0}   # read in order: m3 read means m2 too
-    rooms._read_aloud(rt, seat, 'four', 'm4'); rooms._read_aloud(rt, seat, 'five', 'm5')
-    rooms.stop(chat)
-    assert rt.reading == []                       # Stop: nothing left to wait for
-    rt.stop_flag.clear()
-    rooms._read_aloud(rt, seat, 'six', 'm6'); rooms._read_aloud(rt, seat, 'seven', 'm7')
-    rt.voice_seen -= rooms.VOICE_TAB_S + 1        # the tab went quiet (closed)
-    rooms._await_reading(rt)
-    assert rt.reading == []
 
 
 def test_mentions_switch_off_and_a_hyphen_continues_a_name(world):

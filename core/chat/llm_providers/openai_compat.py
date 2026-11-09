@@ -85,6 +85,10 @@ OPTIONAL_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty',
 # learned in _REFUSED_SWITCHES instead and only stops being injected
 # (ultrareview 2026-11-08).
 THINKING_SWITCHES = ('reasoning_effort', 'chat_template_kwargs')
+# Continue (a trailing assistant row): llama.cpp resumes it on its own; vLLM
+# and SGLang only with these, else they close the row and answer fresh.
+# Injected and unlearned like the thinking switches (_inject_continue).
+CONTINUE_FLAGS = {'continue_final_message': True, 'add_generation_prompt': False}
 _SWITCHES_KEY = '_thinking_switches'      # rides request kwargs to _create, never sent
 # Not in the OpenAI SDK's signature — passing them as kwargs is a TypeError,
 # so they ride extra_body (LM Studio / llama.cpp honor them there).
@@ -101,6 +105,9 @@ PENALTY_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty', 'to
 _REJECTED_PARAMS: Dict[str, set] = {}
 # endpoint|model → disable-thinking switches that endpoint refused (same life).
 _REFUSED_SWITCHES: Dict[str, set] = {}
+# endpoint|model → does a Continue really resume there (continues_reply; same life).
+_CONTINUES: Dict[str, bool] = {}
+_PROBE_SAID = 'Counting: one, two, three, four,'
 
 # endpoint → (model its server named, trusted_until): a provider with no model
 # set asks once a minute, never per turn. Misses are never kept.
@@ -604,6 +611,10 @@ class OpenAICompatProvider(BaseProvider):
                 text = f"{e} {getattr(e, 'body', '') or ''}".lower()
                 bad = self._params_named(e, request_kwargs)
                 sw = [n for n in sorted(switches) if n in text]
+                if not (bad or sw) and http_status(e) == 400 and ('thinking' in text or 'reasoning' in text):
+                    # a refusal that names no field: Ollama's 'model "x" does
+                    # not support thinking' for a model that never thinks
+                    sw = [n for n in sorted(switches) if n in THINKING_SWITCHES]
                 if not (bad or sw) or attempt == 2:
                     from core.socks_proxy import maybe_llm_proxy_hint
                     maybe_llm_proxy_hint(where, str(e))
@@ -620,8 +631,8 @@ class OpenAICompatProvider(BaseProvider):
                     self._refused_switches.add(n)
                     self._drop_switch(request_kwargs, n)
                 if sw:
-                    logger.info(f"[OPENAI-COMPAT] {where} ({self.model}) refuses the "
-                                f"disable-thinking switch {', '.join(sw)} — not sent again (until restart)")
+                    logger.info(f"[OPENAI-COMPAT] {where} ({self.model}) refuses "
+                                f"{', '.join(sw)} — not sent again (until restart)")
     
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -884,6 +895,7 @@ class OpenAICompatProvider(BaseProvider):
         # Thinking control (universal, family-gated) + raw extra_body passthrough.
         self._inject_thinking_control(
             request_kwargs, want_disable=(generation_params or {}).get('disable_thinking', False))
+        self._inject_continue(request_kwargs)
 
         response = self._create(request_kwargs)
 
@@ -975,6 +987,53 @@ class OpenAICompatProvider(BaseProvider):
         if mine:
             kwargs[_SWITCHES_KEY] = mine
 
+    def _inject_continue(self, kwargs: dict) -> None:
+        """A request ending in an assistant row (Continue, a prefill) gets
+        CONTINUE_FLAGS, unless the user's own extra_body sets them or this
+        endpoint refused them."""
+        msgs = kwargs.get('messages') or []
+        last = msgs[-1] if msgs else {}
+        if last.get('role') != 'assistant' or last.get('tool_calls') or not last.get('content'):
+            return
+        extra = dict(kwargs.get('extra_body') or {})
+        refused = getattr(self, '_refused_switches', set())
+        mine = [k for k in CONTINUE_FLAGS if k not in refused and k not in extra]
+        if mine:
+            extra.update({k: CONTINUE_FLAGS[k] for k in mine})
+            kwargs['extra_body'] = extra
+            kwargs[_SWITCHES_KEY] = list(kwargs.get(_SWITCHES_KEY) or []) + mine
+
+    def continues_reply(self) -> Optional[bool]:
+        """Does a Continue really resume a reply on this server? Asked once per
+        endpoint and model (until restart) with an 8-word count: a server that
+        answers it fresh would splice a new reply onto the old one, so the
+        stream refuses Continue there with words. None = no evidence (an
+        error, a model that only thought): Continue goes ahead and fails on
+        its own words if it must."""
+        key = f"{self.base_url}|{self.model}"
+        if key in _CONTINUES:
+            return _CONTINUES[key]
+        kw = {'model': self.model, 'max_tokens': 12, 'temperature': 0, 'timeout': 60,
+              'messages': [{'role': 'user', 'content': 'Count from one to ten in words, separated by commas.'},
+                           {'role': 'assistant', 'content': _PROBE_SAID}]}
+        self._inject_thinking_control(kw, want_disable=True)
+        self._inject_continue(kw)
+        try:
+            text = self._create(kw).choices[0].message.content or ''
+        except Exception as e:
+            logger.info(f"[CONTINUE] couldn't ask {self.base_url} whether it continues a reply: {e}")
+            return None
+        text = re.sub(r'(?s)<think>.*?(</think>|$)', '', text).strip()
+        if text.startswith(_PROBE_SAID):          # llama.cpp echoes the prefill when not streaming
+            text = text[len(_PROBE_SAID):]
+        text = text.lstrip(' ,').lower()
+        if not text:
+            return None
+        _CONTINUES[key] = ok = text.startswith('five')
+        logger.info(f"[CONTINUE] {self.base_url} ({self.model}) {'resumes' if ok else 'answers fresh to'} "
+                    f"a Continue: {text[:40]!r}")
+        return ok
+
     def _raw_keys(self, raw) -> set:
         try:
             rb = raw if isinstance(raw, dict) else json.loads(raw)
@@ -1036,6 +1095,7 @@ class OpenAICompatProvider(BaseProvider):
         # Thinking control (universal, family-gated) + raw extra_body — streaming path too.
         self._inject_thinking_control(
             request_kwargs, want_disable=(generation_params or {}).get('disable_thinking', False))
+        self._inject_continue(request_kwargs)
 
         logger.info(f"[OPENAI-COMPAT] Request params: model={request_kwargs.get('model')}, tools={len(request_kwargs.get('tools', []))}")
 

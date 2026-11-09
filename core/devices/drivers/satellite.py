@@ -118,7 +118,7 @@ SPEC = {
          'help': '0 = never. The backlight goes out to save power; a touch or her stirring brings it back.'},
         # the pendant (firmware/pendant): left alone this long it sleeps, screen, camera, mic and WiFi off; its BOOT key wakes it
         {'key': 'sleep_after_min', 'takes': 'screen.sleep_after_min', 'type': 'number', 'label': 'Sleeps after (minutes)', 'capability': 'screen',
-         'default': 60, 'min': 0, 'max': 1440,
+         'default': 0, 'min': 0, 'max': 1440,
          'help': '0 = never. A board on a battery: everything off but its brain, and it goes offline here. Its BOOT key wakes it.'},
         # the pendant from 0.1.43: the beat her face is painted on is a setting (the sender paces to it within a minute)
         {'key': 'beat', 'takes': 'screen.beat', 'type': 'number', 'label': 'Face frames a second', 'capability': 'screen',

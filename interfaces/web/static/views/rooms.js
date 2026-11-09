@@ -265,7 +265,6 @@ function leave() {
     mentionObs?.disconnect();
     mentionObs = null;
     hush();
-    voicePost({ on: false });
     clearInterval(voiceTimer);
     voiceTimer = null;
     unbindComposer();
@@ -377,7 +376,7 @@ function onTurnEnd(d) {
     }
     const me = R;
     claimLine(d.message_id).then((mine) => {           // one tab reads a line, however many show the room (2026-11-04)
-        if (mine && R === me) speakLine(seatOf(d.speaker), d.text, d.heard, d.message_id);
+        if (mine && R === me) speakLine(seatOf(d.speaker), d.text, d.heard);
     });
 }
 
@@ -391,22 +390,19 @@ function claimLine(mid) {
     return new Promise(r => setTimeout(() => r(localStorage.getItem(key) === mine), 60));
 }
 
-// The rounds keep pace with this tab's reading (core/rooms.py voice/_await_reading,
-// Krem's vote 2026-11-04): a ping while it reads aloud, each line's id when it is read,
-// a flush when it goes quiet. Fire and forget: a lost post costs a line's wait, never a wedge.
-function voicePost(body) {
-    if (!R) return;
-    fetch(roomUrl('/voice'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
-        body: JSON.stringify(body),
-    }).catch(() => {});
-}
+// The open tab's heartbeat: it renews where voice lands (core/routes/rooms.py). The rounds
+// never wait on this tab's reading (Krem 2026-11-08: the 11-04 backlog was a sick 4090).
 let voiceTimer = null;
 function voicePing() {
     clearInterval(voiceTimer);
     voiceTimer = null;
     if (!R) return;
-    const ping = () => voicePost({ on: !!getTtsEnabled() });
+    const ping = () => {
+        if (!R) return;
+        fetch(roomUrl('/voice'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() }, body: '{}',
+        }).catch(() => {});
+    };
     ping();
     voiceTimer = setInterval(ping, 20000);
 }
@@ -419,9 +415,9 @@ function voicePing() {
 // has played, so the chain waits for the queue to drain; a provider with no streaming door
 // gets the whole line as one blob. Stop and leaving the room hush it all (the generation
 // counter drops what was queued). A satellite as the output is a later lane.
-function speakLine(seat, text, heard = null, mid = null) {
+function speakLine(seat, text, heard = null) {
     if (heard) return;                                      // read on the satellite the person spoke from (core/rooms.py)
-    if (!R || !text || !seat || seat.tts === false || !getTtsEnabled()) { if (mid) voicePost({ mid }); return; }
+    if (!R || !text || !seat || seat.tts === false || !getTtsEnabled()) return;
     const me = R, st = seat.settings || {}, voice = st.voice || null, gen = me.voiceGen || 0;
     const live = () => R === me && me.voiceGen === gen;
     me.voiceChain = (me.voiceChain || Promise.resolve()).then(async () => {
@@ -446,14 +442,12 @@ function speakLine(seat, text, heard = null, mid = null) {
                 el.play().catch(() => done());
             });
         } catch (e) { console.warn('[Rooms] voice failed:', e); }
-        finally { if (mid && R === me) voicePost({ mid }); }      // read (or failed): the rounds go on
     });
 }
 
 function hush() {
     audio.stop(true);
     if (!R) return;
-    voicePost({ on: !!getTtsEnabled(), flush: true });     // nothing queued any more: the rounds stop waiting
     R.voiceGen = (R.voiceGen || 0) + 1;
     R.voiceChain = null;
     if (R.voiceEl) { try { R.voiceEl.pause(); } catch (e) { /* gone */ } R.voiceEl = null; }

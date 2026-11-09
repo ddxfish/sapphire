@@ -790,12 +790,21 @@ class StreamingChat:
 
             # Continue only where the provider really resumes a reply: elsewhere
             # refuse with words, history untouched (resolve.continues_in_place).
+            # A local server is asked once whether it really does (continues_reply):
+            # one that answers fresh would splice a new reply onto the old row.
             if continue_from:
                 from .llm_providers.resolve import continues_in_place, display_name
+                why = None
                 if not continues_in_place(provider_key):
-                    logger.info(f"[CONTINUE] refused - {provider_key} doesn't continue a reply in place")
+                    why = "can't continue a reply in place"
+                else:
+                    probe = getattr(provider, 'continues_reply', None)
+                    if callable(probe) and probe() is False:
+                        why = "starts a new reply when asked to continue one"
+                if why:
+                    logger.info(f"[CONTINUE] refused - {provider_key} {why}")
                     yield {"type": "notice", "severity": "warning",
-                           "message": f"{display_name(provider_key)} can't continue a reply in place. "
+                           "message": f"{display_name(provider_key)} {why}. "
                                       f"Ask it to go on in a new message instead."}
                     yield self._emit_llm_done(tts_pump, refused=True)
                     yield {"type": "final", "text": "", "cancelled": False, "error": True}
