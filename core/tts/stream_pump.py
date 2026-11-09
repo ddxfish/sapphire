@@ -316,10 +316,14 @@ class StreamingTTSPump:
                     # Empty + worker done = we're finished with this chunk.
                     if done_evt.is_set():
                         break
-                    # Stalled = no progress since the worker's last sign of
-                    # life (start or segment). Not started yet counts from
-                    # when this chunk reached the head of the line.
-                    last = meta.get("progress_at") or waiting_since
+                    # Stalled = nothing for the timeout since the LATEST of:
+                    # reaching the head of the line, the first synth attempt
+                    # starting, the last segment. A chunk queued behind
+                    # another isn't charged for the wait, and retries don't
+                    # restart the clock — a chunk that keeps failing still
+                    # trips (ultrareview 2026-11-08).
+                    last = max(waiting_since, meta.get("started_at") or 0.0,
+                               meta.get("progress_at") or 0.0)
                     if time.monotonic() - last > _FLUSH_HARD_TIMEOUT_S:
                         logger.warning(
                             f"[TTS-STREAM] flush hard-timeout for chunk {chunk_idx} — "
@@ -619,7 +623,7 @@ class StreamingTTSPump:
             progress["progress_at"] = time.monotonic()      # alive: resets the stall clock
 
         def _run(v):
-            progress["progress_at"] = time.monotonic()      # synth started
+            progress.setdefault("started_at", time.monotonic())   # first attempt only
             kw = {"pitch": self._pitch} if self._provider_pitch else {}
             if self._provider_streams:
                 for segment in self.provider.generate_stream(text, v, speed, **kw):

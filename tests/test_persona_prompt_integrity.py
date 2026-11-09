@@ -410,3 +410,100 @@ def test_phantom_release_nothing_to_do_still_marks(mgr):
     assert mgr.release_phantom_scopes({'email': ['sapphire']}) == {}
     assert (mgr.USER_DIR / mgr.PHANTOM_MARKER).exists()
     assert not (mgr.USER_DIR / 'personas.json.pre-scope-release.bak').exists()
+
+
+# ── Ultrareview 2026-11-08 ──
+
+def test_prompt_rename_reaches_room_seats(presets, world):
+    import core.prompt_crud as crud
+    ok, msg = crud.rename_prompt('ronnie', 'ronnie2')
+    assert ok, msg
+    assert ('ronnie', 'ronnie2') in world.seat_prompts
+
+
+def test_rooms_repoint_prompt_rewrites_frozen_seat(monkeypatch):
+    import core.rooms as rooms
+    room = {'seats': [{'id': 'a', 'persona': 'zed', 'settings': {'prompt': 'ronnie', 'voice': 'v'}},
+                      {'id': 'b', 'persona': 'amy', 'settings': {'prompt': 'beach'}}]}
+    written = {}
+    monkeypatch.setattr(rooms, 'list_rooms', lambda: [{'chat': 'den'}])
+    monkeypatch.setattr(rooms, 'settings_of', lambda chat: {'room': room})
+    monkeypatch.setattr(rooms, '_write', lambda chat, raw: written.update({chat: raw}))
+    assert rooms.repoint_prompt('ronnie', 'ronnie2') == ['den']
+    seats = written['den']['seats']
+    assert seats[0]['settings'] == {'prompt': 'ronnie2', 'voice': 'v'}
+    assert seats[1]['settings'] == {'prompt': 'beach'}
+    assert room['seats'][0]['settings']['prompt'] == 'ronnie'   # copy-on-write
+
+
+@pytest.mark.parametrize('bad', ['Luna, the Moon'])
+def test_prompt_names_refuse_commas(presets, bad):
+    import core.prompt_crud as crud
+    assert 'comma' in crud.prompt_name_problem(bad)
+
+
+def test_phantom_release_without_any_list_does_not_mark(mgr):
+    assert mgr.release_phantom_scopes({}) == {}
+    assert mgr.release_phantom_scopes({'email': []}) == {}
+    assert not (mgr.USER_DIR / mgr.PHANTOM_MARKER).exists()
+
+
+def test_her_piece_create_refuses_hidden_pack_key(piece_store, monkeypatch):
+    import core.prompts as prompts
+    from functions.meta import _prompt_pieces
+    from core.name_problem import Problem, TAKEN
+    monkeypatch.setattr(prompts, 'piece_key_problem',
+                        lambda t, k: Problem("'character/scaffold' already exists", TAKEN)
+                        if k == 'scaffold' else None)
+    msg, ok = _prompt_pieces({'action': 'create', 'component': 'character',
+                              'key': 'scaffold', 'value': 'x'})
+    assert not ok and 'built-in' in msg
+    assert 'scaffold' not in piece_store['character']
+
+
+def test_her_fork_skips_names_the_check_refuses(presets, monkeypatch):
+    import core.prompts as prompts
+    from functions.meta import _save_and_activate_assembled
+    monkeypatch.setattr(prompts, 'get_active_preset_name', lambda: 'default')
+    monkeypatch.setattr(prompts, 'activate_prompt', lambda name, system: (True, ''))
+    real = prompts.prompt_name_problem
+    from core.name_problem import Problem, ASLEEP
+    monkeypatch.setattr(prompts, 'prompt_name_problem',
+                        lambda n: Problem('asleep in the vault', ASLEEP) if n == 'nova' else real(n))
+    name = _save_and_activate_assembled(None, {'character': 'nova', 'extras': []})
+    assert name == 'nova-2' and 'nova' not in presets.ps
+
+
+# ── Refusals carry a code, never parsed from wording (ultrareview #10) ──
+
+def test_name_checks_carry_codes(presets, piece_store, mgr, monkeypatch):
+    import core.prompt_crud as crud
+    from core.name_problem import TAKEN, ASLEEP, INVALID
+    assert crud.prompt_name_problem('ronnie').code == TAKEN
+    assert crud.prompt_name_problem('a, b').code == INVALID
+    assert crud.prompt_name_problem('default').code == INVALID
+    assert crud.piece_key_problem('character', 'sapphire').code == TAKEN
+    assert crud.piece_key_problem('nope', 'x').code == INVALID
+    assert mgr.rename_problem('zed', 'amy').code == TAKEN
+    assert mgr.rename_problem('zed', '!!!').code == INVALID
+    import core.chat.history as hist
+    monkeypatch.setattr(hist, 'sealed_prompt_name', lambda n: n == 'sleeper')
+    assert crud.prompt_name_problem('sleeper').code == ASLEEP
+
+
+def test_refuse_maps_code_to_status_and_header():
+    from core.routes.content import _refuse
+    from core.name_problem import Problem, TAKEN, ASLEEP, PERSONA_TAKEN
+    for code, status in ((TAKEN, 409), (ASLEEP, 409), (PERSONA_TAKEN, 409), ('invalid', 400)):
+        e = _refuse(Problem('whatever the words say', code))
+        assert e.status_code == status and e.headers == {'X-Problem': code}
+    plain = _refuse("Store save failed — and it already exists")   # wording means nothing now
+    assert plain.status_code == 400 and not plain.headers
+
+
+def test_card_prompt_taken_keeps_existing_by_code(importer, presets, mgr):
+    # A taken prompt name on a persona card points at the local one — decided
+    # by the code, so rewording the message can't flip keep vs refuse.
+    res = importer._install_prompt_bundle('ronnie', {'type': 'assembled', 'components': {}},
+                                          None, use_existing=True)
+    assert res['kept_existing'] is True

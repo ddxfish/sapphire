@@ -23,7 +23,9 @@ class HookEvent:
         stt_audio:         An utterance's audio, BEFORE transcription (core/stt/utterance.py).
                            metadata: `audio` (16 kHz mono float32 numpy), `sample_rate`,
                            `utterance` (id, also on that lane's post_stt metadata), `lane`
-                           (wake|browser|conversation|call|device). Observational; return
+                           (wake|browser|conversation|call|device; never the MCP
+                           `listen` tool — a private channel, kept out on purpose).
+                           Observational; return
                            fast and analyze on your own thread so it runs alongside Whisper.
                            chat_name pre-stamped when the lane knows it. Not ALWAYS_DELIVER:
                            private chats reach only privacy_aware plugins. 2026-11-07.

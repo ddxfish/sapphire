@@ -1,7 +1,11 @@
 """core/stt/utterance.py — the audio of one utterance, shown to plugins BEFORE
 it is transcribed (voice tone, 2026-11-07).
 
-Every STT lane calls heard() with the audio it is about to hand to Whisper.
+Every STT lane that carries a turn (wake, browser, conversation, call,
+device) calls heard() with the audio it is about to hand to Whisper. The MCP
+`listen` tool (core/stt/listen.py) is left out on purpose: it is the person
+answering a Claude session over MCP, a private channel no plugin hears by
+default. Its post_stt fires with no utterance id.
 heard() normalizes it once to 16 kHz mono float32 in [-1, 1] and fires the
 `stt_audio` hook. Handlers must return fast and do their analysis on their
 own thread: that is what lets it run alongside transcription instead of

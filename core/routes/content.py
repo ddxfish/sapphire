@@ -266,7 +266,7 @@ async def rename_prompt_piece(request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=400, detail="type and old are required")
     ok, msg = prompt_crud.rename_piece(ctype, old, new)
     if not ok:
-        raise HTTPException(status_code=400, detail=msg)
+        raise _refuse(msg)
     return {"status": "success", "message": msg}
 
 
@@ -312,10 +312,15 @@ async def get_prompt(name: str, request: Request, _=Depends(require_login)):
     return {"name": name, "data": pdata}
 
 
-def _problem_status(msg: str) -> int:
-    """A name-check refusal → HTTP status: taken (incl. asleep in the
-    vault) is a conflict, everything else a bad request."""
-    return 409 if ('already exists' in msg or 'asleep' in msg) else 400
+def _refuse(problem, status=400):
+    """A refusal as an HTTPException. A name check's Problem picks its own
+    status (taken/asleep → 409) and its code rides X-Problem, so neither the
+    server nor the client parses the wording (ultrareview 2026-11-08). A
+    plain message keeps `status`."""
+    code = getattr(problem, 'code', None)
+    return HTTPException(status_code=problem.status if code else status,
+                         detail=str(problem),
+                         headers={'X-Problem': code} if code else None)
 
 
 @router.put("/api/prompts/{name}")
@@ -334,7 +339,7 @@ async def save_prompt(name: str, request: Request, _=Depends(require_login), sys
     if create:
         bad = prompts.prompt_name_problem(name)
         if bad:
-            raise HTTPException(status_code=_problem_status(bad), detail=bad)
+            raise _refuse(bad)
     elif update and not prompts.get_prompt(name):
         if origin == 'vault':
             raise HTTPException(status_code=409, detail=prompts.VAULT_LOCKED_MSG)
@@ -377,7 +382,7 @@ async def rename_prompt(name: str, request: Request, _=Depends(require_login),
     was_vault = prompts.is_vault_prompt(name)
     ok, msg = prompts.rename_prompt(name, new)
     if not ok:
-        raise HTTPException(status_code=_problem_status(msg), detail=msg)
+        raise _refuse(msg)
     publish(Events.PROMPT_DELETED, {"name": "" if was_vault else name})
     publish(Events.PROMPT_CHANGED, {"name": "" if was_vault else new,
                                     "action": "vault_changed" if was_vault else "saved"})
@@ -431,7 +436,7 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
     if data.get('create'):
         bad = prompts.piece_key_problem(comp_type, key)
         if bad:
-            raise HTTPException(status_code=_problem_status(bad), detail=bad)
+            raise _refuse(bad)
     elif data.get('update') and key not in prompts.prompt_manager.components.get(comp_type, {}):
         if origin == 'vault':
             raise HTTPException(status_code=409, detail=prompts.VAULT_LOCKED_MSG)
@@ -942,8 +947,7 @@ async def update_persona(name: str, request: Request, _=Depends(require_login), 
     if "name" in data:
         problem = persona_manager.rename_problem(name, data["name"])
         if problem:
-            raise HTTPException(status_code=409 if "exists" in problem else 400,
-                                detail=problem)
+            raise _refuse(problem)
     if not persona_manager.update(name, data):
         raise HTTPException(status_code=500, detail="Failed to update persona")
     # On rename, reapply must target the NEW name -- update() moved the
@@ -1335,10 +1339,11 @@ def _install_prompt_bundle(prompt_name, prompt_data, components, *, overwrite=Fa
     {'prompt', 'kept_existing', 'pieces': "Wrote N pieces"}."""
     from core import prompts
     from core.prompt_crud import save_prompt, save_components_batch
+    from core.name_problem import TAKEN
     bad = prompts.prompt_name_problem(prompt_name)
-    taken = bool(bad) and "already exists" in bad
+    taken = getattr(bad, 'code', None) == TAKEN
     if bad and not taken:
-        raise HTTPException(status_code=_problem_status(bad), detail=bad)
+        raise _refuse(bad)
     data = _clean_prompt_data(prompt_data)
     if components is not None and not isinstance(components, dict):
         raise HTTPException(status_code=400, detail="Invalid components format")
@@ -1346,7 +1351,7 @@ def _install_prompt_bundle(prompt_name, prompt_data, components, *, overwrite=Fa
         if use_existing:
             logger.info(f"[IMPORT] Prompt '{prompt_name}' exists, keeping existing")
             return {"prompt": prompt_name, "kept_existing": True, "pieces": "Wrote 0 pieces"}
-        raise HTTPException(status_code=409, detail=bad)
+        raise _refuse(bad)
     # Prompt FIRST (DR-8): the door most likely to refuse (cross-type,
     # store latch) refuses before any shared piece is touched.
     # origin='regular': installing shared content never routes by lock state.
@@ -1424,7 +1429,8 @@ async def _import_persona_from_bundle(data):
                             detail="This card's name has no usable characters (letters, digits, space, - or _)")
     persona_exists = persona_manager.exists(safe_name)
     if persona_exists and not overwrite_persona:
-        raise HTTPException(status_code=409, detail=f"Persona '{safe_name}' already exists")
+        from core.name_problem import Problem, PERSONA_TAKEN
+        raise _refuse(Problem(f"Persona '{safe_name}' already exists", PERSONA_TAKEN))
 
     # Persona values — checked, not just keys (hunt 19 + 2026-11-08).
     voice_data = data.get("voice") if isinstance(data.get("voice"), dict) else {}

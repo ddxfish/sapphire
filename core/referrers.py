@@ -77,6 +77,11 @@ def _seats(old, new):
     return [f"room {n}" for n in repoint_persona(old, new)]
 
 
+def _room_seats_prompt(old, new):
+    from core.rooms import repoint_prompt
+    return [f"room {n}" for n in repoint_prompt(old, new)]
+
+
 def persona_renamed(old: str, new: str) -> list:
     """Every holder of persona `old` now holds `new`. Returns what moved."""
     touched = []
@@ -120,6 +125,7 @@ def prompt_renamed(old: str, new: str) -> list:
     touched += _step("tasks", lambda: _tasks('prompt', old, new))
     touched += _step("personas", personas)
     touched += _step("new-chat defaults", lambda: _chat_defaults('prompt', old, new))
+    touched += _step("room seats", lambda: _room_seats_prompt(old, new))
     if touched:
         logger.info(f"[REFS] prompt '{old}' -> '{new}': {touched}")
     return touched

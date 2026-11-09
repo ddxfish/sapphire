@@ -251,14 +251,15 @@ class PersonaManager:
             self._vault_ref_sync(persona["settings"].get("prompt"), None)
         return ok
 
-    def rename_problem(self, name: str, new_name) -> str | None:
-        """Why renaming `name` to `new_name` can't happen, or None when it
-        can (a same-name no-op is fine). The route turns it into a 400/409."""
+    def rename_problem(self, name: str, new_name):
+        """Why renaming `name` to `new_name` can't happen (a Problem), or None
+        when it can (a same-name no-op is fine). The route answers .status."""
+        from core.name_problem import Problem, TAKEN
         safe = self._sanitize_name(new_name or '')
         if not safe:
-            return "That name has no usable characters (letters, digits, space, - or _)"
+            return Problem("That name has no usable characters (letters, digits, space, - or _)")
         if safe != name and safe in self._personas:
-            return f"A persona named '{safe}' already exists"
+            return Problem(f"A persona named '{safe}' already exists", TAKEN)
         return None
 
     def update(self, name: str, data: dict) -> bool:
@@ -451,10 +452,13 @@ class PersonaManager:
         marker = self.USER_DIR / self.PHANTOM_MARKER
         if marker.exists():
             return None
-        changed = {}
+        changed, judged = {}, False
         with self._lock:
             for key, values in (lists or {}).items():
-                if key in self._STORE_SCOPES or not values or 'default' in values:
+                if key in self._STORE_SCOPES or not values:
+                    continue
+                judged = True                # a real list came back for this scope
+                if 'default' in values:
                     continue
                 setting = f"{key}_scope"
                 for name, p in self._personas.items():
@@ -471,8 +475,12 @@ class PersonaManager:
                         self._personas[name]["settings"][k] = 'none'
                 if not self._save_to_user():
                     raise RuntimeError("personas.json save failed")
-            self.USER_DIR.mkdir(parents=True, exist_ok=True)
-            marker.write_text("phantom 'default' scopes released\n", encoding='utf-8')
+            # Only a run that judged something is final: a failed fetch or
+            # no accounts yet sends nothing, and marking that done made the
+            # release a permanent no-op (ultrareview 2026-11-08).
+            if judged:
+                self.USER_DIR.mkdir(parents=True, exist_ok=True)
+                marker.write_text("phantom 'default' scopes released\n", encoding='utf-8')
         if changed:
             logger.warning(f"[PERSONAS] released phantom 'default' scopes: {changed}")
         return changed

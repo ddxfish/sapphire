@@ -456,8 +456,10 @@ def _save_and_activate_assembled(system, state=None) -> str:
     # (scout S4, 2026-11-08). A fork always takes a free name.
     forking = prompts.get_active_preset_name() in (None, '', 'assembled', 'unknown', 'random', 'default')
     if forking:
+        # THE name check, not get_prompt: a reserved name, or one asleep in
+        # the locked vault, is taken too (ultrareview 2026-11-08).
         base, n = preset_name, 2
-        while prompts.get_prompt(preset_name):
+        while prompts.prompt_name_problem(preset_name):
             preset_name = f"{base}-{n}"
             n += 1
     components = {}
@@ -791,10 +793,21 @@ def _prompt_pieces(args):
         # piece and silently replace its text, reporting "Created" (scout
         # S4, 2026-11-08). New vs replace is now her explicit choice.
         exists = key in comps.get(component, {})
-        if action == 'create' and exists:
-            return (f"{component}/'{key}' already exists. To replace its text use "
-                    f"prompt_pieces(action='edit', component='{component}', key='{key}', value=...); "
-                    f"to keep both, create it under another key."), False
+        if action == 'create':
+            # THE piece check: it sees hidden pack pieces too — a user piece
+            # under one of their keys shadowed (blanked) it (ultrareview 2026-11-08).
+            bad = prompts.piece_key_problem(component, key)
+            from core.name_problem import TAKEN
+            taken = getattr(bad, 'code', None) == TAKEN
+            if taken and exists:
+                return (f"{component}/'{key}' already exists. To replace its text use "
+                        f"prompt_pieces(action='edit', component='{component}', key='{key}', value=...); "
+                        f"to keep both, create it under another key."), False
+            if taken:
+                return (f"{component}/'{key}' is taken by a built-in piece. "
+                        f"Create it under another key."), False
+            if bad:
+                return bad, False
         if action == 'edit' and not exists:
             return _unknown_key_msg(component, key), False
         # Item-level funnel (phase 0 of the vault): lock discipline, private-

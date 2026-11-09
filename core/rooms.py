@@ -259,6 +259,32 @@ def repoint_persona(old, new):
     return hit
 
 
+def repoint_prompt(old, new):
+    """Prompt rename upkeep: a seat freezes its persona's settings at
+    add_seat, prompt included — a rename left the seat on a dead name, and
+    its turns fell back to the main chat's prompt (ultrareview 2026-11-08).
+    Returns the touched room names."""
+    hit = []
+    with _lock:
+        for r in list_rooms():
+            chat = r['chat']
+            s = settings_of(chat)
+            raw = s.get('room') if isinstance(s, dict) and isinstance(s.get('room'), dict) else None
+            if not raw:
+                continue
+            seats = [dict(x) if isinstance(x, dict) else x for x in (raw.get('seats') or [])]
+            moved = False
+            for x in seats:
+                st = x.get('settings') if isinstance(x, dict) else None
+                if isinstance(st, dict) and st.get('prompt') == old:
+                    x['settings'] = {**st, 'prompt': new}
+                    moved = True
+            if moved:
+                _write(chat, {**raw, 'seats': seats})
+                hit.append(chat)
+    return hit
+
+
 def describe(chat):
     s, room = _room(chat)
     names = _names(room)

@@ -60,10 +60,13 @@ export async function errorText(res) {
   return wordsOf(await res.json().catch(() => ({})), res.status);
 }
 
-// A !res.ok response as an Error carrying its words and status.
+// A !res.ok response as an Error carrying its words, status, and the
+// server's refusal code (X-Problem: taken | asleep | invalid | persona_taken)
+// — branch on e.code, never on the wording (ultrareview 2026-11-08).
 export async function responseError(res) {
   const e = new Error(await errorText(res));
   e.status = res.status;
+  e.code = res.headers?.get?.('X-Problem') || undefined;
   return e;
 }
 

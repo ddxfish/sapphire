@@ -3,6 +3,7 @@ import logging
 import time
 from .prompt_manager import prompt_manager
 from . import prompt_state
+from core.name_problem import Problem, TAKEN, ASLEEP
 
 logger = logging.getLogger(__name__)
 
@@ -158,19 +159,19 @@ PIECE_TYPES = ('character', 'location', 'relationship', 'goals', 'format',
 _ROUTE_NAMES = ('pieces', 'components', 'piece-usage')
 
 
-def _name_shape_problem(name, what) -> str | None:
+def _name_shape_problem(name, what) -> Problem | None:
     if not isinstance(name, str) or not name.strip():
-        return f"{what} name required"
+        return Problem(f"{what} name required")
     if name != name.strip():
-        return f"{what} names can't start or end with spaces"
+        return Problem(f"{what} names can't start or end with spaces")
     if name.startswith('_'):
-        return f"{what} names starting with '_' are reserved"
+        return Problem(f"{what} names starting with '_' are reserved")
     if '/' in name or '\\' in name:
-        return f"{what} names can't contain / or \\"
+        return Problem(f"{what} names can't contain / or \\")
     return None
 
 
-def prompt_name_problem(name) -> str | None:
+def prompt_name_problem(name) -> Problem | None:
     """Why `name` can't become a NEW prompt, or None. THE check for every
     lane that mints a prompt name — editor New/Duplicate, rename, both
     imports, the AI's create. Taken means anywhere visible (user, pack,
@@ -182,34 +183,39 @@ def prompt_name_problem(name) -> str | None:
     if bad:
         return bad
     if name in ('default', 'assembled'):
-        return f"'{name}' is a reserved name — it refers to the current assembled state"
+        return Problem(f"'{name}' is a reserved name — it refers to the current assembled state")
     if name in _ROUTE_NAMES:
-        return f"'{name}' is reserved by the app — pick another name"
+        return Problem(f"'{name}' is reserved by the app — pick another name")
+    if ',' in name:
+        # Same rule as piece keys: a new assembled prompt gets pieces named
+        # after it, and a comma name left the prompt pointing at pieces the
+        # piece check refused (ultrareview 2026-11-08).
+        return Problem("Prompt names can't contain commas")
     if get_prompt(name):
-        return f"A prompt named '{name}' already exists"
+        return Problem(f"A prompt named '{name}' already exists", TAKEN)
     try:
         from core.chat.history import sealed_prompt_name
         if sealed_prompt_name(name):
-            return (f"'{name}' belongs to a prompt asleep in the locked vault — "
-                    f"unlock it or pick another name")
+            return Problem(f"'{name}' belongs to a prompt asleep in the locked vault — "
+                           f"unlock it or pick another name", ASLEEP)
     except Exception:
         pass
     return None
 
 
-def piece_key_problem(comp_type, key) -> str | None:
+def piece_key_problem(comp_type, key) -> Problem | None:
     """Why `comp_type/key` can't become a NEW piece, or None. Taken checks
     the FULL merge (hidden pack scaffolding included — a blank user shadow
     of one blanked the story engine's character)."""
     if comp_type not in PIECE_TYPES:
-        return f"Unknown piece type '{comp_type}'"
+        return Problem(f"Unknown piece type '{comp_type}'")
     bad = _name_shape_problem(key, "Piece")
     if bad:
         return bad
     if ',' in key:
-        return "Piece names can't contain commas"
+        return Problem("Piece names can't contain commas")
     if key in prompt_manager.components.get(comp_type, {}):
-        return f"'{comp_type}/{key}' already exists"
+        return Problem(f"'{comp_type}/{key}' already exists", TAKEN)
     return None
 
 

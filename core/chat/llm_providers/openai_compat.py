@@ -78,10 +78,14 @@ except Exception:
 # stream_options rides the same law (it used to re-pay the double request
 # on EVERY streaming call to an endpoint that refused it).
 OPTIONAL_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty',
-                   'top_k', 'stream_options',
-                   # the universal disable-thinking switches (_inject_thinking_control):
-                   # an endpoint that refuses one learns it once, like the rest
-                   'reasoning_effort', 'chat_template_kwargs')
+                   'top_k', 'stream_options')
+# The disable-thinking switches _inject_thinking_control adds. NOT optional
+# params: learning one there stripped the real values too (Fireworks'
+# 'medium', the user's own extra_body) until restart. A refused switch is
+# learned in _REFUSED_SWITCHES instead and only stops being injected
+# (ultrareview 2026-11-08).
+THINKING_SWITCHES = ('reasoning_effort', 'chat_template_kwargs')
+_SWITCHES_KEY = '_thinking_switches'      # rides request kwargs to _create, never sent
 # Not in the OpenAI SDK's signature — passing them as kwargs is a TypeError,
 # so they ride extra_body (LM Studio / llama.cpp honor them there).
 EXTRA_BODY_PARAMS = ('repeat_penalty', 'top_k',
@@ -95,6 +99,8 @@ PENALTY_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty', 'to
 # endpoint|model → optional params that endpoint refused (learn-once, lives
 # until restart — the toast says so). See OpenAICompatProvider.__init__.
 _REJECTED_PARAMS: Dict[str, set] = {}
+# endpoint|model → disable-thinking switches that endpoint refused (same life).
+_REFUSED_SWITCHES: Dict[str, set] = {}
 
 # endpoint → (model its server named, trusted_until): a provider with no model
 # set asks once a minute, never per turn. Misses are never kept.
@@ -179,6 +185,7 @@ class OpenAICompatProvider(BaseProvider):
         # rebuilt from config EVERY turn, so a per-instance set forgot the lesson
         # immediately — every turn paid 400 → retry → toast (scout F1, 2026-09-20).
         self._rejected_params: set = _REJECTED_PARAMS.setdefault(f"{self.base_url}|{self.model}", set())
+        self._refused_switches: set = _REFUSED_SWITCHES.setdefault(f"{self.base_url}|{self.model}", set())
 
         logger.info(f"OpenAI-compat provider initialized: {self.base_url}")
     
@@ -378,6 +385,7 @@ class OpenAICompatProvider(BaseProvider):
             return False
         self.model = model
         self._rejected_params = _REJECTED_PARAMS.setdefault(f"{self.base_url}|{model}", set())
+        self._refused_switches = _REFUSED_SWITCHES.setdefault(f"{self.base_url}|{model}", set())
         return True
 
     def context_window(self) -> Optional[int]:
@@ -568,34 +576,52 @@ class OpenAICompatProvider(BaseProvider):
             named = ['stream_options']
         return named
 
+    @staticmethod
+    def _drop_switch(kwargs: Dict[str, Any], name: str) -> None:
+        if name == 'reasoning_effort':
+            kwargs.pop(name, None)
+        eb = kwargs.get('extra_body')
+        if isinstance(eb, dict):
+            eb.pop(name, None)
+            if not eb:
+                kwargs.pop('extra_body', None)
+
     def _create(self, request_kwargs: Dict[str, Any]):
-        """chat.completions.create with learn-once stripping of refused
-        optional params: strip what this endpoint already refused, try,
-        and on a refusal naming an optional param remember it, warn once
-        (log + toast), retry once without it."""
+        """chat.completions.create with learn-once stripping. A refusal that
+        names an optional param the user set: remember it, warn once (log +
+        toast), retry without it. One that names a disable-thinking switch
+        this request injected: stop injecting it for this endpoint, retry.
+        A strict server refuses one name per error, so it retries while
+        each refusal names something new (at most 3 tries)."""
+        switches = set(request_kwargs.pop(_SWITCHES_KEY, None) or ())
         request_kwargs.update(self._hdr_kwargs())   # extra_headers ({session}/{version}), if configured
         self._strip_rejected(request_kwargs)
-        try:
-            return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
-        except Exception as e:
-            bad = self._params_named(e, request_kwargs)
-            if not bad:
-                from core.socks_proxy import maybe_llm_proxy_hint
-                maybe_llm_proxy_hint(self.config.get('display_name') or self.provider_name, str(e))
-                raise
-            self._rejected_params.update(bad)
-            self._strip_rejected(request_kwargs)
-            where = self.config.get('display_name') or self.provider_name
-            msg = (f"{where} ({self.model}) rejected {', '.join(bad)} — sent without it from "
-                   f"now on (until restart). Clear it under Settings › LLM › {where} to stop this.")
-            logger.warning(f"[OPENAI-COMPAT] {msg} | {e}")
-            _notify(msg)
+        where = self.config.get('display_name') or self.provider_name
+        for attempt in range(3):
             try:
                 return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
-            except Exception as e2:
-                from core.socks_proxy import maybe_llm_proxy_hint
-                maybe_llm_proxy_hint(self.config.get('display_name') or self.provider_name, str(e2))
-                raise
+            except Exception as e:
+                text = f"{e} {getattr(e, 'body', '') or ''}".lower()
+                bad = self._params_named(e, request_kwargs)
+                sw = [n for n in sorted(switches) if n in text]
+                if not (bad or sw) or attempt == 2:
+                    from core.socks_proxy import maybe_llm_proxy_hint
+                    maybe_llm_proxy_hint(where, str(e))
+                    raise
+                if bad:
+                    self._rejected_params.update(bad)
+                    self._strip_rejected(request_kwargs)
+                    msg = (f"{where} ({self.model}) rejected {', '.join(bad)} — sent without it from "
+                           f"now on (until restart). Clear it under Settings › LLM › {where} to stop this.")
+                    logger.warning(f"[OPENAI-COMPAT] {msg} | {e}")
+                    _notify(msg)
+                for n in sw:
+                    switches.discard(n)
+                    self._refused_switches.add(n)
+                    self._drop_switch(request_kwargs, n)
+                if sw:
+                    logger.info(f"[OPENAI-COMPAT] {where} ({self.model}) refuses the "
+                                f"disable-thinking switch {', '.join(sw)} — not sent again (until restart)")
     
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -886,16 +912,20 @@ class OpenAICompatProvider(BaseProvider):
             return                                    # OFF path — leave kwargs untouched
 
         extra = dict(kwargs.get('extra_body') or {})
+        injected = []
 
         if disable:
             model = (self.model or '').lower()
             base = (self.base_url or '').lower()
+            refused = getattr(self, '_refused_switches', set())
             if self._is_fireworks_reasoning_model():
                 # Fireworks disables reasoning via the top-level `reasoning_effort`
                 # param (none/false), NOT extra_body — its schema is strict and 400s
                 # on unknown fields like `thinking` / `chat_template_kwargs`. This
                 # overrides the "medium" default set in build_request_kwargs.
-                kwargs['reasoning_effort'] = 'none'
+                if 'reasoning_effort' not in refused:
+                    kwargs['reasoning_effort'] = 'none'
+                    injected.append('reasoning_effort')
                 fam = 'fireworks'
             elif 'api.deepseek.com' in base:
                 extra['thinking'] = {'type': 'disabled'}          # DeepSeek V4 official (on by default)
@@ -913,13 +943,17 @@ class OpenAICompatProvider(BaseProvider):
                 #   chat_template_kwargs:    llama.cpp --jinja, vLLM, SGLang (Qwen,
                 #                            GLM templates read enable_thinking;
                 #                            DeepSeek V3.1, Granite read thinking)
-                # A strict endpoint that refuses one is learned once and retried
-                # without it (OPTIONAL_PARAMS). LM Studio ignores both: its switch
-                # is the load-time "Enable Thinking" toggle.
-                kwargs['reasoning_effort'] = 'none'
-                ctk = dict(extra.get('chat_template_kwargs') or {})
-                ctk.update(enable_thinking=False, thinking=False)
-                extra['chat_template_kwargs'] = ctk
+                # A strict endpoint that refuses one stops getting it (_create,
+                # _REFUSED_SWITCHES). LM Studio ignores both: its switch is the
+                # load-time "Enable Thinking" toggle.
+                if 'reasoning_effort' not in refused:
+                    kwargs['reasoning_effort'] = 'none'
+                    injected.append('reasoning_effort')
+                if 'chat_template_kwargs' not in refused:
+                    ctk = dict(extra.get('chat_template_kwargs') or {})
+                    ctk.update(enable_thinking=False, thinking=False)
+                    extra['chat_template_kwargs'] = ctk
+                    injected.append('chat_template_kwargs')
                 fam = 'universal'
             logger.info(f"[OPENAI-COMPAT] disable_thinking ({fam}) → {self.model}")
 
@@ -935,6 +969,18 @@ class OpenAICompatProvider(BaseProvider):
 
         if extra:
             kwargs['extra_body'] = extra
+        # The user's own raw value is theirs, not a switch to unlearn.
+        user_keys = self._raw_keys(raw) if raw else set()
+        mine = [n for n in injected if n not in user_keys]
+        if mine:
+            kwargs[_SWITCHES_KEY] = mine
+
+    def _raw_keys(self, raw) -> set:
+        try:
+            rb = raw if isinstance(raw, dict) else json.loads(raw)
+            return set(rb) if isinstance(rb, dict) else set()
+        except (ValueError, TypeError):
+            return set()
 
     def chat_completion_stream(
         self,

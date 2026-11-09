@@ -88,11 +88,15 @@ def world(monkeypatch, tmp_path):
         return hit
     monkeypatch.setattr(tok.api_tokens, 'repoint_persona', tok_repoint)
     monkeypatch.setattr(rooms, 'repoint_persona', seat_repoint)
+    # Never the real rooms: a seat's frozen prompt rides its settings.
+    seat_prompts = []
+    monkeypatch.setattr(rooms, 'repoint_prompt',
+                        lambda old, new: seat_prompts.append((old, new)) or [])
     defaults = tmp_path / 'chat_defaults.json'
     defaults.write_text('{"prompt": "ronnie", "persona": "zed"}')
     monkeypatch.setattr(hist, '_user_chat_defaults_path', lambda: defaults)
     return SimpleNamespace(settings=fs, chats=chats, tasks=tasks, tokens=tokens,
-                           seats=seats, defaults=defaults)
+                           seats=seats, defaults=defaults, seat_prompts=seat_prompts)
 
 
 @pytest.fixture

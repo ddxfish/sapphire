@@ -103,3 +103,49 @@ def test_serial_engine_synthesizes_in_order(streaming):
 def test_base_provider_default_is_two():
     from core.tts.providers.base import BaseTTSProvider
     assert BaseTTSProvider.synth_workers == 2
+
+
+# ── Ultrareview 2026-11-08: the clock counts from the latest of head-of-line,
+# first attempt, last segment — never from a retry ──
+
+def test_retries_never_restart_the_stall_clock(streaming, monkeypatch, caplog):
+    """Each attempt ends empty in 0.3s against a 0.45s ceiling: two attempts
+    are 0.6s of nothing. Resetting the clock per attempt never tripped."""
+    import core.tts.stream_pump as sp
+    monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.45)
+
+    class Empty(_SegmentedProvider):
+        def generate_stream(self, text, voice, speed, **kw):
+            time.sleep(0.3)
+            return iter(())
+
+    pump = StreamingTTSPump(system=_system(Empty()))
+    pump.push("Every attempt comes back with nothing at all.")
+    with caplog.at_level("WARNING"):
+        list(pump.flush_and_close())
+    assert "flush hard-timeout" in caplog.text
+
+
+def test_a_chunk_queued_behind_the_engine_is_not_charged_for_the_wait(streaming, monkeypatch):
+    """Two workers, one engine lock: chunk B starts at once but waits 0.6s for
+    A. Counting from B's start dropped it the moment it reached the head."""
+    import threading
+    import core.tts.stream_pump as sp
+    monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.45)
+    engine = threading.Lock()
+
+    class Locked(_SegmentedProvider):
+        def generate_stream(self, text, voice, speed, **kw):
+            with engine:
+                n, gap = (3, 0.2) if text.startswith("First") else (1, 0.1)
+                for i in range(n):
+                    time.sleep(gap)
+                    yield b"OGGS\x00seg%d" % i
+
+    pump = StreamingTTSPump(system=_system(Locked()))
+    pump.push("First sentence takes the engine for a while. ")
+    time.sleep(0.05)
+    pump.push("Second sentence waits its turn.")
+    out = list(pump.flush_and_close())
+    assert len([e for e in out if e.get("type") == "tts_chunk"]) == 4
+    assert not [e for e in out if e.get("type") == "notice"]

@@ -94,7 +94,8 @@ export const importPersonaCard = async (file, { overwrite_prompt = false, overwr
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         const e = new Error(err.detail || 'Import failed');
-        e.status = res.status;   // the confirm flow branches on a 409
+        e.status = res.status;
+        e.code = res.headers.get('X-Problem') || undefined;   // the confirm flow branches on it
         throw e;
     }
     const data = await res.json();

@@ -109,8 +109,8 @@ export async function confirmPersonaImport({ bundle, doImport, onDone }) {
             return;
         } catch (e) {
             // Only the PERSONA collision opens the overwrite modal — a prompt
-            // or piece refusal also says "already exists" but isn't one.
-            if (!(e.status === 409 && /^Persona '.*' already exists$/.test(e.message || ''))) {
+            // or piece refusal is a 409 too, with its own code.
+            if (e.code !== 'persona_taken') {
                 ui.showToast(`Import failed: ${e.message}`, 'error');
                 return;
             }

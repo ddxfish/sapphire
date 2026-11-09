@@ -849,7 +849,7 @@ function bindEvents() {
                                                          components: importPieces, overwrite });
                         break;
                     } catch (e) {
-                        if (e?.status !== 409 || overwrite || !/already exists/.test(e.message || '')) throw e;
+                        if (e?.code !== 'taken' || overwrite) throw e;
                         const next = prompt(`"${name}" already exists. Import under another name\n` +
                                             `(or tick "Overwrite" to replace it):`, name + '-imported');
                         if (!next?.trim()) { ui.showToast('Import cancelled', 'info'); return false; }
