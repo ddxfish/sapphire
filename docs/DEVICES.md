@@ -67,7 +67,7 @@ A device that can be restarted or switched off has a **Power** tab.
 
 | Device | Restart | Off |
 |---|---|---|
-| Satellite | Yes, back in about a minute | Shutdown. Unplug and replug it to bring it back. A board that sleeps (the pendant) also has `sleep`: its BOOT key wakes it |
+| Satellite | Yes, back in about a minute | Shutdown. Its RESET key, or an unplug and replug, brings it back. A board that sleeps (the pendant) also has `sleep`: its BOOT key wakes it |
 | This computer | Yes | Shutdown; sleep on Linux |
 | SSH machine | Yes | Shutdown |
 

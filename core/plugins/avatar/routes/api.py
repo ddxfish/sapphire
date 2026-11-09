@@ -257,4 +257,13 @@ async def save_config(**kwargs):
                     cfg['models'][active][key] = body[key]
 
     _save_config(cfg)
+    from plugins.avatar import brain
+    brain.reload()            # new pool / buckets / model reach her brain now
     return cfg
+
+
+# GET /api/plugin/avatar/state
+def get_state(**kwargs):
+    """The brain's rails now: a renderer that just opened starts from here."""
+    from plugins.avatar import brain
+    return brain.snapshot()

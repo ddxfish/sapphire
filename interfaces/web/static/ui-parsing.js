@@ -116,8 +116,14 @@ export const extractProseText = (el) => {
     // Strip any remaining think tags
     txt = stripThink(txt);
     
-    // Strip any HTML tags that leaked through
+    // Strip any HTML tags that leaked through — but not her avatar tags: the
+    // catch-all ate `<<avatar: wave>` and left a spoken `>`. Both voice
+    // doors strip them server-side, and the streaming one times them into
+    // her speech (a replay animates her too).
+    const tags = [];
+    txt = txt.replace(/<<avatar:[^<>]*>>/g, m => `\u0000${tags.push(m) - 1}\u0000`);
     txt = txt.replace(/<[^>]+>/g, '');
+    txt = txt.replace(/\u0000(\d+)\u0000/g, (_, i) => tags[+i]);
     
     // Clean up multiple periods/punctuation (.. or ., or ,. etc) → single period
     txt = txt.replace(/[.!?,]+\s*[.!?,]+/g, '. ');

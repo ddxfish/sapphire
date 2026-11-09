@@ -28,14 +28,19 @@
       }
     ],
     "hooks": {
-      "prompt_inject": "hooks/prompt_inject.py"
+      "prompt_inject": "hooks/prompt_inject.py",
+      "tts_chunk_audio": "hooks/mouth.py",
+      "tts_stream_start": "hooks/mouth.py",
+      "tts_stream_end": "hooks/mouth.py"
     },
+    "daemon": {"entry": "daemon.py"},
     "routes": [
       {"method": "GET",    "path": "models",            "handler": "routes/api.py:list_models"},
       {"method": "POST",   "path": "upload",            "handler": "routes/api.py:upload_model"},
       {"method": "DELETE", "path": "models/{filename}",  "handler": "routes/api.py:delete_model"},
       {"method": "GET",    "path": "tracks/{filename}",  "handler": "routes/api.py:get_tracks"},
       {"method": "GET",    "path": "config",             "handler": "routes/api.py:get_config"},
+      {"method": "GET",    "path": "state",              "handler": "routes/api.py:get_state"},
       {"method": "PUT",    "path": "config",             "handler": "routes/api.py:save_config"}
     ]
   }

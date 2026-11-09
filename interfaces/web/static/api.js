@@ -653,7 +653,8 @@ function _wrapChunkWithAvatarScan(onChunk) {
         for (const match of scanBuf.matchAll(tagRe)) {
             const track = match[1];
             const mode = (match[2] === 'loop') ? 'loop' : 'once';
-            dispatch('avatar_animate', { track, mode });
+            // source 'text': a renderer lets her voice carry it when one speaks this turn
+            dispatch('avatar_animate', { track, mode, source: 'text' });
         }
         // Carry over any partial tag for the next chunk. Two cases:
         //   (a) Unclosed `<<...` — keep from the last `<<` onwards.

@@ -139,6 +139,38 @@ export function createCameraOrbitSystem(camera, controls, THREE) {
     let _crossfadeTime = 0;            // time into crossfade (0 = start, >= ORBIT_CROSSFADE = done)
     let _crossfadeFrom = null;         // snapshot: {x, y, z} of camera pos when crossfade started
 
+    // --- Face shot: a portrait on her head while she speaks, or held by the lock ---
+    // Framing follows the model's facing (stable), not the head's (it gestures);
+    // the head position is smoothed so a nod doesn't shake the camera.
+    const SHOT_HOLD_MS = 1500;          // stays on her face this long after she stops
+    const SHOT_GRACE_S = 3;             // after the user touches the camera, theirs for this long
+    let _head = null, _root = null;
+    let _speaking = false, _faceLock = false, _shotUntil = 0, _shotT = 0, _inShot = false;
+    const _hs = new THREE.Vector3(), _hv = new THREE.Vector3(), _fwd = new THREE.Vector3();
+    const _want = new THREE.Vector3(), _q = new THREE.Quaternion();
+
+    function _faceShot(delta) {
+        _head.getWorldPosition(_hv);
+        if (!_inShot) _hs.copy(_hv);
+        _hv.y += modelHeight * 0.035;          // the bone sits at the skull base; aim at the face
+        _hs.lerp(_hv, 1 - Math.exp(-6 * delta));
+        _root.getWorldQuaternion(_q);
+        _fwd.set(0, 0, 1).applyQuaternion(_q).setY(0).normalize();
+        _shotT += delta;
+        const sway = Math.sin(_shotT * 0.25) * 7 * DEG;
+        // head-and-shoulders at any canvas shape: a narrow sidebar needs more distance
+        const dist = modelHeight * 0.4 * Math.max(1, 0.9 / (camera.aspect || 1));
+        _want.set(
+            _fwd.x * Math.cos(sway) - _fwd.z * Math.sin(sway),
+            0,
+            _fwd.x * Math.sin(sway) + _fwd.z * Math.cos(sway),
+        ).multiplyScalar(dist).add(_hs);
+        _want.y += modelHeight * (0.01 + Math.sin(_shotT * 0.31) * 0.004);
+        const k = 1 - Math.exp(-3.5 * delta);
+        camera.position.lerp(_want, k);
+        controls.target.lerp(_hs, k);
+    }
+
     // --- User interaction detection ---
     const _onInput = () => {
         _lastUserInput = performance.now();
@@ -197,10 +229,21 @@ export function createCameraOrbitSystem(camera, controls, THREE) {
     }
 
     function update(delta) {
-        if (!enabled) return;
-
         const now = performance.now();
         const idleSec = (now - _lastUserInput) / 1000;
+
+        if (_speaking) _shotUntil = now + SHOT_HOLD_MS;
+        const wantShot = _head && (_faceLock || (enabled && now < _shotUntil)) && idleSec > SHOT_GRACE_S;
+        if (wantShot) {
+            _faceShot(delta);
+            _inShot = true;
+            active = false;               // the orbit blends back in from here afterwards
+            _blendFactor = 0;
+            return;
+        }
+        _inShot = false;
+
+        if (!enabled) return;
 
         if (!active && idleSec > IDLE_DELAY) {
             // Start orbiting — blend from user's camera position
@@ -241,9 +284,10 @@ export function createCameraOrbitSystem(camera, controls, THREE) {
         camera.position.y += (finalY - camera.position.y) * entryEase * delta * 2;
         camera.position.z += (finalZ - camera.position.z) * entryEase * delta * 2;
 
-        // Target stays on upper body
+        // Target stays on upper body (eased, so leaving the face shot doesn't snap)
         const lookY = modelCenter.y + modelHeight * 0.15;
-        controls.target.set(modelCenter.x, lookY, modelCenter.z);
+        _want.set(modelCenter.x, lookY, modelCenter.z);
+        controls.target.lerp(_want, Math.min(1, delta * 2));
 
         // Switch orbit pattern on schedule
         if (_time > _nextSwitchAt) {
@@ -263,6 +307,10 @@ export function createCameraOrbitSystem(camera, controls, THREE) {
         return enabled;
     }
 
+    function setHead(head, root) { _head = head || null; _root = root || null; }
+    function setSpeaking(on) { _speaking = !!on; }
+    function setFaceLock(on) { _faceLock = !!on; if (on) _lastUserInput = 0; return _faceLock; }
+
     function isEnabled() { return enabled; }
     function isActive() { return active; }
 
@@ -279,6 +327,9 @@ export function createCameraOrbitSystem(camera, controls, THREE) {
         isActive,
         setModelInfo,
         randomStart,
+        setHead,
+        setSpeaking,
+        setFaceLock,
         cleanup,
     };
 }

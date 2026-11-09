@@ -497,11 +497,26 @@ function _surfacesStripHTML(p) {
 // Plugins with an "environment" manifest section run their services in a
 // dedicated conda env (sapphire-plugin-<name>). Backend: core/plugin_envs.py.
 
+// A service that is up but not ready yet, or failed to start
+// (core/service_health.py, for services declaring "health").
+function _svcNotReady(env) {
+    return (env?.services || []).map(s => s.health).find(h => h && h.state !== 'ready') || null;
+}
+
+function _svcText(h) {
+    if (h.state === 'error') return `Failed to start: ${h.error || 'see user/logs'}`;
+    const p = h.progress, pct = p?.total ? ` ${Math.floor(100 * p.done / p.total)}%` : '';
+    return `Starting - ${h.phase || 'working'}${pct}...`;
+}
+
 function _envStripHTML(p) {
     const env = p.env;
-    if (!env?.required || env.state === 'ready') return '';
     let text, btn = '';
-    if (env.state === 'building') {
+    if (!env?.required || env.state === 'ready') {
+        const h = _svcNotReady(env);
+        if (!h) return '';
+        text = _svcText(h);
+    } else if (env.state === 'building') {
         text = 'Building environment...';
     } else if (env.state === 'stale') {
         text = 'Environment outdated';
@@ -624,6 +639,32 @@ async function _startEnvBuild(el, ctx, name) {
 }
 
 const envPolling = new Set();
+const svcPolling = new Set();
+
+// Follow a starting service until it is ready or failed (~30 min cap).
+async function _pollSvc(el, ctx, name) {
+    if (svcPolling.has(name)) return;
+    svcPolling.add(name);
+    try {
+        for (let i = 0; i < 900; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            let status;
+            try {
+                const res = await fetch(`/api/plugins/${name}/env-status`);
+                if (!res.ok) return;
+                status = await res.json();
+            } catch { continue; }
+            const cached = ctx.pluginList?.find(p => p.name === name);
+            if (!cached) return;
+            cached.env = status;
+            _syncEnvStrip(el, cached);
+            const h = _svcNotReady(status);
+            if (!h || h.state === 'error') return;
+        }
+    } finally {
+        svcPolling.delete(name);
+    }
+}
 
 async function _pollEnvBuild(el, ctx, name) {
     if (envPolling.has(name)) return;
@@ -1044,6 +1085,7 @@ export default {
         // (envPolling guards against duplicates across re-renders).
         (ctx.pluginList || []).forEach(p => {
             if (p.env?.state === 'building') _pollEnvBuild(el, ctx, p.name);
+            else if (['starting', 'loading'].includes(_svcNotReady(p.env)?.state)) _pollSvc(el, ctx, p.name);
         });
 
         if (el._pluginsBound) return;

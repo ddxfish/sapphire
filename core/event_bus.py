@@ -116,7 +116,20 @@ class EventBus:
             for t in event_types:
                 hooks[t] = hooks.get(t, ()) + (fn,)
             self._hooks = hooks
-    
+
+    def off(self, event_types, fn):
+        """Undo on(): a stopped daemon must not leave its listener behind
+        (a plugin reload would otherwise stack a second copy)."""
+        with self._lock:
+            hooks = dict(self._hooks)
+            for t in event_types:
+                left = tuple(f for f in hooks.get(t, ()) if f is not fn)
+                if left:
+                    hooks[t] = left
+                else:
+                    hooks.pop(t, None)
+            self._hooks = hooks
+
     def _async_put(self, sub_id, aq, event):
         """Runs ON the subscriber's event loop. Catches QueueFull where the
         bus can actually react: the mark is read by the next publish, which

@@ -1,0 +1,18 @@
+{
+  "_about": "Viseme -> ARKit blendshape recipes. One table for every renderer (three.js sidebar, the Python screen renderer). Keys ending in '*' mean both Left and Right.",
+  "sil": {},
+  "PP": {"mouthClose": 0.35, "mouthPress*": 0.45, "mouthRollLower": 0.25, "mouthRollUpper": 0.15},
+  "FF": {"jawOpen": 0.08, "mouthRollLower": 0.55, "mouthUpperUp*": 0.25},
+  "TH": {"jawOpen": 0.15, "tongueOut": 0.25, "mouthStretch*": 0.1},
+  "DD": {"jawOpen": 0.2, "mouthStretch*": 0.12, "mouthUpperUp*": 0.08},
+  "kk": {"jawOpen": 0.25, "mouthStretch*": 0.1},
+  "CH": {"jawOpen": 0.12, "mouthFunnel": 0.45, "mouthPucker": 0.2, "mouthUpperUp*": 0.1},
+  "SS": {"jawOpen": 0.06, "mouthStretch*": 0.3, "mouthSmile*": 0.12, "mouthUpperUp*": 0.1},
+  "nn": {"jawOpen": 0.14, "mouthStretch*": 0.08},
+  "RR": {"jawOpen": 0.14, "mouthPucker": 0.3, "mouthFunnel": 0.25},
+  "aa": {"jawOpen": 0.62, "mouthLowerDown*": 0.2, "mouthStretch*": 0.08},
+  "E":  {"jawOpen": 0.34, "mouthStretch*": 0.3, "mouthSmile*": 0.15, "mouthLowerDown*": 0.1},
+  "I":  {"jawOpen": 0.2, "mouthSmile*": 0.32, "mouthStretch*": 0.25},
+  "O":  {"jawOpen": 0.42, "mouthFunnel": 0.5, "mouthPucker": 0.15},
+  "U":  {"jawOpen": 0.18, "mouthPucker": 0.6, "mouthFunnel": 0.25}
+}

@@ -6,6 +6,7 @@ import { createEnvironment } from './environment.js';
 import { createCameraOrbitSystem } from './camera-orbits.js';
 import { createPlayerController } from './player-controller.js';
 import { createMissileCommand } from './missile-command.js';
+import { createMouth } from './mouth.js';
 
 // Routed through Sapphire's /cdn-cache/ proxy — first request fetches from
 // esm.sh and saves to user/cdn_cache/, subsequent serves from disk. ?bundle
@@ -38,38 +39,24 @@ const FALLBACK_IDLE_POOL = [
 const FALLBACK_CAMERA = { x: 0, y: 1.3, z: 4.4 };
 const FALLBACK_TARGET = { x: 0, y: 1.1, z: 0 };
 
-// Event → state-name map, split by which rail the event writes.
-//   `null` value means "clear that rail" (the picker then falls to whatever's
-//   below it, e.g. rail 5 variety / rail 6 base). This replaces the old
-//   force-to-'idle' transitions which had to compete with priorities.
-// AI-initiated events express Sapph's internal state — they DO NOT trigger
-// wind-down on rail 2 (her loop is undisturbed while her brain ticks).
-const AI_TRANSITIONS = {
-    [eventBus.Events.AI_TYPING_START]:           'typing',
-    [eventBus.Events.AI_TYPING_END]:             'happy',
-    [eventBus.Events.TTS_PLAYING]:               'speaking',
-    [eventBus.Events.TTS_STOPPED]:               null,
-    [eventBus.Events.TOOL_EXECUTING]:            'toolcall',
-    [eventBus.Events.TOOL_COMPLETE]:             'typing',
-    [eventBus.Events.AGENT_SPAWNED]:             'agent',
-    [eventBus.Events.AGENT_COMPLETED]:           'happy',
-    [eventBus.Events.AGENT_DISMISSED]:           null,
-    [eventBus.Events.CONTINUITY_TASK_STARTING]:  'cron',
-    [eventBus.Events.CONTINUITY_TASK_COMPLETE]:  null,
-};
-// User-initiated events express a human reaching for her. They request
-// wind-down on rail 2 (her loop ends gracefully at next iteration). Values
-// are { state, ttlMs? } — ttlMs auto-clears rail 4 after N ms when no
-// natural follow-up event will (USER_SENT is a brief reaction with no
-// matching end-event; STT events have explicit pairs, no TTL needed).
-const USER_TRANSITIONS = {
-    [eventBus.Events.STT_RECORDING_START]:  { state: 'listening' },
-    [eventBus.Events.STT_RECORDING_END]:    { state: 'processing' },
-    [eventBus.Events.STT_PROCESSING]:       { state: 'processing' },
-    [eventBus.Events.WAKEWORD_DETECTED]:    { state: 'wakeword' },
+// Split brain (2026-11-09): her state, the reaches the server hears, idle
+// variety and the base pose are decided ONCE on the server (brain.py) and
+// arrive as `avatar_state` — every renderer of her shows the same her. This
+// tab keeps only what only it knows:
+//   her tags (rails 1-2), fired as she SAYS them (mouth.js cues) or off the
+//   text when no voice carries the turn; `speaking` from its own voice clock;
+//   and the reaches only a browser sees (typing in the box, a message sent).
+// A human reaching for her (any of these) asks her tag loop to wind down.
+const LOCAL_REACHES = {
     [eventBus.Events.USER_TYPING]:          { state: 'user_typing' },
     [eventBus.Events.USER_SENT]:            { state: 'reading', ttlMs: 3000 },
 };
+const WIND_DOWN_EVENTS = [
+    eventBus.Events.STT_RECORDING_START, eventBus.Events.STT_RECORDING_END,
+    eventBus.Events.STT_PROCESSING, eventBus.Events.WAKEWORD_DETECTED,
+    eventBus.Events.USER_TYPING, eventBus.Events.USER_SENT,
+];
+const TEXT_TAG_HOLD_MS = 500;   // a text tag waits this long to learn whether a voice carries the turn
 
 // Track cleanup between sidebar reloads
 let _cleanup = null;
@@ -412,9 +399,6 @@ export async function init(container) {
     let camPos = { ...FALLBACK_CAMERA };
     let camTarget = { ...FALLBACK_TARGET };
     let modelScale = 1.0;
-    let baseStateTrack = null;  // legacy single base; used as fallback only
-    let timeBuckets = [{ name: 'day', start: 7 }, { name: 'night', start: 21 }];
-    let varietyIntervalMin = 2;
 
     try {
         const resp = await fetch('/api/plugin/avatar/config');
@@ -426,9 +410,6 @@ export async function init(container) {
                 if (modelCfg.track_map) trackMap = { ...FALLBACK_TRACK_MAP, ...modelCfg.track_map };
                 if (modelCfg.idle_pool?.length) idlePool = modelCfg.idle_pool;
                 if (modelCfg.greeting_track !== undefined) greetingTrack = modelCfg.greeting_track;
-                if (modelCfg.base_state) baseStateTrack = modelCfg.base_state;
-                if (modelCfg.time_buckets?.length) timeBuckets = modelCfg.time_buckets;
-                if (modelCfg.variety_interval_min) varietyIntervalMin = modelCfg.variety_interval_min;
                 if (modelCfg.camera) camPos = modelCfg.camera;
                 if (modelCfg.target) camTarget = modelCfg.target;
                 if (modelCfg.scale) modelScale = modelCfg.scale;
@@ -436,75 +417,12 @@ export async function init(container) {
         }
     } catch (e) { /* use fallbacks */ }
 
-    // Normalize pool entries. Legacy entries (track/weight/oneshot, no
-    // `variety` field) were ALL variety tracks — migrate them so old configs
-    // keep cycling. `base` is the list of time-bucket names a track can rest
-    // in (empty = not a base candidate).
-    idlePool = idlePool.map(v => ({
-        track: v.track,
-        weight: v.weight ?? 10,
-        oneshot: v.oneshot ?? false,
-        variety: v.variety ?? true,
-        base: Array.isArray(v.base) ? v.base : [],
-    }));
-
     const MODEL_URL = `/api/avatar/${modelFile}`;
 
-    // Build oneshot set from idle pool config
-    const ONESHOT_TRACKS = new Set(
-        idlePool.filter(v => v.oneshot).map(v => v.track)
-    );
-    // Also treat known oneshot animations as oneshot
+    // Oneshot set for the rails this tab writes itself (speaking, local
+    // reaches); the brain sends its own rails' modes. Same rule as brain.py.
+    const ONESHOT_TRACKS = new Set(idlePool.filter(v => v.oneshot).map(v => v.track));
     for (const t of ['happy', 'wave', 'attention', 'attention2']) ONESHOT_TRACKS.add(t);
-
-    // Which time bucket are we in right now? The latest bucket whose `start`
-    // hour is <= the current hour wins, wrapping past midnight (so if the
-    // earliest bucket starts at 07:00, hours 00:00–06:59 belong to the last
-    // bucket of the day, e.g. night).
-    function currentBucket() {
-        if (!timeBuckets.length) return null;
-        const hour = new Date().getHours();
-        const sorted = [...timeBuckets].sort((a, b) => a.start - b.start);
-        let pick = sorted[sorted.length - 1];  // wrap: before first start = last bucket
-        for (const b of sorted) {
-            if (hour >= b.start) pick = b;
-        }
-        return pick.name;
-    }
-
-    // Is the current time bucket "quiet" (no variety overlays)? A bucket can
-    // set quiet:true; if unset, 'night' defaults quiet so legacy configs that
-    // predate the flag still let her sleep undisturbed.
-    function isQuietNow() {
-        const name = currentBucket();
-        const b = timeBuckets.find(x => x.name === name);
-        if (!b) return false;
-        return b.quiet ?? (name === 'night');
-    }
-
-    // Random base track eligible for a given bucket. Falls back to the legacy
-    // base_state, then trackMap.idle, then 'idle'.
-    function pickBaseTrack(bucketName) {
-        const eligible = idlePool.filter(v => v.base.includes(bucketName) && actions[v.track]);
-        if (eligible.length) {
-            return eligible[Math.floor(Math.random() * eligible.length)].track;
-        }
-        if (baseStateTrack && actions[baseStateTrack]) return baseStateTrack;
-        return trackMap.idle || 'idle';
-    }
-
-    // Weighted random pick among VARIETY-tagged tracks (the occasional overlay).
-    function pickIdleVariant() {
-        const pool = idlePool.filter(v => v.variety);
-        if (!pool.length) return null;
-        const total = pool.reduce((s, v) => s + v.weight, 0);
-        let roll = Math.random() * total;
-        for (const v of pool) {
-            roll -= v.weight;
-            if (roll <= 0) return v.track;
-        }
-        return pool[pool.length - 1].track;  // float-edge fallback
-    }
 
     // Dynamic imports (cached after first load)
     let THREE, GLTFLoader, OrbitControls;
@@ -565,6 +483,13 @@ export async function init(container) {
             btnOrbit.classList.toggle('orbit-active', on);
         });
     }
+
+    // Face lock: the camera stays on her face, talking or not
+    const btnFace = container.querySelector('#avatar-btn-face');
+    btnFace?.addEventListener('click', () => {
+        const on = orbitSystem.setFaceLock(!btnFace.classList.contains('face-active'));
+        btnFace.classList.toggle('face-active', on);
+    });
 
     // Player mode toggle
     const btnPlayer = container.querySelector('#avatar-btn-player');
@@ -644,29 +569,29 @@ export async function init(container) {
     // Load model
     const loader = new GLTFLoader();
     let mixer, actions = {}, currentAction = null;
+    let mouth = null;   // her lipsync (mouth.js), set once the model is in
 
-    // Rails system. Six slots, top wins. Each writer sets its slot and calls
-    // applyWinningRail() which crossfades to whatever wins. No priority math,
-    // no time-locks — rail ownership replaces both.
+    // Rails system. Six slots, top wins; applyWinningRail() crossfades to
+    // whatever wins. No priority math, no time-locks — rail ownership.
     //
-    //   1 Sapph oneshot — `<<avatar: rumba>>` tags. Pass 1: every Sapph tag
-    //                     lands here as oneshot. Pass 2 splits in loop/once.
-    //   2 Sapph loop    — wired in Pass 2; stays inactive for now.
-    //   3 AI-init SSE   — typing/speaking/toolcall/agent/cron etc.
-    //   4 User-init SSE — listening/user_typing/wakeword/reading etc.
-    //   5 Idle variety  — weighted pick from idle_pool, plays while base wins.
-    //   6 Base state    — always-on background. Pass 3 makes it configurable.
+    //   1 her tag, once  — `<<avatar: rumba>>`        (this tab)
+    //   2 her tag, loop  — `<<avatar: rumba loop>>`   (this tab)
+    //   3 her state      — `speaking` from this tab's voice clock, else the brain's
+    //   4 a human reach  — the brain's (mic, wakeword), else this tab's (typing, sent)
+    //   5 idle variety   — the brain's
+    //   6 base           — the brain's (a plain idle until it answers)
     //
     // Must exist before the greeting flow (inside the model-load try-block).
-    let idleTimer = null;
     const rails = {
         1: { active: false, track: null, mode: 'oneshot' },
         2: { active: false, track: null, mode: 'loop', windDownRequested: false },
-        3: { active: false, track: null, mode: 'loop' },
-        4: { active: false, track: null, mode: 'loop' },
-        5: { active: false, track: null, mode: 'oneshot' },
-        6: { active: false, track: null, mode: 'loop' },
     };
+    let brainRails = { 3: null, 4: null, 5: null, 6: null };   // {track, mode, id} | null
+    let brainSeq = -1;
+    let speakingSlot = null, localReach = null;              // this tab's rail 3 / 4 writers
+    let slotIds = 0;
+    const finished = new Set();   // ids of oneshots that already played out here
+    let playing = null;           // {rail, slot} on screen now
 
     try {
         const gltf = await new Promise((resolve, reject) => {
@@ -713,25 +638,15 @@ export async function init(container) {
             actions[clip.name] = action;
         }
 
-        // Rail 6 (base state) — always-active, time-aware background. Picks a
-        // random base track eligible for the current time bucket (day/night/
-        // …). Re-rolled by the rotation timer below and on bucket crossover.
-        rails[6].active = true;
-        rails[6].track = pickBaseTrack(currentBucket());
-
-        // Unified mixer 'finished' listener — clears oneshot rails when their
-        // clip ends. Replaces per-action listeners that crossfadeTo and the
-        // old avatar_animate used to attach individually.
+        // A oneshot that played out yields its rail: her tag rail clears; a
+        // brain or local slot is marked finished by id (the brain clears it on
+        // its own clock; a rewrite comes with a new id and plays again).
         mixer.addEventListener('finished', (e) => {
-            const clipName = e.action.getClip().name;
-            for (let i = 1; i <= 6; i++) {
-                if (rails[i].active && rails[i].track === clipName && rails[i].mode === 'oneshot') {
-                    rails[i].active = false;
-                    rails[i].track = null;
-                    applyWinningRail();
-                    return;
-                }
-            }
+            if (!playing || playing.slot.mode !== 'oneshot') return;
+            if (e.action.getClip().name !== playing.slot.track) return;
+            if (playing.rail === 1) { rails[1].active = false; rails[1].track = null; }
+            else finished.add(playing.slot.id);
+            applyWinningRail();
         });
 
         // Mixer 'loop' listener for rail 2 wind-down. Fires at each loop
@@ -755,6 +670,13 @@ export async function init(container) {
         } else {
             applyWinningRail();
         }
+
+        // Her mouth (lipsync) + the face shot's anchor (the Head bone). Her
+        // tags fire through the mouth: as she says the words they rode.
+        try { mouth = await createMouth({ root: gltf.scene, audio, eventBus }); }
+        catch (e) { console.warn('[Avatar] mouth unavailable:', e); }
+        mouth?.onCue((q) => writeSapphRail(q.track, q.mode === 'loop' ? 'loop' : 'once'));
+        orbitSystem.setHead(gltf.scene.getObjectByName('Head'), gltf.scene);
 
         // Enable avatar shadow casting for environment
         env.enableAvatarShadows(gltf.scene);
@@ -804,6 +726,7 @@ export async function init(container) {
 
     } catch (e) {
         console.error('[Avatar] Failed to load model:', e);
+        mouth?.dispose();
         canvas.style.display = 'none';
         container.innerHTML += '<div style="text-align:center;color:var(--text-muted);padding:8px;">Model failed to load</div>';
         return;
@@ -812,16 +735,17 @@ export async function init(container) {
     // --- Animation crossfade (renderer primitive) ---
     // Pure three.js execution layer — takes a track name + loop bool, plays
     // it. The rail layer above decides what to play; this just blends.
-    function crossfadeTo(trackName, isOneshot) {
+    // `restart`: the same oneshot written again (a new id) plays from the top.
+    function crossfadeTo(trackName, isOneshot, restart = false) {
         const action = actions[trackName];
         if (!action) return;
         const desiredLoop = isOneshot ? THREE.LoopOnce : THREE.LoopRepeat;
         if (currentAction === action) {
             // Same track — sync loop mode if it changed (e.g. rail 5 picked
             // the same track rail 6 was already playing but with oneshot).
-            if (action.loop !== desiredLoop) {
+            if (action.loop !== desiredLoop || (restart && isOneshot)) {
                 action.setLoop(desiredLoop);
-                if (isOneshot) action.reset();
+                if (isOneshot) action.reset().play();
             }
             return;
         }
@@ -836,65 +760,49 @@ export async function init(container) {
     }
 
     // --- Rail picker ---
-    function winningRail() {
-        for (let i = 1; i <= 6; i++) if (rails[i].active) return i;
-        return null;
+    // A slot counts while its clip exists here and (if a oneshot) it hasn't
+    // played out on this screen yet.
+    function live(s) { return s && s.track && actions[s.track] && !finished.has(s.id); }
+    function winning() {
+        if (rails[1].active) return { rail: 1, slot: { ...rails[1], id: 'r1' } };
+        if (rails[2].active) return { rail: 2, slot: { ...rails[2], id: 'r2' } };
+        const order = [[3, speakingSlot], [3, brainRails[3]], [4, brainRails[4]],
+                       [4, localReach], [5, brainRails[5]], [6, brainRails[6]]];
+        for (const [rail, slot] of order) if (live(slot)) return { rail, slot };
+        const idle = trackMap.idle || 'idle';     // the brain hasn't answered yet
+        return { rail: 6, slot: { track: actions[idle] ? idle : Object.keys(actions)[0], mode: 'loop', id: 'idle' } };
     }
 
     function applyWinningRail() {
-        const id = winningRail();
-        if (id == null) return;
-        const slot = rails[id];
-        if (statusEl) statusEl.textContent = (id === 6) ? '' : (slot.track || '');
-        crossfadeTo(slot.track, slot.mode === 'oneshot');
-        // Falling into base means "nothing is happening" in the user-facing
-        // sense — arm the variety timer. Otherwise cancel any pending pick.
-        if (id === 6) scheduleIdleVariant();
-        else clearTimeout(idleTimer);
+        const win = winning();
+        if (!win.slot.track) return;
+        const restart = !playing || playing.slot.id !== win.slot.id;
+        if (statusEl) statusEl.textContent = (win.rail === 6) ? '' : win.slot.track;
+        crossfadeTo(win.slot.track, win.slot.mode === 'oneshot', restart);
+        playing = win;
     }
 
     // --- Rail writers ---
-    function writeAIRail(state) {
-        if (state == null) {
-            rails[3].active = false;
-            rails[3].track = null;
-        } else {
-            const track = trackMap[state] || state;
-            rails[3].active = true;
-            rails[3].track = track;
-            rails[3].mode = ONESHOT_TRACKS.has(track) ? 'oneshot' : 'loop';
+    // A reach only this browser sees (typing in the box, a message sent).
+    let _userRailTtlTimer = null;
+    function writeLocalReach(state, ttlMs) {
+        clearTimeout(_userRailTtlTimer);
+        const track = trackMap[state] || state;
+        localReach = { track, mode: ONESHOT_TRACKS.has(track) ? 'oneshot' : 'loop', id: `u${++slotIds}` };
+        // Optional TTL: events without natural end-pairs (USER_SENT)
+        // self-expire so she doesn't get stuck in their pose.
+        if (ttlMs) {
+            _userRailTtlTimer = setTimeout(() => { localReach = null; applyWinningRail(); }, ttlMs);
         }
         applyWinningRail();
     }
 
-    let _userRailTtlTimer = null;
-    function writeUserRail(state, ttlMs) {
-        clearTimeout(_userRailTtlTimer);
-        if (state == null) {
-            rails[4].active = false;
-            rails[4].track = null;
-        } else {
-            const track = trackMap[state] || state;
-            rails[4].active = true;
-            rails[4].track = track;
-            rails[4].mode = ONESHOT_TRACKS.has(track) ? 'oneshot' : 'loop';
-            // Wind-down request: a human is reaching for her. If her loop
-            // (rail 2) is currently active, mark it for graceful end at the
-            // next clip iteration boundary. The mixer 'loop' listener clears
-            // rail 2 when this flag is set, then the picker falls through.
-            if (rails[2].active) rails[2].windDownRequested = true;
-            // Optional TTL: events without natural end-pairs (USER_SENT)
-            // self-expire so she doesn't get stuck in their pose. Resets on
-            // every write — STT_RECORDING_START with no ttlMs cancels any
-            // prior USER_SENT timer (the new state supersedes).
-            if (ttlMs) {
-                _userRailTtlTimer = setTimeout(() => {
-                    rails[4].active = false;
-                    rails[4].track = null;
-                    applyWinningRail();
-                }, ttlMs);
-            }
-        }
+    // `speaking` follows this tab's own voice clock (mouth.js): the browser
+    // lane never fires TTS_PLAYING, and the brain can't know when a tab plays.
+    function setSpeakingSlot(on) {
+        if (on === !!speakingSlot) return;
+        const track = trackMap.speaking || 'attention';
+        speakingSlot = on ? { track, mode: ONESHOT_TRACKS.has(track) ? 'oneshot' : 'loop', id: `s${++slotIds}` } : null;
         applyWinningRail();
     }
 
@@ -920,88 +828,48 @@ export async function init(container) {
             rails[1].active = true;
             rails[1].track = track;
             rails[1].mode = 'oneshot';
+            playing = null;           // the same tag again plays from the top
         }
         applyWinningRail();
     }
 
-    function writeIdleRail(track) {
-        if (!actions[track]) return;
-        rails[5].active = true;
-        rails[5].track = track;
-        // Variety ALWAYS plays once and returns to base — even tracks that
-        // would normally loop. A variety overlay is a brief gesture, not a
-        // sustained state; without this, a non-oneshot pick (e.g. `typing`)
-        // would loop for the whole variety interval. The mixer 'finished'
-        // listener clears rail 5 when the clip ends → picker returns to base.
-        rails[5].mode = 'oneshot';
+    // --- The brain's rails (brain.py) ---
+    function takeBrain(snap) {
+        if (!snap?.rails) return;
+        brainRails = { 3: null, 4: null, 5: null, 6: null };
+        for (const k of [3, 4, 5, 6]) brainRails[k] = snap.rails[k] || null;
+        brainSeq = snap.seq ?? brainSeq;
         applyWinningRail();
     }
-
-    // --- Idle variety + base rotation ---
-    // On each cycle: re-roll rail 6's base track for the CURRENT time bucket
-    // (this also catches day↔night crossover for free — pickBaseTrack reads
-    // the clock), then fire a variety overlay if she's idle. Oneshot variety
-    // auto-cycles via the mixer 'finished' listener; loop variety re-schedules
-    // here. Interval is the user's variety_interval_min (with ±30% jitter).
-    function scheduleIdleVariant() {
-        clearTimeout(idleTimer);
-        const baseMs = Math.max(0.5, varietyIntervalMin) * 60000;
-        const delay = baseMs * (0.7 + Math.random() * 0.6);
-        idleTimer = setTimeout(() => {
-            // Re-roll base for the current bucket. Applies on next fall-through
-            // to rail 6 (after variety) or immediately if nothing else plays.
-            const freshBase = pickBaseTrack(currentBucket());
-            if (winningRail() !== 6) {
-                rails[6].track = freshBase;  // shows when she next falls idle
-                scheduleIdleVariant();
-                return;
-            }
-            // Quiet bucket (e.g. night): rotate the base pose but fire NO
-            // variety overlay — she rests undisturbed. Keep rescheduling so
-            // base rotation continues and we catch the bucket crossover.
-            if (isQuietNow()) {
-                rails[6].track = freshBase;
-                applyWinningRail();
-                scheduleIdleVariant();
-                return;
-            }
-            const track = pickIdleVariant();
-            if (track && actions[track]) {
-                rails[6].track = freshBase;  // she'll settle here when variety ends
-                writeIdleRail(track);  // oneshot — mixer 'finished' re-arms via rail-6 return
-            } else {
-                // No variety tracks configured — just rotate the base pose.
-                rails[6].track = freshBase;
-                applyWinningRail();
-                scheduleIdleVariant();
-            }
-        }, delay);
-    }
-
-    // Wire SSE events — AI-init writers feed rail 3, user-init feed rail 4.
     const unsubs = [];
-    for (const [event, state] of Object.entries(AI_TRANSITIONS)) {
-        // D4: the operator's avatar reflects HER local state — ignore a phone
-        // call / background conversation's turn (AI_TYPING carries foreign; TTS
-        // carries surface). Events without these flags pass through unchanged.
-        const unsub = eventBus.on(event, (data) => {
-            if (data?.foreign || data?.surface === 'phone') return;
-            writeAIRail(state);
-        });
-        if (unsub) unsubs.push(unsub);
+    unsubs.push(eventBus.on('avatar_state', takeBrain));
+    fetch('/api/plugin/avatar/state').then(r => r.ok ? r.json() : null).then(snap => {
+        if (running && snap && (snap.seq ?? 0) >= brainSeq) takeBrain(snap);
+    }).catch(() => { /* a plain idle until the brain speaks */ });
+
+    // A human reaching for her: the browser-only reaches write rail 4 here,
+    // and every reach asks her tag loop (rail 2) to wind down at its next bar.
+    for (const [event, cfg] of Object.entries(LOCAL_REACHES)) {
+        unsubs.push(eventBus.on(event, () => writeLocalReach(cfg.state, cfg.ttlMs)));
     }
-    for (const [event, cfg] of Object.entries(USER_TRANSITIONS)) {
-        const unsub = eventBus.on(event, () => writeUserRail(cfg.state, cfg.ttlMs));
-        if (unsub) unsubs.push(unsub);
+    for (const event of WIND_DOWN_EVENTS) {
+        unsubs.push(eventBus.on(event, () => { if (rails[2].active) rails[2].windDownRequested = true; }));
     }
 
-    // Sapph-triggered animations: <<avatar: trackname [once|loop]>>.
-    // mode='loop' lands on rail 2 (held until she replaces it or user-init
-    // event triggers wind-down). mode='once' (default) lands on rail 1
-    // (clears on clip-end). Unknown/missing mode → 'once'.
+    // Her tags off the TEXT (api.js `source: 'text'`) fire only when no voice
+    // carries this turn: with a voice, the same tag rides the mouth curve and
+    // fires as she says it (above). `avatar_voice` comes from the server when
+    // a voice starts, on any lane; the hold covers the two wires' race.
+    // A user's own typed tags (no source) fire at once.
+    let turnAt = 0, voiceAt = -1;
+    unsubs.push(eventBus.on(eventBus.Events.AI_TYPING_START, (d) => { if (!d?.foreign) turnAt = performance.now(); }));
+    unsubs.push(eventBus.on('avatar_voice', () => { voiceAt = performance.now(); }));
     const avatarUnsub = eventBus.on('avatar_animate', (data) => {
-        const { track, mode } = data || {};
-        if (track) writeSapphRail(track, mode === 'loop' ? 'loop' : 'once');
+        const { track, mode, source } = data || {};
+        if (!track) return;
+        const go = () => writeSapphRail(track, mode === 'loop' ? 'loop' : 'once');
+        if (source !== 'text') return go();
+        setTimeout(() => { if (running && voiceAt < turnAt) go(); }, TEXT_TAG_HOLD_MS);
     });
     if (avatarUnsub) unsubs.push(avatarUnsub);
 
@@ -1014,6 +882,12 @@ export async function init(container) {
         requestAnimationFrame(animate);
         const delta = clock.getDelta();
         if (mixer) mixer.update(delta);
+        if (mouth) {
+            mouth.update(delta);
+            const sp = mouth.isSpeaking();
+            orbitSystem.setSpeaking(sp);
+            setSpeakingSlot(sp);
+        }
         env.update(delta);
         if (playerCtrl.isEnabled()) {
             playerCtrl.update(delta);
@@ -1030,11 +904,11 @@ export async function init(container) {
     // Cleanup
     const _thisCleanup = () => {
         running = false;
-        clearTimeout(idleTimer);
         clearTimeout(_userRailTtlTimer);
         clearInterval(_micPoll);
         unsubs.forEach(fn => fn());
         _chatUnsubs.forEach(fn => fn());
+        mouth?.dispose();
         document.removeEventListener('keydown', _onPlayerAutoActivate);
         document.removeEventListener('keydown', _onGameKey);
         missileGame.cleanup();

@@ -102,6 +102,47 @@ class SpeechChunker:
         self._raw_buf = ""
         self._clean_buf = ""
         self._chunk_index = 0
+        # Avatar tags ride the chunk they were written in: each stripped tag
+        # leaves a private-use mark in clean_buf, and the chunk that carries
+        # the mark carries the tag ({track, mode, pos} in its `avatar` list).
+        # A mark with no words after it in its chunk moves to the next chunk;
+        # past the last chunk it lands in `tail` (spoken-after-everything).
+        self._tags: dict = {}
+        self._tag_n = 0
+        self._carry: list = []
+        self.tail: list = []
+
+    def _mark_tags(self, piece: str) -> str:
+        def mark(m):
+            ch = chr(_MARK_BASE + self._tag_n % _MARK_SPAN)
+            self._tag_n += 1
+            self._tags[ch] = {"track": m.group(1), "mode": "loop" if m.group(2) == "loop" else "once"}
+            return f" {ch} "
+        return _AVATAR_RE.sub(mark, piece)
+
+    def _clean(self, piece: str) -> str:
+        return _clean_piece(self._mark_tags(piece))
+
+    def _emit(self, text: str, boundary: str) -> Optional[dict]:
+        """Lift the marks out of a finished chunk into its `avatar` list."""
+        tags, out = list(self._carry), []
+        self._carry = []
+        for ch in re.sub(r"\s+", " ", text):
+            if _MARK_BASE <= ord(ch) < _MARK_BASE + _MARK_SPAN:
+                tag = self._tags.pop(ch, None)
+                if tag:
+                    tags.append({**tag, "pos": len(out)})
+            elif ch != " " or (out and out[-1] != " "):
+                out.append(ch)
+        text = "".join(out).rstrip()
+        if not text:                      # marks alone: they ride the next words
+            self._carry = [{**t, "pos": 0} for t in tags]
+            return None
+        chunk = _make_chunk(text, boundary, self._chunk_index, self.pause_overrides)
+        if tags:
+            chunk["avatar"] = [{**t, "pos": min(len(text), t["pos"])} for t in tags]
+        self._chunk_index += 1
+        return chunk
 
     def push(self, token: str) -> list:
         """Push a token. Returns any chunks now ready to emit."""
@@ -112,7 +153,7 @@ class SpeechChunker:
         if safe_len > 0:
             piece = self._raw_buf[:safe_len]
             self._raw_buf = self._raw_buf[safe_len:]
-            self._clean_buf += _clean_piece(piece)
+            self._clean_buf += self._clean(piece)
         return self._drain()
 
     def flush(self) -> list:
@@ -128,15 +169,18 @@ class SpeechChunker:
                     leftover = leftover[:idx]
             if leftover.count("```") % 2 == 1:
                 leftover = leftover[:leftover.rfind("```")]
-            self._clean_buf += _clean_piece(leftover)
+            self._clean_buf += self._clean(leftover)
             self._raw_buf = ""
         out.extend(self._drain())
         # Final chunk for whatever's left (regardless of min_chars)
         final_text = _finish_chunk(self._clean_buf)
+        self._clean_buf = ""
         if final_text:
-            out.append(_make_chunk(final_text, "end", self._chunk_index, self.pause_overrides))
-            self._chunk_index += 1
-            self._clean_buf = ""
+            chunk = self._emit(final_text, "end")
+            if chunk:
+                out.append(chunk)
+        self.tail = self._carry + list(self._tags.values())   # tags no words followed
+        self._carry, self._tags = [], {}
         return out
 
     def _drain(self) -> list:
@@ -159,10 +203,9 @@ class SpeechChunker:
             chunk_text, boundary, remainder = cut
             chunk_text = _finish_chunk(chunk_text)
             self._clean_buf = remainder
-            if not chunk_text:
-                continue
-            out.append(_make_chunk(chunk_text, boundary, self._chunk_index, self.pause_overrides))
-            self._chunk_index += 1
+            chunk = self._emit(chunk_text, boundary) if chunk_text else None
+            if chunk:
+                out.append(chunk)
         return out
 
 
@@ -264,6 +307,13 @@ def _safe_prefix_len(raw: str) -> int:
         while last_lt > 0 and raw[last_lt - 1] == "<":
             last_lt -= 1
         safe = min(safe, last_lt)
+    # A `<<` opener whose `>>` hasn't arrived: `<<avatar: wave>` + `>` split
+    # across tokens passes the check above (its `>` is there) and the HTML
+    # catch-all ate it, leaking the second `>` and losing the tag. Bounded so
+    # a prose `<<` never holds the stream (a tag is well under 64 chars).
+    dbl = raw.rfind("<<", 0, safe)
+    if dbl >= 0 and raw.find(">>", dbl, safe) < 0 and safe - dbl < 64:
+        safe = min(safe, dbl)
 
     # Trailing 1-2 backticks could become a triple → hold back
     s = raw[:safe]
@@ -284,7 +334,11 @@ def _safe_prefix_len(raw: str) -> int:
 # strips exactly what display strips. Listed FIRST in _INLINE_PATTERNS so the
 # `<[^>]+>` catch-all below never sees the token and mangles it into a stray
 # `>` that gets spoken. 2026-05-28.
-_AVATAR_RE = re.compile(r"<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>")
+_AVATAR_RE = re.compile(r"<<avatar:\s*([a-zA-Z0-9_]+)(?:\s+(once|loop|\d+(?:\.\d+)?s))?>>")
+# Private-use marks a stripped tag leaves in the text until its chunk is cut
+# (SpeechChunker._emit lifts them out; the synthesizer never sees one).
+_MARK_BASE, _MARK_SPAN = 0xE000, 0x1000
+_MARKS = "(?:[\\ue000-\\uefff]\\s+)*"   # marks between a sentence end and its next word
 
 # Inline cleanup for safe-prefix pieces. Block tags should already be
 # handled via safe-prefix gating; these patterns are belt-and-suspenders
@@ -391,7 +445,7 @@ def _finish_chunk(text: str) -> str:
 # then whitespace, then uppercase letter. The [A-Z] lookahead guards
 # against "Dr. Smith", "3.14", "3:45 PM" false splits.
 # Capture group 1 = punctuation; group 2 = optional closing quotes/parens.
-_SENTENCE_RE = re.compile(r"([\.!?])([\"'\)\]]*)\s+(?=[A-Z])")
+_SENTENCE_RE = re.compile(r"([\.!?])([\"'\)\]]*)\s+(?=" + _MARKS + r"[A-Z])")
 
 # Casual sentence boundary: same shape but next char is lowercase. Required
 # for Sapphire's casual register ("hello. and yeah.") and post-action runs
@@ -400,7 +454,7 @@ _SENTENCE_RE = re.compile(r"([\.!?])([\"'\)\]]*)\s+(?=[A-Z])")
 # abbreviations are ≤3 letters. False-positives still possible (4+ char
 # abbreviations like "Calif.", "Mass."), accepted as cheap-fix tradeoff vs.
 # the lockup-the-whole-buffer cost for lowercase-heavy responses. 2026-05-20.
-_CASUAL_SENTENCE_RE = re.compile(r"(?<=\w{4})([\.!?])([\"'\)\]]*)\s+(?=[a-z])")
+_CASUAL_SENTENCE_RE = re.compile(r"(?<=\w{4})([\.!?])([\"'\)\]]*)\s+(?=" + _MARKS + r"[a-z])")
 
 # CJK / Arabic / full-width terminators — split unconditionally on these.
 # No abbreviation ambiguity in CJK conventions, and CJK text typically has
@@ -413,7 +467,7 @@ _PARAGRAPH_RE = re.compile(r"\n\s*\n")
 
 # Secondary: ; or : followed by whitespace + uppercase. Only splits when
 # the chunk is already large (see _SECONDARY_SPLIT_FRACTION above).
-_SECONDARY_RE = re.compile(r"([;:])\s+(?=[A-Z])")
+_SECONDARY_RE = re.compile(r"([;:])\s+(?=" + _MARKS + r"[A-Z])")
 
 
 def _find_split(buf: str, max_chars: int, min_chars: int,

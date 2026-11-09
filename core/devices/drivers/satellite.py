@@ -667,7 +667,7 @@ def describe(device, config):
             'example': 'hey_marcus', 'values': '<model name> | own', 'wait': 35}
     told['power'] = {'label': 'Power', 'help': 'restart it or shut it down', 'actions': {
         'restart': {'help': 'restart the whole satellite. Back in about a minute', 'example': ''},
-        'shutdown': {'help': 'switch it off. Someone must unplug and replug it to bring it back',
+        'shutdown': {'help': 'switch it off. Someone must press its RESET key, or unplug and replug it, to bring it back',
                      'example': ''},
     }}
     if 'screen.sleep_after_min' in (device.get('takes') or []):     # a board that sleeps (the pendant): its BOOT key wakes it

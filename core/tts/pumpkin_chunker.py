@@ -117,6 +117,13 @@ class PumpkinChunker:
                     stop_evt.set()
                     return
 
+        # The speakers' clock for anything following her voice (her avatar's
+        # mouth): this chunk starts sounding now. Once per chunk, never per slice.
+        publish("tts_chunk_playing", {"stream_id": chunk.get("stream_id"),
+                                      "index": chunk.get("index"), "seg": chunk.get("seg", 0),
+                                      "surface": "local"},
+                ephemeral=True)
+
         # 100ms slices for interruptibility (matches tts_client streaming path)
         slice_size = max(1, int(self.output_rate * 0.1))
         for i in range(0, len(pcm), slice_size):

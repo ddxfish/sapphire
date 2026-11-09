@@ -139,7 +139,7 @@ class BrowserConversationSource:
             publish(Events.TTS_PLAYING, {"surface": "web"})
         self._send({"type": "tts_chunk",
                     **{k: chunk.get(k) for k in
-                       ("audio_b64", "content_type", "index", "boundary",
+                       ("audio_b64", "content_type", "index", "seg", "boundary",
                         "pause_after_ms", "text", "stream_id")}})
 
     def finish(self):

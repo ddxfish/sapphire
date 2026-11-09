@@ -543,6 +543,18 @@ const _ttsStreamMaybeWarnSilent = () => {
 
 let _ttsStreamCurrent = null;  // {audio, url, blob, pause_after_ms, index, text, boundary}
 
+/** Where this tab's voice is right now, for anything that follows it (her
+ * avatar's mouth). Read-only: never touches playback. Streamed chunk ->
+ * {stream_id, index, seg, t}; the whole-blob lane -> {legacy: true, t}; silent -> null. */
+export const speechClock = () => {
+    const item = _ttsStreamCurrent;
+    if (item?.audio && !item.audio.paused && _ttsStreamPlayer === item.audio) {
+        return { stream_id: _currentStreamId, index: item.index, seg: item.seg || 0, t: item.audio.currentTime };
+    }
+    if (player && !player.paused) return { legacy: true, t: player.currentTime };
+    return null;
+};
+
 const _ttsStreamPlayNext = (gen) => {
     if (gen !== _ttsStreamGen) return;        // stopped + restarted under us
     if (!_ttsStreamActive) return;
@@ -667,7 +679,7 @@ const _ttsStreamPlayNext = (gen) => {
  * the per-chunk Audio() startup gap that was stacking with the intentional
  * pause_after_ms to make speech feel laggy on faster machines.
  */
-export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, pause_after_ms, text, stream_id }) => {
+export const enqueueTtsChunk = ({ audio_b64, content_type, index, seg, boundary, pause_after_ms, text, stream_id }) => {
     if (!audio_b64) return;
     // Drop stragglers from a stream the user just stopped (left-button "stop TTS").
     // Without this, chunks already in flight replay a beat after stop ("pump refill") —
@@ -711,7 +723,7 @@ export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, paus
     _ttsStreamQueue.push({
         audio, url, blob,
         pause_after_ms: pause_after_ms || 0,
-        index, text, boundary,
+        index, seg: seg || 0, text, boundary,
     });
     if (!_ttsStreamActive) {
         _ttsStreamActive = true;

@@ -4,14 +4,18 @@
   "files": {
     "README.md": "sha256:73f35b6a26b80727d543fd25bf1270817abbcc519167a882e2d3ee66b8fd608f",
     "bone_mapper.py": "sha256:57aa0dc284effd5cc50d771550c8977aa81532ef1d5d0745ac9c7809f211784d",
+    "brain.py": "sha256:eb011263af85d7e14c9347bf0c8a1d60b2171d3d5eb61d434c74713004ee0db5",
     "build_avatar.py": "sha256:c6f55d60cc1095575794197dac9f1bd892cb556fd558f8baee279919ba98cc38",
     "build_avatar_sapphire.py": "sha256:01c2a964ed5da5078e085ee93f4a9dbadeb95854ec9e1db25be1343c773bc961",
+    "daemon.py": "sha256:fc3cfbb13c5874144eeb83a15649089c2cc3d0f65744d25c501848519956e9ac",
     "glb_merger.py": "sha256:6baccd4aced1a2fb5d97bc0b679ea58b8f0bc35527abadbc1dd9b3ace99d13ca",
     "glb_parser.py": "sha256:e03aab34f4496a8f866c600e3b67d6d0c8305ac1a00c94cdfc4b809bc72ca09c",
+    "hooks/mouth.py": "sha256:f71a101de5ec129e5c3cff5dba3290c629b53074fc147af7e93045e0298f4e5b",
     "hooks/prompt_inject.py": "sha256:6547e0a79689696928b45f5a941d122a94fe3268e3d0c65c12fe9f7e9cd3d3a7",
-    "plugin.json": "sha256:c35beb4fe96e4bc52615c4014f91af14d254cbb244fa24c5970b480850c7310a",
-    "routes/api.py": "sha256:9b75e9b669ed4d94657e16a23274d354e42f82bdd6138377181fc4075f16e6bb",
-    "web/camera-orbits.js": "sha256:9e401ad6f7207a805a5e507374788a2b1b5c444405a9303a43a97983851f87e7",
+    "mouth.py": "sha256:7598715dfe31c90f59bf4905e06674013b189bc15c25f8d7b839b7a0435060c0",
+    "plugin.json": "sha256:65377ef08aa2e2e929240cb8c9a95e3a99012e078768af182a02966b35daa7ee",
+    "routes/api.py": "sha256:b006a99abdeac1838993c8cd94fc3495106dbb88d462b2fc506bba81d2be4d7c",
+    "web/camera-orbits.js": "sha256:f8fea04c3113efda2c5bda5d066a589d53e4a942f4e4cd954fd167e859d71586",
     "web/environment.js": "sha256:591e515585034d671f849bec899e70b01426fb7ea01e6a4085da4a383e8eaf99",
     "web/index.js": "sha256:a208ba9c362427a279213f1c8c36c4ea130b2614f4f3bfc16b88869ad081f510",
     "web/location-loader.js": "sha256:44e5ff7c32326f83a18e0a66469711960844bc1e6d27d5345b689750fb8e0206",
@@ -20,10 +24,12 @@
     "web/locations/starfield.json": "sha256:2a4e9914a775c368c6d8c9bc0192ab4ca2c39daa83a97eb5498a5577e3b3881f",
     "web/locations/void.json": "sha256:8e71bf5ea3963970a0c042058d067940cd9d32940cb747d434dba54eacf036ff",
     "web/missile-command.js": "sha256:f867d75f6127cf2268c8aa39d7759f88c0ccf7bd76bdbdcb090d32021a5a3fff",
+    "web/mouth.js": "sha256:108a888d3e2e344ce575612f0fb3a640f7ca2999797170996c3765813ebe0fc2",
     "web/objects.js": "sha256:e2cf8b8267153d7a2a9a7c1aac843af391731c01d2d889bf69b8bf048f5a1775",
     "web/player-controller.js": "sha256:6df8289350f01f185f7c8c4d9e39f9d762b5aa05de367ed3deb39e6c9b4d8450",
-    "web/sidebar.html": "sha256:6c581eb1c7617da8158c7dd5cf8209013649af3c705925f55ce0ffc3ee2a0b07",
-    "web/sidebar.js": "sha256:5e8182b25d11632f04af6f3900b753cf2fe6b54fcd090347e8b1067588f11805"
+    "web/sidebar.html": "sha256:46fc4360bcbbed5cdd24cd53032d172d0eff03f2aa06559112d154d0b0c1ffa5",
+    "web/sidebar.js": "sha256:1c985b7d618ed87f4796653c35bea453c2f281e3f62793d47531a159611eaf5e",
+    "web/visemes.json": "sha256:d59fd0d349b1b2fec3d70597da36d56931956e89dc8c1675af83a1a704e086ac"
   },
-  "signature": "qojTDGotcbV2zTyt4ibBmTHNLeGf+LWDYHnkXab+XEkuCK63Mqhtru/VaBHISwncmJD8fGtsw45FbxPLRrlnBw=="
+  "signature": "ibklIfqeFPnK23Ix3iTnnlVKswiix/cYw1FRkINJPG8ODD/BJgKZtM5/wd/yISsmdEbUFYvmBrGVxWv8S/WbAQ=="
 }

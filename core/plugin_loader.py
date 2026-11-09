@@ -2448,7 +2448,8 @@ class PluginLoader:
                 return
             python = str(plugin_envs.env_python(name))
 
-        managers = {}
+        from core import service_health
+        managers, watches = {}, {}
         settings = self.get_plugin_settings(name)
         for svc in services:
             svc_name = svc.get("name", "service")
@@ -2521,11 +2522,16 @@ class PluginLoader:
                 if svc.get("restart", True):
                     pm.monitor_and_restart(check_interval=10)
                 managers[svc_name] = pm
+                url = service_health.health_url(svc, port)
+                if url:
+                    watches[svc_name] = service_health.Watch(
+                        name, svc_name, manifest.get("short_display_name") or name, url, pm.is_running)
                 port_note = f" (port {port})" if port else ""
                 logger.info(f"[PLUGINS] Started service '{svc_name}' for {name}{port_note}")
 
         if managers:
             info["service_managers"] = managers
+            info["service_watches"] = watches
             info.pop("services_blocked", None)
 
     def _stop_services(self, name: str):
@@ -2533,6 +2539,8 @@ class PluginLoader:
         info = self._plugins.get(name)
         if not info:
             return
+        for watch in (info.pop("service_watches", None) or {}).values():
+            watch.stop()
         managers = info.pop("service_managers", None) or {}
         for svc_name, pm in managers.items():
             try:
@@ -2616,10 +2624,13 @@ class PluginLoader:
                                    "error": b.get("error")}
         if services:
             managers = info.get("service_managers") or {}
+            watches = info.get("service_watches") or {}
             result["services"] = [{
                 "name": s.get("name", "service"),
                 "running": bool(managers.get(s.get("name", "service"))
                                 and managers[s.get("name", "service")].is_running()),
+                "health": (watches[s.get("name", "service")].snapshot()
+                           if s.get("name", "service") in watches else None),
             } for s in services]
             if info.get("services_blocked"):
                 result["services_blocked"] = info["services_blocked"]

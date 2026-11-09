@@ -382,6 +382,7 @@ class StreamingTTSPump:
                 "chunk_count": self._chunk_count,
                 "total_chars": self._total_chars,
                 "interrupted": interrupted,
+                "avatar_tail": list(self.chunker.tail),   # tags after her last words
                 "system": self.system,
             },
         )
@@ -564,6 +565,7 @@ class StreamingTTSPump:
             "boundary": chunk["boundary"],
             "pause_after_ms": chunk["pause_after_ms"],
             "text": text_to_synth,
+            "avatar": chunk.get("avatar"),      # tags this chunk carries (streaming.py)
         }
         if not self._own_bound:
             self._bind_own()
@@ -731,6 +733,10 @@ class StreamingTTSPump:
         if not audio_bytes or not isinstance(audio_bytes, (bytes, bytearray)):
             return None
         content_type = getattr(self.provider, "audio_content_type", "audio/ogg")
+        # A chunk can arrive as several segments (Kokoro streams long text in
+        # pieces): `seg` tells them apart wherever (stream_id, index) was the key.
+        seg = meta.get("seg_n", 0)
+        meta["seg_n"] = seg + 1
         # Hook event uses a dict carrier so plugins can mutate or replace.
         carrier = {"audio_bytes": audio_bytes, "content_type": content_type}
         ev = self._fire_hook(
@@ -738,7 +744,9 @@ class StreamingTTSPump:
             metadata={
                 "stream_id": self._stream_id,
                 "chunk_index": meta["index"],
+                "segment": seg,
                 "chunk_text": meta["text"],
+                "avatar": meta.get("avatar"),
                 "boundary": meta["boundary"],
                 "pause_after_ms": meta["pause_after_ms"],
                 "audio": carrier,
@@ -766,6 +774,7 @@ class StreamingTTSPump:
             "audio_b64": base64.b64encode(final_bytes).decode("ascii"),
             "content_type": final_ct,
             "index": meta["index"],
+            "seg": seg,
             "boundary": meta["boundary"],
             "pause_after_ms": meta["pause_after_ms"],
             "text": meta["text"],
