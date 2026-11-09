@@ -3,6 +3,7 @@
 # The store is a dict, the inbox is real (no system: begin_stream judges),
 # a seat's turn is a recorder, run_turn is a recorder that must never be
 # called for a room. Record: tmp/chat-room-plan.md (BUILD 2026-10-11).
+import re
 import threading
 import time
 from unittest.mock import patch
@@ -157,6 +158,16 @@ def _wait(pred, timeout=3.0):
     return pred()
 
 
+def _c(old):
+    """An old-style cue ("Name: text" lines, "(Your turn, X.)") in the quoted form (Krem 2026-11-08)."""
+    out = []
+    for part in old.split("\n\n"):
+        m = re.match(r"\(Your turn, (.+)\.\)$", part)
+        name, sep, text = part.partition(": ")
+        out.append(rooms._your_turn(m.group(1)) if m else part if part.startswith("(") or not sep else rooms._quoted(name, text))
+    return "\n\n".join(out)
+
+
 def _salon(two=True):
     chat = rooms.create('salon', 'Talk about the boat.')
     a = rooms.add_seat(chat, 'sapphire')
@@ -204,14 +215,14 @@ def test_projection_keys_on_seat_id_and_labels_the_rest(world):
     ]
     _, room = rooms._room(chat)
     hist, cue, _ = rooms.projection(rows, {'id': a['id'], 'name': 'Sapphire'}, rooms._names(room))
-    assert hist == [{'role': 'user', 'content': 'Krem: Evening, both.'},
+    assert hist == [{'role': 'user', 'content': _c('Krem: Evening, both.')},
                     {'role': 'assistant', 'content': 'Evening, Krem.'}]
-    assert cue == 'Sapphire 2: Hi.\n\nKrem: Boat talk?\n\nVisitor: hello from outside\n\n(Your turn, Sapphire.)'
+    assert cue == _c('Sapphire 2: Hi.\n\nKrem: Boat talk?\n\nVisitor: hello from outside\n\n(Your turn, Sapphire.)')
     # the twin sees Sapphire's line as someone else's, never as its own
     hist_b, cue_b, _ = rooms.projection(rows, {'id': b['id'], 'name': 'Sapphire 2'}, rooms._names(room))
-    assert hist_b[0]['content'] == 'Krem: Evening, both.\n\nSapphire: Evening, Krem.'
+    assert hist_b[0]['content'] == _c('Krem: Evening, both.\n\nSapphire: Evening, Krem.')
     assert hist_b[1] == {'role': 'assistant', 'content': 'Hi.'}
-    assert cue_b.endswith('(Your turn, Sapphire 2.)')
+    assert cue_b.endswith(_c('(Your turn, Sapphire 2.)'))
     # nothing said yet
     _, cue0, _ = rooms.projection([], {'id': a['id'], 'name': 'Sapphire'}, rooms._names(room))
     assert cue0.startswith('(Nobody has spoken yet.)')
@@ -697,25 +708,26 @@ def test_her_turn_is_one_ask_with_the_lines_since_her_last(world, monkeypatch, c
     door.tools = []
     far_chat, cue, who = door.cues[0]
     assert far_chat == 'room-dev-salon' and who == "the chat room 'salon' on dev"
-    assert cue == 'Krem: Evening, Prime.\n\n(Your turn, Prime.)'
+    assert cue == _c('Krem: Evening, Prime.\n\n(Your turn, Prime.)')
     assert rows[1]['kind'] == 'sapphire'
     # her pass is no line; a round nobody spoke in stops the room with a line of its own
     door.answer = '(pass)'
     rooms.say(chat, 'Anything?')
     assert _wait(lambda: len(door.cues) == 2 and not rooms.state(chat)['running'])
-    assert [r['speaker'] for r in rows] == ['user', seat['id'], 'user', 'room']
+    assert [r['speaker'] for r in rows] == ['user', seat['id'], 'user', 'room', 'room']
+    assert rows[-2]['kind'] == 'pass' and rows[-2]['content'] == '[Prime chose to pass]'   # Krem 2026-11-08: a pass is said
     assert rows[-1]['content'].startswith('Nobody spoke this round, so the room stopped.')
-    assert door.cues[1][1] == 'Krem: Anything?\n\n(Your turn, Prime.)'    # since HER last line, her own left out
+    assert door.cues[1][1] == _c('Krem: Anything?\n\n(Your turn, Prime.)')    # since HER last line, her own left out
     # her door's words for an empty answer are a pass too, never her line
     door.answer = '(she said nothing)'
     rooms.say(chat, 'Hm?')
     assert _wait(lambda: len(door.cues) == 3 and not rooms.state(chat)['running'])
-    assert [r['speaker'] for r in rows][-3:] == ['room', 'user', 'room']
+    assert [r['speaker'] for r in rows][-3:] == ['user', 'room', 'room'] and rows[-2]['content'] == '[Prime said nothing]'
     # ...and so are her door's words WITH the reason (her box's turn report, 2026-10-12)
     door.answer = '(she said nothing: thinking never finished (past 6000 chars with no words, cut off here))'
     rooms.say(chat, 'Hm?')
     assert _wait(lambda: len(door.cues) == 4 and not rooms.state(chat)['running'])
-    assert [r['speaker'] for r in rows][-3:] == ['room', 'user', 'room']
+    assert [r['speaker'] for r in rows][-3:] == ['user', 'room', 'room'] and rows[-2]['content'] == '[Prime said nothing]'
     # silent turns are lines in the LOG, with what her door said (three silent turns in a
     # row looked like lost lines once, field report 2026-10-12)
     said = [r.getMessage() for r in caplog.records if 'passed' in r.getMessage()]
@@ -782,7 +794,8 @@ def test_a_seat_turn_runs_on_her_own_chat_and_says_why_when_silent(world, monkey
         {'type': 'tool_start', 'id': 't1', 'name': 'read_self', 'args': {}},
         {'type': 'tool_end', 'id': 't1', 'name': 'read_self', 'result': '...', 'error': False},
         report(tools=['read_self', 'search_memory'], why='ran read_self, search_memory and ended without words')])
-    assert out == '' and rows == []
+    assert out == '' and [r['content'] for r in rows] == ['[Sapphire said nothing: ran read_self, search_memory and ended without words]']
+    assert rows[0]['kind'] == 'pass' and rows[0]['speaker'] == 'room'
     assert end['dropped'] is True and end['tools'] == ['read_self', 'search_memory'] and end['speaker'] == a['id']
     assert end['why'] == 'ran read_self, search_memory and ended without words'
     assert seen['chat'] == own and seen['keep_prompt'] is True and seen['quiet'] is True and seen['source'] == 'room'
@@ -791,12 +804,12 @@ def test_a_seat_turn_runs_on_her_own_chat_and_says_why_when_silent(world, monkey
     # the model's ceiling
     out, end, rows, _ = _seat_turn_with(world, monkeypatch, chat, [
         report(finish='length', why='the model hit its reply token limit (finish=length) before any words')])
-    assert out == '' and rows == [] and end['dropped'] is True
+    assert out == '' and rows[-1]['content'].startswith('[Sapphire said nothing: the model hit') and end['dropped'] is True
     assert end['why'] == 'the model hit its reply token limit (finish=length) before any words'
     # the pass word: her own choice, dropped on the wire too (the swap used to paint the
     # previous bot's line for a text that has no row)
     out, end, rows, _ = _seat_turn_with(world, monkeypatch, chat, [report(text='(pass)')], text='(pass)')
-    assert out == '' and rows == [] and end['dropped'] is True and end['text'] == '' and end['why'] == "said: '(pass)'"
+    assert out == '' and rows[-1]['content'] == '[Sapphire chose to pass]' and end['dropped'] is True and end['text'] == '' and end['why'] == "said: '(pass)'"
     # words: a line, with the tools she used as its footnote - lifted from HER chat's rows,
     # inputs off the tool_calls row and results off the tool row
     hers = [{'role': 'user', 'content': 'cue'},
@@ -815,7 +828,7 @@ def test_a_seat_turn_runs_on_her_own_chat_and_says_why_when_silent(world, monkey
     assert rows[-1]['content'] == '<think>Boats first.</think>\n\n<think>Two hits.</think>\n\nFound it.'
     # ...and never reaches another seat's cue
     assert rooms.projection(rows, {'id': 'zz', 'name': 'Zed'}, {a['id']: 'Sapphire', 'zz': 'Zed'})[1] \
-        == 'Sapphire: Found it.\n\n(Your turn, Zed.)'
+        == _c('Sapphire: Found it.\n\n(Your turn, Zed.)')
     assert rows[-1]['tools'] == [{'id': 'c1', 'name': 'web_search', 'args': {'q': 'boats'}, 'result': 'Boats are good.'},
                                  {'id': 'c2', 'name': 'read_self', 'args': {}, 'result': 'You are Sapphire.'}]
     assert end['dropped'] is False and end['why'] == '' and end['tools'] == ['web_search', 'read_self']
@@ -823,7 +836,7 @@ def test_a_seat_turn_runs_on_her_own_chat_and_says_why_when_silent(world, monkey
     assert world.llm_chat.session_manager.chats[own]['rows'] == hers
     rooms.append_line(chat, 'user', 'Nice.', 'user', 'Krem')
     _, _, _, seen = _seat_turn_with(world, monkeypatch, chat, [report(text='Ta.')], text='Ta.')
-    assert seen['cue'] == 'Krem: Nice.\n\n(Your turn, Sapphire.)'
+    assert seen['cue'] == _c('Krem: Nice.\n\n(Your turn, Sapphire.)')
     # a lane that raises (a refused chat, ChatBusy for the inbox to retry) raises here too
     from core import cadence
 
@@ -1010,7 +1023,7 @@ def test_a_speakerless_row_is_labelled_the_rooms(world):
     rows = [{'role': 'user', 'content': 'Summary of earlier talk.'},           # a compress summary
             {'role': 'assistant', 'content': 'Fine.', 'speaker': a['id']}]
     hist, cue, _ = rooms.projection(rows, {'id': b['id'], 'name': 'Sapphire 2'}, rooms._names(room))
-    assert hist == [] and cue.startswith('Room: Summary of earlier talk.\n\nSapphire: Fine.')
+    assert hist == [] and cue.startswith(_c('Room: Summary of earlier talk.\n\nSapphire: Fine.'))
 
 
 # ── the blind round ──────────────────────────────────────────────────────────
@@ -1048,16 +1061,16 @@ def test_a_blind_round_cues_every_seat_before_anyone_speaks(world, monkeypatch):
     assert [r['speaker'] for r in rows] == ['user', a['id'], b['id'], 'user']
     assert turns[:2] == [(a['id'], a['id']), (b['id'], b['id'])]         # one after another, each the one speaking
     # both cues of round 1 were read before either spoke: the person's line, not the other seat's answer
-    assert cues[a['id']][0] == 'Krem: Boats?\n\n(Your turn, Sapphire.)'
-    assert cues[b['id']][0] == 'Krem: Boats?\n\n(Your turn, Sapphire 2.)'
+    assert cues[a['id']][0] == _c('Krem: Boats?\n\n(Your turn, Sapphire.)')
+    assert cues[b['id']][0] == _c('Krem: Boats?\n\n(Your turn, Sapphire 2.)')
     assert rows[1]['seen'] == 1 and rows[2]['seen'] == 1                 # where each cue left off
     st = rooms.state(chat)
     assert st['turn'] == a['id'] and st['waiting'] is False
     gate2.set()
     # round 2 is where they read each other and the line typed meanwhile; then the floor is the person's
     assert _wait(lambda: len(cues[b['id']]) == 2 and rooms.state(chat)['waiting'])
-    assert cues[a['id']][1] == f"Sapphire 2: {b['id']} says\n\nKrem: typed while a speaks\n\n(Your turn, Sapphire.)"
-    assert cues[b['id']][1] == f"Sapphire: {a['id']} says\n\nKrem: typed while a speaks\n\n(Your turn, Sapphire 2.)"
+    assert cues[a['id']][1] == _c(f"Sapphire 2: {b['id']} says\n\nKrem: typed while a speaks\n\n(Your turn, Sapphire.)")
+    assert cues[b['id']][1] == _c(f"Sapphire: {a['id']} says\n\nKrem: typed while a speaks\n\n(Your turn, Sapphire 2.)")
     rooms.stop(chat)
     assert _wait(lambda: not rooms.state(chat)['running'])
     # the sidebar's speaking order offers it (not the gear, which nobody found); the rules carry it
@@ -1076,12 +1089,12 @@ def test_a_blind_round_cues_every_seat_before_anyone_speaks(world, monkeypatch):
            {'role': 'assistant', 'content': 'a1', 'speaker': 'A', 'name': 'Ay', 'seen': 1},
            {'role': 'user', 'content': 'more', 'speaker': 'user', 'name': 'Krem'}]
     nm = {'A': 'Ay', 'B': 'Bee', 'user': 'Krem'}
-    assert rooms.projection(rws, {'id': 'A', 'name': 'Ay'}, nm)[1] == 'Bee: b1\n\nKrem: more\n\n(Your turn, Ay.)'
-    assert rooms.projection(rws, {'id': 'B', 'name': 'Bee'}, nm)[1] == 'Ay: a1\n\nKrem: more\n\n(Your turn, Bee.)'
+    assert rooms.projection(rws, {'id': 'A', 'name': 'Ay'}, nm)[1] == _c('Bee: b1\n\nKrem: more\n\n(Your turn, Ay.)')
+    assert rooms.projection(rws, {'id': 'B', 'name': 'Bee'}, nm)[1] == _c('Ay: a1\n\nKrem: more\n\n(Your turn, Bee.)')
     rws[2]['seen'] = 7
-    assert rooms.projection(rws, {'id': 'A', 'name': 'Ay'}, nm)[1] == 'Krem: more\n\n(Your turn, Ay.)'
+    assert rooms.projection(rws, {'id': 'A', 'name': 'Ay'}, nm)[1] == _c('Krem: more\n\n(Your turn, Ay.)')
     del rws[2]['seen']
-    assert rooms.projection(rws, {'id': 'A', 'name': 'Ay'}, nm)[1] == 'Krem: more\n\n(Your turn, Ay.)'
+    assert rooms.projection(rws, {'id': 'A', 'name': 'Ay'}, nm)[1] == _c('Krem: more\n\n(Your turn, Ay.)')
 
 
 def test_stop_ends_a_blind_round_before_the_next_seat(world, monkeypatch):
@@ -1161,7 +1174,7 @@ def test_a_picture_on_a_line_reaches_every_seat_and_stays_with_her(world, monkey
     seat_a = next(s for s in rooms._room(chat)[1]['seats'] if s['id'] == a['id'])
     out, cue, parts = rooms.projection(rows, seat_a, names)
     assert out == []                                           # her view: nothing of hers yet, the cue carries the rest
-    assert cue == 'Krem: (an image)\n\nKrem: Look.\n\n(Your turn, Sapphire.)'
+    assert cue == _c('Krem: (an image)\n\nKrem: Look.\n\n(Your turn, Sapphire.)')
     assert [p['handle'] for p in parts] == ['img:k1', 'img:k2']
     assert '(an image)' in rooms._guest_cue(chat, rooms._room(chat)[1], seat_a)
     # her turn: the pixels ride the cue and her chat keeps her own copy
@@ -1252,7 +1265,7 @@ def test_the_room_is_the_record_and_a_seats_chat_follows_its_edits(world, monkey
     rows = sm.chats[chat]['rows']
     report = lambda **k: {'type': 'turn_report', 'text': '', 'tools': [], 'finish': 'stop', 'why': '', **k}
     rooms.append_line(chat, 'user', 'Who won?', 'user', 'Krem')
-    first = [{'role': 'user', 'content': 'Krem: Who won?\n\n(Your turn, Sapphire.)'},
+    first = [{'role': 'user', 'content': _c('Krem: Who won?\n\n(Your turn, Sapphire.)')},
              {'role': 'assistant', 'content': '<think>Lookup.</think>',
               'tool_calls': [{'id': 'c1', 'type': 'function', 'function': {'name': 'web_search', 'arguments': '{}'}}]},
              {'role': 'tool', 'tool_call_id': 'c1', 'name': 'web_search', 'content': 'The Reds.'},
@@ -1264,7 +1277,7 @@ def test_the_room_is_the_record_and_a_seats_chat_follows_its_edits(world, monkey
     assert sm.chats[own]['settings']['room_sync'] == [rooms._key(rows[0])]  # synced at her cue: the room as it stood
     # an append never rebuilds: her chat keeps the lane's rows exactly
     rooms.append_line(chat, 'user', 'And the score?', 'user', 'Krem')
-    second = [{'role': 'user', 'content': 'Krem: And the score?\n\n(Your turn, Sapphire.)'}, {'role': 'assistant', 'content': 'Three nil.'}]
+    second = [{'role': 'user', 'content': _c('Krem: And the score?\n\n(Your turn, Sapphire.)')}, {'role': 'assistant', 'content': 'Three nil.'}]
     _seat_turn_with(world, monkeypatch, chat, [report(text='Three nil.')], text='Three nil.', rows_after=second)
     assert sm.chats[own]['rows'] == first + second
     assert [r.get('speaker') for r in rows] == ['user', a['id'], 'user', a['id']]
@@ -1275,8 +1288,8 @@ def test_the_room_is_the_record_and_a_seats_chat_follows_its_edits(world, monkey
                                     rows_after=[{'role': 'user', 'content': 'x'}, {'role': 'assistant', 'content': 'The Reds.'}])
     # ...and her chat was rebuilt from the room before her turn: the deleted question and the turn that answered it are gone
     hers = sm.chats[own]['rows']
-    assert hers[:2] == [{'role': 'user', 'content': 'Krem: And the score?\n\n(Your turn, Sapphire.)'}, {'role': 'assistant', 'content': 'Three nil.'}]
-    assert 'Who won?' not in str(hers) and seen['cue'] == 'Krem: Who won, again?\n\n(Your turn, Sapphire.)'
+    assert hers[:2] == [{'role': 'user', 'content': _c('Krem: And the score?\n\n(Your turn, Sapphire.)')}, {'role': 'assistant', 'content': 'Three nil.'}]
+    assert 'Who won?' not in str(hers) and seen['cue'] == _c('Krem: Who won, again?\n\n(Your turn, Sapphire.)')
     assert sm.chats[own]['settings']['room_sync'] == [rooms._key(r) for r in rows[:3]]
     # the view by hand: a blind round's `seen` keeps a line that landed during her turn out of that cue and in the
     # next; a picture rides as the room's part; a row from before turns were kept is her line alone; a silent
@@ -1291,14 +1304,14 @@ def test_the_room_is_the_record_and_a_seats_chat_follows_its_edits(world, monkey
            {'role': 'user', 'content': 'More.', 'speaker': 'user', 'name': 'Krem'},
            {'role': 'assistant', 'content': 'a3', 'speaker': a['id'], 'name': 'Sapphire', 'seen': 99}]
     assert rooms._view(rws, {'id': a['id'], 'name': 'Sapphire'}, names) == [
-        {'role': 'user', 'content': [{'type': 'text', 'text': 'Krem: Look.\n\n(Your turn, Sapphire.)'}, img]},
+        {'role': 'user', 'content': [{'type': 'text', 'text': _c('Krem: Look.\n\n(Your turn, Sapphire.)')}, img]},
         {'role': 'assistant', 'content': 'a1'},
-        {'role': 'user', 'content': 'Bee: b1\n\n(Your turn, Sapphire.)'},
+        {'role': 'user', 'content': _c('Bee: b1\n\n(Your turn, Sapphire.)')},
         {'role': 'assistant', 'content': '<think>t</think>\n\na2'},
-        {'role': 'user', 'content': 'Krem: More.\n\n(Your turn, Sapphire.)'},
+        {'role': 'user', 'content': _c('Krem: More.\n\n(Your turn, Sapphire.)')},
         {'role': 'assistant', 'content': 'a3'}]
     assert rooms._view([{'role': 'assistant', 'content': 'hi', 'speaker': a['id']}], {'id': a['id'], 'name': 'Sapphire'}, names) == [
-        {'role': 'user', 'content': '(Nobody has spoken yet.)\n\n(Your turn, Sapphire.)'}, {'role': 'assistant', 'content': 'hi'}]
+        {'role': 'user', 'content': _c('(Nobody has spoken yet.)\n\n(Your turn, Sapphire.)')}, {'role': 'assistant', 'content': 'hi'}]
 
 
 def test_the_rail_comes_home_empty_and_the_chat_view_paints_on_show():
@@ -1451,7 +1464,7 @@ def test_her_turn_at_the_door_is_a_cue_handed_out_once_and_her_line_back(world, 
     waiter.join(3)
     cue = box['cue']
     assert cue['turn'] and cue['seconds'] == 120 and '<<PASS>>' in cue['note']
-    assert cue['cue'] == 'Krem: Who is at the door?\n\n(Your turn, Cobalt.)'
+    assert cue['cue'] == _c('Krem: Who is at the door?\n\n(Your turn, Cobalt.)')
     assert cue['images'] == [{'data': base64.b64encode(b'PIX').decode('ascii'), 'media_type': 'image/png'}]
     assert cue['about'] == {'room': chat, 'you': 'Cobalt', 'purpose': 'Talk about the boat.', 'people': ['Krem'],
                             'instructions': 'Keep it short.', 'rules': rooms._rules_text(rooms._room(chat)[1])}
@@ -1473,15 +1486,15 @@ def test_her_turn_at_the_door_is_a_cue_handed_out_once_and_her_line_back(world, 
                              {'k': rows[1]['k'], 'who': 'Cobalt', 'text': 'I am.', 'you': True}]
     assert read['your_turn'] is False and read['about']['people'] == ['Krem']
     # the next cue starts after her line: nothing new
-    for words in ('Nothing to add. <<pass>>', ''):
+    for words, said in (('Nothing to add. <<pass>>', '[Cobalt chose to pass]'), ('', '[Cobalt said nothing]')):
         n = len(rows)
         turn = threading.Thread(target=lambda: box.update(line=rooms._seat_turn(chat, seat, rt)))
         turn.start()
         assert _wait(lambda: rt.doors[d['id']].cue is not None)
-        assert rt.doors[d['id']].cue['cue'] == '(Nobody has spoken since your last line.)\n\n(Your turn, Cobalt.)'
+        assert rt.doors[d['id']].cue['cue'] == _c('(Nobody has spoken since your last line.)\n\n(Your turn, Cobalt.)')
         assert rooms.door_post('cobalt', chat, words) == 'Passed.'
         turn.join(3)
-        assert box['line'] == '' and len(rows) == n
+        assert box['line'] == '' and len(rows) == n + 1 and rows[-1]['content'] == said and rows[-1]['kind'] == 'pass'
     assert published[-1][1]['dropped'] and published[-1][1]['why'] == 'said nothing'
 
 
@@ -1777,3 +1790,18 @@ def test_rules_have_ceilings_and_a_colour_is_only_a_colour(world):
         assert rooms.update_seat(chat, a['id'], {'color': ok})['color'] == ok
     for bad in ('red;background:url(https://x/p.png)', 'url(x)', 'expression(alert(1))'):
         assert rooms.update_seat(chat, a['id'], {'color': bad})['color'] == ''
+
+
+def test_a_seats_own_name_comes_off_her_line_and_a_pass_row_never_reaches_a_cue(world):
+    """Krem 2026-11-08: Marcus opened his lines "Marcus: " and a seat parroted the cue
+    (the bare transcript was a format to copy); a pass looked like a skipped turn."""
+    assert rooms._unname('Marcus: Marcus: Whoa.', 'Marcus') == 'Whoa.'
+    assert rooms._unname('**Marcus:** hey', 'marcus') == 'hey'
+    assert rooms._unname('Anita: says hi', 'Marcus') == 'Anita: says hi'
+    nm = {'user': 'Krem', 'room': 'Room', 'A': 'Ay', 'B': 'Bee'}
+    rws = [{'role': 'user', 'content': 'hi', 'speaker': 'user'},
+           {'role': 'user', 'content': '[Bee chose to pass]', 'speaker': 'room', 'kind': 'pass'}]
+    _, cue, _ = rooms.projection(rws, {'id': 'A', 'name': 'Ay'}, nm)
+    assert cue == rooms._quoted('Krem', 'hi') + '\n\n' + rooms._your_turn('Ay') and 'pass' not in cue
+    assert 'pass' not in str(rooms._view(rws + [{'role': 'assistant', 'content': 'yo', 'speaker': 'A'}],
+                                         {'id': 'A', 'name': 'Ay'}, nm))

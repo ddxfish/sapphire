@@ -78,6 +78,7 @@ DOOR_WAIT = 120.0               # seconds her turn waits for her line once she i
 DOOR_PRESENT = 90.0             # seconds since her last call at the door she still counts as here; away = skipped at once
 WAIT_MAX = 120                  # the longest one room_wait parks
 PASS_MARK = '<<PASS>>'          # anywhere in a line: she passes (Krem 2026-10-13, after the phone's <<HANG UP>>)
+PASSED = 'pass'                 # row kind: "X chose to pass." on the room for the person, never in a seat's cue
 SEAT = 'seat'                   # the mode of a local seat's own chat: her tools, her memory, her rows
 TOOL_NOTE_CAP = 8000            # characters of one tool result on a room line's footnote
 CUE_CAP = 7000                  # characters of a guest's cue (her door takes 8000 with the header)
@@ -769,6 +770,29 @@ def _label(row, names):
     return sp or names[NOTICE]          # a row with no speaker (a compress summary) is the room's
 
 
+def _quoted(label, text):
+    """One room line in a cue, quoted as data. A bare "Name: text" transcript was a
+    format the seats copied: Marcus opened his lines "Marcus: ", and a seat answered
+    with the whole cue (Krem 2026-11-08)."""
+    return f'<line from="{str(label).replace(chr(34), "")}">\n{text}\n</line>'
+
+
+def _your_turn(me):
+    return f"(Your turn, {me}. Write only your own reply: plain words, no name in front, no tags.)"
+
+
+def _unname(text, name):
+    """Her line without her own name in front ("Marcus: ...", "**Marcus:** ...")."""
+    if not name:
+        return text
+    pat = re.compile(r'^\s*[*_]*' + re.escape(name) + r'[*_]*\s*:[*_]*\s*', re.I)
+    while True:
+        t = pat.sub('', text, count=1)
+        if t == text:
+            return text
+        text = t
+
+
 def rows_of(chat):
     """The room's rows as stored: user and assistant lines only."""
     msgs, _state, _skips = _sm()._read_store_messages(chat)
@@ -794,8 +818,8 @@ def projection(rows, seat, names):
             buf.clear()
 
     for i, r in enumerate(rows):
-        if not isinstance(r, dict) or r.get('role') not in ('user', 'assistant'):
-            continue                                   # a tool row or thinking never reaches a seat
+        if not isinstance(r, dict) or r.get('role') not in ('user', 'assistant') or r.get('kind') == PASSED:
+            continue                                   # a tool row, thinking or a pass row never reaches a seat
         text = think.strip(_text(r.get('content')))     # her thinking rides on her row, never in a cue
         if not text and _image_parts(r.get('content')):
             text = '(an image)'                          # a picture alone is still a line
@@ -807,20 +831,20 @@ def projection(rows, seat, names):
             out.append({'role': 'assistant', 'content': text})
             last = i
         else:
-            buf.append(f"{_label(r, names)}: {text}")
+            buf.append(_quoted(_label(r, names), text))
     if last is None:
         start = 0
     else:
         seen = rows[last].get('seen')                  # stale (a row deleted before it): the lines since her line
         start = seen if isinstance(seen, int) and 0 <= seen <= last else last + 1
     fresh = [(r, t) for i, r, t in kept if i >= start and r.get('speaker') != seat['id']]
-    new = [f"{_label(r, names)}: {t}" for r, t in fresh]
+    new = [_quoted(_label(r, names), t) for r, t in fresh]
     pics = [p for r, _ in fresh for p in _image_parts(r.get('content'))][-CUE_IMAGES:]
     if new:
         cue = '\n\n'.join(new)
     else:
         cue = '(Nobody has spoken since your last line.)' if out else '(Nobody has spoken yet.)'
-    return out, f"{cue}\n\n(Your turn, {names.get(seat['id'], seat.get('name', ''))}.)", pics
+    return out, f"{cue}\n\n{_your_turn(names.get(seat['id'], seat.get('name', '')))}", pics
 
 
 def _preamble(chat, room, seat, names, first=False):
@@ -834,10 +858,11 @@ def _preamble(chat, room, seat, names, first=False):
         lines.append(f"What this room is for: {room['purpose']}")
     lines.append(f"You are {me}, one of the seats." + (f" The other seats: {', '.join(others)}." if others else '')
                  + f" {names[USER]} is the person here, the human the room is for.")
-    lines.append('Each of your turns starts with the lines spoken since your last one, as "Name: text". Answer them '
-                 'in ONE message: that message is your line in the room. The others answer after you, and you '
-                 'see their replies on your next turn. Speak only as yourself, in your own words; never write '
-                 'lines for anyone else, and do not start your line with your own name.')
+    lines.append('Each of your turns starts with the lines spoken since your last one, each quoted as '
+                 '<line from="Name">...</line>. Answer them in ONE message: that message is your line in the room. '
+                 'The others answer after you, and you see their replies on your next turn. Speak only as yourself, '
+                 'in your own words, as plain text: never quote or repeat the lines back, never write lines for '
+                 'anyone else, no tags, and do not start your line with your own name.')
     lines.append(_rules_text(room))
     if first:
         lines.append('This is your first turn here: read your self-sheet (read_self) before your line, so you '
@@ -996,7 +1021,7 @@ def _view(rows, seat, names):
     me = names.get(seat['id'], seat.get('name', ''))
     out, pending = [], []                              # pending: (index, 'Name: text', image parts) not handed to her yet
     for i, r in enumerate(rows):
-        if not isinstance(r, dict) or r.get('role') not in ('user', 'assistant'):
+        if not isinstance(r, dict) or r.get('role') not in ('user', 'assistant') or r.get('kind') == PASSED:
             continue
         content = r.get('content')
         text, pics = think.strip(_text(content)), _image_parts(content)
@@ -1005,7 +1030,7 @@ def _view(rows, seat, names):
         if not text:
             continue
         if r.get('speaker') != seat['id']:
-            pending.append((i, f"{_label(r, names)}: {text}", pics))
+            pending.append((i, _quoted(_label(r, names), text), pics))
             continue
         seen = r.get('seen')
         cut = seen if isinstance(seen, int) and 0 <= seen <= i else i
@@ -1014,7 +1039,7 @@ def _view(rows, seat, names):
             words = '\n\n'.join(p[1] for p in handed)
         else:
             words = '(Nobody has spoken since your last line.)' if out else '(Nobody has spoken yet.)'
-        words += f"\n\n(Your turn, {me}.)"
+        words += f"\n\n{_your_turn(me)}"
         parts = [x for p in handed for x in p[2]]
         out.append({'role': 'user', 'content': ([{'type': 'text', 'text': words}] + parts) if parts else words})
         turn = r.get('turn')
@@ -1098,6 +1123,14 @@ def append_line(chat, role, text, speaker, name, persona=None, kind=None, tools=
 
 def _notice(chat, text):
     append_line(chat, 'user', text, NOTICE, 'Room')
+
+
+def _pass_line(chat, name, why=''):
+    """A turn that left no line, said on the room so the person knows (Krem
+    2026-11-08: a pass looked like a skipped turn). Never in a cue (_view, projection)."""
+    words = (f"[{name} chose to pass]" if not why else f"[{name} said nothing]" if why == 'said nothing'
+             else f"[{name} said nothing: {why}]")
+    append_line(chat, 'user', words, NOTICE, 'Room', kind=PASSED)
 
 
 def _cause(e):
@@ -1686,6 +1719,7 @@ def _seat_turn(chat, seat, rt, prep=None):
         for t in timer:
             t.cancel()
         rt.streams.pop(seat['id'], None)
+    text = _unname(text, seat.get('name'))
     passed = _passed(text)
     # why there is no line: her own word (pass), the seat clock, or what the lane saw
     # (stopped, the model's token ceiling, tools and no words, nothing at all); '' when she spoke
@@ -1710,9 +1744,10 @@ def _seat_turn(chat, seat, rt, prep=None):
         _notice(rt.chat, f"{seat.get('name')} ran out of time and was skipped.")
         return ''
     if why:
-        # a silent turn is nothing in the room (Krem's rule) but a line in the log: three
-        # silent turns in a row looked like lost lines once (field report 2026-10-12)
+        # a silent turn is never her LINE (Krem's rule), but the room says so (Krem 2026-11-08)
         logger.info(f"[ROOM] '{chat}': {seat.get('name')} passed ({why})")
+        if not rt.stop_flag.is_set():
+            _pass_line(rt.chat, seat.get('name'), '' if passed else why)
         return ''
     return text
 
@@ -1778,13 +1813,16 @@ def _guest_turn(chat, seat, rt, prep=None):
     while t.is_alive() and not rt.stop_flag.wait(0.2):
         pass
     raw = str(box.get('text') or '')
-    text = '' if t.is_alive() or 'error' in box else visible_text(raw).strip()[:8000]
+    text = '' if t.is_alive() or 'error' in box else _unname(visible_text(raw).strip()[:8000], name)
     low = text.strip('() .').lower()
-    if _passed(text) or low.startswith('she said nothing') or low.startswith('nothing came back'):
+    chose = _passed(text)
+    if chose or low.startswith('she said nothing') or low.startswith('nothing came back'):
         text = ''                       # her pass, or her door's words for an empty answer (and why)
     if not text and 'error' not in box:
         logger.info(f"[ROOM] '{chat}': {name} passed ("
                     f"{'abandoned at Stop' if t.is_alive() else 'her door said: ' + repr(raw[:200])})")
+        if not t.is_alive() and not rt.stop_flag.is_set():
+            _pass_line(rt.chat, name, '' if chose else 'said nothing')
     shared = [str(t) for t in (box.get('tools') or []) if t]           # names only, when her box shares them
     why = ('' if text else 'abandoned at Stop' if t.is_alive()
            else f"did not answer: {box['error']}" if 'error' in box else f"her door said: {raw[:120]!r}")
@@ -2047,7 +2085,7 @@ def _door_turn(chat, seat, rt, prep=None):
             break
     answered, raw = d.take_back()
     stopped = rt.stop_flag.is_set()
-    text = '' if stopped or not answered else visible_text(str(raw or '')).strip()[:8000]
+    text = '' if stopped or not answered else _unname(visible_text(str(raw or '')).strip()[:8000], name)
     why = ('abandoned at Stop' if stopped else 'ran out of time' if not answered
            else 'said: ' + repr(text[:80]) if _passed(text) else '' if text else 'said nothing')
     if not why:
@@ -2062,6 +2100,8 @@ def _door_turn(chat, seat, rt, prep=None):
         return ''
     if why:
         logger.info(f"[ROOM] '{chat}': {name} passed ({why})")
+        if not stopped:
+            _pass_line(rt.chat, name, '' if _passed(text) else why)
         return ''
     return text
 

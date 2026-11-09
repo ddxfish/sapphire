@@ -647,7 +647,7 @@ function seatHtml(s) {
                     <label>what you ask of her here</label>
                     <textarea data-f="context" rows="3" placeholder="Goes to her box: the room block in her chat there is re-written when this changes.">${esc(s.context || '')}</textarea>
                 </div>
-                <div class="sb-field"><label><input type="checkbox" data-f="tts" ${s.tts === false ? '' : 'checked'}> speaks her lines aloud here (TTS, the default voice)</label></div>
+                <div class="sb-field"><label><input type="checkbox" data-f="tts" ${s.tts === false ? '' : 'checked'}> speaks their lines aloud here (TTS, the default voice)</label></div>
                 <p class="rm-guest-note">She answers from her own box with her own prompt, model and tools, in her chat "${esc(s.chat || '?')}". Nothing of hers is set here.</p>
                 <button type="button" class="sb-btn-full rm-seat-remove">Remove from the room</button>
             </div>
@@ -663,7 +663,7 @@ function seatHtml(s) {
                     <textarea data-f="context" rows="3" placeholder="Adds to the persona's custom context. e.g. You hold that a hot dog IS a sandwich.">${esc(s.context || '')}</textarea>
                 </div>
                 <div class="sb-field"><label><input type="checkbox" data-f="memory_write" ${s.memory_write ? 'checked' : ''}> may write to memory, people, goals</label></div>
-                <div class="sb-field"><label><input type="checkbox" data-f="tts" ${s.tts === false ? '' : 'checked'}> speaks her lines aloud (TTS)</label></div>
+                <div class="sb-field"><label><input type="checkbox" data-f="tts" ${s.tts === false ? '' : 'checked'}> speaks their lines aloud (TTS)</label></div>
                 <div class="sidebar-section">
                     ${['prompt', 'toolset', 'brain', 'voice'].map(k => `<div class="gs-content" data-sec="${k}"></div>`).join('')}
                 </div>
