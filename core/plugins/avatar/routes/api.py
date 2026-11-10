@@ -52,6 +52,7 @@ def _get_config():
         'inject_prompt': state.get('inject_prompt', True),
         'strip_tags': state.get('strip_tags', False),
         'user_tags': state.get('user_tags', False),
+        'stage': state.get('stage') or {},
     }
 
 
@@ -240,13 +241,26 @@ async def save_config(**kwargs):
         state = _get_state()
         state.save('user_tags', bool(body['user_tags']))
 
+    # She stands in the chat (web/stage.js)
+    if isinstance(body.get('stage'), dict):
+        s = body['stage']
+        chair = s.get('chair')
+        _get_state().save('stage', {
+            'on': bool(s.get('on')),
+            'size': max(8, min(95, int(s.get('size') or 20))),
+            'ghost': max(0, min(100, int(s['ghost'] if s.get('ghost') is not None else 30))),
+            'chair': None if chair is None else max(0, min(100, int(chair))),
+            'couch': bool(s.get('couch')),
+            'desk': bool(s.get('desk')),
+        })
+
     # Update active location
     if 'active_location' in body:
         cfg['active_location'] = body['active_location']
 
     # Shorthand: update just the active model's config
-    _model_keys = ('track_map', 'idle_pool', 'base_state', 'time_buckets',
-                   'variety_interval_min', 'greeting_track', 'camera', 'target')
+    _model_keys = ('track_map', 'idle_pool', 'time_buckets',
+                   'variety_interval_min', 'greeting_track', 'camera', 'target', 'mouth_gain')
     if any(k in body for k in _model_keys):
         active = cfg.get('active_model', '')
         if active:
@@ -259,6 +273,11 @@ async def save_config(**kwargs):
     _save_config(cfg)
     from plugins.avatar import brain
     brain.reload()            # new pool / buckets / model reach her brain now
+    from core.event_bus import publish
+    active = cfg.get('active_model', '')
+    publish('avatar_config', {'active_model': active,
+                              'mouth_gain': (cfg.get('models', {}).get(active) or {}).get('mouth_gain')},
+            ephemeral=True)
     return cfg
 
 

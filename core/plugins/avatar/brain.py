@@ -12,7 +12,14 @@ Each renderer keeps what only it knows: rails 1-2 (her `<<avatar:>>` tags,
 fired on its own playback clock), `speaking` (its own voice clock), and in the
 tab the browser-only reaches (typing in the box, a message sent).
 
-Publishes `avatar_state` {seq, rails: {"3".."6": {track, mode, id} | null}} on
+Her place (she can stand in the chat, web/stage.js): `place` {x, d, spot, id}, x =
+0..100 % across the floor, d = 0..100 % deep into it, spot = a seat that is out
+(couch / desk / chair) or None. A new id = "walk there now": an idle stroll on
+the variety beat, and to her desk when she starts real work (a tool, an agent, a task). Her own `go_…` tags are walked
+by each renderer as she says them; `went()` only keeps x current here for a
+late joiner, same id, so nobody walks twice.
+
+Publishes `avatar_state` {seq, place, rails: {"3".."6": {track, mode, id} | null}} on
 every change; GET /api/plugin/avatar/state is the same snapshot for a late
 joiner. A rail's `id` changes on every write, so a renderer replays a oneshot
 only when the brain wrote it again. Oneshots clear here on the clip's own
@@ -20,6 +27,7 @@ length (read from the GLB): renderers never report back.
 """
 import logging
 import queue
+import re
 import random
 import threading
 import time
@@ -56,6 +64,37 @@ FALLBACK_TRACK_MAP = {
     "typing": "defaultanim", "speaking": "attention", "toolcall": "attention2",
     "wakeword": "attention", "happy": "happy", "agent": "thinking", "cron": "thinking",
 }
+STROLL = 0.35             # of variety beats she walks somewhere instead of gesturing
+LINGER = 12.0             # seconds she stands over the chat's text before stepping aside
+COLUMN = (15, 85)         # percent across: between these she is over the messages
+SPOTS = {"left": {"x": 6}, "right": {"x": 94}, "center": {"x": 50}, "middle": {"x": 50},
+         "back": {"d": 100}, "front": {"d": 0}}
+SEATS = ("couch", "desk", "chair")
+WORK = (Events.TOOL_EXECUTING, Events.AGENT_SPAWNED, Events.CONTINUITY_TASK_STARTING)
+_GO = re.compile(r"^go_([a-z0-9]+)(?:_(\d{1,3}))?$", re.I)
+
+
+def parse_go(track, seats=()):
+    """`go_left|right|center` (across), `go_back|front` (depth), `go_40`, `go_40_100`
+    (across, deep), `go_couch|desk|chair` (a seat that is out)
+    -> {x?, d?, spot: None} | {spot} | None. The same grammar as web/stage.js parseGo."""
+    m = _GO.match(track or "")
+    if not m:
+        return None
+    k, deep = m.group(1).lower(), m.group(2)
+    k = "chair" if k == "sit" else k
+    if k in SEATS:
+        return {"spot": k} if k in seats and not deep else None
+    if k in SPOTS:
+        return None if deep else {**SPOTS[k], "spot": None}
+    if not (k.isdigit() and len(k) <= 3):
+        return None
+    to = {"x": min(100, int(k)), "spot": None}
+    if deep:
+        to["d"] = min(100, int(deep))
+    return to
+
+
 FALLBACK_POOL = [
     {"track": "idle", "weight": 60}, {"track": "defaultanim", "weight": 10},
     {"track": "listening", "weight": 10}, {"track": "attention", "weight": 5, "oneshot": True},
@@ -73,6 +112,7 @@ class Brain:
         self.seq = 0
         self._ids = 0
         self._due = {}                    # name -> monotonic deadline
+        self.place = {"x": 94, "d": 0, "spot": None, "id": 0}
         self._load()
 
     # ── config ───────────────────────────────────────────────────────────────
@@ -88,12 +128,16 @@ class Brain:
                       "oneshot": v.get("oneshot", False), "variety": v.get("variety", True),
                       "base": v.get("base") if isinstance(v.get("base"), list) else []}
                      for v in pool if v.get("track")]
-        self.base_state = m.get("base_state")
         self.buckets = m.get("time_buckets") or [{"name": "day", "start": 7}, {"name": "night", "start": 21}]
         self.interval = max(0.5, float(m.get("variety_interval_min") or 2)) * 60
         self.oneshots = ONESHOT_KNOWN | {v["track"] for v in self.pool if v["oneshot"]}
         self.clips = {t["name"]: t["duration"] for t in extract_tracks(AVATAR_DIR / active)}
         self.enabled = cfg.get("enabled", True) is not False
+        st = cfg.get("stage") or {}
+        self.stage_on = bool(st.get("on"))
+        self.seats = [s for s in SEATS if (st.get(s) is not None if s == "chair" else st.get(s))]
+        if self.place["spot"] not in self.seats:
+            self.place["spot"] = None
 
     def _has(self, track):
         return bool(track) and (not self.clips or track in self.clips)
@@ -118,8 +162,6 @@ class Brain:
         ok = [v["track"] for v in self.pool if name in v["base"] and self._has(v["track"])]
         if ok:
             return random.choice(ok)
-        if self._has(self.base_state):
-            return self.base_state
         return self.track_map.get("idle") or "idle"
 
     def _variety(self):
@@ -154,10 +196,25 @@ class Brain:
         else:
             self._due.pop("variety", None)
 
+    def _go(self, to):
+        self._ids += 1
+        self.place = {**self.place, **to, "id": self._ids}
+        self._aside()
+
+    def _aside(self):
+        """Standing over the text is a visit: arm (or drop) her step back to an edge."""
+        p = self.place
+        if self.stage_on and not p["spot"] and COLUMN[0] < p["x"] < COLUMN[1]:
+            self._due["aside"] = time.monotonic() + LINGER
+        else:
+            self._due.pop("aside", None)
+
     def _on_event(self, etype, data):
         if etype in AI:
             if data.get("foreign") or data.get("surface") == "phone":
                 return False              # a phone call's turn is not hers here
+            if etype in WORK and self.stage_on and "desk" in self.seats and self.place["spot"] != "desk":
+                self._go({"spot": "desk"})                # real work happens at her desk
             state = AI[etype]
             self._write(3, self.track_map.get(state, state) if state else None)
             if etype in (Events.AI_TYPING_START, Events.LLM_ERROR):
@@ -174,10 +231,25 @@ class Brain:
         if name.startswith("r"):
             self._write(int(name[1:]), None)
             return
+        if name == "aside":
+            if self.rails[3]:             # mid-turn: let her finish where she stands
+                self._due["aside"] = time.monotonic() + 4
+            else:
+                self._go({"x": 6 if self.place["x"] < 50 else 94, "spot": None})
+            return
         # the variety cycle: a fresh base for this hour, and a gesture unless it's quiet
         fresh = self._base()
         self._write(6, fresh, "loop")
-        track = None if self._quiet() else self._variety()
+        if self._quiet():
+            return
+        if self.stage_on and random.random() < STROLL:
+            spots = [{"x": x, "d": d, "spot": None} for x in (6, 94) for d in (0, 0, 100)]   # the edges, mostly up front
+            spots += [{"spot": s} for s in self.seats if s != "desk"] * 3                      # she likes a seat
+            here = {k: self.place[k] for k in ("x", "d", "spot")}
+            to = random.choice([s for s in spots if {**here, **s} != here] or spots)
+            self._go(to)
+            return
+        track = None if self.place["spot"] and self.stage_on else self._variety()   # she rests in a seat
         if track:
             self._write(5, track, "oneshot")   # a gesture, even from a looping clip
 
@@ -209,9 +281,19 @@ class Brain:
     def reload(self):
         self._q.put(("_reload", {}))
 
+    def went(self, track):
+        """Her own go tag: renderers walk it as she says it; keep x for a late joiner."""
+        to = parse_go(track, self.seats)
+        if to:
+            with self._lock:
+                self.place = {**self.place, **to}
+                self._aside()
+            self._q.put(("_wake", {}))    # the loop re-reads its deadlines
+
     def snapshot(self):
         with self._lock:
-            return {"seq": self.seq, "rails": {str(k): v for k, v in self.rails.items()}}
+            return {"seq": self.seq, "place": dict(self.place),
+                    "rails": {str(k): v for k, v in self.rails.items()}}
 
     def _run(self):
         while not self._stop.is_set():
@@ -269,6 +351,11 @@ def stop():
 def reload():
     if _brain:
         _brain.reload()
+
+
+def went(track):
+    if _brain:
+        _brain.went(track)
 
 
 def snapshot():

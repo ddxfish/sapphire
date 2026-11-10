@@ -7,6 +7,7 @@ import { createCameraOrbitSystem } from './camera-orbits.js';
 import { createPlayerController } from './player-controller.js';
 import { createMissileCommand } from './missile-command.js';
 import { createMouth } from './mouth.js';
+import { createStage, parseGo, inPlace } from './stage.js';
 
 // Routed through Sapphire's /cdn-cache/ proxy — first request fetches from
 // esm.sh and saves to user/cdn_cache/, subsequent serves from disk. ?bundle
@@ -399,6 +400,7 @@ export async function init(container) {
     let camPos = { ...FALLBACK_CAMERA };
     let camTarget = { ...FALLBACK_TARGET };
     let modelScale = 1.0;
+    let mouthGain = 1.6;
 
     try {
         const resp = await fetch('/api/plugin/avatar/config');
@@ -413,6 +415,7 @@ export async function init(container) {
                 if (modelCfg.camera) camPos = modelCfg.camera;
                 if (modelCfg.target) camTarget = modelCfg.target;
                 if (modelCfg.scale) modelScale = modelCfg.scale;
+                if (modelCfg.mouth_gain) mouthGain = modelCfg.mouth_gain;
             }
         }
     } catch (e) { /* use fallbacks */ }
@@ -570,6 +573,11 @@ export async function init(container) {
     const loader = new GLTFLoader();
     let mixer, actions = {}, currentAction = null;
     let mouth = null;   // her lipsync (mouth.js), set once the model is in
+    let stage = null;   // her legs + the chat stage (stage.js)
+    // the waist split for sitting (crossfadeTo); declared here: the greeting plays before that code runs
+    const LOWER = /^(Hips|Armature|Body|coat_|(Left|Right)(UpLeg|Leg|Foot|Toe))/;
+    const halves = {};
+    let lowAction = null;
 
     // Rails system. Six slots, top wins; applyWinningRail() crossfades to
     // whatever wins. No priority math, no time-locks — rail ownership.
@@ -632,7 +640,9 @@ export async function init(container) {
 
         mixer = new THREE.AnimationMixer(gltf.scene);
 
+        const travel = {};
         for (const clip of gltf.animations) {
+            travel[clip.name] = inPlace(clip);      // walk clips stride in place; legs move her
             const action = mixer.clipAction(clip);
             action.clampWhenFinished = true;
             actions[clip.name] = action;
@@ -673,9 +683,14 @@ export async function init(container) {
 
         // Her mouth (lipsync) + the face shot's anchor (the Head bone). Her
         // tags fire through the mouth: as she says the words they rode.
-        try { mouth = await createMouth({ root: gltf.scene, audio, eventBus }); }
+        try { mouth = await createMouth({ root: gltf.scene, audio, eventBus, gain: mouthGain }); }
         catch (e) { console.warn('[Avatar] mouth unavailable:', e); }
-        mouth?.onCue((q) => writeSapphRail(q.track, q.mode === 'loop' ? 'loop' : 'once'));
+        mouth?.onCue((q) => fireTag(q.track, q.mode));
+        stage = createStage({
+            THREE, scene, renderer, canvas, model: gltf.scene, actions, travel, height: size.y,
+            play: (track) => crossfadeTo(track, false),
+            onArrive: () => { playing = null; applyWinningRail(); },
+        });
         orbitSystem.setHead(gltf.scene.getObjectByName('Head'), gltf.scene);
 
         // Enable avatar shadow casting for environment
@@ -736,9 +751,29 @@ export async function init(container) {
     // Pure three.js execution layer — takes a track name + loop bool, plays
     // it. The rail layer above decides what to play; this just blends.
     // `restart`: the same oneshot written again (a new id) plays from the top.
-    function crossfadeTo(trackName, isOneshot, restart = false) {
-        const action = actions[trackName];
+    // Seated (`seat`): her legs hold the sit clip and only the top half of
+    // the track plays, so she waves, talks and types from her chair without
+    // standing up, and faces the way the seat does.
+    function half(track, low) {
+        const src = actions[track];
+        if (!src) return null;
+        const key = `${track}:${low}`;
+        if (!halves[key]) {
+            const c = src.getClip();
+            halves[key] = mixer.clipAction(new THREE.AnimationClip(c.name, c.duration, c.tracks.filter(t => LOWER.test(t.name) === low)));
+            halves[key].clampWhenFinished = true;
+        }
+        return halves[key];
+    }
+    function crossfadeTo(trackName, isOneshot, restart = false, seat = false) {
+        const action = seat ? half(trackName, false) : actions[trackName];
         if (!action) return;
+        const low = seat ? half(stage.sitClip(), true) : null;
+        if (low !== lowAction) {
+            lowAction?.fadeOut(CROSSFADE_MS / 1000);
+            low?.reset().setLoop(THREE.LoopRepeat).fadeIn(CROSSFADE_MS / 1000).play();
+            lowAction = low;
+        }
         const desiredLoop = isOneshot ? THREE.LoopOnce : THREE.LoopRepeat;
         if (currentAction === action) {
             // Same track — sync loop mode if it changed (e.g. rail 5 picked
@@ -776,7 +811,21 @@ export async function init(container) {
     function applyWinningRail() {
         const win = winning();
         if (!win.slot.track) return;
+        if (stage?.walking()) { playing = null; return; }      // her legs have her; the winner plays on arrival
         const restart = !playing || playing.slot.id !== win.slot.id;
+        if (stage?.seated()) {
+            if (win.rail !== 2) {                               // seated: the winner plays from the waist up
+                let t = win.slot.track, once = win.slot.mode === 'oneshot';
+                if (win.slot === speakingSlot) { t = actions.talking_seated ? 'talking_seated' : t; once = false; }
+                else if (win.rail === 3 && !once && stage.seatName() === 'desk' && actions.typing) t = 'typing';   // working at her desk
+                else if (win.rail >= 5) { t = stage.sitClip(); once = false; }                                    // resting
+                if (statusEl) statusEl.textContent = '';
+                crossfadeTo(t, once, restart, true);
+                playing = win;
+                return;
+            }
+            stage.stand();                                      // a loop of her own (a dance): she gets up
+        }
         if (statusEl) statusEl.textContent = (win.rail === 6) ? '' : win.slot.track;
         crossfadeTo(win.slot.track, win.slot.mode === 'oneshot', restart);
         playing = win;
@@ -833,9 +882,20 @@ export async function init(container) {
         applyWinningRail();
     }
 
+    // Her tags: `go_…` moves her (stage.js), anything else is a clip.
+    function fireTag(track, mode) {
+        if (/^go_/i.test(track)) { stage?.go(parseGo(track, stage.has)); return; }
+        writeSapphRail(track, mode === 'loop' ? 'loop' : 'once');
+    }
+
     // --- The brain's rails (brain.py) ---
+    let placeId = null;
     function takeBrain(snap) {
         if (!snap?.rails) return;
+        if (snap.place && snap.place.id !== placeId) {          // the brain moved her (the first one just puts her there)
+            stage?.go(snap.place, { teleport: placeId === null });
+            placeId = snap.place.id;
+        }
         brainRails = { 3: null, 4: null, 5: null, 6: null };
         for (const k of [3, 4, 5, 6]) brainRails[k] = snap.rails[k] || null;
         brainSeq = snap.seq ?? brainSeq;
@@ -843,6 +903,9 @@ export async function init(container) {
     }
     const unsubs = [];
     unsubs.push(eventBus.on('avatar_state', takeBrain));
+    unsubs.push(eventBus.on('avatar_config', (d) => {        // settings saved: her mouth now
+        if (d?.active_model === modelFile && d.mouth_gain) mouth?.setGain(d.mouth_gain);
+    }));
     fetch('/api/plugin/avatar/state').then(r => r.ok ? r.json() : null).then(snap => {
         if (running && snap && (snap.seq ?? 0) >= brainSeq) takeBrain(snap);
     }).catch(() => { /* a plain idle until the brain speaks */ });
@@ -867,11 +930,77 @@ export async function init(container) {
     const avatarUnsub = eventBus.on('avatar_animate', (data) => {
         const { track, mode, source } = data || {};
         if (!track) return;
-        const go = () => writeSapphRail(track, mode === 'loop' ? 'loop' : 'once');
+        const go = () => fireTag(track, mode);
         if (source !== 'text') return go();
         setTimeout(() => { if (running && voiceAt < turnAt) go(); }, TEXT_TAG_HOLD_MS);
     });
     if (avatarUnsub) unsubs.push(avatarUnsub);
+
+    // --- Step into the chat: the sidebar box becomes her control panel ---
+    const panel = container.querySelector('#avatar-stage-panel');
+    const stSize = container.querySelector('#avatar-stage-size');
+    const stGhost = container.querySelector('#avatar-stage-ghost');
+    const stChairOn = container.querySelector('#avatar-stage-chair-on');
+    const stChairX = container.querySelector('#avatar-stage-chair-x');
+    const stageCfg = { on: false, size: 20, ghost: 30, chair: null, couch: false, desk: false, ...(avatarConfig.stage || {}) };
+    const saveStage = () => fetch('/api/plugin/avatar/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json',
+                   'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+        body: JSON.stringify({ stage: stageCfg }),
+    }).catch(() => { /* this tab still has it */ });
+    function setStage(want, save = true) {
+        if (want) {
+            if (displayMode !== 'sidebar') setDisplayMode('sidebar');
+            stage.setSize(stageCfg.size);
+            stage.setGhost(stageCfg.ghost);
+            stage.setProps(stageCfg);
+            stage.setFace(container.querySelector('#avatar-stage-face'));
+            if (!stage.enter()) return;         // no chat on this page
+        } else {
+            stage.exit();
+        }
+        stageCfg.on = stage.isOn();
+        displayEl.style.display = stageCfg.on ? 'none' : '';
+        if (panel) panel.style.display = stageCfg.on ? '' : 'none';
+        playing = null;
+        applyWinningRail();
+        if (save) saveStage();
+    }
+    if (stage && panel) {
+        if (stSize) stSize.value = stageCfg.size;
+        if (stChairOn) stChairOn.checked = stageCfg.chair != null;
+        if (stChairX) { stChairX.value = stageCfg.chair ?? 88; stChairX.disabled = stageCfg.chair == null; }
+        container.querySelector('#avatar-btn-stage')?.addEventListener('click', () => setStage(true));
+        container.querySelector('#avatar-stage-back')?.addEventListener('click', () => setStage(false));
+        stSize?.addEventListener('input', () => { stageCfg.size = +stSize.value; stage.setSize(stageCfg.size); });
+        stSize?.addEventListener('change', saveStage);
+        if (stGhost) stGhost.value = stageCfg.ghost;
+        stGhost?.addEventListener('input', () => { stageCfg.ghost = +stGhost.value; stage.setGhost(stageCfg.ghost); });
+        stGhost?.addEventListener('change', saveStage);
+        const chairChanged = () => {
+            stageCfg.chair = stChairOn.checked ? +stChairX.value : null;
+            stChairX.disabled = !stChairOn.checked;
+            stage.setProps(stageCfg);
+        };
+        for (const name of ['couch', 'desk']) {
+            const cb = container.querySelector(`#avatar-stage-${name}`);
+            if (!cb) continue;
+            cb.checked = !!stageCfg[name];
+            cb.addEventListener('change', () => {
+                stageCfg[name] = cb.checked;
+                stage.setProps(stageCfg);
+                playing = null;
+                applyWinningRail();
+                saveStage();
+            });
+        }
+        stChairOn?.addEventListener('change', () => { chairChanged(); applyWinningRail(); saveStage(); });
+        stChairX?.addEventListener('input', chairChanged);
+        stChairX?.addEventListener('change', saveStage);
+        panel.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => fireTag(b.dataset.go)));
+        if (stageCfg.on) setStage(true, false);
+    }
 
     // Render loop
     const clock = new THREE.Clock();
@@ -889,6 +1018,11 @@ export async function init(container) {
             setSpeakingSlot(sp);
         }
         env.update(delta);
+        if (stage?.isOn()) {
+            stage.update(delta);
+            stage.render();
+            return;
+        }
         if (playerCtrl.isEnabled()) {
             playerCtrl.update(delta);
         } else {
@@ -909,6 +1043,7 @@ export async function init(container) {
         unsubs.forEach(fn => fn());
         _chatUnsubs.forEach(fn => fn());
         mouth?.dispose();
+        stage?.cleanup();
         document.removeEventListener('keydown', _onPlayerAutoActivate);
         document.removeEventListener('keydown', _onGameKey);
         missileGame.cleanup();
@@ -941,15 +1076,18 @@ export async function init(container) {
     // the WebGL context. Only treat detachment as final after 1s. Previously
     // any momentary detach killed the avatar irreversibly. 2026-05-13.
     let _detachTimer = null;
+    // The watch is THIS instance's: it stops with it and only ever tears down
+    // itself. (It used to call the module's _cleanup, which after a sidebar
+    // rebuild is the NEXT instance's: the old one, seeing its own canvas gone,
+    // killed the new avatar a second after it appeared.)
     const observer = new MutationObserver(() => {
-        if (!document.contains(canvas)) {
+        if (!running) { clearTimeout(_detachTimer); observer.disconnect(); return; }
+        if (!document.contains(canvas) || !document.contains(displayEl)) {   // on the stage the canvas lives in the chat
             if (!_detachTimer) {
                 _detachTimer = setTimeout(() => {
                     _detachTimer = null;
-                    if (!document.contains(canvas)) {
-                        if (_cleanup) _cleanup();
-                        observer.disconnect();
-                    }
+                    if (running && (!document.contains(canvas) || !document.contains(displayEl))) _thisCleanup();
+                    if (!running) observer.disconnect();
                 }, 1000);
             }
         } else if (_detachTimer) {

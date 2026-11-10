@@ -265,6 +265,11 @@
         user-select: none;
     }
     .chat-bar-spacer { flex: 1; }
+    .avatar-stage-btn {
+        border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary);
+        color: var(--text); font-size: 12px; padding: 3px 8px; cursor: pointer; white-space: nowrap;
+    }
+    .avatar-stage-btn:hover { border-color: var(--trim, #4a9eff); }
 </style>
 <div id="avatar-display" style="position:relative; width:100%; padding:0;">
     <canvas id="avatar-canvas" style="width:100%; height:280px; display:block; border-radius:6px;"></canvas>
@@ -278,6 +283,7 @@
         <button class="avatar-ctrl-btn" id="avatar-btn-player" title="Player mode (WASD)">&#x1F6B6;</button>
         <button class="avatar-ctrl-btn" id="avatar-btn-orbit" title="Toggle auto-orbit">&#x27F3;</button>
         <button class="avatar-ctrl-btn" id="avatar-btn-face" title="Keep the camera on her face">&#x1F642;</button>
+        <button class="avatar-ctrl-btn" id="avatar-btn-stage" title="Step into the chat">&#x1F4AC;</button>
         <button class="avatar-ctrl-btn" id="avatar-btn-expand" title="Expand">&#x2922;</button>
         <button class="avatar-ctrl-btn" id="avatar-btn-fullscreen" title="Fullscreen">&#x26F6;</button>
     </div>
@@ -297,6 +303,36 @@
     </div>
 
     <div id="avatar-status" style="position:absolute; bottom:4px; left:0; right:0; text-align:center; font-size:0.7rem; color:var(--text-muted); pointer-events:none;"></div>
+</div>
+<!-- Her control panel while she stands in the chat (stage.js) -->
+<div id="avatar-stage-panel" style="display:none; font-size:0.85em;">
+    <canvas id="avatar-stage-face" width="320" height="320" title="Her face, close up"
+            style="display:block; width:100%; max-width:240px; aspect-ratio:1; margin:0 auto 6px; border-radius:8px; background:rgba(0,0,0,0.35);"></canvas>
+    <label style="display:flex; align-items:center; gap:8px;">Size
+        <input type="range" id="avatar-stage-size" min="8" max="95" step="1" value="20" style="flex:1;">
+    </label>
+    <label style="display:flex; align-items:center; gap:8px; margin-top:4px;" title="How solid she is where she crosses a message: 0 = hidden behind it, 100 = fully over the text">Ghost
+        <input type="range" id="avatar-stage-ghost" min="0" max="100" step="5" value="30" style="flex:1;">
+    </label>
+    <label style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+        <input type="checkbox" id="avatar-stage-chair-on" style="margin:0;"> Chair
+        <input type="range" id="avatar-stage-chair-x" min="0" max="100" step="1" value="88" style="flex:1;" title="Where along the back her chair stands">
+    </label>
+    <div style="display:flex; gap:14px; margin-top:4px;">
+        <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="avatar-stage-couch" style="margin:0;"> Couch (left)</label>
+        <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="avatar-stage-desk" style="margin:0;"> Desk (right)</label>
+    </div>
+    <div style="display:flex; gap:4px; margin-top:6px; flex-wrap:wrap;">
+        <button class="avatar-stage-btn" data-go="go_left" title="Walk to the left edge">&#x25C0; Left</button>
+        <button class="avatar-stage-btn" data-go="go_center">Center</button>
+        <button class="avatar-stage-btn" data-go="go_right" title="Walk to the right edge">Right &#x25B6;</button>
+        <button class="avatar-stage-btn" data-go="go_back" title="Walk deeper into the scene">Back</button>
+        <button class="avatar-stage-btn" data-go="go_front" title="Come up front">Front</button>
+        <button class="avatar-stage-btn" data-go="go_chair" title="Sit in her chair">Chair</button>
+        <button class="avatar-stage-btn" data-go="go_couch">Couch</button>
+        <button class="avatar-stage-btn" data-go="go_desk">Desk</button>
+        <button class="avatar-stage-btn" id="avatar-stage-back" style="margin-left:auto;">To sidebar</button>
+    </div>
 </div>
 <!-- Enabled switch (Krem 2026-08-23): off = the 3D scene is torn down (the
      browser's GPU share comes back, the render loop stops) AND the prompt

@@ -86,7 +86,7 @@ def brain(monkeypatch):
         self.track_map = dict(mod.FALLBACK_TRACK_MAP)
         self.pool = [{"track": "idle", "weight": 1, "oneshot": False, "variety": False, "base": ["day", "night"]},
                      {"track": "wave", "weight": 1, "oneshot": True, "variety": True, "base": []}]
-        self.base_state = None
+        self.stage_on, self.seats = False, []
         self.buckets = [{"name": "day", "start": 0, "quiet": False}]
         self.interval = 60.0
         self.oneshots = mod.ONESHOT_KNOWN | {"wave"}
@@ -138,3 +138,73 @@ def test_rewrite_gets_a_new_id(brain):
     first = brain.rails[3]["id"]
     brain._on_event(Events.AI_TYPING_END, {})
     assert brain.rails[3]["id"] != first
+
+
+# ── her place: go tags and the idle stroll ──────────────────────────────────
+def test_go_grammar():
+    from plugins.avatar.brain import parse_go
+    assert parse_go("go_left") == {"x": 6, "spot": None}
+    assert parse_go("GO_37") == {"x": 37, "spot": None}
+    assert parse_go("go_back") == {"d": 100, "spot": None}
+    assert parse_go("go_30_60") == {"x": 30, "d": 60, "spot": None}
+    assert parse_go("go_couch", ["couch"]) == {"spot": "couch"}
+    assert parse_go("go_sit", ["chair"]) == {"spot": "chair"}
+    assert parse_go("go_desk", ["couch"]) is None       # no desk out
+    assert parse_go("go_moon") is None and parse_go("wave") is None
+
+
+def test_her_go_tag_updates_x_without_a_new_walk(brain):
+    before = brain.place["id"]
+    brain.went("go_back")
+    brain.went("go_left")
+    assert brain.place == {"x": 6, "d": 100, "spot": None, "id": before}
+    brain.seats = ["couch"]
+    brain.went("go_couch")
+    assert brain.place["spot"] == "couch" and brain.place["id"] == before
+
+
+def test_stroll_moves_her_instead_of_a_gesture(brain, monkeypatch):
+    from plugins.avatar import brain as mod
+    brain.stage_on, brain.seats = True, ["chair"]
+    monkeypatch.setattr(mod.random, "random", lambda: 0.0)
+    was = dict(brain.place)
+    brain._tick("variety")
+    assert brain.place["id"] != was["id"]
+    assert {k: brain.place[k] for k in ("x", "d", "spot")} != {k: was[k] for k in ("x", "d", "spot")}
+    assert brain.rails[5] is None
+    assert brain.snapshot()["place"] == brain.place
+
+
+def test_no_base_ticked_rests_on_idle_not_a_hidden_key(brain):
+    brain.pool = [p for p in brain.pool if p["track"] != "idle"]
+    assert brain._base() == "idle"
+
+
+def test_real_work_sends_her_to_her_desk(brain):
+    brain.stage_on, brain.seats = True, ["desk"]
+    brain._on_event(Events.AI_TYPING_START, {})
+    assert brain.place["spot"] is None              # a plain reply: she stays put
+    brain._on_event(Events.TOOL_EXECUTING, {})
+    assert brain.place["spot"] == "desk"
+    at = brain.place["id"]
+    brain._on_event(Events.TOOL_EXECUTING, {})
+    assert brain.place["id"] == at                  # already there
+
+
+def test_the_middle_is_a_visit_she_steps_aside(brain):
+    brain.stage_on = True
+    brain.went("go_40")
+    assert "aside" in brain._due                    # over the text: the clock runs
+    brain.rails[3] = {"track": "typing", "mode": "loop", "id": 1}
+    brain._tick("aside")
+    assert brain.place["x"] == 40 and "aside" in brain._due     # mid-turn she stays
+    brain.rails[3] = None
+    at = brain.place["id"]
+    brain._tick("aside")
+    assert brain.place["x"] == 6 and brain.place["id"] != at and "aside" not in brain._due
+    brain.went("go_right")
+    assert "aside" not in brain._due                # an edge is a place to stay
+    brain.seats = ["chair"]
+    brain.went("go_50")
+    brain.went("go_chair")
+    assert "aside" not in brain._due                # so is a seat

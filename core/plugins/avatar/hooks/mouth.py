@@ -54,6 +54,10 @@ def tts_chunk_audio(event):
         "cues": mouth.cues(meta.get("avatar"), start, end, len(text), curve["dur"]),
     })
     publish("avatar_mouth", curve, ephemeral=True)
+    for cue in curve["cues"]:
+        if cue["track"].lower().startswith("go_"):
+            from plugins.avatar import brain
+            brain.went(cue["track"])
 
 
 def tts_stream_start(event):

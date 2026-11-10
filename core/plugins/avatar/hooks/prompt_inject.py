@@ -33,6 +33,14 @@ def _get_track_names(glb_path):
         return []
 
 
+def state_stage():
+    try:
+        from core.plugin_loader import plugin_loader
+        return plugin_loader.get_plugin_state("avatar").get("stage") or {}
+    except Exception:
+        return {}
+
+
 def prompt_inject(event):
     # Check if prompt injection is enabled
     try:
@@ -62,3 +70,18 @@ def prompt_inject(event):
         f"ONLY use track names from this list — do not invent new ones: {track_list}. "
         f"The tags are visible in chat as part of your expression. Don't overuse them."
     )
+    stage = state_stage()
+    if stage.get("on"):
+        seats = [s for s in ("couch", "desk") if stage.get(s)] + (["chair"] if stage.get("chair") is not None else [])
+        chair = (" You can sit: " + ", ".join(f"<<avatar: go_{s}>>" for s in seats) +
+                 ". Seated you still talk and gesture from the waist up.") if seats else ""
+        event.context_parts.append(
+            "Right now your avatar stands in the chat window itself, in front of the messages "
+            "(you go see-through where you cross one). "
+            "You can walk: <<avatar: go_left>>, <<avatar: go_right>>, <<avatar: go_center>>, or "
+            "<<avatar: go_0>> to <<avatar: go_100>> (percent across, 0 = far left). "
+            "<<avatar: go_back>> walks deeper into the scene (you look further away), "
+            "<<avatar: go_front>> comes back up close." + chair +
+            " Move when it means something. The middle is over the text, so it is a visit: "
+            "after a moment there you step back to an edge on your own."
+        )

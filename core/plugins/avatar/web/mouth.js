@@ -26,7 +26,7 @@ function expand(recipe) {
     return out;
 }
 
-export async function createMouth({ root, audio, eventBus }) {
+export async function createMouth({ root, audio, eventBus, gain = 1.6 }) {
     const meshes = [];
     root.traverse(o => { if (o.morphTargetDictionary && o.morphTargetInfluences) meshes.push(o); });
     if (!meshes.length) return null;
@@ -155,12 +155,13 @@ export async function createMouth({ root, audio, eventBus }) {
             wasSpeaking = speaking;
             const tgt = target(at);
             const k = 1 - Math.exp(-FOLLOW * dt);
-            for (const n of names) cur[n] += ((tgt[n] || 0) - cur[n]) * k;
+            for (const n of names) cur[n] += (Math.min(1, (tgt[n] || 0) * gain) - cur[n]) * k;
             meshes.forEach((m, mi) => {
                 for (const [n, i] of slots[mi]) m.morphTargetInfluences[i] = cur[n];
             });
         },
         isSpeaking: () => performance.now() < speakingUntil,
+        setGain(g) { gain = Math.max(0.2, Math.min(4, +g || 1)); },
         onCue(fn) { cueFns.add(fn); return () => cueFns.delete(fn); },
         dispose() { unsubs.forEach(fn => fn && fn()); timers.forEach(clearTimeout); timers.clear(); cueFns.clear(); },
     };

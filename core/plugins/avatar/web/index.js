@@ -121,6 +121,11 @@ registerPluginSettings({
                         <input type="number" id="avatar-scale" min="0.01" max="100" step="0.1" value="1.0" class="avatar-weight" style="width:70px">
                         <span class="avatar-help" style="margin:0">(1.0 = auto-fit, adjust if too big/small)</span>
                     </div>
+                    <div class="avatar-field" style="margin-top:6px">
+                        <label>Mouth movement</label>
+                        <input type="range" id="avatar-mouth-gain" min="0.5" max="3" step="0.1" value="1.6">
+                        <span class="avatar-help" style="margin:0">1.6×</span>
+                    </div>
                 </div>
 
             </div>
@@ -377,6 +382,13 @@ async function loadTrackMapping(container) {
     // Scale
     const scaleInput = container.querySelector('#avatar-scale');
     if (scaleInput) scaleInput.value = _activeConfig.scale || 1.0;
+    const gainInput = container.querySelector('#avatar-mouth-gain');
+    if (gainInput) {
+        const show = () => { gainInput.nextElementSibling.textContent = (+gainInput.value).toFixed(1) + '×'; };
+        gainInput.oninput = show;
+        gainInput.value = _activeConfig.mouth_gain || 1.6;
+        show();
+    }
 }
 
 function collectConfig(container) {
@@ -415,6 +427,7 @@ function collectConfig(container) {
     // Greeting + scale
     const greeting_track = container.querySelector('#avatar-greeting-track')?.value || null;
     const scale = parseFloat(container.querySelector('#avatar-scale')?.value || '1.0') || 1.0;
+    const mouth_gain = parseFloat(container.querySelector('#avatar-mouth-gain')?.value || '1.6') || 1.6;
 
     return {
         active_model: _activeModel,
@@ -427,6 +440,7 @@ function collectConfig(container) {
                 variety_interval_min,
                 greeting_track,
                 scale,
+                mouth_gain,
             }
         }
     };
