@@ -6,7 +6,7 @@
 //   floor  the canvas moves into #chatbg, over the transcript. x = 0..100 %
 //          across, d = 0..100 % deep: the floor has perspective, her eye line
 //          is the horizon, so walking back she shrinks and rises a little.
-//   seats  couch on the left wall, desk on the right, a chair at the back.
+//   seats  couch on the left wall, desk on the right, a chair and a bed at the back.
 //          Only the one she is using (or walking to) is drawn; the rest fade out.
 //   ghost  where she crosses a bubble SHE goes part see-through (the bubble
 //          stays solid): only her own pixels over the text are touched.
@@ -23,14 +23,15 @@ const EYES = 0.93;              // her eye line, of her height: the horizon
 const SPOTS = { left: { x: 6 }, right: { x: 94 }, center: { x: 50 }, middle: { x: 50 },
                 back: { d: 100 }, front: { d: 0 } };
 // where each seat stands (percent) and which way she faces in it (0 = at us)
-const SEATS = { couch: { x: 11, d: 40, yaw: 0.9 }, desk: { x: 87, d: 40, yaw: 1.15 }, chair: { d: 100, yaw: 0 } };
+const SEATS = { couch: { x: 11, d: 40, yaw: 0.9 }, desk: { x: 87, d: 40, yaw: 1.15 }, chair: { d: 100, yaw: 0 },
+                bed: { x: 24, d: 100, yaw: 0 } };
 const PROP_FADE = 0.4;          // seconds a seat takes to appear / go
 const SCAN_MS = 300;            // how often the bubbles near the view are looked up again
 const FACE_PX = 220;
 let _last = null;               // survives a sidebar rebuild: she stays where she stood
 
 // `go_left|right|center` (across), `go_back|front` (depth), `go_40` (across),
-// `go_40_100` (across, deep), `go_couch|desk|chair` (a seat, when it is out)
+// `go_40_100` (across, deep), `go_couch|desk|chair|bed` (a seat, when it is out)
 // -> {x?, d?} | {spot} | null
 export function parseGo(track, has = () => false) {
     const m = /^go_([a-z0-9]+)(?:_(\d{1,3}))?$/i.exec(track || '');
@@ -128,7 +129,21 @@ function buildDesk(THREE, h, seatY) {
     return g;
 }
 
-const BUILD = { chair: buildChair, couch: buildCouch, desk: buildDesk };
+// `topY` = the mattress top. The sleeping clip lays her across (along x), her
+// head to -x and her middle a little past her origin, so the bed is built the same way.
+function buildBed(THREE, h, topY) {
+    const { mat, part } = kit(THREE), g = new THREE.Group();
+    const wood = mat(0x5a3a24, 0.7), sheet = mat(0xd9dee8, 0.95), pillow = mat(0xf4f6fa, 0.95), quilt = mat(0x3b4a63, 0.95);
+    const len = 1.02 * h, w = 0.48 * h, zc = -0.04 * h, xc = 0.07 * h;
+    part(g, wood, len + 0.04 * h, topY - 0.1 * h, w + 0.04 * h, xc, (topY - 0.1 * h) / 2 + 0.04 * h, zc);     // frame
+    part(g, sheet, len, 0.08 * h, w, xc, topY - 0.04 * h, zc);                                                  // mattress
+    part(g, wood, 0.03 * h, topY + 0.2 * h, w + 0.04 * h, xc - (len / 2 + 0.015 * h), (topY + 0.2 * h) / 2, zc);  // headboard
+    part(g, pillow, 0.18 * h, 0.04 * h, w * 0.7, xc - (len / 2 - 0.12 * h), topY + 0.015 * h, zc);
+    part(g, quilt, len * 0.22, 0.085 * h, w + 0.01 * h, xc + len / 2 - len * 0.11, topY - 0.038 * h, zc);          // folded quilt at the foot
+    return g;
+}
+
+const BUILD = { chair: buildChair, couch: buildCouch, desk: buildDesk, bed: buildBed };
 
 export function createStage({ THREE, scene, renderer, canvas, model, actions, travel, height, play, onArrive }) {
     css();
@@ -149,10 +164,12 @@ export function createStage({ THREE, scene, renderer, canvas, model, actions, tr
         return tr ? tr.values[1] * sc.y : null;
     };
     const seatY = sitClip && hipY(sitClip) != null ? hipY(sitClip) - 0.06 * height : 0.3 * height;
+    const lieClip = actions.sleeping_idle ? 'sleeping_idle' : (actions.sleeping ? 'sleeping' : null);
+    const bedY = lieClip && hipY(lieClip) != null ? hipY(lieClip) - 0.08 * height : 0.22 * height;
     const STEP = 0.24 * height;                     // she stands this far in front of a seat before sitting
 
     let on = false, host = null, size = 20, ghost = 0.3, scanAt = 0, near = [];
-    let cfg = { chair: null, couch: false, desk: false };
+    let cfg = { chair: null, couch: false, desk: false, bed: false };
     const props = {};                               // seat name -> its furniture
     let cur = { x: 94, d: 0, spot: null, ..._last };    // where she is headed / stands
     let state = 'rest', seated = false, stood = false, yaw = 0, wantYaw = 0;
@@ -192,7 +209,7 @@ export function createStage({ THREE, scene, renderer, canvas, model, actions, tr
         const half = (dist - z) * tanF * aspect - 0.22 * height;
         return half * (Math.max(0, Math.min(100, x)) / 50 - 1);
     };
-    const has = (name) => name === 'chair' ? cfg.chair != null : !!cfg[name];
+    const has = (name) => name === 'chair' ? cfg.chair != null : name === 'bed' ? !!(cfg.bed && lieClip) : !!cfg[name];
     const seat = (name) => {
         const s = SEATS[name], z = zOf(s.d);
         return { x: xOf(name === 'chair' ? cfg.chair : s.x, z), z, yaw: s.yaw };
@@ -237,7 +254,7 @@ export function createStage({ THREE, scene, renderer, canvas, model, actions, tr
         for (const name of Object.keys(BUILD)) {
             const want = on && has(name);
             if (want && !props[name]) {
-                const g = props[name] = BUILD[name](THREE, height, seatY);
+                const g = props[name] = BUILD[name](THREE, height, name === 'bed' ? bedY : seatY);
                 g.userData.a = 0;                   // how drawn it is, 0..1
                 g.visible = false;
                 scene.add(g);
@@ -403,10 +420,11 @@ export function createStage({ THREE, scene, renderer, canvas, model, actions, tr
         seated: () => on && sitting(),
         seatName: () => (on && sitting()) ? cur.spot : null,
         sitClip: () => sitClip,
+        lieClip: () => lieClip,
         stand() { stood = true; },                  // she gets up where she is (a dance of her own)
         setSize(v) { size = Math.max(8, Math.min(95, +v || 20)); },
         setGhost(v) { ghost = Math.max(0, Math.min(100, +(v ?? 30))) / 100; },   // how solid she is over a bubble
-        setProps(p) { cfg = { chair: p.chair ?? null, couch: !!p.couch, desk: !!p.desk }; furnish(); },
+        setProps(p) { cfg = { chair: p.chair ?? null, couch: !!p.couch, desk: !!p.desk, bed: !!p.bed }; furnish(); },
         setFace(c) { faceCtx = c ? c.getContext('2d') : null; faceAt = null; },
         cleanup() { exit(); camera.clearViewOffset(); scene.remove(shadow); veil.geometry.dispose(); veil.material.dispose(); },
     };

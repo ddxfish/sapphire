@@ -917,3 +917,59 @@ def test_a_chunk_past_the_hard_timeout_abandons_the_stream(enable_streaming, mon
     assert len(fp.calls) == 2                                # the two in flight; no retry, chunks 2-3 never asked
     notice = [e for e in out if e.get("type") == "notice"]
     assert notice and "fell behind" in notice[0]["message"] and "4 TTS chunks" in notice[0]["message"]
+
+
+def _opus(seconds):
+    import io
+    import numpy as np
+    import soundfile as sf
+    buf = io.BytesIO()
+    sf.write(buf, np.zeros(int(48000 * seconds), dtype="float32"), 48000, format="OGG", subtype="OPUS")
+    return buf.getvalue()
+
+
+def test_ogg_seconds_reads_an_opus_files_length():
+    from core.tts.stream_pump import _ogg_seconds
+    assert abs(_ogg_seconds(_opus(1.5)) - 1.5) < 0.03
+    assert _ogg_seconds(b"OGGS\x00fake") is None
+    assert _ogg_seconds(b"ID3\x04 an mp3") is None
+
+
+def test_a_turn_a_plugin_took_starts_the_next_in_whole_paragraphs(enable_streaming, fresh_hooks, monkeypatch):
+    # A plugin that plays the audio itself (FlashHead) starts on the first
+    # chunk with a shallow queue: no ramp for the rest of that turn, and the
+    # next turn starts in whole paragraphs.
+    import core.tts.stream_pump as sp
+    monkeypatch.setitem(sp._TAKEN, "last", False)
+
+    def take(ev):
+        ev.skip_tts = True
+    fresh_hooks.register("tts_chunk_audio", take, plugin_name="face")
+    pump = StreamingTTSPump(system=_make_system(provider=_FakeProvider()))
+    assert pump.chunker.ramp is True
+    pump.push("The lamp is lit tonight. The sea is calm. ")
+    pump.push("The gulls are quiet.")
+    list(pump.flush_and_close())
+    assert pump.chunker.ramp is False and sp._TAKEN["last"] is True
+    nxt = StreamingTTSPump(system=_make_system(provider=_FakeProvider()))
+    assert nxt.chunker.ramp is False
+    nxt.cancel()
+
+
+def test_a_turn_played_here_turns_the_ramp_back_on(enable_streaming, monkeypatch):
+    import core.tts.stream_pump as sp
+    monkeypatch.setitem(sp._TAKEN, "last", True)
+    pump = StreamingTTSPump(system=_make_system(provider=_FakeProvider()))
+    pump.push("The lamp is lit tonight. The sea is calm.")
+    list(pump.flush_and_close())
+    assert sp._TAKEN["last"] is False
+
+
+def test_measured_engine_speed_feeds_the_ramp(enable_streaming, monkeypatch):
+    import core.tts.stream_pump as sp
+    monkeypatch.setattr(sp, "_SPEEDS", {})
+    pump = StreamingTTSPump(system=_make_system(provider=_FakeProvider(audio_bytes=_opus(2.0), delay=0.2)))
+    pump.push("The lamp is lit tonight. The sea is calm.")
+    list(pump.flush_and_close())
+    assert 4 < sp._SPEEDS["_FakeProvider"] < 11          # 2 s of audio in ~0.2 s
+    assert pump.chunker.speed == sp._SPEEDS["_FakeProvider"]

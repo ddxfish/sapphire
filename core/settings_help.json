@@ -342,7 +342,7 @@
   },
   "TTS_STREAMING_SPLIT_MODE": {
     "short": "Where to break the stream for TTS",
-    "long": "How granular the stream chunks are. 'paragraph' (default) splits only on paragraph breaks (\\n\\n) — preserves prosodic flow across consecutive sentences in the same paragraph, sounds more natural. 'sentence' splits on every sentence end — lower latency to first audio, but flatter intonation since each sentence is synthesized in isolation. Max chunk length still applies as a safety cap in both modes."
+    "long": "How granular the stream chunks are. 'paragraph' (default) splits on paragraph breaks (\\n\\n) — preserves prosodic flow across consecutive sentences in the same paragraph, sounds more natural. A reply still starts with its first sentence alone, and the next chunks grow as fast as the voice engine can stay ahead of playback, so first audio comes quickly without gaps (off when a plugin such as an avatar plays the voice itself). 'sentence' splits on every sentence end — lower latency to first audio, but flatter intonation since each sentence is synthesized in isolation. Max chunk length still applies as a safety cap in both modes."
   },
   "TTS_STREAMING_PAUSE_PARAGRAPH_MS": {
     "short": "Pause after a paragraph break (ms)",
@@ -350,7 +350,7 @@
   },
   "TTS_STREAMING_PAUSE_SENTENCE_MS": {
     "short": "Pause after a sentence end (ms)",
-    "long": "Silence inserted after a sentence-ending chunk in 'sentence' split mode. Default 0 (relies on Kokoro's natural breath silence). Set higher (50-150ms) if sentences feel run-on. Only meaningful when split mode is 'sentence'."
+    "long": "Silence inserted after a sentence-ending chunk in 'sentence' split mode. Default 0 (relies on Kokoro's natural breath silence). Set higher (50-150ms) if sentences feel run-on. Applies in 'sentence' mode, and in 'paragraph' mode to the short chunks a reply starts with."
   },
   "TTS_STREAMING_STAGE_PAUSE_STYLE": {
     "short": "Prosody marker for *stage direction* and (parens)",

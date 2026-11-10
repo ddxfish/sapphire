@@ -32,12 +32,14 @@ export const setVolume = (val) => {
     volume = Math.max(0, Math.min(1, val));
     if (player) player.volume = muted ? 0 : volume;
     if (_ttsStreamPlayer) _ttsStreamPlayer.volume = muted ? 0 : volume;
+    _gain();
 };
 
 export const setMuted = (val) => {
     muted = val;
     if (player) player.volume = muted ? 0 : volume;
     if (_ttsStreamPlayer) _ttsStreamPlayer.volume = muted ? 0 : volume;
+    _gain();
 };
 
 export const getVolume = () => volume;
@@ -385,9 +387,9 @@ export const clearTtsCache = () => {
 // ---------------------------------------------------------------------------
 // Streaming TTS playback (v2.7.0)
 //
-// Brain-side chunker emits per-sentence OGG blobs over SSE; we queue + play
-// them in order via short-lived Audio elements. Each chunk is independently
-// decodable. Pause-between-chunks honors the brain's `pause_after_ms`.
+// Brain-side chunker emits per-sentence OGG blobs over SSE; we queue them and
+// play them in order, gapless on Web Audio (see "Gapless playback" below).
+// Each chunk is independently decodable.
 // ---------------------------------------------------------------------------
 let _ttsStreamGen = 0;       // generation counter — bumped by stop() to invalidate stale chunks
 let _ttsStreamActive = false;
@@ -515,7 +517,7 @@ const _ttsStreamCleanupCurrent = () => {
 // Emits the always-on one-line "black box" summary, and — only when chunks
 // arrived but none actually produced sound — dumps the per-chunk failure
 // detail and shows the user a toast. Idempotent: consumes _ttsStats so a
-// second caller (endTtsStream vs _ttsStreamPlayNext, whichever lands second)
+// second caller (endTtsStream vs _pump, whichever lands second)
 // is a no-op.
 const _ttsStreamMaybeWarnSilent = () => {
     const s = _ttsStats;
@@ -541,7 +543,212 @@ const _ttsStreamMaybeWarnSilent = () => {
     }
 };
 
-let _ttsStreamCurrent = null;  // {audio, url, blob, pause_after_ms, index, text, boundary}
+let _ttsStreamCurrent = null;  // the item an <audio> element is playing: {audio, url, blob, ...}
+
+// ---------------------------------------------------------------------------
+// Gapless playback (2026-11-10). Each chunk is decoded the moment it arrives
+// (decodeAudioData) and scheduled on one AudioContext exactly where the one
+// before it ends, so a sentence or segment boundary costs no time: starting an
+// <audio> element per chunk lost ~20-300 ms at every one, more on slow
+// machines. The chunker's `pause_after_ms` is scheduled silence between
+// CHUNKS; segments of one chunk run on without it.
+//
+// Where Web Audio can't play a chunk (no gesture on this page yet, a browser
+// that can't decode Ogg/Opus, a context that stops advancing) that chunk and
+// the rest of the page play through the <audio> element player below, the
+// player this replaced, so no browser does worse than before.
+// ---------------------------------------------------------------------------
+const LEAD_S = 0.03;          // headroom for a chunk started from idle
+let _pctx = null, _pgain = null;
+let _webAudioBroken = false;  // a decode or a stall failed: elements for this page
+let _scheduled = [];          // items on the context, in play order
+let _cursor = 0;              // context time the scheduled audio ends
+let _endWall = 0;             // performance.now() when the last audio ended
+let _lastIndex = null;        // chunk index heard last, and the pause it asked for
+let _lastPause = 0;
+let _waitTimer = null;        // an element chunk waiting out its pause
+let _decodeFails = 0;         // decode failures in a row
+let _idleTimer = null;
+
+function _gain() {
+    if (_pgain) _pgain.gain.value = muted ? 0 : volume;
+}
+
+// The voice's context, or null for elements. Made only once the page has had
+// a gesture (sticky activation), so it starts running; suspended when idle
+// and resumed on the next chunk (allowed after a gesture).
+// WebKit (iPhone, iPad, Safari) keeps the element player: its Web Audio
+// obeys the ring/silent switch where <audio> doesn't (a silent voice nothing
+// detects), its Ogg/Opus decoding is new (18.4), and setting the page's
+// audio session to "playback" could fight the mic in conversation mode.
+const _webkitSession = !!navigator.audioSession;
+
+const _playCtx = () => {
+    if (_webAudioBroken || _webkitSession) return null;
+    if (!_pctx) {
+        if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return null;
+        try {
+            _pctx = new AudioContext();
+            _pgain = _pctx.createGain();
+            _pgain.connect(_pctx.destination);
+            _gain();
+        } catch (e) {
+            console.warn('[TTS-STREAM] no AudioContext, using <audio> elements:', e?.message);
+            _webAudioBroken = true;
+            return null;
+        }
+    }
+    if (_pctx.state === 'closed') { _webAudioBroken = true; return null; }
+    if (_pctx.state !== 'running') _pctx.resume().catch(() => {});
+    return _pctx;
+};
+// Made inside a gesture so it starts running (pointerdown is one only for a
+// mouse; a touch activates on pointerup/touchend/click), then left to idle:
+// a click mid-silence wakes nothing, the next chunk resumes it.
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+    window.addEventListener(ev, () => {
+        if (_pctx || _webAudioBroken || _webkitSession) return;
+        if (_playCtx()) _armIdle();
+    }, true);
+}
+
+// Suspend the context after 10 s with nothing to play: a running one keeps
+// the output device open (a Bluetooth headset streaming, a USB DAC awake).
+const _armIdle = () => {
+    clearTimeout(_idleTimer);
+    _idleTimer = setTimeout(() => {
+        if (!_busy() && !_ttsStreamActive && _pctx?.state === 'running') _pctx.suspend().catch(() => {});
+    }, 10000);
+};
+
+const _busy = () => _scheduled.length > 0 || !!_ttsStreamCurrent;
+
+// A chunk the element player will take: its <audio> is built now so it
+// preloads while earlier audio plays. false = undecodable (counted, skipped).
+const _toElement = (item) => {
+    item.buffer = null;
+    item.useEl = true;
+    try {
+        item.url = URL.createObjectURL(item.blob);
+        item.audio = new Audio(item.url);
+        item.audio.preload = 'auto';
+        // No explicit .load(): Chromium (incl. Brave) can read it as a load
+        // restart and reject the later play() with AbortError. 2026-05-26.
+        if (_ttsStats && !item.counted) _ttsStats.decoded++;
+        item.counted = true;
+        return true;
+    } catch (e) {
+        if (item.url) { try { URL.revokeObjectURL(item.url); } catch {} }
+        item.dead = true;
+        if (_ttsStats) {
+            _ttsStats.failed++;
+            _ttsStats.fails.push({ idx: item.index, outcome: 'decode-error', detail: e?.message });
+        }
+        return false;
+    }
+};
+
+const _release = (item) => {
+    clearTimeout(item.watch);
+    if (item.src) { try { item.src.disconnect(); } catch {} }
+    item.src = null;
+    item.buffer = null;
+};
+
+const _finish = () => {
+    _ttsStreamMaybeWarnSilent();
+    _ttsStreamActive = false;
+    _ttsStreamCleanupCurrent();
+    isStreaming = false;
+    _armIdle();
+};
+
+// Play what's ready, in order. Called on every arrival, decode, and end.
+const _pump = (gen) => {
+    if (gen !== _ttsStreamGen || !_ttsStreamActive || _ttsStreamCurrent || _waitTimer) return;
+    while (_ttsStreamQueue.length) {
+        const item = _ttsStreamQueue[0];
+        if (item.dead) { _ttsStreamQueue.shift(); continue; }
+        if (!item.buffer && !item.useEl) return;          // still decoding: order holds
+        const gap = (_lastIndex !== null && item.index !== _lastIndex) ? _lastPause : 0;
+        if (item.buffer) {
+            const ctx = _playCtx();
+            if (ctx) {
+                _ttsStreamQueue.shift();
+                _schedule(item, ctx, gap);
+                continue;
+            }
+            if (!_toElement(item)) continue;              // context gone: element
+        }
+        if (_scheduled.length) return;                    // after the scheduled audio
+        const wait = gap - (performance.now() - _endWall);
+        if (wait > 1) {
+            _waitTimer = setTimeout(() => { _waitTimer = null; _pump(gen); }, wait);
+            return;
+        }
+        _ttsStreamQueue.shift();
+        _lastIndex = item.index;
+        _lastPause = item.pause_after_ms;
+        _elPlay(item, gen);
+        return;
+    }
+    if (!_busy() && _ttsStreamEnded) _finish();
+};
+
+const _schedule = (item, ctx, gapMs) => {
+    const now = ctx.currentTime;
+    const start = _scheduled.length
+        ? Math.max(_cursor + gapMs / 1000, now)
+        : now + Math.max(LEAD_S, (gapMs - (performance.now() - _endWall)) / 1000);
+    const src = ctx.createBufferSource();
+    src.buffer = item.buffer;
+    src.connect(_pgain);
+    item.src = src;
+    item.startAt = start;
+    item.endAt = start + item.buffer.duration;
+    _cursor = item.endAt;
+    _lastIndex = item.index;
+    _lastPause = item.pause_after_ms;
+    _scheduled.push(item);
+    clearTimeout(_idleTimer);
+    src.onended = () => {
+        const mine = _scheduled.includes(item);
+        _scheduled = _scheduled.filter(x => x !== item);
+        _release(item);
+        if (!mine) return;
+        _recordChunk(item, 'played');
+        _endWall = performance.now();
+        _pump(_ttsStreamGen);
+    };
+    // A context that stops advancing (a lost output device, a suspended tab)
+    // never ends its sources. Past this chunk's end plus 3 s, everything still
+    // scheduled goes back to the queue for the element player, unless the
+    // context is moving and just started late (a sink or Bluetooth headset
+    // slow to wake): then wait for the end again.
+    const watch = (ms) => setTimeout(() => {
+        if (!_scheduled.includes(item)) return;
+        const t = ctx.currentTime;
+        if (ctx.state === 'running' && t > now + 0.05 && t < item.endAt + 1) {
+            item.watch = watch((item.endAt - t) * 1000 + 3000);
+            return;
+        }
+        console.warn(`[TTS-STREAM] audio context stalled (${ctx.state}, t=${ctx.currentTime.toFixed(2)}); ` +
+                     '<audio> elements from here on');
+        _webAudioBroken = true;
+        const stuck = _scheduled;
+        _scheduled = [];
+        for (const x of stuck) {
+            if (x.src) { x.src.onended = null; try { x.src.stop(); } catch {} }
+            _release(x);
+            _toElement(x);
+        }
+        _lastIndex = null;
+        _ttsStreamQueue.unshift(...stuck);
+        _pump(_ttsStreamGen);
+    }, ms);
+    item.watch = watch((item.endAt - now) * 1000 + 3000);
+    src.start(start);
+};
 
 /** Where this tab's voice is right now, for anything that follows it (her
  * avatar's mouth). Read-only: never touches playback. Streamed chunk ->
@@ -551,39 +758,27 @@ export const speechClock = () => {
     if (item?.audio && !item.audio.paused && _ttsStreamPlayer === item.audio) {
         return { stream_id: _currentStreamId, index: item.index, seg: item.seg || 0, t: item.audio.currentTime };
     }
+    if (_scheduled.length && _pctx) {
+        const t = _pctx.currentTime - (_pctx.outputLatency || 0);   // what the speakers play now
+        const on = _scheduled.find(x => x.startAt <= t && t < x.endAt);
+        if (on) return { stream_id: _currentStreamId, index: on.index, seg: on.seg || 0, t: t - on.startAt };
+    }
     if (player && !player.paused) return { legacy: true, t: player.currentTime };
     return null;
 };
 
-const _ttsStreamPlayNext = (gen) => {
+// The element player: one <audio> per chunk, the fallback lane.
+const _elDone = (gen) => {
     if (gen !== _ttsStreamGen) return;        // stopped + restarted under us
-    if (!_ttsStreamActive) return;
-    if (_ttsStreamQueue.length === 0) {
-        // Queue empty: either we're done (end marker received) or waiting.
-        if (_ttsStreamEnded) {
-            _ttsStreamMaybeWarnSilent();
-            _ttsStreamActive = false;
-            _ttsStreamCleanupCurrent();
-            isStreaming = false;
-        } else {
-            // Slow CPU: queue drained before next chunk arrived. Null the
-            // player so enqueueTtsChunk can detect idle state and restart
-            // playback when new audio arrives. 2026-05-20.
-            _ttsStreamCleanupCurrent();
-        }
-        return;
-    }
-    const item = _ttsStreamQueue.shift();
     _ttsStreamCleanupCurrent();
+    _endWall = performance.now();
+    _pump(gen);
+};
+
+const _elPlay = (item, gen) => {
     _ttsStreamCurrent = item;
     _ttsStreamPlayer = item.audio;
     _ttsStreamUrl = item.url;
-    if (!_ttsStreamPlayer) {
-        // Defensive — should have been pre-built on enqueue
-        console.warn('[TTS-STREAM] item missing audio element, skipping');
-        _ttsStreamPlayNext(gen);
-        return;
-    }
     _ttsStreamPlayer.volume = muted ? 0 : volume;
     // Real-progress detection: 'timeupdate' fires as currentTime advances
     // during actual playback. The FIRST advance past 0 is the only in-browser
@@ -604,19 +799,14 @@ const _ttsStreamPlayNext = (gen) => {
         // without ever progressing = silent.
         if (item.audio && item.audio.currentTime > 0) _recordChunk(item, 'played');
         else _recordChunk(item, 'silent-ended', _audioDiag(item.audio));
-        const pause = item.pause_after_ms || 0;
-        if (pause > 0) {
-            setTimeout(() => _ttsStreamPlayNext(gen), pause);
-        } else {
-            _ttsStreamPlayNext(gen);
-        }
+        _elDone(gen);
     };
     _ttsStreamPlayer.onerror = () => {
         // error.code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED = codec/decode failure
         // (the OGG/Opus-on-hardened-Brave signature).
         _recordChunk(item, 'media-error', _audioDiag(item.audio));
         // Don't surface to user — keep draining queue
-        _ttsStreamPlayNext(gen);
+        _elDone(gen);
     };
     // Track when play() actually resolves (= in the media stack) so
     // _disposeItem can safely abort it later without rejecting a pending
@@ -638,10 +828,9 @@ const _ttsStreamPlayNext = (gen) => {
         // element never progresses (currentTime stuck at 0) AND never fires
         // ended/error within a generous window, it's the silent class the other
         // tags can't see: duration=0 / no decodable data / decoder refused
-        // without firing error / dead OS sink / tab-muted. That case otherwise
-        // produces a totally silent turn with ZERO log — the worst no-audio
-        // report to debug. Record it with diagnostics and advance so a dead
-        // chunk can't also hang the queue. 2026-05-28.
+        // without firing error / dead OS sink / tab-muted. Record it with
+        // diagnostics and advance so a dead chunk can't also hang the queue.
+        // 2026-05-28.
         const a = item.audio;
         const stallMs = (a && Number.isFinite(a.duration) && a.duration > 0)
             ? a.duration * 1000 + 1500
@@ -655,7 +844,7 @@ const _ttsStreamPlayNext = (gen) => {
                 // Detach handlers so a late ended/error can't double-advance.
                 item.audio.onended = null;
                 item.audio.onerror = null;
-                _ttsStreamPlayNext(gen);
+                _elDone(gen);
             }
         }, stallMs);
     }).catch(err => {
@@ -667,18 +856,12 @@ const _ttsStreamPlayNext = (gen) => {
         else if (err?.name === 'AbortError') tag = 'aborted';
         _recordChunk(item, tag, (err?.name || '') + ' ' + (err?.message || '') +
                      (item.audio ? ' ' + _audioDiag(item.audio) : ''));
-        _ttsStreamPlayNext(gen);
+        _elDone(gen);
     });
 };
 
-/** Called by api.js SSE handler on `tts_chunk` events.
- *
- * The Audio element is built HERE (not when the chunk is popped to play),
- * so the browser starts preloading/decoding while the previous chunk is
- * still playing. By the time we hit play() the OGG is ready — eliminates
- * the per-chunk Audio() startup gap that was stacking with the intentional
- * pause_after_ms to make speech feel laggy on faster machines.
- */
+/** Called by api.js SSE handler on `tts_chunk` events. Decoding starts at
+ * once, so a chunk is ready to play the instant the one before it ends. */
 export const enqueueTtsChunk = ({ audio_b64, content_type, index, seg, boundary, pause_after_ms, text, stream_id }) => {
     if (!audio_b64) return;
     // Drop stragglers from a stream the user just stopped (left-button "stop TTS").
@@ -697,45 +880,46 @@ export const enqueueTtsChunk = ({ audio_b64, content_type, index, seg, boundary,
     }
     if (!_ttsStats) _ttsStats = _newTtsStats();  // defensive: chunk before start
     _ttsStats.received++;
-    // Decode + Audio() build can throw on bad base64 or unsupported codec —
-    // a failed chunk is counted in the black-box and skipped, never queued.
-    let blob, url, audio;
+    let blob;
     try {
         blob = _b64ToBlob(audio_b64, content_type);
-        url = URL.createObjectURL(blob);
-        audio = new Audio(url);
-        audio.preload = 'auto';   // hint browser to start decoding immediately
-        // `new Audio(url)` already starts loading; explicit `.load()` after
-        // construction can be interpreted by Chromium (incl. Brave) as a
-        // load-restart, leaving subsequent .play() in a state that rejects
-        // with "AbortError: interrupted by new load request" in some
-        // environments. Dropped 2026-05-26 user-report scouting party.
     } catch (e) {
         console.warn('[TTS-STREAM] chunk decode failed, skipping', { index, err: e?.message });
-        if (_ttsStats) {
-            _ttsStats.failed++;
-            _ttsStats.fails.push({ idx: index, outcome: 'decode-error', detail: e?.message });
-        }
-        if (url) { try { URL.revokeObjectURL(url); } catch {} }
+        _ttsStats.failed++;
+        _ttsStats.fails.push({ idx: index, outcome: 'decode-error', detail: e?.message });
         return;
     }
-    if (_ttsStats) _ttsStats.decoded++;
-    _ttsStreamQueue.push({
-        audio, url, blob,
-        pause_after_ms: pause_after_ms || 0,
-        index, seg: seg || 0, text, boundary,
-    });
+    const item = { blob, pause_after_ms: pause_after_ms || 0, index, seg: seg || 0, text, boundary };
+    const gen = _ttsStreamGen;
+    const ctx = _playCtx();
+    if (ctx) {
+        blob.arrayBuffer().then(ab => ctx.decodeAudioData(ab)).then(buf => {
+            if (gen !== _ttsStreamGen || item.useEl) return;
+            item.buffer = buf;
+            item.counted = true;
+            _decodeFails = 0;
+            if (_ttsStats) _ttsStats.decoded++;
+            _pump(gen);
+        }).catch(e => {
+            if (gen !== _ttsStreamGen || item.useEl) return;
+            // One bad chunk plays on an element; two in a row = this browser
+            // can't decode them: elements for the rest of the page.
+            if (++_decodeFails >= 2) _webAudioBroken = true;
+            console.warn(`[TTS-STREAM] Web Audio could not decode a chunk (${e?.message}); ` +
+                         (_webAudioBroken ? '<audio> elements from here on' : 'this one plays on <audio>'));
+            _toElement(item);
+            _pump(gen);
+        });
+    } else if (!_toElement(item)) {
+        return;
+    }
+    _ttsStreamQueue.push(item);
     if (!_ttsStreamActive) {
         _ttsStreamActive = true;
         _ttsStreamEnded = false;
         isStreaming = true;
-        _ttsStreamPlayNext(_ttsStreamGen);
-    } else if (!_ttsStreamPlayer) {
-        // Consumer stalled on empty queue (slow CPU / Kokoro couldn't keep
-        // up) — _ttsStreamPlayNext nulled the player when it found nothing
-        // to play. Wake it back up now that new audio has arrived. 2026-05-20.
-        _ttsStreamPlayNext(_ttsStreamGen);
     }
+    _pump(gen);
 };
 
 /** Called by api.js SSE handler on `tts_stream_start`.
@@ -749,7 +933,7 @@ export const startTtsStream = (data = {}) => {
     // "two voices" overlap. 2026-09-08.
     _stopLegacyPlayer();
     if (_currentStreamId && newId && newId !== _currentStreamId &&
-        (_ttsStreamActive || _ttsStreamQueue.length > 0 || _ttsStreamPlayer)) {
+        (_ttsStreamActive || _ttsStreamQueue.length > 0 || _busy())) {
         // A NEW stream is starting while a different one is still active.
         // Preempt: tear down old playback so the new turn doesn't audio-bleed.
         console.log('[TTS-STREAM] new stream', newId, 'preempting', _currentStreamId);
@@ -757,10 +941,16 @@ export const startTtsStream = (data = {}) => {
     }
     _currentStreamId = newId;
     _stoppedStreamId = null;   // fresh stream — clear any prior stop guard
+    // Not preempted (no stream ids) but an element or its pause timer still
+    // live: their callbacks carry the old gen and would never advance the
+    // new stream, leaving it wedged. End them with the old turn.
+    if (_waitTimer) { clearTimeout(_waitTimer); _waitTimer = null; }
+    if (_ttsStreamCurrent) _ttsStreamCleanupCurrent();
     _ttsStreamGen += 1;
     _ttsStreamQueue = [];
     _ttsStreamEnded = false;
     _ttsStreamAnyPlayed = false;
+    _lastIndex = null;         // a new turn's indexes start over
     _ttsStats = _newTtsStats();  // fresh black-box for this turn
     // The pump is live from its first push — that's the mic ⏹'s real
     // lifetime, not the first decoded chunk. On a slow CPU the gap between
@@ -781,18 +971,11 @@ export const endTtsStream = (data = {}) => {
     // stop in its first second read as "chunks couldn't play" (2026-11-04)
     if (data.stream_id && data.stream_id === _stoppedStreamId) return;
     _ttsStreamEnded = true;
-    // Unconditional cleanup of streaming-state flags. The old version only
-    // cleaned up if `_ttsStreamActive` was true, but a stream that emitted
-    // zero successful chunks (e.g. all synth failed, or plugin muted all)
-    // never set _ttsStreamActive, so the "speaking" indicators stayed
-    // dirty until the next stream. Cleanup is idempotent — safe to run
-    // even when the player is still draining. 2026-05-18 herring-table #11.
-    if (_ttsStreamQueue.length === 0 && !_ttsStreamPlayer) {
-        _ttsStreamMaybeWarnSilent();
-        _ttsStreamActive = false;
-        isStreaming = false;
-        _ttsStreamCleanupCurrent();
-    }
+    // Unconditional cleanup of streaming-state flags: a stream that emitted
+    // zero playable chunks never set _ttsStreamActive, and the "speaking"
+    // indicators stayed dirty until the next stream. Idempotent — safe while
+    // the player is still draining. 2026-05-18 herring-table #11.
+    if (_ttsStreamQueue.length === 0 && !_busy()) _finish();
 };
 
 const _ttsStreamStop = () => {
@@ -801,6 +984,13 @@ const _ttsStreamStop = () => {
     // URLs and decoded buffers that should be released immediately.
     for (const item of _ttsStreamQueue) _disposeItem(item);
     _ttsStreamQueue = [];
+    for (const item of _scheduled) {
+        if (item.src) { item.src.onended = null; try { item.src.stop(); } catch {} }
+        _release(item);
+    }
+    _scheduled = [];
+    _lastIndex = null;
+    if (_waitTimer) { clearTimeout(_waitTimer); _waitTimer = null; }
     _ttsStreamEnded = true;
     _ttsStreamActive = false;
     _ttsStreamAnyPlayed = false;
@@ -808,6 +998,7 @@ const _ttsStreamStop = () => {
     _ttsStats = null;         // a stopped stream is not a silent one: no "couldn't play" toast for it
     _currentStreamId = null;  // herring #5 — no stream is current after stop
     _ttsStreamCleanupCurrent();
+    _armIdle();
 };
 
 // Subscribe to SSE-relayed streaming-TTS events at module load.

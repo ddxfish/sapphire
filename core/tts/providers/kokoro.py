@@ -73,6 +73,12 @@ class KokoroTTSProvider(BaseTTSProvider):
     SPEED_MAX = 2.0
     supports_streaming = True
     supports_pitch = True  # server resamples PCM pre-encode (pitch in payload)
+    # The server makes one sentence at a time (pipeline_lock, not first come
+    # first served): a second pump worker could take it before chunk N and
+    # hold first audio for both, more likely now replies start with short
+    # chunks (2026-11-10). The cost: a chunk's last encode and send no longer
+    # overlap the next chunk's synthesis (milliseconds).
+    synth_workers = 1
 
     # Read on each use: an edit in Settings reaches her next sentence, no restart.
     primary_server = property(lambda self: config.TTS_PRIMARY_SERVER)

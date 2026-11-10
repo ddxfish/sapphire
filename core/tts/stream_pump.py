@@ -48,6 +48,28 @@ _FLUSH_POLL_TIMEOUT_S = 0.1
 # 22s, and was dropped at 30s with its audio 11s from done).
 _FLUSH_HARD_TIMEOUT_S = 30.0
 
+# What the chunker's ramp (core.tts.streaming) needs to know, kept across
+# turns: each engine's measured speed (x realtime, smoothed; keyed by the
+# provider class) and whether the last turn's audio went to a plugin that
+# plays it itself (FlashHead): its player starts on the first chunk with a
+# shallow queue while the engine makes the rest on the same GPU, so a turn
+# after one like that starts in whole paragraphs (2026-11-10).
+_SPEEDS: dict = {}
+_TAKEN = {"last": False}
+
+
+def _ogg_seconds(data: bytes) -> Optional[float]:
+    """Length of one Ogg/Opus file from its last page's granule position
+    (48 kHz for Opus, less the pre-skip); None for anything else."""
+    head = data.find(b"OpusHead", 0, 512)
+    last = data.rfind(b"OggS")
+    if not data.startswith(b"OggS") or head < 0 or len(data) < last + 14:
+        return None
+    granule = int.from_bytes(data[last + 6:last + 14], "little")
+    pre = int.from_bytes(data[head + 10:head + 12], "little")
+    sec = (granule - pre) / 48000
+    return sec if 0 < sec < 3600 else None
+
 
 
 class StreamingTTSPump:
@@ -164,6 +186,10 @@ class StreamingTTSPump:
             pause_overrides=pause_overrides,
             stage_pause_style=stage_pause_style,
         )
+        self._engine = type(self.provider).__name__ if self.provider is not None else ""
+        self.chunker.speed = _SPEEDS.get(self._engine)
+        self.chunker.ramp = not _TAKEN["last"]
+        self._taken = False             # a plugin took this turn's audio (see _TAKEN)
         self.pending: deque = deque()
         self.executor = None
         self._stream_started = False
@@ -386,6 +412,8 @@ class StreamingTTSPump:
                 "system": self.system,
             },
         )
+        if self._chunk_count:
+            _TAKEN["last"] = self._taken
         logger.info(
             f"[TTS-STREAM] stream {self._stream_id[:8]} done: "
             f"{self._chunk_count} chunks emitted, "
@@ -615,13 +643,17 @@ class StreamingTTSPump:
         supports_streaming=True but ships the default impl."""
         n_segments = 0
         total_bytes = 0
+        seconds = 0.0                   # audio made, when every segment is Ogg/Opus
         progress = meta if meta is not None else {}
 
         def _put(segment):
-            nonlocal n_segments, total_bytes
+            nonlocal n_segments, total_bytes, seconds
             seg_queue.put(segment)
             n_segments += 1
             total_bytes += len(segment)
+            if seconds is not None:
+                sec = _ogg_seconds(segment)
+                seconds = None if sec is None else seconds + sec
             progress["progress_at"] = time.monotonic()      # alive: resets the stall clock
 
         def _run(v):
@@ -666,9 +698,17 @@ class StreamingTTSPump:
                     f"'{voice}' — retrying with default '{default_voice}'"
                 )
                 _run(default_voice)
+            rate = ""
+            took = time.monotonic() - progress.get("started_at", time.monotonic())
+            if n_segments and seconds and took > 0.05:
+                r = seconds / took
+                old = _SPEEDS.get(self._engine)
+                _SPEEDS[self._engine] = r if old is None else 0.5 * old + 0.5 * r
+                self.chunker.speed = _SPEEDS[self._engine]
+                rate = f", {seconds:.1f}s audio at {r:.1f}x"
             logger.info(
                 f"[TTS-STREAM] chunk {chunk_index} synth done: voice={voice} "
-                f"streams={self._provider_streams} {n_segments} segments, {total_bytes} bytes"
+                f"streams={self._provider_streams} {n_segments} segments, {total_bytes} bytes{rate}"
             )
         except Exception as e:
             logger.warning(
@@ -766,6 +806,11 @@ class StreamingTTSPump:
         # here is off and this pump plays here. Counted as spoken, so the
         # end-of-stream drop notice stays honest. 2026-10-17.
         consumed = bool(ev is not None and ev.skip_tts)
+        if consumed and not self._taken:
+            self._taken = True
+            self.chunker.ramp = False   # its player may not start well on a short chunk
+            logger.info(f"[TTS-STREAM] stream {self._stream_id[:8]}: a plugin plays the audio, "
+                        "whole paragraphs from here (and next turn)")
         if consumed or (self._plays_here and not getattr(config, "TTS_LOCAL_PLAYBACK", True)):
             meta["segments_emitted"] = meta.get("segments_emitted", 0) + 1
             return None

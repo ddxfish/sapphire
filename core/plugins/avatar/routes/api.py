@@ -53,6 +53,7 @@ def _get_config():
         'strip_tags': state.get('strip_tags', False),
         'user_tags': state.get('user_tags', False),
         'stage': state.get('stage') or {},
+        'screens': state.get('screens') or 'off',
     }
 
 
@@ -241,6 +242,10 @@ async def save_config(**kwargs):
         state = _get_state()
         state.save('user_tags', bool(body['user_tags']))
 
+    # Her 3D face on her boards' screens (screen.py): off | talking | always
+    if body.get('screens') in ('off', 'talking', 'always'):
+        _get_state().save('screens', body['screens'])
+
     # She stands in the chat (web/stage.js)
     if isinstance(body.get('stage'), dict):
         s = body['stage']
@@ -252,6 +257,7 @@ async def save_config(**kwargs):
             'chair': None if chair is None else max(0, min(100, int(chair))),
             'couch': bool(s.get('couch')),
             'desk': bool(s.get('desk')),
+            'bed': bool(s.get('bed')),
         })
 
     # Update active location
@@ -273,6 +279,8 @@ async def save_config(**kwargs):
     _save_config(cfg)
     from plugins.avatar import brain
     brain.reload()            # new pool / buckets / model reach her brain now
+    from plugins.avatar import screen
+    screen.changed()
     from core.event_bus import publish
     active = cfg.get('active_model', '')
     publish('avatar_config', {'active_model': active,

@@ -561,7 +561,8 @@ export async function init(container) {
     function resize() {
         const w = canvas.clientWidth;
         const h = canvas.clientHeight;
-        if (canvas.width !== w || canvas.height !== h) {
+        const pr = renderer.getPixelRatio();     // the drawing buffer is CSS size x pixel ratio
+        if (canvas.width !== Math.floor(w * pr) || canvas.height !== Math.floor(h * pr)) {
             renderer.setSize(w, h, false);
             camera.aspect = w / h;
             camera.updateProjectionMatrix();
@@ -813,6 +814,12 @@ export async function init(container) {
         if (!win.slot.track) return;
         if (stage?.walking()) { playing = null; return; }      // her legs have her; the winner plays on arrival
         const restart = !playing || playing.slot.id !== win.slot.id;
+        if (stage?.seatName() === 'bed' && win.rail !== 2) {     // in bed she sleeps, whole body
+            if (statusEl) statusEl.textContent = '';
+            crossfadeTo(stage.lieClip(), false, restart);
+            playing = win;
+            return;
+        }
         if (stage?.seated()) {
             if (win.rail !== 2) {                               // seated: the winner plays from the waist up
                 let t = win.slot.track, once = win.slot.mode === 'oneshot';
@@ -942,7 +949,7 @@ export async function init(container) {
     const stGhost = container.querySelector('#avatar-stage-ghost');
     const stChairOn = container.querySelector('#avatar-stage-chair-on');
     const stChairX = container.querySelector('#avatar-stage-chair-x');
-    const stageCfg = { on: false, size: 20, ghost: 30, chair: null, couch: false, desk: false, ...(avatarConfig.stage || {}) };
+    const stageCfg = { on: false, size: 20, ghost: 30, chair: null, couch: false, desk: false, bed: false, ...(avatarConfig.stage || {}) };
     const saveStage = () => fetch('/api/plugin/avatar/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json',
@@ -983,7 +990,7 @@ export async function init(container) {
             stChairX.disabled = !stChairOn.checked;
             stage.setProps(stageCfg);
         };
-        for (const name of ['couch', 'desk']) {
+        for (const name of ['couch', 'desk', 'bed']) {
             const cb = container.querySelector(`#avatar-stage-${name}`);
             if (!cb) continue;
             cb.checked = !!stageCfg[name];

@@ -293,6 +293,13 @@ async def devices_provision(request: Request, _=Depends(require_login)):
     return await _do(provision_device, await _body(request))
 
 
+@router.get("/api/devices/face-feed")
+async def devices_face_feed(_=Depends(require_login)):
+    """Her face as a feed (core/avatar_feed): who is her face, on which boards, what went to each."""
+    from core import avatar_feed
+    return avatar_feed.status()
+
+
 @router.get("/api/devices/here")
 async def devices_here(request: Request, _=Depends(require_login)):
     _open(request)

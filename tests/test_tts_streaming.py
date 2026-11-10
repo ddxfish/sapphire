@@ -453,3 +453,105 @@ def test_chunker_empty_stream_flushes_nothing():
     chunker = SpeechChunker()
     assert chunker.push("") == []
     assert chunker.flush() == []
+
+
+def test_first_sentence_comes_early_in_paragraph_mode():
+    # First audio waits on the first sentence, not the whole paragraph;
+    # the rest of the paragraph stays one chunk for its prosody.
+    chunks = _collect(["The lamp is lit tonight. The sea is calm. The gulls are quiet."],
+                      split_mode="paragraph")
+    assert [c["text"] for c in chunks] == ["The lamp is lit tonight.",
+                                           "The sea is calm. The gulls are quiet."]
+    assert chunks[0]["boundary"] == "sentence"
+
+
+def test_first_sentence_too_short_merges_forward():
+    # "Sure!" alone is under min_chars: the first chunk runs to the next end.
+    chunks = _collect(["Sure! I can check that for you. It takes a moment. Then we see."],
+                      split_mode="paragraph", min_chars=15)
+    assert chunks[0]["text"] == "Sure! I can check that for you."
+    assert chunks[1]["text"] == "It takes a moment. Then we see."
+
+
+def test_first_sentence_never_ends_on_a_trail_off():
+    chunks = _collect(["Well, that took a while... You know I like pizza. And the sea."],
+                      split_mode="paragraph", min_chars=15)
+    assert chunks[0]["text"] == "Well, that took a while... You know I like pizza."
+
+
+def test_first_sentence_arrives_before_the_paragraph_ends():
+    # Pushed token by token, the first chunk is out as soon as the second
+    # sentence has begun — no wait for the paragraph break.
+    c = SpeechChunker(split_mode="paragraph")
+    out = []
+    for tok in ["The lamp ", "is lit tonight. ", "The", " sea is calm"]:
+        out += c.push(tok)
+    assert [x["text"] for x in out] == ["The lamp is lit tonight."]
+
+
+def _ramp(text, **kw):
+    c = SpeechChunker(split_mode="paragraph", **kw)
+    out = []
+    for w in text.split(" "):
+        out += c.push(w + " ")
+    return [x["text"] for x in out + c.flush()]
+
+
+def test_each_chunk_fits_what_2x_realtime_makes_meanwhile():
+    # Chunk k <= first + all before it (+ separators): an engine at 2x
+    # realtime always has it ready while the audio ahead plays. And it GROWS:
+    # equal sentences must not stall at one per chunk.
+    s = "The lamp turns slowly. "
+    texts = _ramp(s * 30)
+    assert texts[0] == s.strip()
+    for k in range(1, len(texts) - 1):
+        assert len(texts[k]) <= len(texts[0]) + sum(map(len, texts[:k])) + k, texts[k]
+    assert len(texts) <= 6 and len(texts[2]) > len(texts[1]) > len(texts[0])
+
+
+def test_ramp_keeps_a_long_sentence_whole():
+    # No sentence end fits the cap: the next one is taken whole, never cut
+    # mid-sentence.
+    long = "This sentence runs on and on " + "and on " * 20 + "until it stops."
+    texts = _ramp("Here is the opening line. " + long + " Then a short one.")
+    assert texts[1] == long
+
+
+def test_ramp_ends_once_chunks_reach_max_chars():
+    # Past max_chars the cap no longer binds: paragraphs come whole again.
+    para = "Waves fold over the rocks. " * 6
+    texts = _ramp("Opening line is here now. " + para.strip() + "\n\n" + para.strip() + "\n\nEnd.",
+                  max_chars=200)
+    assert texts[-2] == para.strip()
+
+
+def test_early_cuts_skip_abbreviations_initials_and_list_numbers():
+    texts = _ramp("Yesterday I spoke with Dr. Smith about the results. They looked good. "
+                  "We met at the U.S. Embassy after that. It went fine.")
+    assert texts[0] == "Yesterday I spoke with Dr. Smith about the results."
+    assert not any(t.endswith(("Dr.", "U.S.")) for t in texts)
+    texts = _ramp("Here are the steps.\n1. First do this thing. 2. Then do that thing. 3. Rest.")
+    assert not any(t.rstrip().endswith(("1.", "2.", "3.")) and len(t) < 30 for t in texts[:-1])
+
+
+def test_ramp_takes_a_fitting_sentence_before_a_maxlen_cut():
+    run_on = "So " + "and then we went on " * 40 + "end."
+    texts = _ramp("Yes, I can help with that. Here is the deal for you. " + run_on)
+    assert texts[:2] == ["Yes, I can help with that.", "Here is the deal for you."]
+
+
+def test_ramp_follows_the_engine_speed():
+    s = "The lamp turns slowly. " * 30
+
+    def run(speed=None, ramp=True):
+        c = SpeechChunker(split_mode="paragraph")
+        c.speed, c.ramp = speed, ramp
+        out = []
+        for w in s.split(" "):
+            out += c.push(w + " ")
+        return [len(x["text"]) for x in out + c.flush()]
+
+    fast, slow = run(4.0), run(1.5)
+    assert fast[0] == slow[0] == 22                  # one sentence first either way
+    assert fast[1] > slow[1]                         # a faster engine ramps faster
+    assert len(run(1.1)) == 1 and len(run(ramp=False)) == 1   # too slow / off: one paragraph chunk

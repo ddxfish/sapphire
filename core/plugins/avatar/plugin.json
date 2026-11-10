@@ -1,15 +1,29 @@
 {
   "name": "avatar",
   "privacy_aware": true,
-  "surfaces": ["chat"],
+  "surfaces": [
+    "chat"
+  ],
   "short_display_name": "Avatar",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "3D Avatar \u2014 animated presence that reacts to Sapphire's state in real-time",
   "author": "sapphire",
   "icon": "\ud83d\udc8e",
   "priority": 80,
   "default_enabled": false,
   "settingsUI": "plugin",
+  "environment": {
+    "python": "3.12",
+    "pip": [
+      "pygfx>=0.17",
+      "wgpu>=0.33",
+      "rendercanvas>=3.0",
+      "gltflib",
+      "imageio",
+      "numpy",
+      "pillow"
+    ]
+  },
   "capabilities": {
     "sidebar_accordion": {
       "title": "Avatar",
@@ -24,7 +38,9 @@
         "genre": "arcade",
         "desc": "Protect Sapphire from incoming missiles \u2014 click to shoot, waves get harder.",
         "icon": "\ud83d\ude80",
-        "surfaces": ["chat_sidebar"]
+        "surfaces": [
+          "chat_sidebar"
+        ]
       }
     ],
     "hooks": {
@@ -33,15 +49,53 @@
       "tts_stream_start": "hooks/mouth.py",
       "tts_stream_end": "hooks/mouth.py"
     },
-    "daemon": {"entry": "daemon.py"},
+    "daemon": {
+      "entry": "daemon.py"
+    },
     "routes": [
-      {"method": "GET",    "path": "models",            "handler": "routes/api.py:list_models"},
-      {"method": "POST",   "path": "upload",            "handler": "routes/api.py:upload_model"},
-      {"method": "DELETE", "path": "models/{filename}",  "handler": "routes/api.py:delete_model"},
-      {"method": "GET",    "path": "tracks/{filename}",  "handler": "routes/api.py:get_tracks"},
-      {"method": "GET",    "path": "config",             "handler": "routes/api.py:get_config"},
-      {"method": "GET",    "path": "state",              "handler": "routes/api.py:get_state"},
-      {"method": "PUT",    "path": "config",             "handler": "routes/api.py:save_config"}
+      {
+        "method": "GET",
+        "path": "models",
+        "handler": "routes/api.py:list_models"
+      },
+      {
+        "method": "POST",
+        "path": "upload",
+        "handler": "routes/api.py:upload_model"
+      },
+      {
+        "method": "DELETE",
+        "path": "models/{filename}",
+        "handler": "routes/api.py:delete_model"
+      },
+      {
+        "method": "GET",
+        "path": "tracks/{filename}",
+        "handler": "routes/api.py:get_tracks"
+      },
+      {
+        "method": "GET",
+        "path": "config",
+        "handler": "routes/api.py:get_config"
+      },
+      {
+        "method": "GET",
+        "path": "state",
+        "handler": "routes/api.py:get_state"
+      },
+      {
+        "method": "PUT",
+        "path": "config",
+        "handler": "routes/api.py:save_config"
+      }
+    ],
+    "services": [
+      {
+        "name": "render",
+        "entry": "render_server.py",
+        "port": 5021,
+        "health": "/health"
+      }
     ]
   }
 }

@@ -82,7 +82,10 @@ class SpeechChunker:
       'paragraph' — break only on \\n\\n paragraph breaks (preserves
                     intonation across consecutive sentences). max_chars
                     still applies as a safety cap so a long paragraph
-                    doesn't buffer forever. DEFAULT.
+                    doesn't buffer forever. DEFAULT
+                    A reply still starts with its first sentence alone,
+                    then chunks ramp up to what the engine can make while
+                    the audio ahead plays (see _drain; `speed`, `ramp`).
     pause_overrides: dict mapping boundary name → ms (overrides PAUSE_AFTER_MS).
     """
 
@@ -102,6 +105,12 @@ class SpeechChunker:
         self._raw_buf = ""
         self._clean_buf = ""
         self._chunk_index = 0
+        self._first_len = self._sum_len = 0     # chunk lengths so far: the ramp's cap
+        # Set by the pump: the engine's measured speed (x realtime, None =
+        # unknown, taken as 2) and whether to ramp at all (off when a plugin
+        # plays the audio itself: its player may not start at the first chunk).
+        self.speed = None
+        self.ramp = True
         # Avatar tags ride the chunk they were written in: each stripped tag
         # leaves a private-use mark in clean_buf, and the chunk that carries
         # the mark carries the tag ({track, mode, pos} in its `avatar` list).
@@ -171,7 +180,7 @@ class SpeechChunker:
                 leftover = leftover[:leftover.rfind("```")]
             self._clean_buf += self._clean(leftover)
             self._raw_buf = ""
-        out.extend(self._drain())
+        out.extend(self._drain(final=True))
         # Final chunk for whatever's left (regardless of min_chars)
         final_text = _finish_chunk(self._clean_buf)
         self._clean_buf = ""
@@ -183,7 +192,7 @@ class SpeechChunker:
         self._carry, self._tags = [], {}
         return out
 
-    def _drain(self) -> list:
+    def _drain(self, final: bool = False) -> list:
         """Pull as many chunks as possible out of clean_buf with current params."""
         # Apply stage-direction prosody substitution before splitting.
         # Complete *X* and (X) pairs get wrapped with the configured marker;
@@ -198,6 +207,27 @@ class SpeechChunker:
         out: list = []
         while True:
             cut = _find_split(self._clean_buf, self.max_chars, self.min_chars, self.split_mode)
+            # The first chunk ends at its first sentence in either mode, so
+            # first audio waits on one sentence, not a paragraph. Each later
+            # chunk is cut at a sentence end to what the engine can make while
+            # the audio ahead of it plays: made one after another at `speed`
+            # x realtime, chunk k is ready in time when
+            # L_k <= L_0 + (speed - 1) * (L_0 + ... + L_k-1). A short first
+            # sentence and then a whole paragraph left a ~3 s hole on a CPU
+            # laptop (2026-11-10). Chars stand in for seconds. Off (`ramp`
+            # False, or an engine too slow to get ahead): chunks as split_mode
+            # cuts them, the way they were before.
+            early = None
+            r = self.speed or 2.0
+            if self.ramp and r >= 1.3:
+                cap = int(self._first_len + (r - 1) * self._sum_len + self._chunk_index)
+                if self._chunk_index == 0:
+                    early = _sentence_cut(self._clean_buf, self.min_chars)
+                elif cap < self.max_chars and (cut is None or len(cut[0]) > cap):
+                    early = _sentence_cut(self._clean_buf, self.min_chars, cap,
+                                          final or (cut is not None and cut[1] == "maxlen"))
+            if early and (cut is None or len(early[0]) < len(cut[0])):
+                cut = early
             if cut is None:
                 break
             chunk_text, boundary, remainder = cut
@@ -205,6 +235,8 @@ class SpeechChunker:
             self._clean_buf = remainder
             chunk = self._emit(chunk_text, boundary) if chunk_text else None
             if chunk:
+                self._first_len = self._first_len or len(chunk["text"])
+                self._sum_len += len(chunk["text"])
                 out.append(chunk)
         return out
 
@@ -468,6 +500,60 @@ _PARAGRAPH_RE = re.compile(r"\n\s*\n")
 # Secondary: ; or : followed by whitespace + uppercase. Only splits when
 # the chunk is already large (see _SECONDARY_SPLIT_FRACTION above).
 _SECONDARY_RE = re.compile(r"([;:])\s+(?=" + _MARKS + r"[A-Z])")
+
+
+# Words a period follows without ending the sentence ("Dr. Smith", "Mt.
+# Hood"), checked only where the chunker cuts early: a cut there reads
+# "Doctor." with a falling end and a seam mid-name.
+_NOT_AN_END = {"mr", "mrs", "ms", "dr", "st", "jr", "sr", "vs", "prof", "mt", "fig", "approx", "dept", "est"}
+_INITIALS_RE = re.compile(r"(?:[A-Za-z]\.)+")          # U.S.  p.m.  J.
+_LIST_NUM_RE = re.compile(r"\d+[.)]")                   # "2." heading a list item
+
+
+def _false_end(head: str) -> bool:
+    """A sentence-end match that isn't one: a trail-off `...`, an
+    abbreviation, initials, or a list item's number."""
+    head = head.rstrip("\"')]")
+    if head.endswith(("...", "\u2026")):
+        return True
+    if not head.endswith("."):
+        return False
+    word = head.rsplit(None, 1)[-1]
+    return (word[:-1].lower() in _NOT_AN_END or bool(_INITIALS_RE.fullmatch(word))
+            or bool(_LIST_NUM_RE.fullmatch(word)))
+
+
+def _sentence_cut(buf: str, min_chars: int, cap: Optional[int] = None,
+                  final: bool = False) -> Optional[Tuple[str, str, str]]:
+    """A cut at a sentence end (any of the sentence-mode shapes) leaving at
+    least min_chars before it, never at a trail-off `...` ("Sure!" alone or
+    "Fishy..." would be read out of context). No cap: the earliest. With a
+    cap: the last one within cap chars, decided only once a sentence end
+    past cap has arrived (an end is seen only when the next word does, so
+    before that one more may still fit); if none fits, the earliest. `final`:
+    the stream is over (or a max-length cut is due) and the end of the text
+    counts as a sentence end."""
+    ends = []
+    for rx in (_SENTENCE_RE, _CJK_SENTENCE_RE, _CASUAL_SENTENCE_RE):
+        for m in rx.finditer(buf):
+            end = m.end(2) if m.group(2) else m.end(1)
+            head = buf[:end].strip()
+            if len(head) >= min_chars and not _false_end(head):
+                ends.append((end, m.end()))
+    if cap is not None:
+        tail = len(buf.rstrip())
+        if final:
+            ends.append((tail, len(buf)))
+        if not any(e > cap for e, _ in ends):
+            return None
+    if not ends:
+        return None
+    ends.sort()
+    fit = [e for e in ends if cap is not None and e[0] <= cap]
+    end, rest = fit[-1] if fit else ends[0]
+    if end >= len(buf.rstrip()):
+        return None                       # the whole rest: flush emits it
+    return buf[:end], "sentence", buf[rest:]
 
 
 def _find_split(buf: str, max_chars: int, min_chars: int,

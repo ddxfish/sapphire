@@ -14,25 +14,25 @@ export function updateMicButtonState() {
     const { micBtn } = getElements();
     if (!micBtn) return;
 
-    // Conversation on: the mic IS the live-session indicator (tap = end).
-    // Outranks tts-playing — her speech is the conversation's.
+    // Conversation on: the mic IS the live-session indicator (tap = end),
+    // except while she speaks: then it's Stop TTS like outside it, and the
+    // conversation goes on listening after.
     const conv = getConvo();
     const on = convoOn();
-    micBtn.classList.toggle('convo-on', on);
-    if (on) {
+    // Check both browser TTS and local (server speaker) TTS
+    const ttsActive = audio.isTtsPlaying() || audio.isLocalTtsPlaying();
+    micBtn.classList.toggle('convo-on', on && !ttsActive);
+    if (on && !ttsActive) {
         micBtn.classList.remove('tts-playing');
         micBtn.textContent = '\u{1F399}';
         micBtn.title = `Conversation on (${conv.source} mic) \u2014 tap to end`;
         return;
     }
 
-    // Check both browser TTS and local (server speaker) TTS
-    const ttsActive = audio.isTtsPlaying() || audio.isLocalTtsPlaying();
-
     if (ttsActive) {
         micBtn.classList.add('tts-playing');
         micBtn.textContent = '⏹';
-        micBtn.title = 'Stop TTS';
+        micBtn.title = on ? 'Stop TTS (conversation stays on)' : 'Stop TTS';
     } else {
         micBtn.classList.remove('tts-playing');
         const canRecord = getSttEnabled() && getSttReady();
@@ -59,16 +59,18 @@ export function stopMicIconPolling() {
 export async function handleMicPress() {
     const { micBtn } = getElements();
 
-    // Conversation on → this press ends it; hold-to-record is suspended
-    if (convoOn()) {
-        setConvo('off');
-        return;
-    }
-
-    // If any TTS is playing (browser or local), stop it instead of recording
+    // If any TTS is playing (browser or local), stop it instead of recording.
+    // In conversation mode too: the server cuts her turn the way a barge-in
+    // does (chat-wide stop -> the conversation sink) and goes on listening.
     if (audio.isTtsPlaying() || audio.isLocalTtsPlaying()) {
         audio.stop(true, true);
         updateMicButtonState();
+        return;
+    }
+
+    // Conversation on → this press ends it; hold-to-record is suspended
+    if (convoOn()) {
+        setConvo('off');
         return;
     }
     

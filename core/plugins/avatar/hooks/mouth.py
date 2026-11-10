@@ -54,6 +54,11 @@ def tts_chunk_audio(event):
         "cues": mouth.cues(meta.get("avatar"), start, end, len(text), curve["dur"]),
     })
     publish("avatar_mouth", curve, ephemeral=True)
+    try:
+        from plugins.avatar import screen
+        screen.speak(curve, audio)               # her screens' renderer draws the same curve, with its voice
+    except Exception as e:
+        logger.debug(f"[avatar] screen renderer skipped: {e!r}")
     for cue in curve["cues"]:
         if cue["track"].lower().startswith("go_"):
             from plugins.avatar import brain
@@ -63,6 +68,15 @@ def tts_chunk_audio(event):
 def tts_stream_start(event):
     meta = event.metadata or {}
     if _enabled():
+        try:
+            from plugins.avatar import screen
+            screen.wake()
+            device = meta.get("device") or ""
+            if device and screen.carries(device):    # that board's own reply, and her 3D face streams to it now: the stream
+                from core import avatar_feed        # carries this reply's voice (one clock), core's sentence door skips it there
+                avatar_feed.claim(screen.NAME, device, meta.get("stream_id"))
+        except Exception as e:
+            logger.debug(f"[avatar] screens not woken: {e!r}")
         publish("avatar_voice", {"stream_id": meta.get("stream_id"),
                                  "plays_here": bool(meta.get("plays_here", True)),
                                  "device": meta.get("device")}, ephemeral=True)
@@ -71,6 +85,15 @@ def tts_stream_start(event):
 def tts_stream_end(event):
     meta = event.metadata or {}
     _segments.end(meta.get("stream_id"))
+    try:
+        from plugins.avatar import screen
+        if screen._ours:
+            from core.devices import glass
+            glass.av_release(sid=meta.get("stream_id"))   # the reply is made: a board that began to voice it voices it to its end (avatar_feed)
+            if meta.get("interrupted"):
+                screen.flush(meta.get("stream_id") or "")
+    except Exception:
+        pass
     tail = meta.get("avatar_tail")
     if tail and _enabled():
         publish("avatar_tail", {"stream_id": meta.get("stream_id"),

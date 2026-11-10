@@ -69,7 +69,7 @@ LINGER = 12.0             # seconds she stands over the chat's text before stepp
 COLUMN = (15, 85)         # percent across: between these she is over the messages
 SPOTS = {"left": {"x": 6}, "right": {"x": 94}, "center": {"x": 50}, "middle": {"x": 50},
          "back": {"d": 100}, "front": {"d": 0}}
-SEATS = ("couch", "desk", "chair")
+SEATS = ("couch", "desk", "chair", "bed")
 WORK = (Events.TOOL_EXECUTING, Events.AGENT_SPAWNED, Events.CONTINUITY_TASK_STARTING)
 _GO = re.compile(r"^go_([a-z0-9]+)(?:_(\d{1,3}))?$", re.I)
 
@@ -215,12 +215,16 @@ class Brain:
                 return False              # a phone call's turn is not hers here
             if etype in WORK and self.stage_on and "desk" in self.seats and self.place["spot"] != "desk":
                 self._go({"spot": "desk"})                # real work happens at her desk
+            elif self.place["spot"] == "bed":
+                self._go({"spot": None})                  # a turn of hers gets her up
             state = AI[etype]
             self._write(3, self.track_map.get(state, state) if state else None)
             if etype in (Events.AI_TYPING_START, Events.LLM_ERROR):
                 self._write(4, None)      # the reach was answered
             return True
         if etype in USER:
+            if self.place["spot"] == "bed":
+                self._go({"spot": None})                  # you reached for her: she gets up
             state = USER[etype]
             self._write(4, self.track_map.get(state, state))
             return True
@@ -240,11 +244,14 @@ class Brain:
         # the variety cycle: a fresh base for this hour, and a gesture unless it's quiet
         fresh = self._base()
         self._write(6, fresh, "loop")
+        abed = self.place["spot"] == "bed"
         if self._quiet():
+            if self.stage_on and "bed" in self.seats and not abed:
+                self._go({"spot": "bed"})                 # her quiet hours: to bed
             return
-        if self.stage_on and random.random() < STROLL:
+        if self.stage_on and (abed or random.random() < STROLL):      # morning gets her up
             spots = [{"x": x, "d": d, "spot": None} for x in (6, 94) for d in (0, 0, 100)]   # the edges, mostly up front
-            spots += [{"spot": s} for s in self.seats if s != "desk"] * 3                      # she likes a seat
+            spots += [{"spot": s} for s in self.seats if s not in ("desk", "bed")] * 3                      # she likes a seat
             here = {k: self.place[k] for k in ("x", "d", "spot")}
             to = random.choice([s for s in spots if {**here, **s} != here] or spots)
             self._go(to)

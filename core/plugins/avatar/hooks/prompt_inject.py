@@ -72,8 +72,8 @@ def prompt_inject(event):
     )
     stage = state_stage()
     if stage.get("on"):
-        seats = [s for s in ("couch", "desk") if stage.get(s)] + (["chair"] if stage.get("chair") is not None else [])
-        chair = (" You can sit: " + ", ".join(f"<<avatar: go_{s}>>" for s in seats) +
+        seats = [s for s in ("couch", "desk", "bed") if stage.get(s)] + (["chair"] if stage.get("chair") is not None else [])
+        chair = (" You can sit" + (" (the bed is for lying down)" if "bed" in seats else "") + ": " + ", ".join(f"<<avatar: go_{s}>>" for s in seats) +
                  ". Seated you still talk and gesture from the waist up.") if seats else ""
         event.context_parts.append(
             "Right now your avatar stands in the chat window itself, in front of the messages "

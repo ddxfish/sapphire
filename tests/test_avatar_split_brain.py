@@ -208,3 +208,24 @@ def test_the_middle_is_a_visit_she_steps_aside(brain):
     brain.went("go_50")
     brain.went("go_chair")
     assert "aside" not in brain._due                # so is a seat
+
+
+def test_quiet_hours_send_her_to_bed_and_a_turn_gets_her_up(brain):
+    brain.stage_on, brain.seats = True, ["couch", "bed"]
+    brain.buckets = [{"name": "night", "start": 0, "quiet": True}]
+    brain._tick("variety")
+    assert brain.place["spot"] == "bed"
+    at = brain.place["id"]
+    brain._tick("variety")
+    assert brain.place["id"] == at                  # asleep: nothing more happens
+    brain._on_event(Events.AI_TYPING_START, {})
+    assert brain.place["spot"] is None              # her own turn gets her up
+    brain._tick("variety")
+    assert brain.place["spot"] == "bed"             # and back to bed after
+    brain.buckets = [{"name": "day", "start": 0, "quiet": False}]
+    brain._tick("variety")
+    assert brain.place["spot"] != "bed"             # morning
+    for _ in range(40):                             # a daytime stroll never picks the bed
+        brain._tick("variety")
+        assert brain.place["spot"] != "bed"
+    assert brain.went("go_bed") is None and brain.place["spot"] == "bed"    # her own tag still can
