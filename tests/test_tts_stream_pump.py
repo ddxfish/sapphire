@@ -53,14 +53,94 @@ def enable_streaming(monkeypatch):
     monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", True, raising=False)
 
 
-def test_disabled_when_streaming_setting_off(monkeypatch):
+@pytest.fixture
+def streaming_off(monkeypatch):
     import config
     monkeypatch.setattr(config, "TTS_ENABLED", True, raising=False)
     monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", False, raising=False)
-    pump = StreamingTTSPump(system=_make_system(provider=_FakeProvider()))
-    assert pump.enabled is False
-    assert pump.push("Hello. World. ") == []
-    assert list(pump.flush_and_close()) == []
+    monkeypatch.setattr(config, "TTS_STREAMING_SPLIT_MODE", "sentence", raising=False)
+
+
+def test_streaming_off_holds_the_reply_and_sends_it_whole(streaming_off):
+    """2026-11-10: with Stream speech off the pump went inert, the browser fetched
+    one blob and no audio hook fired (FlashHead: she spoke, the face never heard).
+    Now the same pump holds the reply: nothing is asked of the engine while the LLM
+    writes, and the same events come out at the flush."""
+    fp = _FakeProvider()
+    pump = StreamingTTSPump(system=_make_system(provider=fp))
+    assert pump.enabled is True
+    events = pump.push("Hello there friend. ") + pump.push("The sun is out today. ")
+    assert [e["type"] for e in events] == ["tts_stream_start"]
+    assert fp.calls == []                                    # the engine waits for the LLM
+    out = list(pump.flush_and_close())
+    assert [e["type"] for e in out] == ["tts_chunk", "tts_stream_end"]
+    assert out[0]["text"] == "Hello there friend. The sun is out today."   # paragraphs, whatever the split setting
+    assert pump._stream_started is True                      # llm_done's tts_streamed: the browser fetches no blob
+
+
+def test_streaming_off_releases_nothing_until_all_of_it_is_made(streaming_off):
+    """The point for a small GPU: a face renderer gets her voice (tts_chunk_audio)
+    only when the voice engine is done with the whole reply."""
+    order = []
+
+    class Slow(_FakeProvider):
+        def generate(self, text, voice, speed):
+            time.sleep(0.15)
+            order.append("made")
+            return b"OGGS\x00fake"
+    pump = StreamingTTSPump(system=_make_system(provider=Slow()))
+    real = pump._build_chunk_event
+    pump._build_chunk_event = lambda seg, meta: (order.append("released"), real(seg, meta))[1]
+    pump.push("First paragraph here.\n\nSecond paragraph here.\n\nThird one here. ")
+    out = list(pump.flush_and_close())
+    assert order == ["made"] * 3 + ["released"] * 3
+    assert [e.get("index") for e in out if e["type"] == "tts_chunk"] == [0, 1, 2]
+
+
+def test_streaming_off_a_stop_while_it_is_made_releases_nothing(streaming_off):
+    stop = {"now": False}
+    fp = _FakeProvider(delay=0.5)
+    pump = StreamingTTSPump(system=_make_system(provider=fp), cancel_check=lambda: stop["now"])
+    pump.push("One paragraph.\n\nAnother paragraph. ")
+    gen = pump.flush_and_close()
+    import threading
+    threading.Timer(0.15, lambda: stop.update(now=True)).start()
+    t0 = time.monotonic()
+    out = list(gen)
+    assert time.monotonic() - t0 < 0.45                      # did not wait for the engine
+    assert [e["type"] for e in out] == ["tts_stream_end"]
+    assert out[0]["interrupted"] is True
+
+
+def test_streaming_off_a_stalled_engine_still_speaks_what_was_made(streaming_off, monkeypatch):
+    import core.tts.stream_pump as sp
+    monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.3)
+
+    class Hangs(_FakeProvider):
+        synth_workers = 1
+
+        def generate(self, text, voice, speed):
+            if "Second" in text:
+                time.sleep(1.5)
+                return None
+            return b"OGGS\x00fake"
+    pump = StreamingTTSPump(system=_make_system(provider=Hangs()))
+    pump.push("First paragraph here.\n\nSecond paragraph here.\n\nThird one here. ")
+    out = list(pump.flush_and_close())
+    assert [e.get("index") for e in out if e["type"] == "tts_chunk"] == [0]
+    assert any(e["type"] == "notice" and "fell behind" in e["message"] for e in out)
+    assert out[-1]["type"] == "tts_stream_end"
+
+
+def test_streaming_off_a_phone_calls_sentence_split_still_streams(streaming_off):
+    """A call's driver asks for sentences (split_override): dead air until the
+    reply is finished is worse than the switch. It streams, like a satellite."""
+    fp = _FakeProvider()
+    pump = StreamingTTSPump(system=_make_system(provider=fp), split_override="sentence")
+    pump.push("It is noon here. The sun is out. ")
+    assert fp.calls or pump.pending                          # asked of the engine before the flush
+    out = list(pump.flush_and_close())
+    assert pump._whole is False and out[-1]["type"] == "tts_stream_end"
 
 
 def test_disabled_when_no_provider(enable_streaming):
@@ -68,12 +148,18 @@ def test_disabled_when_no_provider(enable_streaming):
     assert pump.enabled is False
 
 
-def test_disabled_when_provider_no_stream_support(enable_streaming):
-    class NoStream:
+def test_an_engine_with_no_streaming_door_is_voiced_whole(enable_streaming):
+    """It used to leave the pump inert (the browser fetched a blob, no audio hook
+    fired). Now it is held and made at the flush, with generate()."""
+    class NoStream(_FakeProvider):
         supports_streaming = False
-        def generate(self, *a, **kw): return b""
-    pump = StreamingTTSPump(system=_make_system(provider=NoStream()))
-    assert pump.enabled is False
+    fp = NoStream()
+    pump = StreamingTTSPump(system=_make_system(provider=fp))
+    assert pump.enabled is True and pump._whole is True
+    pump.push("Hello there friend. ")
+    assert fp.calls == []
+    out = list(pump.flush_and_close())
+    assert [e["type"] for e in out] == ["tts_chunk", "tts_stream_end"]
 
 
 def test_first_push_emits_stream_start(enable_streaming):

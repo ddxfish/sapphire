@@ -187,7 +187,7 @@ A room is a chat with several speakers. Not a room → 404; a bad request → 40
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | POST | `/api/tts` | Generate TTS audio |
-| POST | `/api/tts/stream` | Streaming TTS for known text, as SSE (`tts_stream_start`, `tts_chunk`, `tts_stream_end`). 503 when streaming is off or the provider can't stream: fall back to `/api/tts` |
+| POST | `/api/tts/stream` | Streaming TTS for known text, as SSE (`tts_stream_start`, `tts_chunk`, `tts_stream_end`). With streaming off or a provider that can't stream, the text is made whole first, then sent the same way. 503 only with TTS off or no engine: fall back to `/api/tts` |
 | POST | `/api/tts/preview` | Preview voice sample |
 | GET | `/api/tts/status` | TTS server status |
 | POST | `/api/tts/stop` | Stop TTS playback |

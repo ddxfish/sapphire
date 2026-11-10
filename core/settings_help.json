@@ -330,7 +330,7 @@
   },
   "TTS_STREAMING_ENABLED": {
     "short": "Stream speech in sentence-sized chunks",
-    "long": "When ON, Sapphire synthesizes and starts playing each sentence as soon as the LLM finishes it — speech starts ~1-2s after you press send instead of waiting for the whole reply. Works with providers that support streaming; the others fall back to whole-reply playback automatically. On by default; turn it off to hear each reply in one piece after it finishes."
+    "long": "When ON, Sapphire synthesizes and starts playing each sentence as soon as the LLM finishes it — speech starts ~1-2s after you press send instead of waiting for the whole reply. Works with providers that support streaming; the others fall back to whole-reply playback automatically. On by default; turn it off to hear each reply in one piece after it finishes: her whole voice is made first, then played, so an avatar plugin's face gets the GPU to itself (helps a small graphics card that stutters with a talking face)."
   },
   "TTS_STREAMING_MIN_CHARS": {
     "short": "Minimum chars before emitting a chunk",

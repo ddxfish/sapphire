@@ -186,22 +186,21 @@ async def handle_tts_stream(request: Request, _=Depends(require_login), system=D
     in the same format chat_streaming emits (tts_stream_start / tts_chunk /
     tts_stream_end). Frontend's existing event-bus subscribers play them.
 
-    Returns 503 when streaming is disabled OR provider lacks support — the
-    client should fall back to /api/tts (whole-blob) on either case.
+    With Settings > TTS "Stream speech" off, or an engine with no streaming
+    door, the same pump makes the text whole and then sends it: the events
+    and the plugin hooks are the same either way. 503 only with TTS off or
+    no engine (the client falls back to /api/tts).
     """
     import json
     check_endpoint_rate(request, 'tts', max_calls=30, window=60)
-
-    if not getattr(config, 'TTS_STREAMING_ENABLED', True):
-        raise HTTPException(status_code=503, detail="Streaming TTS disabled in settings")
 
     if not config.TTS_ENABLED:
         raise HTTPException(status_code=503, detail="TTS disabled")
 
     tts = getattr(system, 'tts', None)
     provider = getattr(tts, '_provider', None) if tts else None
-    if not provider or not getattr(provider, 'supports_streaming', False):
-        raise HTTPException(status_code=503, detail="Provider doesn't support streaming")
+    if not provider:
+        raise HTTPException(status_code=503, detail="No TTS engine")
 
     data = await request.json()
     text = (data.get('text') or '').strip()

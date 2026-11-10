@@ -281,8 +281,11 @@ enough to build live captions, an audio recorder, or a lipsync driver. Sending
 her voice to another speaker (an avatar, a game, a robot) and silencing this
 computer is its own page: [Sending her voice somewhere else](voice-routing.md).
 
-These fire **only** for streaming-capable providers. Legacy/whole-blob providers
-use `pre_tts` / `post_tts` instead.
+They fire for every chat reply, streamed or not. With streaming off, or a
+provider that can't stream, the same pump holds the reply until the LLM is done,
+makes all of it, then releases it: the same hooks in the same order, only later.
+`pre_tts` / `post_tts` belong to whole-blob speech outside a chat turn (the
+speakers, satellites' sentence door, Telegram voice notes).
 
 ### Lifecycle & order (per turn)
 

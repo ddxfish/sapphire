@@ -147,6 +147,20 @@ class StreamingTTSPump:
             and hasattr(self.provider, "generate_stream")
             and getattr(self.provider, "supports_streaming", False)
         )
+        # Whole: Settings > TTS "Stream speech" is off, or the engine has no
+        # streaming door. The reply is made after the LLM is done and none of
+        # it is released (hooks, browser) until all of it is made - the same
+        # pump, hooks and events as a streamed reply, so an avatar plugin gets
+        # her voice either way. Before 2026-11-10 this pump went inert and the
+        # browser fetched one blob no audio hook ever saw (FlashHead: she
+        # spoke, the face never heard it). It also keeps a face renderer off
+        # the GPU until the voice engine is done with it. A satellite (force)
+        # or a phone call (split_override) needs its first sentence early and
+        # streams whatever the switch says.
+        self._whole = not self._force and not split_override and not (
+            getattr(config, "TTS_STREAMING_ENABLED", True)
+            and getattr(self.provider, "supports_streaming", False))
+        self._held: list = []           # whole: the chunks cut so far, not yet asked of the engine
         # Voice/speed/pitch SNAPSHOT — bound ONCE at stream start. Chunks used
         # to read live client state at synth time, so a chat switch, a
         # continuity task's set→restore, or a second concurrent stream retuned
@@ -171,6 +185,8 @@ class StreamingTTSPump:
         # one-paragraph spoken reply, which is seconds of dead air on a call).
         split_mode = ((split_override or "").strip().lower()
                       or (getattr(config, "TTS_STREAMING_SPLIT_MODE", "paragraph") or "paragraph").strip().lower())
+        if self._whole:
+            split_mode = "paragraph"    # nothing plays early: the best prosody is free
         pause_overrides = {
             "sentence":  int(getattr(config, "TTS_STREAMING_PAUSE_SENTENCE_MS", 0) or 0),
             "paragraph": int(getattr(config, "TTS_STREAMING_PAUSE_PARAGRAPH_MS", 80) or 80),
@@ -188,7 +204,7 @@ class StreamingTTSPump:
         )
         self._engine = type(self.provider).__name__ if self.provider is not None else ""
         self.chunker.speed = _SPEEDS.get(self._engine)
-        self.chunker.ramp = not _TAKEN["last"]
+        self.chunker.ramp = not _TAKEN["last"] and not self._whole
         self._taken = False             # a plugin took this turn's audio (see _TAKEN)
         self.pending: deque = deque()
         self.executor = None
@@ -227,12 +243,7 @@ class StreamingTTSPump:
     def enabled(self) -> bool:
         if self._force:
             return self.provider is not None
-        return bool(
-            getattr(config, "TTS_ENABLED", False)
-            and getattr(config, "TTS_STREAMING_ENABLED", True)
-            and self.provider is not None
-            and getattr(self.provider, "supports_streaming", False)
-        )
+        return bool(getattr(config, "TTS_ENABLED", False) and self.provider is not None)
 
     def push(self, text: str) -> list:
         """Push LLM content text; return SSE event dicts to yield."""
@@ -289,6 +300,9 @@ class StreamingTTSPump:
                 return []
             out.append({"type": "tts_stream_start", "stream_id": self._stream_id})
             self._executor()  # lazy-create
+        if self._whole:
+            self._held.extend(self.chunker.push(text))
+            return out
         for chunk in self.chunker.push(text):
             self._submit(chunk)
         out.extend(self._drain_ready())
@@ -310,8 +324,11 @@ class StreamingTTSPump:
         if not self._stream_started or self._closed:
             self._close()
             return
-        for chunk in self.chunker.flush():
+        for chunk in self._held + self.chunker.flush():
             self._submit(chunk)
+        self._held = []
+        if self._whole:
+            self._wait_whole()
         interrupted = False
         # Drain pump-chunks in order. For each, fully drain its segment
         # queue (waiting on the worker if needed), polling cancel between
@@ -453,6 +470,27 @@ class StreamingTTSPump:
         }
         self._was_interrupted = interrupted
         self._close()
+
+    def _wait_whole(self):
+        """Whole (see __init__): wait until every chunk is made before the
+        first is released. A Stop ends the wait (the drain after it sees the
+        same Stop). An engine that stalls drops that chunk and the ones behind
+        it: what was made is still spoken, and the notice says the rest fell."""
+        for at, (_seg_queue, done_evt, _fut, meta) in enumerate(list(self.pending)):
+            since = time.monotonic()
+            while not done_evt.wait(_FLUSH_POLL_TIMEOUT_S):
+                if self._is_cancelled():
+                    return
+                last = max(since, meta.get("started_at") or 0.0, meta.get("progress_at") or 0.0)
+                if time.monotonic() - last > _FLUSH_HARD_TIMEOUT_S:
+                    logger.warning(f"[TTS-STREAM] chunk {meta.get('index')} stalled while the reply "
+                                   f"was made whole: it and what follows are not voiced")
+                    self._abandoned.set()
+                    while len(self.pending) > at:
+                        _q, _d, fut, m = self.pending.pop()
+                        fut.cancel()
+                        self._dropped_chunks.append(m.get("index"))
+                    return
 
     def _is_cancelled(self) -> bool:
         if self._cancel_check is None:

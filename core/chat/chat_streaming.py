@@ -361,8 +361,9 @@ class StreamingChat:
         yield {"type": "stream_started"}
 
         # Streaming TTS pump — emits per-chunk audio SSE events alongside
-        # LLM token content. Inert when TTS_STREAMING_ENABLED is off or
-        # provider lacks supports_streaming. Single pump spans the whole
+        # LLM token content. With TTS_STREAMING_ENABLED off (or an engine
+        # with no streaming door) it holds the reply and emits it whole at
+        # the flush: same events, same hooks. Single pump spans the whole
         # turn (across tool iterations); only the final-content iteration
         # actually feeds it text and closes it. Defined here (outside the
         # main try) so the cleanup-finally can always reach it. The

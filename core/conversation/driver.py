@@ -10,9 +10,10 @@ Bridges the pure-logic ConversationEngine to Sapphire's streaming pipeline:
 Routing voice through chat_stream (instead of the blocking chat()) is what makes
 the reply stream to the UI AND makes the LLM cancellable for real barge-in.
 
-NOTE: local audio depends on TTS streaming being enabled (chat_stream's pump only
-emits tts_chunk events then). With it off, the UI still streams but she's silent —
-a fallback (tts.speak final) is a later add. STT/stream/sink are injectable for tests.
+With Settings > TTS "Stream speech" off the pump makes the reply whole and then
+emits the same tts_chunk events, so she speaks once the reply is finished (a phone
+call's sentence split streams whatever the switch says). STT/stream/sink are
+injectable for tests.
 """
 import difflib
 import logging
@@ -287,8 +288,8 @@ class ConversationDriver:
                 self._turn_chat = chat                  # what a barge-in cancels
                 if self._tts_split:
                     # Phone surface: force the sentence-split pump so the first
-                    # sentence synthesizes while the rest still generates. Inert
-                    # when TTS streaming is globally off (pump stays disabled).
+                    # sentence synthesizes while the rest still generates, whatever
+                    # the global streaming switch says (dead air on a call otherwise).
                     stream.tts_split_override = self._tts_split
                 if self._chat_name:
                     # A phone call or a bot's channel is elsewhere: Settings >

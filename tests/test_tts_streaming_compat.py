@@ -98,42 +98,45 @@ class _LegacyOnly:
     def generate(self, text, voice, speed): return b"x"
 
 
-def test_pump_inert_for_legacy_provider_no_hooks_fire(streaming_on, fresh_hooks):
-    """A plugin listening to tts_stream_start must NOT see a ghost event
-    when the active provider can't stream. Otherwise a captioning banner
-    would show ghost captions for non-streaming providers."""
+def test_legacy_provider_is_voiced_whole_and_every_hook_fires(streaming_on, fresh_hooks):
+    """An engine that can't stream is held and voiced at the flush by the same
+    pump (2026-11-10): the hooks an avatar or a captions plugin listens to fire
+    for it too, in order, with real audio behind them (no ghost events)."""
     seen = []
     fresh_hooks.register("tts_stream_start", lambda ev: seen.append("start"), plugin_name="t")
     fresh_hooks.register("tts_chunk_text",   lambda ev: seen.append("text"),  plugin_name="t")
     fresh_hooks.register("tts_chunk_audio",  lambda ev: seen.append("audio"), plugin_name="t")
     fresh_hooks.register("tts_stream_end",   lambda ev: seen.append("end"),   plugin_name="t")
     pump = StreamingTTSPump(system=_system_with(_LegacyOnly()))
-    assert pump.enabled is False
+    assert pump.enabled is True
     pump.push("Hello there. ")
     pump.push("More.")
+    assert seen == ["start"]                     # nothing made while the LLM writes
     out = list(pump.flush_and_close())
-    assert out == []
-    assert seen == []  # zero hook fires
+    assert [e["type"] for e in out] == ["tts_chunk", "tts_stream_end"]
+    assert seen == ["start", "text", "audio", "end"]
 
 
 # ---------------------------------------------------------------------------
 # 3. Setting disabled — no events, no hook fires (even with capable provider)
 # ---------------------------------------------------------------------------
 
-def test_pump_inert_when_setting_off_even_with_capable_provider(monkeypatch, fresh_hooks):
+def test_setting_off_voices_the_reply_whole_through_the_same_hooks(monkeypatch, fresh_hooks):
     import config
     monkeypatch.setattr(config, "TTS_ENABLED", True, raising=False)
     monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", False, raising=False)
     seen = []
     fresh_hooks.register("tts_stream_start", lambda ev: seen.append("start"), plugin_name="t")
     fresh_hooks.register("tts_chunk_text",   lambda ev: seen.append("text"),  plugin_name="t")
+    fresh_hooks.register("tts_chunk_audio",  lambda ev: seen.append("audio"), plugin_name="t")
     pump = StreamingTTSPump(system=_system_with(_StreamCapable()))
-    assert pump.enabled is False
+    assert pump.enabled is True
     pump.push("Hello there. ")
     pump.push("More.")
+    assert seen == ["start"]
     out = list(pump.flush_and_close())
-    assert out == []
-    assert seen == []
+    assert [e["type"] for e in out] == ["tts_chunk", "tts_stream_end"]
+    assert seen == ["start", "text", "audio"]
 
 
 def test_pump_inert_when_tts_globally_off(monkeypatch, fresh_hooks):
