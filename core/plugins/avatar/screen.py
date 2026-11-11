@@ -36,7 +36,7 @@ _connected = threading.Event()
 _voiced = False
 _ours = False
 _said = {}
-_speech = queue.Queue(maxsize=64)   # sentences on their way to the renderer, in order
+_speech = queue.Queue(maxsize=1024)   # segments on their way to the renderer, in order (a reply made whole lands at once)
 _http = requests.Session()
 _threads = []
 
@@ -124,7 +124,17 @@ def carries(device_id):
 
 def flush(sid=""):
     """She was stopped: the renderer drops what it holds of that reply (its flush comes back
-    down the stream and clears the boards)."""
+    down the stream and clears the boards). What still waits here for it goes first."""
+    kept = []
+    while True:
+        try:
+            item = _speech.get_nowait()
+        except queue.Empty:
+            break
+        if item is None or (sid and item[0].get("stream_id") != sid):
+            kept.append(item)
+    for item in kept:
+        _speech.put_nowait(item)
     _stop_at_source(sid)
 
 
@@ -145,7 +155,7 @@ def speak(curve, audio_bytes):
     try:
         _speech.put_nowait((curve, audio_bytes))
     except queue.Full:
-        pass
+        logger.warning("[avatar] the renderer is far behind: a sentence is not drawn")
 
 
 def _pcm(audio_bytes):

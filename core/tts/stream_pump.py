@@ -17,6 +17,7 @@ import re
 import threading
 import time
 import uuid
+import weakref
 from collections import deque
 from typing import Callable, Optional
 
@@ -47,6 +48,30 @@ _FLUSH_POLL_TIMEOUT_S = 0.1
 # (2026-11-08: a 746-char Audio8 chunk waited 18s for the GPU, synthesized in
 # 22s, and was dropped at 30s with its audio 11s from done).
 _FLUSH_HARD_TIMEOUT_S = 30.0
+# ...or this long per character of the chunk, if longer: an engine that hands
+# a long chunk back in one piece (Audio8 groups, blob providers) reports no
+# progress until it's done, and a slow GPU making 750 chars passed 30 s with
+# nothing wrong (2026-11-10). ~0.1 s/char = two-thirds of real time.
+_STALL_S_PER_CHAR = 0.1
+
+
+def _stall_limit(meta) -> float:
+    return max(_FLUSH_HARD_TIMEOUT_S, len(meta.get("text") or "") * _STALL_S_PER_CHAR)
+
+
+# Every started pump by stream id, whoever owns it (a chat turn, /api/tts/stream,
+# a room seat): /api/tts/stop names the one the browser hears and stop_stream
+# finds it. Weak: a pump nobody holds anymore is gone from here too.
+_LIVE: "weakref.WeakValueDictionary[str, StreamingTTSPump]" = weakref.WeakValueDictionary()
+
+
+def stop_stream(stream_id) -> bool:
+    """Mute one pump by id (no new synth; its drain bails as interrupted)."""
+    pump = _LIVE.get(str(stream_id or ""))
+    if pump is None:
+        return False
+    pump._skip_turn = True
+    return True
 
 # What the chunker's ramp (core.tts.streaming) needs to know, kept across
 # turns: each engine's measured speed (x realtime, smoothed; keyed by the
@@ -204,7 +229,10 @@ class StreamingTTSPump:
         )
         self._engine = type(self.provider).__name__ if self.provider is not None else ""
         self.chunker.speed = _SPEEDS.get(self._engine)
-        self.chunker.ramp = not _TAKEN["last"] and not self._whole
+        # A provider whose engine runs on another computer (`remote`) never shares
+        # the face's GPU: the ramp stays (first words early) whoever plays them.
+        self._remote = bool(getattr(self.provider, "remote", False))
+        self.chunker.ramp = not (_TAKEN["last"] and not self._remote) and not self._whole
         self._taken = False             # a plugin took this turn's audio (see _TAKEN)
         self.pending: deque = deque()
         self.executor = None
@@ -299,6 +327,7 @@ class StreamingTTSPump:
                 self._closed = True
                 return []
             out.append({"type": "tts_stream_start", "stream_id": self._stream_id})
+            _LIVE[self._stream_id] = self
             self._executor()  # lazy-create
         if self._whole:
             self._held.extend(self.chunker.push(text))
@@ -324,12 +353,16 @@ class StreamingTTSPump:
         if not self._stream_started or self._closed:
             self._close()
             return
-        for chunk in self._held + self.chunker.flush():
+        # Stopped already (the ⏹ while the LLM wrote): nothing more is asked of
+        # the engine, and the end says interrupted (a held whole reply was made
+        # anyway, a billed blob provider included).
+        stopped = self._is_cancelled()
+        for chunk in ([] if stopped else self._held + self.chunker.flush()):
             self._submit(chunk)
         self._held = []
-        if self._whole:
+        if self._whole and not stopped:
             self._wait_whole()
-        interrupted = False
+        interrupted = stopped
         # Drain pump-chunks in order. For each, fully drain its segment
         # queue (waiting on the worker if needed), polling cancel between
         # checks so a user Stop bails within ~100ms.
@@ -367,7 +400,7 @@ class StreamingTTSPump:
                     # trips (ultrareview 2026-11-08).
                     last = max(waiting_since, meta.get("started_at") or 0.0,
                                meta.get("progress_at") or 0.0)
-                    if time.monotonic() - last > _FLUSH_HARD_TIMEOUT_S:
+                    if time.monotonic() - last > _stall_limit(meta):
                         logger.warning(
                             f"[TTS-STREAM] flush hard-timeout for chunk {chunk_idx} — "
                             f"the engine is behind: this stream asks it for nothing more"
@@ -482,17 +515,23 @@ class StreamingTTSPump:
                 if self._is_cancelled():
                     return
                 last = max(since, meta.get("started_at") or 0.0, meta.get("progress_at") or 0.0)
-                if time.monotonic() - last > _FLUSH_HARD_TIMEOUT_S:
+                if time.monotonic() - last > _stall_limit(meta):
                     logger.warning(f"[TTS-STREAM] chunk {meta.get('index')} stalled while the reply "
-                                   f"was made whole: it and what follows are not voiced")
+                                   f"was made whole: it and what's unmade after it are not voiced")
                     self._abandoned.set()
-                    while len(self.pending) > at:
-                        _q, _d, fut, m = self.pending.pop()
-                        fut.cancel()
-                        self._dropped_chunks.append(m.get("index"))
+                    kept = deque(list(self.pending)[:at])
+                    for item in list(self.pending)[at:]:
+                        if item[1].is_set():
+                            kept.append(item)       # made already: still spoken
+                        else:
+                            item[2].cancel()
+                            self._dropped_chunks.append(item[3].get("index"))
+                    self.pending = kept
                     return
 
     def _is_cancelled(self) -> bool:
+        if self._skip_turn:                 # muted: stop_tts, or stop_stream by id
+            return True
         if self._cancel_check is None:
             return False
         try:
@@ -698,9 +737,17 @@ class StreamingTTSPump:
             progress.setdefault("started_at", time.monotonic())   # first attempt only
             kw = {"pitch": self._pitch} if self._provider_pitch else {}
             if self._provider_streams:
-                for segment in self.provider.generate_stream(text, v, speed, **kw):
-                    if segment:
-                        _put(segment)
+                gen = self.provider.generate_stream(text, v, speed, **kw)
+                try:
+                    for segment in gen:
+                        if self._abandoned.is_set():
+                            break            # a Stop: the close below drops the provider's socket, its server stops
+                        if segment:
+                            _put(segment)
+                finally:
+                    close = getattr(gen, "close", None)
+                    if close:
+                        close()
             else:
                 audio = self.provider.generate(text, v, speed, **kw)
                 if audio:
@@ -846,9 +893,10 @@ class StreamingTTSPump:
         consumed = bool(ev is not None and ev.skip_tts)
         if consumed and not self._taken:
             self._taken = True
-            self.chunker.ramp = False   # its player may not start well on a short chunk
-            logger.info(f"[TTS-STREAM] stream {self._stream_id[:8]}: a plugin plays the audio, "
-                        "whole paragraphs from here (and next turn)")
+            if not self._remote:
+                self.chunker.ramp = False   # its player may not start well on a short chunk while the engine shares its GPU
+            logger.info(f"[TTS-STREAM] stream {self._stream_id[:8]}: a plugin plays the audio"
+                        + ("" if self._remote else ", whole paragraphs from here (and next turn)"))
         if consumed or (self._plays_here and not getattr(config, "TTS_LOCAL_PLAYBACK", True)):
             meta["segments_emitted"] = meta.get("segments_emitted", 0) + 1
             return None
@@ -883,6 +931,7 @@ class StreamingTTSPump:
 
     def _close(self):
         self._abandoned.set()                # its workers retry nothing past this
+        _LIVE.pop(self._stream_id, None)
         if self._closed:
             return
         self._closed = True

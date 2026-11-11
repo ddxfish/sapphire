@@ -99,3 +99,18 @@ def tts_stream_end(event):
         publish("avatar_tail", {"stream_id": meta.get("stream_id"),
                                 "cues": [{"track": t["track"], "mode": t.get("mode", "once")} for t in tail]},
                 ephemeral=True)
+
+
+def tts_stop(event):
+    """The ⏹: a reply made whole is over at the pump before it's heard, so its
+    tts_stream_end never flushed the renderer (2026-11-10)."""
+    meta = event.metadata or {}
+    sid = meta.get("stream_id")
+    if not sid and not meta.get("chat_wide"):
+        return
+    try:
+        from plugins.avatar import screen
+        if screen._ours:
+            screen.flush(sid or "")
+    except Exception:
+        pass

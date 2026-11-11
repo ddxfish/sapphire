@@ -115,6 +115,7 @@ def test_streaming_off_a_stop_while_it_is_made_releases_nothing(streaming_off):
 def test_streaming_off_a_stalled_engine_still_speaks_what_was_made(streaming_off, monkeypatch):
     import core.tts.stream_pump as sp
     monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(sp, "_STALL_S_PER_CHAR", 0)   # the floor alone
 
     class Hangs(_FakeProvider):
         synth_workers = 1
@@ -214,6 +215,33 @@ def test_cancel_no_more_events(enable_streaming):
     assert pump.push("more") == []
     # flush_and_close after cancel is no-op
     assert list(pump.flush_and_close()) == []
+
+
+def test_a_stop_mid_stream_closes_the_engines_stream(enable_streaming):
+    """A Stop used to read the chunk's stream to its end: the engine's server
+    rendered the rest while the next request waited (scouts 2026-11-10)."""
+    import threading
+    started, closed = threading.Event(), threading.Event()
+    made = []
+
+    class Streamer(_FakeProvider):
+        def generate_stream(self, text, voice, speed, **kw):
+            try:
+                for i in range(40):
+                    made.append(i)
+                    started.set()
+                    yield b"OggS seg"
+                    time.sleep(0.05)
+            finally:
+                closed.set()
+
+    pump = StreamingTTSPump(system=_make_system(provider=Streamer()))
+    pump.push("A sentence long enough to be spoken right away. ")
+    pump.push("Then another one.")
+    assert started.wait(3)
+    pump.cancel()
+    assert closed.wait(3)
+    assert len(made) < 40
 
 
 def test_push_with_no_text_no_events(enable_streaming):
@@ -992,6 +1020,7 @@ def test_a_chunk_past_the_hard_timeout_abandons_the_stream(enable_streaming, mon
     import core.tts.stream_pump as sp
     monkeypatch.setattr(config, "TTS_STREAMING_SPLIT_MODE", "sentence", raising=False)
     monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(sp, "_STALL_S_PER_CHAR", 0)   # the floor alone
     fp = _FakeProvider(audio_bytes=None, delay=1.0)          # busy: slow, then nothing
     pump = StreamingTTSPump(system=_make_system(provider=fp))
     for words in ("One here. ", "Two here. ", "Three here. ", "Four here."):

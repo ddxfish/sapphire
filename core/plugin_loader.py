@@ -2822,10 +2822,13 @@ class PluginLoader:
             # that hands file bytes to a <video>, <audio> or <img> — a seeking
             # player fires Range requests in bursts and a thumbnail grid is one
             # GET per tile, so a media GET is not metered like an API call.
-            opts = {'media': bool(route_def.get('media'))}
+            # `live` (2026-11-11): a viewer's feed or the status it polls (a face
+            # stream, a panel's few-second poll): two panels and a Watch burst
+            # past the GET meter and showed "status unavailable".
+            opts = {'media': bool(route_def.get('media')), 'live': bool(route_def.get('live'))}
             registered.append((method, compiled, param_names, handler_func, opts))
             logger.debug(f"[PLUGINS] Registered route: {method} /api/plugin/{name}/{path}"
-                         f"{' (media)' if opts['media'] else ''}")
+                         f"{' (media)' if opts['media'] else ''}{' (live)' if opts['live'] else ''}")
 
         if registered:
             with self._lock:
@@ -2906,7 +2909,7 @@ class PluginLoader:
 
     def get_route_handler(self, plugin_name: str, method: str, path: str) -> Optional[Tuple[Callable, dict, dict]]:
         """Find a matching route handler. Returns (handler_func, path_params,
-        opts) or None; opts = the manifest's route options ({'media': bool})."""
+        opts) or None; opts = the manifest's route options ({'media': bool, 'live': bool})."""
         with self._lock:
             routes = self._routes.get(plugin_name)
         if not routes:

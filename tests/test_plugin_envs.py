@@ -162,3 +162,27 @@ def test_spec_hash_ignores_what_the_env_is_not_made_of():
     spec = {"python": "3.10", "pip": ["six"]}
     assert plugin_envs.spec_hash({**spec, "client": {"setting": "client"}}) == plugin_envs.spec_hash(spec)
     assert plugin_envs.spec_hash({**spec, "pip": ["seven"]}) != plugin_envs.spec_hash(spec)
+
+
+def test_a_line_for_another_platform_never_makes_this_env_stale():
+    """Audio8's triton-windows (2026-11-11): on Linux, adding a win32-only line
+    sent every env through a remove-and-recreate for a package it never gets."""
+    import sys
+    other = "win32" if sys.platform != "win32" else "linux"
+    base = {"python": "3.12", "pip": ["torch==2.11.0"]}
+    grown = {"python": "3.12", "pip": ["torch==2.11.0", f'triton-windows>=3.6,<3.7; sys_platform == "{other}"']}
+    assert plugin_envs.spec_hash(grown) == plugin_envs.spec_hash(base)
+    here = {"python": "3.12", "pip": ["torch==2.11.0", f'extra; sys_platform == "{sys.platform}"']}
+    assert plugin_envs.spec_hash(here) != plugin_envs.spec_hash(base)
+
+
+def test_an_env_built_before_the_marker_rule_is_still_ready(monkeypatch):
+    """FlashHead already carried a win32 line: its receipts hold the old hash."""
+    spec = {"python": "3.10", "pip": ["torch", 'triton-windows; sys_platform == "win32"']}
+    monkeypatch.setattr(plugin_envs, "build_state", lambda n: {})
+    monkeypatch.setattr(plugin_envs, "find_conda", lambda: "conda")
+    monkeypatch.setattr(plugin_envs, "env_python", lambda n: "python")
+    monkeypatch.setattr(plugin_envs, "_read_receipt", lambda n: {"spec_hash": plugin_envs._legacy_hash(spec)})
+    assert plugin_envs.env_status("flashhead", spec) == "ready"
+    monkeypatch.setattr(plugin_envs, "_read_receipt", lambda n: {"spec_hash": "old"})
+    assert plugin_envs.env_status("flashhead", spec) == "stale"

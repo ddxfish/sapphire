@@ -47,7 +47,8 @@
       "prompt_inject": "hooks/prompt_inject.py",
       "tts_chunk_audio": "hooks/mouth.py",
       "tts_stream_start": "hooks/mouth.py",
-      "tts_stream_end": "hooks/mouth.py"
+      "tts_stream_end": "hooks/mouth.py",
+      "tts_stop": "hooks/mouth.py"
     },
     "daemon": {
       "entry": "daemon.py"
@@ -81,7 +82,8 @@
       {
         "method": "GET",
         "path": "state",
-        "handler": "routes/api.py:get_state"
+        "handler": "routes/api.py:get_state",
+        "live": true
       },
       {
         "method": "PUT",

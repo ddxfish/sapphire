@@ -246,7 +246,10 @@ def serve(server_cls, handler, host, port, folder):
             self.RequestHandlerClass(tls, client_address, self)
 
         def handle_error(self, request, client_address):
-            pass                                            # a dropped stranger is no traceback
+            e = sys.exc_info()[1]
+            if isinstance(e, (OSError, ssl.SSLError)):      # a caller that dropped: no traceback
+                return
+            logger.exception(f"A request from {client_address[0]} failed in its handler")
 
     return Door((host, port), handler)
 
@@ -306,6 +309,12 @@ def session(text, timeout=5):
             kw["ssl_context"] = ctx
             kw["assert_hostname"] = False
             return super().init_poolmanager(*a, **kw)
+
+        def cert_verify(self, conn, url, verify, cert):
+            # requests would load its public CA bundle INTO ctx here (2.32.5:
+            # 1 -> 137 trusted certs), and with no hostname check any CA-signed
+            # cert would pass. The pinned cert is the whole trust.
+            pass
 
     s = requests.Session()
     s.trust_env = False                                     # a LAN worker never rides a proxy

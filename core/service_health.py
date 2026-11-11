@@ -38,8 +38,11 @@ def health_url(svc, port):
 class Watch:
     """Polls one service's health on a daemon thread until stop()."""
 
-    def __init__(self, plugin, service, label, url, alive):
-        self.plugin, self.label, self.url, self._alive = plugin, label, url, alive
+    def __init__(self, plugin, service, label, url, alive, fetch=None):
+        """`fetch`: returns the health JSON itself, for a service that runs
+        elsewhere (a plugin's Client only worker, reached through its door);
+        else `url` is polled here."""
+        self.plugin, self.label, self.url, self._alive, self._fetch = plugin, label, url, alive, fetch
         self.key = f"service:{plugin}:{service}"
         self.state = {"state": "starting", "phase": "", "progress": None, "error": ""}
         self._rid = None              # the active row, while one is open
@@ -64,8 +67,11 @@ class Watch:
         if not self._alive():
             return {"state": "starting", "phase": "Starting the server", "progress": None, "error": ""}
         try:
-            from core import net
-            h = net.get(self.url, timeout=2).json()
+            if self._fetch:
+                h = self._fetch()
+            else:
+                from core import net
+                h = net.get(self.url, timeout=2).json()
         except Exception:
             return {"state": "starting", "phase": "Starting the server", "progress": None, "error": ""}
         status = str(h.get("status") or "")

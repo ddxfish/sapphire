@@ -91,7 +91,9 @@ def test_a_face_still_coming_takes_her_words(server, tmp_path, monkeypatch):
     s.face, s.want = None, str(face)
     server._state["status"] = "ready"
     server.BEAT[0] = server.time.monotonic()
-    monkeypatch.setattr(server, "_queue_speech", lambda s, data, **kw: None)
+    server.P.update(n16=15360, n24=23040)
+    monkeypatch.setattr(server, "_decode", lambda data: (server.np.zeros(100, server.np.float32),
+                                                         server.np.zeros(150, server.np.int16)))
     assert _speak(server) == {"taken": True, "why": ""}
     assert s.open
 
@@ -172,7 +174,7 @@ def test_a_viewers_numbers_make_one_line(server, caplog):
                                           "clock": 1, "evil": "x"}).encode())
         server._viewer_log(s, b"not json")
     line = [r.message for r in caplog.records if r.message.startswith("viewer")]
-    assert len(line) == 1 and "late frames 30" in line[0] and "gaps 2 (0.40s)" in line[0]
+    assert len(line) == 1 and "late frames 30" in line[0] and "gaps 2 (0.40s)" in line[0] and "ahead avg/min" in line[0]
 
 
 def test_a_tap_on_her_face_names_the_stream_and_is_logged(server, monkeypatch, caplog):
@@ -203,3 +205,95 @@ def test_a_tap_on_her_face_names_the_stream_and_is_logged(server, monkeypatch, c
     # dropped: how many slices went (screens.py reads it: did a stop hit anything)
     assert replies == [{"ok": True, "dropped": 1}] and s.speech.empty() and not s.open
     assert any(r.message == "Stopped from the viewer (local)" for r in caplog.records)
+
+
+def test_her_speaker_keeps_her_voice_when_a_browser_watches_too(server):
+    """The standalone viewer as her speaker: the app page's Speak (a browser that
+    starts watching) took her voice from it (Teri's Pi, 2026-11-10)."""
+    s = server._session("local")
+    pi, browser, newer, call = queue.Queue(), queue.Queue(), queue.Queue(), queue.Queue()
+    s.viewers[pi] = True
+    s.speakers.add(pi)
+    s.viewers[browser] = True
+    assert server._voice_of(s) is pi
+    s.viewers[call] = True
+    s.call = call
+    assert server._voice_of(s) is call                     # a webcam call hears her first
+    s.call = None
+    del s.viewers[call]
+    s.viewers.pop(pi)
+    s.speakers.discard(pi)
+    s.viewers[newer] = True
+    assert server._voice_of(s) is newer                    # no speaker: the newest browser
+
+
+def test_her_words_waiting_are_rendered_seconds_ahead_her_idle_is_not(server):
+    """A ~1 s cushion turned every GPU hiccup on a near-real-time card into a gap."""
+    np = server.np
+    server.P.update(n16=15360, n24=23040, chunk_s=0.96, render_s=0.7)
+    s = server._session("local")
+    s.viewers[queue.Queue()] = True
+    s.want = "face.png"
+    now = server.time.monotonic()
+    s.clock = [now, 2.5]                                   # 2.5 s made ahead of her viewers
+    assert server._pick() is None                          # idle: past its ~1 s lead
+    s.speech.put((np.zeros(15360, np.float32), np.zeros(23040, np.int16), None))
+    assert server._pick() is s                             # talking: banks up to TALK_AHEAD
+    s.clock = [now, server.TALK_AHEAD + 0.5]
+    assert server._pick() is None
+
+
+def test_the_hold_counts_from_when_her_words_end_not_when_they_came(server):
+    """A 20 s group lands in one burst: counted from its arrival, the hold was over
+    before it finished playing and the next group came after a reset."""
+    np = server.np
+    server.P.update(n16=15360, n24=23040, chunk_s=0.96, render_s=0.2)
+    s = server._session("local")
+    s.open = True
+    s.heard = server.time.monotonic() + 3                  # her last chunk ends in 3 s on her viewers' clock
+    s.pending["a16"] = np.ones(100, np.float32)
+    assert s.held()
+
+
+def test_a_face_that_fails_never_wedges_the_render_loop(server, monkeypatch):
+    """Words drained to the packer while holding s.lock: _out holds two and the
+    packer needs s.lock to send, so 3+ queued slices froze both for good."""
+    import threading
+    np = server.np
+    server.P.update(n16=15360, n24=23040, chunk_s=0.96, render_s=0.2)
+    server._state["status"] = "ready"
+    s = server._session("local")
+    for _ in range(5):
+        s.speech.put((np.zeros(15360, np.float32), np.zeros(23040, np.int16), None))
+    monkeypatch.setattr(server, "_pick", lambda: s)
+    monkeypatch.setattr(server, "_apply_face", lambda _s: (_ for _ in ()).throw(RuntimeError("no face")))
+    threading.Thread(target=server._turn, daemon=True).start()   # blocks on _out (no packer here)
+    server.time.sleep(0.2)
+    assert s.lock.acquire(timeout=1)                       # the packer could take it and drain _out
+    s.lock.release()
+
+
+def test_a_new_reply_on_her_lane_cuts_the_last_one(server):
+    """Made whole, a reply is over at core before it's heard: the next one queued
+    behind all of it while the browser had already moved on."""
+    np = server.np
+    server.P.update(n16=15360, n24=23040, chunk_s=0.96, render_s=0.2)
+    s = server._session("local")
+    slice_ = lambda sid, device="": (np.zeros(15360, np.float32), np.zeros(23040, np.int16),
+                                     {"sid": sid, "device": device, "mute": False, "taken": True})
+    for _ in range(3):
+        s.speech.put(slice_("old"))
+    s.speech.put(slice_("board", "pendant"))
+    assert server._older_replies(s, "new", "") == {"old"}
+    server._flush(s, "old")
+    assert [t["sid"] for *_, t in list(s.speech.queue)] == ["board"]   # another lane plays on
+
+
+def test_her_voice_on_every_viewer_when_asked(server):
+    """Teri: the app page's Speak to her desktop AND her Pi viewer at once."""
+    s = server._session("local")
+    desk, pi, board = queue.Queue(), queue.Queue(), queue.Queue()
+    s.viewers.update({desk: True, pi: True, board: False})
+    s.voice, s.everyone = pi, True
+    server._broadcast(s, b"loud", b"quiet")
+    assert (desk.get_nowait(), pi.get_nowait(), board.get_nowait()) == (b"loud", b"loud", b"quiet")

@@ -53,6 +53,7 @@ def test_steady_progress_outlives_the_stall_timeout(streaming, monkeypatch):
     0.4s of the last, so nothing is a stall and nothing drops."""
     import core.tts.stream_pump as sp
     monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.6)
+    monkeypatch.setattr(sp, "_STALL_S_PER_CHAR", 0)   # the floor alone
     pump = StreamingTTSPump(system=_system(_SegmentedProvider(n=3, gap=0.4)))
     pump.push("A whole sentence that will take a while to say.")
     out = list(pump.flush_and_close())
@@ -64,6 +65,7 @@ def test_steady_progress_outlives_the_stall_timeout(streaming, monkeypatch):
 def test_a_real_stall_still_trips(streaming, monkeypatch):
     import core.tts.stream_pump as sp
     monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(sp, "_STALL_S_PER_CHAR", 0)   # the floor alone
     pump = StreamingTTSPump(system=_system(_SegmentedProvider(n=2, gap=1.0)))
     pump.push("Nothing comes back for far too long.")
     t0 = time.monotonic()
@@ -113,6 +115,7 @@ def test_retries_never_restart_the_stall_clock(streaming, monkeypatch, caplog):
     are 0.6s of nothing. Resetting the clock per attempt never tripped."""
     import core.tts.stream_pump as sp
     monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.45)
+    monkeypatch.setattr(sp, "_STALL_S_PER_CHAR", 0)   # the floor alone
 
     class Empty(_SegmentedProvider):
         def generate_stream(self, text, voice, speed, **kw):
@@ -132,6 +135,7 @@ def test_a_chunk_queued_behind_the_engine_is_not_charged_for_the_wait(streaming,
     import threading
     import core.tts.stream_pump as sp
     monkeypatch.setattr(sp, "_FLUSH_HARD_TIMEOUT_S", 0.45)
+    monkeypatch.setattr(sp, "_STALL_S_PER_CHAR", 0)   # the floor alone
     engine = threading.Lock()
 
     class Locked(_SegmentedProvider):
@@ -149,3 +153,55 @@ def test_a_chunk_queued_behind_the_engine_is_not_charged_for_the_wait(streaming,
     out = list(pump.flush_and_close())
     assert len([e for e in out if e.get("type") == "tts_chunk"]) == 4
     assert not [e for e in out if e.get("type") == "notice"]
+
+
+def test_a_long_chunk_made_in_one_piece_gets_time_for_its_length():
+    """Audio8 hands a group back whole: 750 chars on a slow GPU passed 30 s with
+    no progress to report, and the reply was dropped with nothing wrong."""
+    import core.tts.stream_pump as sp
+    assert sp._stall_limit({"text": "x" * 20}) == sp._FLUSH_HARD_TIMEOUT_S
+    assert sp._stall_limit({"text": "x" * 750}) == 750 * sp._STALL_S_PER_CHAR > sp._FLUSH_HARD_TIMEOUT_S
+
+
+def test_a_pump_is_stopped_by_its_id_whoever_owns_it(streaming):
+    """/api/tts/stop names the stream the browser hears. A Replay's or the
+    FlashHead app page's pump was registered nowhere, so the ⏹ never found it."""
+    import core.tts.stream_pump as sp
+    pump = StreamingTTSPump(system=_system(_SegmentedProvider(n=6, gap=0.1)))
+    pump.push("A sentence long enough to still be making when it's stopped.")
+    assert sp.stop_stream(pump._stream_id)
+    out = list(pump.flush_and_close())
+    assert out[-1]["type"] == "tts_stream_end" and out[-1]["interrupted"]
+    assert not sp.stop_stream(pump._stream_id)             # closed: gone from the registry
+
+
+def test_a_reply_made_whole_and_stopped_while_written_asks_the_engine_nothing(monkeypatch):
+    """Stream speech off: the reply is held until the LLM is done. A ⏹ in the
+    meantime still sent every held chunk to the engine (a billed one too)."""
+    import config
+    monkeypatch.setattr(config, "TTS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", False, raising=False)
+    asked = []
+
+    class Counting(_SegmentedProvider):
+        def generate_stream(self, text, voice, speed, **kw):
+            asked.append(text)
+            yield b"OGGS\x00seg"
+
+    pump = StreamingTTSPump(system=_system(Counting()))
+    pump.push("First sentence here. Second sentence here.\n\n")
+    pump._skip_turn = True                                 # stop_tts
+    out = list(pump.flush_and_close())
+    assert not asked and out[-1]["interrupted"]
+
+
+def test_a_remote_engine_keeps_the_ramp_when_a_face_plays_her(streaming, monkeypatch):
+    """Whole paragraphs after a take are for an engine sharing the face's GPU;
+    on another computer they only delayed her first words."""
+    import core.tts.stream_pump as sp
+    monkeypatch.setitem(sp._TAKEN, "last", True)
+    local = StreamingTTSPump(system=_system(_SegmentedProvider()))
+    remote_provider = _SegmentedProvider()
+    remote_provider.remote = True
+    remote = StreamingTTSPump(system=_system(remote_provider))
+    assert not local.chunker.ramp and remote.chunker.ramp

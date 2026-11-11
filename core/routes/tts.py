@@ -236,6 +236,11 @@ async def handle_tts_stream(request: Request, _=Depends(require_login), system=D
         except Exception as e:
             logger.error(f"[TTS-STREAM] generate failed: {e!r}", exc_info=True)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            # The page went away mid-stream (GeneratorExit is no Exception): the
+            # engine stops and tts_stream_end(interrupted) reaches the avatars.
+            # A pump that finished is closed already: a no-op.
+            pump.cancel()
 
     return StreamingResponse(
         generate(),
@@ -374,6 +379,21 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
             system.llm_chat.stop_tts_streams(chat_name=_active, exclude_chats=(None if _active else _ext))
     except Exception:
         pass
+    # Any pump by the id the browser named (a Replay, the FlashHead app page's
+    # Speak, a room seat: not only chat turns), and every plugin that plays her
+    # voice itself: a reply made whole is over at the pump before it's heard,
+    # so tts_stream_end never told a face to stop (2026-11-10).
+    if _sid or (_wide and not (_active and _active in _ext)):     # a live call's voice is the phone's, never the web's to stop
+        from core.tts import stream_pump
+        if _sid:
+            stream_pump.stop_stream(_sid)
+        try:
+            from core.hooks import hook_runner, HookEvent
+            if hook_runner.has_handlers("tts_stop"):
+                hook_runner.fire("tts_stop", HookEvent(config=config, metadata={
+                    "stream_id": _sid, "chat_wide": _wide, "chat": _active, "system": system}))
+        except Exception as e:
+            logger.warning(f"[TTS-STOP] tts_stop hook failed: {e!r}")
     # Conversation mode plays through a separate sink and the LLM may still be
     # streaming — but ONLY when the conversation is the operator's own
     # (local/browser: driver._chat_name None). A phone call's driver is off-limits.

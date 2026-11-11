@@ -88,6 +88,20 @@ def test_kokoro_reaches_a_paired_kokoro_and_keeps_its_key_out_of_logs(worker, ca
     assert "key=" not in kokoro._shown(text) and kokoro._shown("http://localhost:5012") == "http://localhost:5012"
 
 
+def test_the_pin_stays_the_only_trust_after_requests_uses_it(worker):
+    """requests loaded its public CA bundle into the pinned context on the
+    first call (1 -> 137 certs on 2.32.5): with no hostname check, any
+    CA-signed cert would have passed."""
+    folder, address = worker
+    door.add_client(folder, "vm")
+    text = door.pairing(folder, "vm", address)
+    s, base = door.session(text)
+    assert s.get(f"{base}/", timeout=5).status_code == 200
+    assert s.get(f"{base}/", timeout=5, stream=True).status_code == 200
+    base, _, fp = door.parse(text)
+    assert len(door.context(base, fp).get_ca_certs()) == 1
+
+
 def test_plugin_copies_say_exactly_what_core_says():
     """A plugin whose server also runs alone carries a copy (FlashHead's
     worker_door.py): a drifted copy would speak another protocol."""

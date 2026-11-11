@@ -130,3 +130,15 @@ def test_down_after_ready_is_a_new_start(rig, monkeypatch):
     assert _wait(lambda: "finish" in rec.kinds())
     w.stop()
     assert rec.kinds()[0] == "begin" and rec.calls[0][1] == "Starting P"
+
+
+def test_a_service_elsewhere_is_watched_through_its_own_fetch(monkeypatch):
+    """A plugin's Client only worker: its first run downloads and compiles for
+    minutes on another computer, and nothing here said so (2026-11-10)."""
+    from core import service_health
+    calls = []
+    w = service_health.Watch.__new__(service_health.Watch)
+    w.url, w._alive, w._fetch = None, (lambda: True), (lambda: calls.append(1) or
+                                                       {"status": "loading", "phase": "Downloading", "progress": {"done": 1, "total": 4}})
+    st = w._poll()
+    assert calls and st["state"] == "loading" and st["phase"] == "Downloading" and st["progress"]["total"] == 4

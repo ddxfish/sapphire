@@ -2830,7 +2830,8 @@ async def plugin_route_dispatch(plugin_name: str, path: str, request: Request):
     # or <img>: a seeking player fires Range requests in bursts and a
     # thumbnail grid is one GET per tile, so its GETs are not metered (core's
     # own file lanes never were). Its other verbs stay metered. 2026-10-10.
-    if not (opts.get('media') and request.method == 'GET'):
+    # `live`: a viewer's feed or its status poll, unmetered for GET the same way.
+    if not ((opts.get('media') or opts.get('live')) and request.method == 'GET'):
         max_calls = 60 if request.method == 'GET' else 30
         check_endpoint_rate(request, f"plugin_route:{plugin_name}:{request.method}",
                             max_calls=max_calls, identity=identity)

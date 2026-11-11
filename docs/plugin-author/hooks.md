@@ -22,6 +22,7 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `tts_chunk_text` | Streaming TTS: per chunk, before synth | `tts_text`, `skip_tts` | Rewrite or mute a chunk before it's voiced |
 | `tts_chunk_audio` | Streaming TTS: per chunk, after synth | `metadata['audio']` carrier, `skip_tts` | Transform/replace chunk audio bytes; `skip_tts` = you took it (not played here, not counted as lost) |
 | `tts_stream_end` | Streaming TTS: turn ends | — | Finalize captions/recording |
+| `tts_stop` | The user stopped her voice (⏹, a tap on a face) | metadata `stream_id` (the reply named, or None), `chat_wide` | Flush audio your plugin plays itself: `tts_stream_end` means the reply was MADE, and a reply made whole ends before a word is heard |
 | `on_wake` | Wakeword detected | — | Play sounds, log, custom reactions |
 | `provider_switched` | After a TTS/STT/embed provider hot-swap | metadata `kind`, `provider` | Warm caches / reset state (observational) |
 | `chat_renamed` | After a chat rename succeeds | metadata `old`, `new` | Re-key chat-keyed data your plugin holds *outside* the chat-scoped store |
@@ -119,6 +120,7 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `tts_chunk_text` | **Yes** | Yes | `tts_text`, `skip_tts` |
 | `tts_chunk_audio` | **Yes** | Yes | `metadata['audio']['audio_bytes']`, `['content_type']` |
 | `tts_stream_end` | **Yes** | Yes | None (observational) |
+| `tts_stop` | No | Yes | None (observational; metadata `stream_id`, `chat_wide`, `chat`) |
 | `on_wake` | No | Yes | None (notification only) |
 | `provider_switched` | No | No | None (observational; metadata `kind`, `provider`) |
 | `chat_renamed` | No | No | None (observational; metadata `old`, `new`) |

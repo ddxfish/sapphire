@@ -30,6 +30,7 @@ For the example above, in a plugin named `my-plugin`: `POST /api/plugin/my-plugi
 | `path` | string | Yes | URL path (supports `{param}` placeholders) |
 | `handler` | string | Yes | `file:function` reference (default function: `handle`) |
 | `media` | bool | No | `true` for a door that serves file bytes to a `<video>`, `<audio>` or `<img>` (a `FileResponse`). Its GETs skip the per-plugin rate meter: a seeking player fires Range requests in bursts and a thumbnail grid is one GET per tile. Other verbs on the route stay metered |
+| `live` | bool | No | `true` for a viewer's live feed or the status a panel polls every few seconds (a face stream, its status). Its GETs skip the per-plugin rate meter like `media`: two panels and a Watch burst past 60 a minute. Other verbs stay metered |
 
 ## Handler Signature
 
@@ -72,7 +73,7 @@ All of the following are enforced automatically — you cannot disable them:
 
 - **Authentication**: `require_login` dependency — session or API key required
 - **CSRF**: Middleware validates tokens on POST/PUT/DELETE from browser sessions
-- **Rate limiting**: 60 GET / 30 non-GET requests per minute, per plugin (bucketed by session — or by bearer-token hash when bearer auth is used). GETs on a route declared `media: true` are exempt — that is the one door for streaming a file to the browser
+- **Rate limiting**: 60 GET / 30 non-GET requests per minute, per plugin (bucketed by session — or by bearer-token hash when bearer auth is used). GETs on a route declared `media: true` or `live: true` are exempt — that is the one door for streaming a file to the browser
 - **Bearer-token auth (opt-in)**: a plugin may *add* (never weaken) a bearer path by writing `user/plugin_state/{plugin}_mcp_key.json` (`{"key": "..."}`). A request whose `Authorization: Bearer <key>` matches then bypasses session login — used by MCP clients. Session CSRF still cannot be disabled.
 
 ## Example: Webcam Capture Endpoint

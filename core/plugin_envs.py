@@ -130,11 +130,38 @@ def env_python(plugin_name: str):
 _BUILD_KEYS = ("python", "pip", "conda", "channels")      # what the env is made of; `client` is not
 
 
-def spec_hash(env_spec: dict) -> str:
-    spec = {k: v for k, v in (env_spec or {}).items() if k in _BUILD_KEYS}
+def _applies(line) -> bool:
+    """A pip line counts here unless its marker says another platform
+    (`triton-windows; sys_platform == "win32"` on Linux). Unsure = it counts."""
+    if not isinstance(line, str) or ";" not in line or line.lstrip().startswith("-"):
+        return True
+    try:
+        from packaging.markers import Marker
+        return Marker(line.split(";", 1)[1].strip()).evaluate()
+    except Exception:
+        return True
+
+
+def _hash(spec: dict) -> str:
     return hashlib.sha256(
         json.dumps(spec, sort_keys=True, separators=(',', ':')).encode('utf-8')
     ).hexdigest()
+
+
+def spec_hash(env_spec: dict) -> str:
+    """What this computer's env is made of: a pip line for another platform
+    is not part of it, so adding one (2026-11-11: Audio8's triton-windows)
+    never sends every Linux env through a 4 GB rebuild for nothing."""
+    spec = {k: v for k, v in (env_spec or {}).items() if k in _BUILD_KEYS}
+    if isinstance(spec.get("pip"), list):
+        spec["pip"] = [line for line in spec["pip"] if _applies(line)]
+    return _hash(spec)
+
+
+def _legacy_hash(env_spec: dict) -> str:
+    """The hash receipts were written with before other platforms' lines were
+    left out: an env built then is still the env its spec asks for."""
+    return _hash({k: v for k, v in (env_spec or {}).items() if k in _BUILD_KEYS})
 
 
 def _read_receipt(plugin_name: str) -> dict:
@@ -200,7 +227,7 @@ def env_status(plugin_name: str, env_spec: dict) -> str:
         return "no-conda"
     if not env_python(plugin_name):
         return "error" if b.get("state") == "error" else "missing"
-    if _read_receipt(plugin_name).get("spec_hash") != spec_hash(env_spec):
+    if _read_receipt(plugin_name).get("spec_hash") not in (spec_hash(env_spec), _legacy_hash(env_spec)):
         # A failed pip step leaves python present but no receipt — that's a
         # failed BUILD, not an outdated env. Reporting "stale" here hid the
         # error behind an "Environment outdated / Rebuild" strip forever.
