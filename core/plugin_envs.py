@@ -307,6 +307,8 @@ def _build_worker(plugin_name: str, env_spec: dict, conda: str, on_done):
         log_fh.write(f"\n=== {step_label}: {' '.join(cmd)} ===\n")
         log_fh.flush()
         run_kwargs = {}
+        if os.name == "nt":
+            run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW   # no console flash under pythonw
         if os.name == "posix":
             # Die with Sapphire: a restart mid-build otherwise orphans the
             # conda/pip child for up to CONDA_TIMEOUT of CPU and disk churn.

@@ -64,6 +64,7 @@ class TTSClient:
         self.should_stop = threading.Event()
         self._is_playing = False
         self._generation = 0  # epoch counter — prevents stale threads from playing
+        self._playing_gen = None  # the generation that set _is_playing (only it may clear it)
         
         # Audio output device setup
         self.output_device = None
@@ -262,7 +263,10 @@ class TTSClient:
             # every blob-lane speak (streaming.py had this order since
             # 2026-05-28; this cleaner never got it — broadsword M-C5).
             r'<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>',
-            r'<[^>]+>',                      # HTML tags
+            # HTML tags: a real tag opens with a letter (or / or !) and holds
+            # no second '<'. The old `<[^>]+>` under DOTALL ate everything
+            # from a stray '<' ("x < y") to the next '>' anywhere after it.
+            r'</?[a-zA-Z!][^<>]*>',
         ]
         for pattern in block_patterns:
             processed_text = re.sub(pattern, ' ', processed_text, flags=re.DOTALL)
@@ -280,9 +284,10 @@ class TTSClient:
         processed_text = re.sub(r'\n{2,}', '. ', processed_text)
         processed_text = re.sub(r'\n', '. ', processed_text)
 
-        ui_words = ['Copy', 'Copied!', 'Failed', 'Loading...', '...']
-        for word in ui_words:
-            processed_text = processed_text.replace(word, '')
+        # An ellipsis is a pause. (This used to also delete the words Copy,
+        # Copied!, Failed and Loading... wherever they stood - leftovers from
+        # scraping the chat page - so "Failed to back up" was read "to back up".)
+        processed_text = processed_text.replace('...', '. ')
 
         processed_text = re.sub(r'[.!?,]+\s*[.!?,]+', '. ', processed_text)
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
@@ -522,6 +527,7 @@ class TTSClient:
                 if self.should_stop.is_set() or _stale():
                     return
                 self._is_playing = True
+                self._playing_gen = gen
 
             audio_data, samplerate = self._fetch_audio(text)
             if _stale():
@@ -606,8 +612,14 @@ class TTSClient:
             logger.error(f"Error in TTS playback: {e}", exc_info=True)
         finally:
             with self.lock:
-                was_playing = self._is_playing
-                self._is_playing = False
+                # Only the thread that owns the flag clears it. A stale thread
+                # (an older utterance, unwinding late) used to clear it under
+                # the one now speaking: wait() returned early and the mic
+                # reopened onto her own voice.
+                mine = self._playing_gen == gen
+                was_playing = mine and self._is_playing
+                if mine:
+                    self._is_playing = False
             if was_playing:
                 publish(Events.TTS_STOPPED, {"surface": "local"})
             gc.collect()
@@ -642,6 +654,7 @@ class TTSClient:
                 if self.should_stop.is_set() or _stale():
                     return
                 self._is_playing = True
+                self._playing_gen = gen
 
             # Pitch parity with the blob path (_fetch_audio) and the SSE pump
             # (stream_pump._synth): supports_pitch providers shift server-side
@@ -773,8 +786,10 @@ class TTSClient:
             logger.error(f"Error in streaming TTS playback: {e}", exc_info=True)
         finally:
             with self.lock:
-                was_playing = self._is_playing
-                self._is_playing = False
+                mine = self._playing_gen == gen      # see _generate_and_play_audio
+                was_playing = mine and self._is_playing
+                if mine:
+                    self._is_playing = False
             if was_playing and playing_started:
                 publish(Events.TTS_STOPPED, {"surface": "local"})
             gc.collect()

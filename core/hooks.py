@@ -205,6 +205,7 @@ class HookRunner:
         # {plugin_name: frozenset(surfaces)} — only plugins that declared
         # (or were overridden) appear here; absent = everywhere.
         self._surfaces: Dict[str, frozenset] = {}
+        self._bad_voice_match: set = set()     # (plugin, hook) already logged for an unmatchable trigger
 
     def set_surfaces(self, plugin_name: str, surfaces):
         """Record where a plugin's presence hooks belong (effective list:
@@ -364,7 +365,18 @@ class HookRunner:
                     logger.debug(f"[HOOKS] '{hook_name}' withheld from {plugin_name} "
                                  f"(surface '{surface}' not in {sorted(allowed)})")
                     continue
-            if not self._check_voice_match(voice_match, event.input):
+            # One plugin's bad trigger (a regex that does not compile, a
+            # trigger that is not text) used to raise here, outside the
+            # handler's own guard below, and take every chat turn with it.
+            try:
+                if not self._check_voice_match(voice_match, event.input):
+                    continue
+            except Exception as e:
+                key = (plugin_name, hook_name)
+                if key not in self._bad_voice_match:
+                    self._bad_voice_match.add(key)
+                    logger.error(f"[HOOKS] {plugin_name}: voice trigger for '{hook_name}' can't be "
+                                 f"matched ({e}) - this handler is skipped until the plugin is fixed")
                 continue
 
             # For ghost_inject: stamp the label, clear any previous handler's

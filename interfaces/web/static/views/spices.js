@@ -329,17 +329,20 @@ function bindEvents() {
                         await setCategoryEmoji(catName, catData.emoji);
                     }
 
-                    // Add spices (replace if overwrite, skip if exists)
-                    if (overwrite && existing) {
-                        // Delete existing spices first (reverse order to keep indices stable)
-                        for (let i = (existing.spices?.length || 0) - 1; i >= 0; i--) {
-                            await deleteSpice(catName, i);
-                        }
-                    }
-
+                    // Add spices (replace if overwrite, skip if exists). New ones
+                    // go in FIRST: if one is refused the import stops with the old
+                    // spices still there (deleting first left the category empty).
                     if (overwrite || !existing) {
                         for (const spiceText of (catData.spices || [])) {
                             await addSpice(catName, spiceText);
+                        }
+                    }
+
+                    if (overwrite && existing) {
+                        // The old ones sit at the front (adds append); reverse
+                        // order keeps their indices stable.
+                        for (let i = (existing.spices?.length || 0) - 1; i >= 0; i--) {
+                            await deleteSpice(catName, i);
                         }
                     }
 

@@ -536,6 +536,12 @@ class SipEndpoint:
                     logger.info("[TWILIO] second call while busy — replying 486 Busy Here")
                     self._reply(486, "Busy Here", h, addr)
                 return
+            if not self.tls and not self._from_twilio(addr):
+                # UDP: the SIP port takes datagrams from anyone. A call is only
+                # ever offered by Twilio's signaling edges (TLS has no such
+                # door: its INVITEs arrive on the flow we opened to Twilio).
+                logger.warning(f"[TWILIO] INVITE from {addr[0]}:{addr[1]} is not a Twilio edge - ignored")
+                return
             self._answer_invite(start, h, body, addr)
         elif start.startswith("BYE"):
             if call and h.get("call-id") == call["call_id"]:
@@ -557,6 +563,20 @@ class SipEndpoint:
         else:
             # TEMP probe: SIP arriving outside a call.
             logger.info(f"[TWILIO-SIPIDLE] {start} from {addr[0]}:{addr[1]}")
+
+    def _from_twilio(self, addr) -> bool:
+        """A UDP source that may offer a call: Twilio's US1 signaling block
+        (54.172.60.0/23, the block _TWILIO_EDGES is punched toward) or the
+        registrar we registered with."""
+        import ipaddress
+        try:
+            ip = ipaddress.ip_address(addr[0])
+        except ValueError:
+            return False
+        if ip in ipaddress.ip_network("54.172.60.0/23"):
+            return True
+        reg = getattr(self, "registrar", None)
+        return bool(reg) and addr[0] == reg[0]
 
     def _answer_invite(self, start, h, sdp, addr):
         m = re.search(r"c=IN IP4 ([\d.]+)", sdp)
@@ -656,6 +676,15 @@ class SipEndpoint:
                 except ConnectionResetError:
                     # Windows WSAECONNRESET on UDP (ICMP echo of a failed
                     # send) — transient, not a call-ending error.
+                    continue
+                # Audio is taken only from the media address the call's SDP
+                # named. Any host that found this port could otherwise speak
+                # into a live call as the caller (and keep it from ending).
+                if _addr[0] != dialog["remote"][0]:
+                    if not dialog.get("stray_rtp"):
+                        dialog["stray_rtp"] = True
+                        logger.warning(f"[TWILIO] dropping RTP from {_addr[0]} - this call's media is "
+                                       f"{dialog['remote'][0]} (logged once per call)")
                     continue
                 if len(data) > 12 and (data[0] & 0xC0) == 0x80:
                     _gap = time.time() - last_rtp          # TEMP probe: is Twilio RTP

@@ -266,3 +266,20 @@ class TestIntegration:
             path = resolve_model_path(model_name)
             assert path is not None
             assert len(path) > 0
+
+def test_wake_word_while_she_speaks_stops_her_and_records_nothing():
+    """Krem 2026-11-12: the wake word during her speech is the stop button."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from core.wakeword.wake_detector import WakeWordDetector
+
+    det = WakeWordDetector.__new__(WakeWordDetector)
+    tts = SimpleNamespace(_is_playing=True, stop=MagicMock())
+    chat = MagicMock()
+    chat.session_manager.get_active_chat_name.return_value = 'main'
+    det.system = SimpleNamespace(tts=tts, llm_chat=chat, _conversation_manager=None)
+    assert det._stop_her_voice() is True
+    tts.stop.assert_called_once()
+    chat.stop_tts_streams.assert_called_once()
+    tts._is_playing = False
+    assert det._stop_her_voice() is False          # quiet: the wake word is a wake word

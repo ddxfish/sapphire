@@ -452,10 +452,13 @@ class LLMChat:
                     logger.info("[SPICE] Spice disabled — cleared and reassembled prompt")
             return False
 
-        if not prompts.is_assembled_mode():
-            return False
-
-        spice_turns = chat_settings.get('spice_turns', 3)
+        # Spice rides the ghost rail (or the system weave), not the assembled
+        # prompt, so it rotates in BOTH prompt modes. A monolith chat used to
+        # stop here: no spice, or one frozen from an earlier assembled chat.
+        try:
+            spice_turns = max(1, int(chat_settings.get('spice_turns', 3)))
+        except (TypeError, ValueError):
+            spice_turns = 3
         current_spice = prompts.get_current_spice()
 
         # Pick spice if: none set (just enabled) OR rotation interval hit
@@ -463,9 +466,10 @@ class LLMChat:
             logger.info(f"[SPICE] SPICE REFRESH at turn {turn_count} (had_spice={bool(current_spice)})")
             try:
                 spice_result = prompts.set_random_spice()
-                prompt_data = prompts.get_current_prompt()
-                content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)
-                self.set_system_prompt(content)
+                if prompts.is_assembled_mode():
+                    prompt_data = prompts.get_current_prompt()
+                    content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)
+                    self.set_system_prompt(content)
                 logger.info(f"[SPICE] Spice refresh completed: {spice_result}")
                 return True
             except Exception as e:

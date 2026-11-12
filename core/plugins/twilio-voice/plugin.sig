@@ -9,7 +9,7 @@
     "hooks/phone_context.py": "sha256:0cdc659a3ad719966057f675ab1ca04f0bfcb5076285197dd7be5c060c8f8bd9",
     "plugin.json": "sha256:2d4df1cfef7c48b37218c64a5b573c4fd9f1837a9189f584f9eaf2147d7c4e9e",
     "routes/accounts.py": "sha256:237fbc3328642e35ec99f695554dddef1924a1c0c7708d64b3d6fa499de711a8",
-    "sip_endpoint.py": "sha256:d658719ab58749af691ad5c527bffd6b6d6ec295324ee8b4176a7b663622d8c0",
+    "sip_endpoint.py": "sha256:c7e4797f3b60f794d2e7666925804caf6dd7405424fea87d57f49bd5a08ce5d7",
     "tests/conftest.py": "sha256:f8ed516b8df922ab32ea901437920e901ff3d61917ff8287f9217893da2bebf0",
     "tests/test_codec.py": "sha256:1b04054d68a51ee3fa3d4281423972a50617c923942d61ee987a4001726d874f",
     "tests/test_elevate_key.py": "sha256:93078e2b255d9f97500247c21f5e11d8ebab2272263c3dd3ca2747bac8a01261",
@@ -20,5 +20,5 @@
     "twilio_source.py": "sha256:7a9a0b6d7c8589a18011b2ccd130275a03c090a70065a3e5ac6f2337666db65d",
     "web/index.js": "sha256:ccc6882ecc8a0d35db67dac0a22c39bc1612db3d9807995cbaa1f6bd480ac70d"
   },
-  "signature": "udJrYfPA7BZvGiJSYkZgoQv5UHxbmX1aXhm6OCM1550YyLuvxA/KhJo5K3JHtlAXy/iHXzg+vMXFEDKJyGe0BA=="
+  "signature": "oYXJvXaQ2v/SaXbQiRxwgPDgvubhq9750CuMLZ2AZerdRdDWIlIVE0Py1l0gFUj7kQXfcUKXALoUa6RR7UeKDQ=="
 }

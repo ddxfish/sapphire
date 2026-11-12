@@ -33,6 +33,9 @@ export default {
                     A token that speaks as a persona (pick one when you add the key) also gets
                     <b>speak</b> and <b>ding</b> on this machine's speakers and that persona's own
                     memory. The microphone switch below adds <b>listen</b>.
+                    A persona key opens this door and nothing else. A key with no persona is a
+                    <b>master key</b>: it also opens the rest of her API, settings and plugin
+                    installs included, so whoever holds one can run code on this machine.
                 </p>
                 ${ctx.renderFields(this.essentialKeys)}
             </div>
@@ -40,7 +43,7 @@ export default {
                 <h3>\u{1FA91} Chat rooms</h3>
                 <p class="text-muted" style="font-size:var(--font-sm);line-height:1.5">
                     Another Sapphire that holds one of her tokens may invite her into a chat room
-                    over there. She decides in one turn of her own, with her memory behind her, and
+                    over there (give her a persona key, never a master key). She decides in one turn of her own, with her memory behind her, and
                     joins by calling <code>chatroom_join</code> with what she brings: a persona, a
                     model, a toolset, a name, a few lines for herself. What she leaves out comes
                     from the persona below. The host then sends her the room's lines in a chat made

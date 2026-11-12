@@ -1331,11 +1331,14 @@ class StreamingChat:
                 # Check both content AND thinking - GLM puts tool calls in reasoning_content
                 else:
                     function_call_data = None
+                    # No tools offered this turn = nothing to call: tool-shaped
+                    # text (a caller reading one aloud) is just text.
+                    _offered = bool(_allowed_tool_names)
                     # Check content first
-                    if current_content:
+                    if _offered and current_content:
                         function_call_data = self.tool_engine.extract_function_call_from_text(current_content)
                     # Also check thinking content (GLM reasoning_content may contain tool calls)
-                    if not function_call_data and current_thinking:
+                    if _offered and not function_call_data and current_thinking:
                         function_call_data = self.tool_engine.extract_function_call_from_text(current_thinking)
                         if function_call_data:
                             logger.info("[TOOL] Found text-based tool call in thinking/reasoning content")

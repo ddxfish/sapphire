@@ -889,3 +889,13 @@ class TestExecuteWithSuccess:
             mgr = self._mgr(MagicMock(return_value=("played", True)), enabled=())
             assert self._run(mgr, allowed_tools={'test_func'},
                              with_success=True) == ("played", True)
+
+    def test_empty_allowed_tools_means_no_tools(self):
+        """A turn that was given no tools (toolset 'none') must not fall back
+        to the operator's live toolset."""
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            fn = MagicMock(return_value=("ran", True))
+            mgr = self._mgr(fn)
+            result, success = self._run(mgr, allowed_tools=set(), with_success=True)
+            assert success is False
+            fn.assert_not_called()

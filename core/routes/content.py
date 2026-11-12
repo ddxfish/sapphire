@@ -675,6 +675,13 @@ async def save_custom_toolset(request: Request, _=Depends(require_login), system
     functions = data.get('functions', [])
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
+    # Names the engine reads as something else: "custom" is its word for an
+    # ad-hoc pick, "all"/"none" are built in, and a module's name would hide
+    # the module. An existing set keeps its name (it wins the lookup now).
+    fm = system.llm_chat.function_manager
+    if name in ('all', 'none', 'custom') or (
+            name in fm.function_modules and not toolset_manager.toolset_exists(name)):
+        raise HTTPException(status_code=400, detail=f"'{name}' is a built-in name - pick another")
     if toolset_manager.save_toolset(name, functions):
         reapply_if_active(system, 'toolset', name)
         # Echo the canonical accepted function list so the UI can re-sync from
@@ -714,6 +721,36 @@ async def set_toolset_emoji(toolset_name: str, request: Request, _=Depends(requi
 # SPICES ROUTES
 # =============================================================================
 
+def _save_spices():
+    """Persist the spice pool, or say it did not happen: the routes used to
+    answer "success" while the save was refused (an unreadable file on disk)."""
+    if prompts.prompt_manager.save_spices() is False:
+        raise HTTPException(status_code=409, detail=(
+            "Not saved: your spices file (user/prompts/prompt_spices.json) could not be read, "
+            "so Sapphire won't write over it. Fix the file, then Reload."))
+
+
+def _spice_name(name, what="Name"):
+    """A category or set name that will survive a reload: names starting with
+    '_' are the file's own keys (_meta, _comment) and are dropped on load."""
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=400, detail=f"{what} required")
+    name = name.strip()
+    if name.startswith('_'):
+        raise HTTPException(status_code=400, detail=f"{what} can't start with an underscore")
+    return name
+
+
+def _apply_spice_set(set_name):
+    """Make the live pool match a set: its categories on, the rest off."""
+    from core.spice_sets import spice_set_manager
+    categories = spice_set_manager.get_categories(set_name)
+    all_cats = set(prompts.prompt_manager.spices.keys())
+    prompts.prompt_manager._disabled_categories = all_cats - set(categories)
+    _save_spices()
+    prompts.invalidate_spice_picks()
+
+
 @router.get("/api/spices")
 async def list_spices(request: Request, _=Depends(require_login)):
     """List all spices."""
@@ -725,9 +762,7 @@ async def list_spices(request: Request, _=Depends(require_login)):
 async def create_spice_category(request: Request, _=Depends(require_login)):
     """Create a spice category."""
     data = await request.json()
-    name = data.get('name')
-    if not name:
-        raise HTTPException(status_code=400, detail="Name required")
+    name = _spice_name(data.get('name'))
     spices = prompts.prompt_manager._spices
     if name in spices:
         raise HTTPException(status_code=409, detail=f"Category '{name}' already exists")
@@ -737,7 +772,7 @@ async def create_spice_category(request: Request, _=Depends(require_login)):
     description = data.get('description', '')
     if emoji or description:
         prompts.prompt_manager._spice_meta[name] = {'emoji': emoji, 'description': description}
-    prompts.prompt_manager.save_spices()
+    _save_spices()
     return {"status": "success", "name": name}
 
 
@@ -750,7 +785,7 @@ async def delete_spice_category(name: str, request: Request, _=Depends(require_l
     del spices[name]
     prompts.prompt_manager._disabled_categories.discard(name)
     prompts.prompt_manager._spice_meta.pop(name, None)
-    prompts.prompt_manager.save_spices()
+    _save_spices()
     return {"status": "success", "name": name}
 
 
@@ -758,12 +793,15 @@ async def delete_spice_category(name: str, request: Request, _=Depends(require_l
 async def rename_spice_category(name: str, request: Request, _=Depends(require_login)):
     """Rename a spice category."""
     data = await request.json()
-    new_name = data.get('new_name')
-    if not new_name:
-        raise HTTPException(status_code=400, detail="New name required")
+    new_name = _spice_name(data.get('new_name'), "New name")
     spices = prompts.prompt_manager._spices
     if name not in spices:
         raise HTTPException(status_code=404, detail=f"Category '{name}' not found")
+    if new_name == name:
+        return {"status": "success", "old_name": name, "new_name": new_name}
+    if new_name in spices:
+        # It used to replace that category's spices with this one's.
+        raise HTTPException(status_code=409, detail=f"Category '{new_name}' already exists")
     spices[new_name] = spices.pop(name)
     # Transfer disabled state
     if name in prompts.prompt_manager._disabled_categories:
@@ -772,7 +810,11 @@ async def rename_spice_category(name: str, request: Request, _=Depends(require_l
     # Transfer meta
     if name in prompts.prompt_manager._spice_meta:
         prompts.prompt_manager._spice_meta[new_name] = prompts.prompt_manager._spice_meta.pop(name)
-    prompts.prompt_manager.save_spices()
+    _save_spices()
+    # The sets that held it follow the new name (they used to lose it).
+    from core.spice_sets import spice_set_manager
+    spice_set_manager.rename_category(name, new_name)
+    prompts.invalidate_spice_picks()
     return {"status": "success", "old_name": name, "new_name": new_name}
 
 
@@ -786,7 +828,7 @@ async def set_spice_category_emoji(name: str, request: Request, _=Depends(requir
     meta = prompts.prompt_manager._spice_meta.get(name, {})
     meta['emoji'] = emoji
     prompts.prompt_manager._spice_meta[name] = meta
-    prompts.prompt_manager.save_spices()
+    _save_spices()
     return {"status": "success", "name": name, "emoji": emoji}
 
 
@@ -800,7 +842,7 @@ async def toggle_spice_category(name: str, request: Request, _=Depends(require_l
     else:
         disabled.add(name)
         enabled = False
-    prompts.prompt_manager.save_spices()
+    _save_spices()
     prompts.invalidate_spice_picks()
     publish(Events.SPICE_CHANGED, {"category": name, "enabled": enabled})
     return {"status": "success", "category": name, "enabled": enabled}
@@ -830,7 +872,7 @@ async def add_spice(request: Request, _=Depends(require_login)):
     if category not in spices:
         raise HTTPException(status_code=404, detail=f"Category '{category}' not found")
     spices[category].append(content)
-    prompts.prompt_manager.save_spices()
+    _save_spices()
     publish(Events.SPICE_CHANGED, {"category": category, "action": "added"})
     return {"status": "success"}
 
@@ -846,7 +888,7 @@ async def update_spice(category: str, index: int, request: Request, _=Depends(re
     if category not in spices or index < 0 or index >= len(spices[category]):
         raise HTTPException(status_code=404, detail="Spice not found")
     spices[category][index] = content
-    prompts.prompt_manager.save_spices()
+    _save_spices()
     publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "updated"})
     return {"status": "success"}
 
@@ -858,7 +900,7 @@ async def delete_spice(category: str, index: int, request: Request, _=Depends(re
     if category not in spices or index < 0 or index >= len(spices[category]):
         raise HTTPException(status_code=404, detail="Spice not found")
     spices[category].pop(index)
-    prompts.prompt_manager.save_spices()
+    _save_spices()
     publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "deleted"})
     return {"status": "success"}
 
@@ -1598,12 +1640,7 @@ async def activate_spice_set(set_name: str, request: Request, _=Depends(require_
         raise HTTPException(status_code=409,
                             detail="Active chat changed — spice set not applied")
 
-    categories = spice_set_manager.get_categories(set_name)
-    all_cats = set(prompts.prompt_manager.spices.keys())
-    disabled = all_cats - set(categories)
-    prompts.prompt_manager._disabled_categories = disabled
-    prompts.prompt_manager.save_spices()
-    prompts.invalidate_spice_picks()
+    _apply_spice_set(set_name)
 
     spice_set_manager.active_name = set_name
     publish(Events.SPICE_CHANGED, {"spice_set": set_name})
@@ -1615,11 +1652,18 @@ async def save_custom_spice_set(request: Request, _=Depends(require_login)):
     """Save a custom spice set."""
     from core.spice_sets import spice_set_manager
     data = await request.json()
-    name = data.get('name')
+    name = _spice_name(data.get('name'))
     categories = data.get('categories', [])
-    if not name:
-        raise HTTPException(status_code=400, detail="Name required")
-    spice_set_manager.save_set(name, categories)
+    if not isinstance(categories, list) or not all(isinstance(c, str) for c in categories):
+        raise HTTPException(status_code=400, detail="categories must be a list of names")
+    if not spice_set_manager.save_set(name, categories):
+        raise HTTPException(status_code=409, detail=spice_set_manager.corrupt_error
+                            or "Spice set could not be saved (see the log)")
+    # Editing the set that is ON changes what she draws from now, not at the
+    # next activate.
+    if name == spice_set_manager.active_name:
+        _apply_spice_set(name)
+        publish(Events.SPICE_CHANGED, {"spice_set": name})
     return {"status": "success", "name": name}
 
 

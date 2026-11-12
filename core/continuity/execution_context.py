@@ -171,7 +171,7 @@ class ExecutionContext:
         # continuity run's mindpalace metadata.
         self.system_prompt = self._build_prompt()
         self.tools = self._resolve_tools()
-        self._allowed_tool_names = {t["function"]["name"] for t in self.tools if "function" in t} if self.tools else None
+        self._allowed_tool_names = {t["function"]["name"] for t in (self.tools or []) if "function" in t}
         self.provider_key, self.provider, self.model_override = self._resolve_provider()
         self.scopes = self._build_scopes()
         self.gen_params = self._build_gen_params()
@@ -725,7 +725,9 @@ class ExecutionContext:
                 continue
 
             elif response_msg.content and _visible:
-                fn_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
+                # No tools offered = nothing to call: tool-shaped text is just text.
+                fn_data = (self.tool_engine.extract_function_call_from_text(response_msg.content)
+                           if self._allowed_tool_names else None)
                 if fn_data:
                     self.tool_log.append(fn_data.get('name', '?'))
                     self._tell_tool([fn_data.get('name', '?')])

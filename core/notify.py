@@ -559,7 +559,7 @@ def _on_plugin_load_error(event):
     body = str(d.get('error') or 'failed to load')
     if d.get('hint'):
         body += f" — {d['hint']}"
-    notify(f"Plugin '{plugin}' did not load", 'warning' if deps else 'error', body,
+    notify(d.get('title') or f"Plugin '{plugin}' did not load", 'warning' if deps else 'error', body,
            source=plugin, key=f"plugin-load:{plugin}", go=_PLUGINS)
 
 

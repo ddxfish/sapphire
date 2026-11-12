@@ -54,6 +54,7 @@ def _fsync_dir(path):
 class SettingsManager:
     """Manages application settings with hot-reload and persistence."""
     corrupt_error = None     # see __init__ (class default: test doubles skip __init__)
+    forced_defaults = False  # the file was unreadable at BOOT: nothing of theirs is loaded
     
     # Serializes every settings.json tmp-write+rename across ALL instances.
     # CLASS attribute on purpose: (1) all four persist sites share ONE tmp
@@ -160,8 +161,14 @@ class SettingsManager:
         # Auth is now handled entirely by core/setup.py using ~/.config/sapphire/secret_key or %APPDATA%\Sapphire\
         # Remove legacy env var handling
     
-    def _load_user_settings(self):
-        """Load user/settings.json if exists"""
+    def _load_user_settings(self, keep=False):
+        """Load user/settings.json if exists.
+
+        keep=True is a reload of a running Sapphire: a file that can't be
+        parsed (a typo mid-edit) leaves the settings she already has in place.
+        Falling to defaults there turned her voice and ears off and swapped
+        the embedder under her memory, without the confirmation that swap is
+        guarded by. Only a boot has nothing to keep (forced_defaults)."""
         user_path = self.BASE_DIR / 'user' / 'settings.json'
         if user_path.exists():
             try:
@@ -169,13 +176,23 @@ class SettingsManager:
                     nested = json.load(f)
                 self._user = self._flatten_dict(nested)
                 self.corrupt_error = None
+                self.forced_defaults = False
                 logger.info(f"Loaded user settings from {user_path}")
             except Exception as e:
+                if keep and not self.forced_defaults:
+                    logger.error(f"Corrupt settings file at {user_path}: {e} — keeping the settings already loaded")
+                    self.corrupt_error = (
+                        f"Your settings file (user/settings.json) can't be read ({e}). Sapphire is keeping the "
+                        f"settings she already had and won't save changes over the file. Fix the file, or reset "
+                        f"settings in Settings › System.")
+                    return
                 logger.error(f"Corrupt settings file at {user_path}: {e} — using defaults until fixed")
+                self.forced_defaults = True
                 self.corrupt_error = (
                     f"Your settings file (user/settings.json) can't be read ({e}), so Sapphire is running on "
-                    f"default settings and won't save changes over it. Fix the file (a copy is beside it as "
-                    f"settings.json.corrupt) or reset settings in Settings › System.")
+                    f"default settings and won't save changes over it. Internet requests are held until then "
+                    f"(your proxy setting is in that file); your local network still works. Fix the file "
+                    f"(a copy is beside it as settings.json.corrupt) or reset settings in Settings › System.")
                 try:
                     backup = user_path.with_suffix('.json.corrupt')
                     shutil.copy2(user_path, backup)
@@ -752,10 +769,32 @@ class SettingsManager:
     def reload(self):
         """Reload settings from disk"""
         with self._lock:
-            self._load_user_settings()
+            was_error, was_forced = self.corrupt_error, self.forced_defaults
+            self._load_user_settings(keep=True)
             self._merge_settings()
             self._update_mtime()
             logger.info("Settings reloaded from disk")
+        self._after_readability_change(was_error, was_forced)
+
+    def _after_readability_change(self, was_error, was_forced):
+        """The file went unreadable or came back: say so, and re-stamp the
+        proxy env when a boot on forced defaults (internet held) just ended."""
+        try:
+            from core import notify
+            if self.corrupt_error and self.corrupt_error != was_error:
+                notify.notify("Settings file can't be read", 'error', self.corrupt_error, source='settings',
+                              key='settings-corrupt', go={'view': 'settings', 'tab': 'system'})
+            elif was_error and not self.corrupt_error:
+                notify.forget('settings-corrupt')
+                notify.notify("Settings file is readable again", 'info', source='settings')
+        except Exception as e:
+            logger.debug(f"settings readability notice skipped: {e}")
+        if was_forced and not self.forced_defaults:
+            try:
+                from core import socks_proxy
+                socks_proxy.clear_session_cache()
+            except Exception as e:
+                logger.error(f"Could not re-apply the proxy env after the settings file was fixed: {e}")
     
     def reset_to_defaults(self):
         """Reset all settings to defaults (clears user overrides and file)"""
@@ -776,8 +815,11 @@ class SettingsManager:
                     replace_with_retry(tmp_path, user_path)
                     _fsync_dir(user_path.parent)
                     self._last_mtime = user_path.stat().st_mtime
+                was_forced, self.forced_defaults = self.forced_defaults, False
                 self.corrupt_error = None       # reset IS the fix for an unreadable file
                 logger.info("Settings reset to defaults")
+                if was_forced:
+                    self._after_readability_change(None, True)
                 return True
             except Exception as e:
                 logger.error(f"Failed to reset settings file: {e}")

@@ -921,6 +921,11 @@ def _apply_chat_settings_unlocked(system, settings: dict):
         if "spice_set" in settings:
             from core.spice_sets import spice_set_manager
             set_name = settings["spice_set"]
+            if not spice_set_manager.set_exists(set_name) and spice_set_manager.set_exists('default'):
+                # The chat's set was deleted: without this it kept whatever
+                # pool the previous chat left behind.
+                logger.warning(f"Spice set '{set_name}' no longer exists - using 'default'")
+                set_name = 'default'
             if spice_set_manager.set_exists(set_name):
                 categories = spice_set_manager.get_categories(set_name)
                 all_cats = set(prompts.prompt_manager.spices.keys())

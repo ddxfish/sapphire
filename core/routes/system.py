@@ -1148,13 +1148,15 @@ async def dashboard_component_status(_=Depends(require_login)):
 
     def _wakeword_status() -> str:
         try:
-            if not getattr(config, 'WAKEWORD_ENABLED', False):
+            # WAKE_WORD_ENABLED is the setting; 'WAKEWORD_ENABLED' never
+            # existed, so this always said idle.
+            if not getattr(config, 'WAKE_WORD_ENABLED', False):
                 return 'idle'
             detector = getattr(system, 'wake_detector', None)
             if detector is None:
                 return 'error'
             if 'null' in type(detector).__name__.lower():
-                return 'idle'
+                return 'error'      # it is ON and fell back to the null detector: she is deaf
             return 'ok'
         except Exception:
             return 'warn'
@@ -1310,19 +1312,20 @@ async def toggle_true_speech(request: Request, _=Depends(require_login), system=
         # itself engages via the WS connect (/ws/conversation), not this PUT.
         if system.conversation_mode_enabled and getattr(system, "conversation_source", None) == "browser":
             logger.info("[CONV] local mode requested — ending the browser session")
-            mgr.stop()
-        ok = mgr.start_local()
+            await asyncio.to_thread(mgr.stop)      # opens/closes audio, joins threads: off the loop
+        ok = await asyncio.to_thread(mgr.start_local)
         if ok:
             mgr.remember("local")
         return {
             "status": "ok" if ok else "failed",
             "active": mgr.active,
-            "note": "" if ok else ("Sapphire couldn't open the mic on the computer it runs on. Check that one "
+            "note": "" if ok else (getattr(mgr, "refused", "") or
+                                   "Sapphire couldn't open the mic on the computer it runs on. Check that one "
                                    "is plugged in and picked in Settings › Audio."),
         }
     if mgr.active:
         logger.info(f"[CONV] Off requested over HTTP (source={getattr(system, 'conversation_source', None)})")
-    mgr.stop()
+    await asyncio.to_thread(mgr.stop)
     mgr.remember("off")
     return {"status": "ok", "active": mgr.active}
 

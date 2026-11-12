@@ -428,14 +428,15 @@ def _safe_rename_corrupted(db_path):
     else:
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         target = db_path.with_name(db_path.name + f'.corrupted.{ts}')
-    try:
-        db_path.rename(target)
+    # Sidecars travel with their DB (core.fs_utils.move_db_aside): the -wal
+    # holds its newest writes, and must never sit beside the fresh DB.
+    from core.fs_utils import move_db_aside
+    if move_db_aside(db_path, target):
         logger.error(f"[MINDPALACE] Corrupted DB preserved at {target} — "
                      f"fresh DB will be created; re-run import_v2 to recover copied data")
         return True
-    except Exception as e:
-        logger.error(f"[MINDPALACE] Could not preserve corrupted DB at {target}: {e}")
-        return False
+    logger.error(f"[MINDPALACE] Could not preserve corrupted DB at {target}")
+    return False
 
 
 def _setup_fts(cursor):

@@ -339,7 +339,7 @@ def clean_text(text):
     text = think.strip(text)
 
     # Stage 2: Strip all HTML tags
-    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'</?[a-zA-Z!][^<>]*>', '', text)      # a tag, not a stray '<' ("x < y")
 
     # Stage 3: Replace problematic punctuation
     text = re.sub(r'[—–―]|--', '. ', text)  # Em/en dashes and -- → period for TTS pause
@@ -353,7 +353,11 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
 
     # Stage 4: Character whitelist
-    cleaned_text = re.sub(r"[^a-zA-Z0-9 .,?!'\"\-():;']", '', text)
+    # Letters and digits of any language, plus the symbols an engine can
+    # read ("50%", "$5", "2 + 2 = 4", "20°", "and/or"). The old ASCII-only
+    # list deleted those symbols and every accented or non-Latin letter.
+    text = text.replace('_', ' ')
+    cleaned_text = re.sub(r"[^\w .,?!'\"\-():;/%$+=°&@]", '', text)
 
     return cleaned_text.strip()
 

@@ -181,7 +181,13 @@ class VoiceChatSystem:
             plugin_loader.scan(function_manager=self.llm_chat.function_manager)
         except Exception as e:
             logger.critical(f"Plugin loader failed — ALL plugins unavailable: {e}", exc_info=True)
-            self._plugin_load_error = str(e)
+            try:
+                plugin_loader.report_load_error({
+                    'plugin': 'plugins', 'title': 'Plugins did not load',
+                    'error': f"The plugin loader failed, so no plugin is running (memory and tools included): {e}",
+                    'hint': 'see the log, then restart'})
+            except Exception:
+                pass
 
         # Re-derive proxy env now that plugins have registered their
         # direct hosts (register_direct_hosts): the boot stamp ran
@@ -247,7 +253,7 @@ class VoiceChatSystem:
                 # below has no consumer, row 19, 2026-10-16).
                 try:
                     if not any(e.get('plugin') == _name for e in _pl._load_errors):
-                        _pl._load_errors.append({
+                        _pl.report_load_error({
                             'plugin': _name,
                             'error': f"essential plugin did not load ({reason}); memory/core tools are unavailable",
                             'hint': f"python tools/sign_plugin.py core/plugins/{_name}, or ALLOW_UNSIGNED_PLUGINS=true, then restart",
@@ -283,7 +289,8 @@ class VoiceChatSystem:
                 try:   # keyed by the group, not a member's id (classic's id IS the group word)
                     _key = f"{_group} engine"
                     if not any(e.get('plugin') == _key for e in _pl._load_errors):
-                        _pl._load_errors.append({'plugin': _key, 'error': _err, 'hint': _hint})
+                        _pl.report_load_error({'plugin': _key, 'error': _err, 'hint': _hint,
+                                               'title': f"No {_group} engine is running"})
                 except Exception:
                     pass
             if self._missing_essential_plugins:
@@ -597,8 +604,8 @@ class VoiceChatSystem:
                 # the replay ring is never read in production, so it was
                 # guaranteed-invisible (negspace N7, 2026-08-31).
                 from core.plugin_loader import plugin_loader as _pl_boot
-                _pl_boot._load_errors.append({
-                    "plugin": "wakeword",
+                _pl_boot.report_load_error({
+                    "plugin": "wakeword", "title": "Wake word did not start",
                     "error": ("Wake word init failed -- Sapphire booted DEAF. "
                               "Check the wakeword model / settings, then "
                               "re-toggle wake word."),
@@ -1500,10 +1507,23 @@ def run():
                           key='settings-corrupt', go={'view': 'settings', 'tab': 'system'})
     except Exception as e:
         logger.debug(f"settings-corrupt notice skipped: {e}")
+    # The same for her saved keys and passwords: never written over, said every
+    # boot, with a button that starts fresh (the old file is kept beside it).
+    try:
+        from core.credentials_manager import credentials as _creds_boot
+        from core import notify
+        notify.register_repair('credentials-fresh', _creds_boot.start_fresh)
+        if _creds_boot.corrupt_error:
+            notify.notify("Saved keys can't be read", 'error', _creds_boot.corrupt_error, source='settings',
+                          key='credentials-corrupt', action={'repair': 'credentials-fresh', 'label': 'Start fresh'})
+    except Exception as e:
+        logger.debug(f"credentials-corrupt notice skipped: {e}")
     
     # Auto-detect timezone if unset (upgrades skip setup wizard)
+    # 'UTC' is also the DEFAULT, so it only means "unset" when the person
+    # never saved it: someone who picked UTC had it replaced at every boot.
     _tz = getattr(config, 'USER_TIMEZONE', '') or ''
-    if not _tz or _tz == 'UTC':
+    if not _tz or (_tz == 'UTC' and 'USER_TIMEZONE' not in getattr(settings, '_user', {})):
         try:
             _tz_name = None
             # Read /etc/localtime symlink (Linux) — gives proper IANA name

@@ -63,9 +63,9 @@ export const stopLocalTtsPoll = () => {
     localTtsPlaying = false;
 };
 
-export const stopLocalTts = async (streamId = null, chatWide = false) => {
+export const stopLocalTts = async (streamId = null, chatWide = false, speakers = true) => {
     try {
-        await api.stopLocalTts(streamId, chatWide);
+        await api.stopLocalTts(streamId, chatWide, speakers);
         localTtsPlaying = false;
     } catch {}
     // Re-check server state after a delay to catch races where TTS
@@ -127,7 +127,10 @@ export const stop = (force = false, chatWide = false) => {
     isStreaming = false;
     // Always tell server to stop TTS — even if we don't think it's playing yet.
     // Server stop is idempotent and prevents races where TTS starts after our check.
-    stopLocalTts(sid, chatWide);
+    // force = somebody asked for quiet (Stop, Replay, a barge-in). Without it
+    // this is housekeeping (a chat switch, the page closing): the tab's own
+    // audio stops, the computer's speakers are left alone.
+    stopLocalTts(sid, chatWide, force);
     // the person meant "quiet": a chat room's reading queue hears it and goes
     // quiet too, instead of taking the stop as the end of a line (2026-11-04)
     if (chatWide) dispatch('tts_user_stop', {});

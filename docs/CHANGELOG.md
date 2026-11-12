@@ -1,3 +1,5 @@
+# 2.16.4 - Million Dollar Bug Hunt
+- Widespread bug hunt across whole system
 # 2.16.3 - Personas and Prompts upgrades
 - Ghost messages show in Chat > Sidebar > System prompt
 - Full actual speech is in the STT hook

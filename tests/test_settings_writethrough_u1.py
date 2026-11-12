@@ -119,3 +119,56 @@ def test_an_unreadable_settings_file_refuses_every_save(tmp_path):
     bad.write_text('{"identity": {"X": 1}}', encoding='utf-8')            # fixed by hand: the watcher reloads
     sm._load_user_settings()
     assert sm.corrupt_error is None
+
+
+def _bare_manager(tmp_path, text):
+    from core.settings_manager import SettingsManager
+    sm = SettingsManager.__new__(SettingsManager)
+    sm.BASE_DIR = tmp_path
+    (tmp_path / 'user').mkdir()
+    f = tmp_path / 'user' / 'settings.json'
+    f.write_text(text, encoding='utf-8')
+    sm.corrupt_error = None
+    sm._user = {}
+    return sm, f
+
+
+def test_a_typo_in_a_live_reload_keeps_the_settings_already_loaded(tmp_path):
+    """A parse error on a RELOAD used to drop every user value to its default:
+    voice and ears off, and the embedder swapped under her memory with no
+    confirmation. A running Sapphire keeps what she has."""
+    sm, f = _bare_manager(tmp_path, '{"tts": {"TTS_PROVIDER": "kokoro"}}')
+    sm._load_user_settings()
+    assert sm._user == {'TTS_PROVIDER': 'kokoro'} and not sm.forced_defaults
+    f.write_text('{"tts": {"TTS_PROVIDER": "kokoro",}}', encoding='utf-8')
+    sm._load_user_settings(keep=True)
+    assert sm._user == {'TTS_PROVIDER': 'kokoro'}          # kept
+    assert sm.corrupt_error and not sm.forced_defaults       # saves refused, internet not held
+    assert sm.save() is False
+    f.write_text('{"tts": {"TTS_PROVIDER": "none"}}', encoding='utf-8')
+    sm._load_user_settings(keep=True)
+    assert sm._user == {'TTS_PROVIDER': 'none'} and sm.corrupt_error is None
+
+
+def test_an_unreadable_file_at_boot_forces_defaults_and_holds_the_internet(tmp_path, monkeypatch):
+    sm, f = _bare_manager(tmp_path, '{"network": {"SOCKS_ENABLED": true,}}')
+    sm._load_user_settings()
+    assert sm.forced_defaults and sm._user == {}
+    sm._load_user_settings(keep=True)                        # still broken on a reload: still forced
+    assert sm.forced_defaults
+
+    import os
+    from core import socks_proxy
+    from core import settings_manager as smod
+    for var in list(socks_proxy._PROXY_VARS) + ['NO_PROXY', 'no_proxy']:
+        monkeypatch.setenv(var, '')
+        monkeypatch.setenv(var.lower(), '')
+    monkeypatch.setattr(smod.settings, 'forced_defaults', True, raising=False)
+    monkeypatch.setattr(socks_proxy.config, 'SOCKS_ENABLED', False, raising=False)
+    socks_proxy._apply_proxy_env_inner()
+    assert os.environ['ALL_PROXY'].endswith('127.0.0.1:1')    # a proxy that refuses: nothing goes direct
+    assert '192.168.0.0/16' in os.environ['NO_PROXY']         # the LAN still works
+    assert socks_proxy._blackholed
+    monkeypatch.setattr(smod.settings, 'forced_defaults', False, raising=False)
+    socks_proxy._apply_proxy_env_inner()
+    assert 'ALL_PROXY' not in os.environ and not socks_proxy._blackholed

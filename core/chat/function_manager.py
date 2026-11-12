@@ -548,11 +548,18 @@ class FunctionManager:
                         mod_stub.__file__ = str(tool_path)
                         namespace = mod_stub.__dict__
                         namespace["__file__"] = str(tool_path)
-                        exec(compile(source, str(tool_path), "exec"), namespace)
                         # Install as a real module in sys.modules so future
                         # `from plugins.memory.tools import memory_tools` calls
                         # resolve to the SAME module object (no split state).
+                        # BEFORE the exec: code that looks its own module up
+                        # while it is being defined (`@dataclass` under
+                        # `from __future__ import annotations`) needs it there.
                         sys.modules[canonical_name] = mod_stub
+                        try:
+                            exec(compile(source, str(tool_path), "exec"), namespace)
+                        except BaseException:
+                            sys.modules.pop(canonical_name, None)   # a half-run module must not stay importable
+                            raise
 
                     if not namespace.get('ENABLED', True):
                         logger.info(f"Plugin tool '{module_name}' is disabled")
@@ -1288,11 +1295,13 @@ class FunctionManager:
                          if t['function']['name'] not in self._hidden_tools], "all", None)
             if one == "none":
                 return ([], "none", None)
+            # A saved toolset wins over a module of the same name (a set the
+            # person named "web" used to be silently replaced by the module).
+            if toolset_manager.toolset_exists(one):
+                return (list(toolset_manager.get_toolset_functions(one)), one, None)
             if one in self.function_modules:
                 return ([n for n in self.function_modules[one]['available_functions']
                          if n not in self._hidden_tools], one, None)
-            if toolset_manager.toolset_exists(one):
-                return (list(toolset_manager.get_toolset_functions(one)), one, None)
             group = self._group_names(one)          # a category, or a plugin by name (2026-10-08)
             if group is not None:
                 return (group, one, None)
@@ -1308,12 +1317,12 @@ class FunctionManager:
         out = set()
         for name in extras or []:
             try:
-                if name in self.function_modules:
+                if toolset_manager.toolset_exists(name):     # saved set first, as in resolve_tool_names
+                    fn_names = toolset_manager.get_toolset_functions(name)
+                elif name in self.function_modules:
                     # same hidden rule as a module named as THE toolset
                     fn_names = [n for n in self.function_modules[name]['available_functions']
                                 if n not in self._hidden_tools]
-                elif toolset_manager.toolset_exists(name):
-                    fn_names = toolset_manager.get_toolset_functions(name)
                 elif self._group_names(name) is not None:
                     fn_names = self._group_names(name)
                 else:
@@ -1446,10 +1455,14 @@ class FunctionManager:
         Used by execute_function() to coerce arg types. Reads the internal
         (pre-mode-filter) list so the schema is found even when the executing
         tool isn't in the current mode-filtered view."""
-        for tool in self._enabled_tools:
-            fn = tool.get('function', {})
-            if fn.get('name') == function_name:
-                return fn.get('parameters')
+        # The operator's set first, then every registered tool: a background
+        # lane (task, Discord, a non-active chat) runs tools that are not in
+        # the operator's live toolset, and skipped arg coercion for them.
+        for tools in (self._enabled_tools, getattr(self, 'all_possible_tools', ())):
+            for tool in tools:
+                fn = tool.get('function', {})
+                if fn.get('name') == function_name:
+                    return fn.get('parameters')
         return None
 
     def has_network_tools_enabled(self) -> bool:
@@ -1477,11 +1490,11 @@ class FunctionManager:
                                   if t['function']['name'] not in self._hidden_tools])
         elif self.current_toolset_name == "none":
             expected_count = 0
+        elif toolset_manager.toolset_exists(self.current_toolset_name):
+            expected_count = len(toolset_manager.get_toolset_functions(self.current_toolset_name))
         elif self.current_toolset_name in self.function_modules:
             expected_count = len([n for n in self.function_modules[self.current_toolset_name]['available_functions']
                                   if n not in self._hidden_tools])
-        elif toolset_manager.toolset_exists(self.current_toolset_name):
-            expected_count = len(toolset_manager.get_toolset_functions(self.current_toolset_name))
         
         mode = self._get_current_prompt_mode()
 
@@ -1576,7 +1589,7 @@ class FunctionManager:
         """_execute_function with this turn's tool names in `turn_tools` for the
         call's duration (get_self_info reads them), reset after so they never
         outlive it into an unrelated call on the same thread."""
-        token = turn_tools.set(frozenset(allowed_tools)) if allowed_tools else None
+        token = turn_tools.set(frozenset(allowed_tools)) if allowed_tools is not None else None
         try:
             return self._execute_function(function_name, arguments, scopes, allowed_tools,
                                           executor_snapshot, with_success)
@@ -1609,8 +1622,9 @@ class FunctionManager:
         start_time = time.time()
 
         # Validate function was available when sent to LLM (snapshot)
-        # or is currently enabled (fallback)
-        check_names = set(allowed_tools) if allowed_tools else self.get_enabled_function_names()
+        # or is currently enabled (fallback). An EMPTY snapshot is a turn that
+        # was given no tools - it must never fall back to the operator's live set.
+        check_names = set(allowed_tools) if allowed_tools is not None else self.get_enabled_function_names()
         if function_name not in check_names:
             logger.warning(f"Function '{function_name}' called but not enabled. Enabled: {check_names}")
             # Make the error LLM-actionable. The old terse message ("not currently

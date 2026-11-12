@@ -1625,6 +1625,19 @@ def _plugin_extra(plugin_name):
         return None
 
 
+def _refuse_unverified(plugin_name: str, info: dict):
+    """Packages are installed only for a plugin that is allowed to load. Its
+    manifest names what pip fetches and runs (setup scripts included), so a
+    plugin the loader blocks must not get there through this door."""
+    if info.get("verified"):
+        return
+    if info.get("verify_tier") == "unsigned" and getattr(config, "ALLOW_UNSIGNED_PLUGINS", False):
+        return
+    raise HTTPException(status_code=403, detail=(
+        f"{plugin_name} is not verified ({info.get('verify_msg') or 'unsigned'}), so Sapphire won't "
+        f"install packages for it. Settings > Plugins shows how to allow or fix it."))
+
+
 @router.post("/api/plugins/{plugin_name}/install-deps")
 def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
     """Install a plugin's packages - its hard `pip_dependencies` and its
@@ -1642,6 +1655,7 @@ def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
     info = plugin_loader.get_plugin_info(plugin_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    _refuse_unverified(plugin_name, info)
     name = extras.PLUGIN_PREFIX + plugin_name
     if not extras.known(name):
         return {"status": "ok", "message": "This plugin declares no packages", "state": "done"}
@@ -1675,6 +1689,7 @@ async def build_plugin_env(plugin_name: str, _=Depends(require_login)):
     info = plugin_loader.get_plugin_info(plugin_name)
     if not info:
         raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    _refuse_unverified(plugin_name, info)
     env_spec = info.get("manifest", {}).get("environment")
     if not env_spec:
         raise HTTPException(status_code=400, detail=f"{plugin_name} declares no environment")

@@ -45,6 +45,24 @@ PLUGINS_JSON_LOCK = threading.RLock()
 RETIRED_PLUGIN_NAMES = frozenset({"setup-wizard"})
 
 
+def _exec_as_module(path: Path, name: str) -> dict:
+    """Run a plugin file as a module that IS in sys.modules while it runs;
+    returns its namespace. A bare-dict exec left the name unregistered, and
+    anything that looks its own module up at class-creation time failed:
+    `from __future__ import annotations` with `@dataclass` could not load."""
+    import sys
+    import types
+    mod = types.ModuleType(name)
+    mod.__file__ = str(path)
+    sys.modules[name] = mod
+    try:
+        exec(compile(path.read_text(encoding="utf-8-sig"), str(path), "exec"), mod.__dict__)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return mod.__dict__
+
+
 def _time_to_cron(value, fallback: str) -> str:
     """'HH:MM' or a bare hour (9, 9.0, '9') → daily cron 'M H * * *'. Anything
     unparsable keeps the manifest cron, so a mistyped settings value degrades
@@ -453,8 +471,8 @@ class PluginLoader:
                         self.unload_plugin(name)           # whatever it registered before the raise
                     except Exception as ue:
                         logger.warning(f"[PLUGINS] {name}: cleanup after the failed load: {ue!r}")
-                    self._load_errors.append({"plugin": name, "error": f"Failed to load: {e}",
-                                              "hint": "Check the plugin's plugin.json"})
+                    self.report_load_error({"plugin": name, "error": f"Failed to load: {e}",
+                                            "hint": "Check the plugin's plugin.json"})
                     ok = False
                 if ok:
                     loaded += 1
@@ -1004,8 +1022,8 @@ class PluginLoader:
             with self._lock:
                 if name in self._plugins:
                     self._plugins[name]["loaded"] = False
-            self._load_errors.append({"plugin": name, "error": f"Failed to load: {e}",
-                                      "hint": "Check the plugin's plugin.json and its code"})
+            self.report_load_error({"plugin": name, "error": f"Failed to load: {e}",
+                                    "hint": "Check the plugin's plugin.json and its code"})
             return False
 
     def _load_plugin_inner(self, name: str) -> bool:
@@ -1312,8 +1330,7 @@ class PluginLoader:
                     logger.warning(f"[PLUGINS] Provider file not found: {provider_path}")
                     continue
                 try:
-                    ns = {"__file__": str(provider_path), "__name__": f"plugin_provider_{name}_{system_name}"}
-                    exec(compile(provider_path.read_text(encoding='utf-8-sig'), str(provider_path), 'exec'), ns)
+                    ns = _exec_as_module(provider_path, f"plugin_provider_{name}_{system_name}")
                     provider_class = ns.get(class_name)
                     if not provider_class:
                         logger.error(f"[PLUGINS] Class '{class_name}' not found in {provider_path}")
@@ -1589,9 +1606,7 @@ class PluginLoader:
             # One namespace per file: handlers from the same file share module-level state
             namespace = ns_cache.get(handler_path) if ns_cache is not None else None
             if namespace is None:
-                source = full_path.read_text(encoding="utf-8-sig")
-                namespace = {"__file__": str(full_path), "__name__": f"plugin_{plugin_dir.name}_{full_path.stem}"}
-                exec(compile(source, str(full_path), "exec"), namespace)
+                namespace = _exec_as_module(full_path, f"plugin_{plugin_dir.name}_{full_path.stem}")
                 if ns_cache is not None:
                     ns_cache[handler_path] = namespace
 
@@ -1610,6 +1625,12 @@ class PluginLoader:
 
         except Exception as e:
             logger.error(f"[PLUGINS] Failed to load handler {full_path}: {e}", exc_info=True)
+            # The plugin still shows as loaded: without a row, a hook that
+            # never fires looked like a working plugin.
+            self.report_load_error({"plugin": plugin_dir.name,
+                                    "error": f"{handler_path} failed to load, so its '{hook_name}' "
+                                             f"handler is not running: {e}",
+                                    "hint": "fix the file, then reload the plugin"})
             return None
 
     def _get_provider_registry(self, system_name: str):
@@ -3137,6 +3158,20 @@ class PluginLoader:
     def get_enabled_plugins(self) -> List[str]:
         """Names of enabled plugins."""
         return [n for n, info in self._plugins.items() if info["enabled"]]
+
+    def report_load_error(self, err: dict):
+        """A boot or load failure the person must see: onto the list (once per
+        'plugin' key) AND onto the bus, where core/notify turns it into a row.
+        The list alone has no reader in the UI - an entry appended after
+        notify.init() without the event was shown nowhere."""
+        if not any(e.get('plugin') == err.get('plugin') and e.get('error') == err.get('error')
+                   for e in self._load_errors):
+            self._load_errors.append(err)
+        try:
+            from core.event_bus import publish, Events
+            publish(Events.PLUGIN_LOAD_ERROR, err)
+        except Exception as e:
+            logger.debug(f"[PLUGINS] load error not published: {e}")
 
     def get_load_errors(self) -> list:
         """Get accumulated plugin load errors (for startup toast display).

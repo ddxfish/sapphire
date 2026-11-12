@@ -1015,6 +1015,20 @@ class Backup:
             target += timedelta(days=1)
         return (target - now).total_seconds(), target
 
+    OVERDUE_HOURS = 26          # a daily run plus slack
+    CATCH_UP_DELAY_S = 300.0    # after boot: let the app settle first
+
+    def _overdue(self) -> bool:
+        """Backups are on and the newest one (any tier) is older than a day, or there is none."""
+        if not getattr(config, 'BACKUPS_ENABLED', True):
+            return False
+        try:
+            newest = self.newest_backup()
+        except Exception as e:
+            logger.warning(f"Backup scheduler: could not read the newest backup ({e}) - no catch-up")
+            return False
+        return newest is None or float(newest.get('age_hours') or 0) > self.OVERDUE_HOURS
+
     def newest_backup(self):
         """{filename, size, age_hours} of the newest backup of any tier, or None."""
         try:
@@ -1084,10 +1098,20 @@ class Backup:
         self.ensure_openers()
 
         def _backup_loop():
+            first = True
             while not self._stop_event.is_set():
                 try:
                     wait_seconds, target = self._next_run_seconds()
-                    logger.info(f"Backup scheduler: next run in {wait_seconds / 3600:.1f}h at {target.strftime('%Y-%m-%d %H:%M')}")
+                    # Catch-up, once per boot: a machine that is off at
+                    # BACKUPS_HOUR every night never reached a run, so it had
+                    # no backups at all. Nothing newer than a day -> run soon.
+                    if first and self._overdue():
+                        wait_seconds = self.CATCH_UP_DELAY_S
+                        logger.info(f"Backup scheduler: no backup in the last {self.OVERDUE_HOURS}h - "
+                                    f"catching up in {wait_seconds / 60:.0f} min")
+                    else:
+                        logger.info(f"Backup scheduler: next run in {wait_seconds / 3600:.1f}h at {target.strftime('%Y-%m-%d %H:%M')}")
+                    first = False
                 except Exception as e:
                     # The loop must NEVER die quietly — pre-fix a bad
                     # BACKUPS_HOUR raised here, killed this thread on iteration

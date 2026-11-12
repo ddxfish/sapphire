@@ -67,3 +67,37 @@ def ro_uri(path) -> str:
     if not s.startswith('/'):           # a Windows drive: /C:/...
         s = '/' + s
     return 'file://' + quote(s, safe='/:') + '?mode=ro'
+
+
+DB_SIDECARS = ('-wal', '-shm', '-journal')
+
+
+def move_db_aside(db_path, target) -> bool:
+    """Rename a SQLite file to `target` WITH its sidecars (-wal, -shm, -journal).
+
+    The sidecars belong to the file they were written for. Left behind, a
+    stale -wal is replayed by SQLite into whatever file next takes the name
+    (the old pages land on top of the new DB, integrity_check still 'ok'),
+    and the copy that was moved aside loses its newest, un-checkpointed
+    writes. All or nothing: if a sidecar cannot follow, everything is put
+    back and False is returned, so the caller never builds beside a stray."""
+    db_path, target = Path(db_path), Path(target)
+    moved = []
+    try:
+        db_path.rename(target)
+        moved.append((target, db_path))
+        for suffix in DB_SIDECARS:
+            src = db_path.with_name(db_path.name + suffix)
+            if src.exists():
+                dst = target.with_name(target.name + suffix)
+                src.rename(dst)
+                moved.append((dst, src))
+        return True
+    except Exception as e:
+        logger.error(f"Could not move {db_path} aside to {target}: {e}")
+        for now, was in reversed(moved):
+            try:
+                now.rename(was)
+            except Exception as back:
+                logger.critical(f"Could not put {now} back at {was}: {back}")
+        return False

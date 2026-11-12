@@ -158,6 +158,14 @@ def _register_tools(name, mcp_tools):
     module_name = f"mcp:{name}"
     sapphire_tools = []
     for t in mcp_tools:
+        # Two servers with a tool of the same name: the first keeps it. The
+        # map used to be overwritten here while FunctionManager kept the first
+        # server's schema, so its calls were sent to the second server.
+        owner = _tool_map.get(t["name"])
+        if owner and owner != name:
+            logger.warning(f"[MCP] '{name}' also offers '{t['name']}', which '{owner}' already "
+                           f"provides - skipped (rename it on one server to use both)")
+            continue
         sapphire_tools.append({
             "type": "function",
             "function": {

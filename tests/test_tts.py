@@ -125,3 +125,23 @@ class TestCleanTextBullets:
     def test_guillemets_to_quotes(self):
         result = clean_text("\u00ABquoted\u00BB")
         assert '"quoted"' == result
+
+
+class TestCleanerHunt20261112:
+    """TTS text fixes from the 2026-11-12 hunt."""
+
+    def test_readable_symbols_and_accents_survive(self):
+        out = clean_text("Caf\u00e9: 50% off, $5 + $5 = $10, 20\u00b0 and/or more")
+        for piece in ("Caf\u00e9", "50%", "$5", "+", "=", "20\u00b0", "and/or"):
+            assert piece in out
+
+    def test_a_stray_less_than_does_not_eat_the_sentence(self):
+        out = clean_text("if x < y then say hello, and z > 2 too")
+        assert "then say hello" in out
+
+    def test_stream_holds_a_tag_but_not_a_stray_bracket(self):
+        from core.tts.streaming import _safe_prefix_len as safe
+        raw = "I love you <3 and here is a long sentence that keeps going"
+        assert safe(raw) == len(raw)                 # "<3" is not a tag: nothing held
+        raw = "Hello there <spa"
+        assert safe(raw) == raw.index("<")           # a tag being typed: held

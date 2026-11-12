@@ -220,9 +220,20 @@ class ContinuityScheduler:
                 shutil.copy2(self._tasks_path, bad)
                 logger.error(f"[Continuity] Unreadable tasks file preserved "
                              f"at {bad.name} — restore by hand after fixing.")
+                kept = f" The unreadable file is kept as user/continuity/{bad.name}."
             except Exception:
-                pass
+                kept = ""
             self._tasks = {}
+            # The schedule has to keep running (alarms, plugin tasks), so it
+            # starts empty - but never silently: every task of theirs is off.
+            try:
+                from core import notify
+                notify.notify("Scheduled tasks can't be read", 'error',
+                              f"Your tasks file can't be read ({e}), so none of your scheduled tasks are "
+                              f"running.{kept} Fix it and put it back as tasks.json, then restart.",
+                              source='continuity', key='tasks-corrupt')
+            except Exception as ne:
+                logger.debug(f"[Continuity] tasks notice skipped: {ne}")
 
     def _save_tasks(self):
         """Save tasks to JSON file (atomic write via temp + rename)."""

@@ -581,3 +581,43 @@ class TestWasmSigned:
         passed, msg, _ = verify_plugin(d)
         assert not passed
         assert "unrecognized file" in msg
+
+
+class TestUnsignedCompiledCode:
+    """A signed plugin must run only what was signed. Python prefers a native
+    module or a cached .pyc over the .py beside it, and neither is signable."""
+
+    def test_planted_bytecode_is_cleared_on_a_pass(self, tmp, official_key):
+        priv, _ = official_key
+        d = _make_plugin(tmp)
+        _sign_plugin_dir(d, priv)
+        cache = d / "__pycache__"
+        cache.mkdir()
+        (cache / "main.cpython-312.pyc").write_bytes(b"planted")
+        passed, msg, _ = verify_plugin(d)
+        assert passed, msg
+        assert not cache.exists()
+
+    def test_bytecode_survives_a_failed_verify(self, tmp, official_key):
+        """Only a PASS clears: a failed plugin never loads, leave its folder alone."""
+        priv, _ = official_key
+        d = _make_plugin(tmp)
+        _sign_plugin_dir(d, priv)
+        (d / "evil.py").write_text("x = 1")
+        cache = d / "__pycache__"
+        cache.mkdir()
+        passed, _, _ = verify_plugin(d)
+        assert not passed and cache.exists()
+
+    @pytest.mark.parametrize("name", ["main.cpython-312-x86_64-linux-gnu.so", "main.pyd",
+                                      "main.pyc", "sub/helper.DLL"])
+    def test_native_or_sourceless_code_fails(self, tmp, official_key, name):
+        priv, _ = official_key
+        d = _make_plugin(tmp)
+        _sign_plugin_dir(d, priv)
+        f = d / name
+        f.parent.mkdir(exist_ok=True)
+        f.write_bytes(b"\x7fELF")
+        passed, msg, meta = verify_plugin(d)
+        assert not passed and meta["tier"] == "failed"
+        assert "cannot be signed" in msg

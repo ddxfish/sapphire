@@ -336,14 +336,19 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
     # idle tab's housekeeping muted every pump on the active chat, a
     # satellite mid-reply included, and cancelled conversation mode (hunt 21).
     _wide = bool(_body.get("chat_wide")) if isinstance(_body, dict) else False
-    system.tts.stop()
-    # A persona speaking through the MCP door plays on this machine too, on
-    # its own stream: the same button ends it.
-    try:
-        from core.audio import playback
-        playback.stop()
-    except Exception:
-        pass
+    # `speakers: false`: a tab's housekeeping (switching chats, closing). It
+    # stops what that tab plays; the computer's speakers keep talking. They
+    # used to be cut on every call, so opening another chat silenced her.
+    _speakers = _body.get("speakers", True) is not False if isinstance(_body, dict) else True
+    if _speakers:
+        system.tts.stop()
+        # A persona speaking through the MCP door plays on this machine too, on
+        # its own stream: the same button ends it.
+        try:
+            from core.audio import playback
+            playback.stop()
+        except Exception:
+            pass
     # Phase I isolation: this button belongs to the WEB UI — everything it stops
     # must be scoped to the operator's surface. Unscoped, it muted ALL streams,
     # cancelled ALL generation, and flushed the singleton driver's sink — which

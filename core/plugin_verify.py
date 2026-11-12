@@ -29,6 +29,11 @@ SIGNABLE_EXTENSIONS = {".py", ".json", ".js", ".css", ".html", ".md"}
 # Compiled code a plugin runs in the browser: signed like the text files, but
 # hashed as raw bytes (a CRLF pair inside a binary is data, not a line ending).
 RAW_EXTENSIONS = {".wasm"}
+# Code Python imports AHEAD of, or instead of, a signed .py: a native module
+# beside it, a sourceless .pyc in its place. Never signable, so one of these
+# anywhere in a signed plugin (outside __pycache__, which verify_plugin
+# clears) means the plugin would run code nobody signed.
+UNSIGNABLE_CODE = {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib"}
 
 # Filenames that platform tooling drops into directories without the user's
 # knowledge. If one of these is a signable extension (currently none are, but
@@ -215,24 +220,52 @@ def _verify_file_integrity(plugin_dir: Path, sig_data: dict) -> Tuple[bool, str]
             continue
         if f.name in _IGNORABLE_FILENAMES:
             continue
-        if f.suffix not in SIGNABLE_EXTENSIONS | RAW_EXTENSIONS:
-            continue
         if "__pycache__" in f.parts or ".claude" in f.parts:
             continue   # .claude/: Claude Code scratch (gitignored) — a scout's notes must not block the plugin
         rel = f.relative_to(plugin_dir).as_posix()
+        if f.suffix.lower() in UNSIGNABLE_CODE:
+            return False, f"compiled code that cannot be signed: {rel}"
+        if f.suffix not in SIGNABLE_EXTENSIONS | RAW_EXTENSIONS:
+            continue
         if rel not in files_manifest:
             return False, f"unrecognized file not in manifest: {rel}"
 
     return True, "ok"
 
 
+def _drop_bytecode(plugin_dir: Path) -> str:
+    """Remove every __pycache__ under a plugin. Returns '' or what is left.
+
+    Python runs a cached .pyc in place of the .py beside it (an unchecked
+    hash-based one without even looking at the source), and the signature
+    covers sources only. So cached bytecode is never trusted: it goes, and
+    Python recompiles from the files that were just verified."""
+    import shutil
+    for d in [d for d in plugin_dir.rglob("__pycache__") if d.is_dir()]:
+        shutil.rmtree(d, ignore_errors=True)
+        if d.exists():
+            return d.relative_to(plugin_dir).as_posix()
+    return ""
+
+
 def verify_plugin(plugin_dir: Path) -> Tuple[bool, str, dict]:
-    """Verify a plugin's signature and file integrity.
+    """Verify a plugin's signature and file integrity. A plugin that passes
+    has its cached bytecode cleared (see _drop_bytecode), so what loads is
+    what was signed.
 
     Returns:
         (passed, message, metadata)
         metadata = {"tier": "official"|"verified_author"|"unsigned"|"failed", "author": name|None}
     """
+    passed, msg, meta = _verify_signed(plugin_dir)
+    if passed:
+        left = _drop_bytecode(plugin_dir)
+        if left:
+            return False, f"could not clear cached bytecode: {left}", {"tier": "failed", "author": None}
+    return passed, msg, meta
+
+
+def _verify_signed(plugin_dir: Path) -> Tuple[bool, str, dict]:
     sig_path = plugin_dir / "plugin.sig"
 
     # No signature file → unsigned

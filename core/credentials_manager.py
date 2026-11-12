@@ -109,6 +109,8 @@ def _get_env_var_for_provider(provider: str) -> str:
 class CredentialsManager:
     """Manages credentials stored outside project directory."""
 
+    corrupt_error = None     # why the file can't be read; while set, every save is refused
+
     def __init__(self):
         self._credentials = None
         self._scramble_key = None
@@ -122,24 +124,40 @@ class CredentialsManager:
         if CREDENTIALS_FILE.exists():
             try:
                 with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
-                    self._credentials = json.load(f)
-                # Ensure all expected keys exist
-                self._ensure_schema()
-                logger.info(f"Loaded credentials from {CREDENTIALS_FILE}")
+                    loaded = json.load(f)
+                if not isinstance(loaded, dict):
+                    raise ValueError("the file is not a JSON object")
             except Exception as e:
-                logger.critical(f"Credentials file corrupted: {e}")
-                # Back up corrupt file before resetting (timestamped to preserve history)
+                # Never written over: the file is the person's keys. She keeps
+                # what was loaded before (a reload), or runs with none (boot),
+                # and refuses every save until it is fixed or start_fresh().
+                logger.critical(f"Credentials file can't be read: {e}")
+                backup = ''
                 try:
                     from datetime import datetime
                     import shutil
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     backup = CREDENTIALS_FILE.with_suffix(f'.json.corrupt.{timestamp}')
                     shutil.copy2(CREDENTIALS_FILE, backup)
-                    logger.critical(f"Corrupt credentials backed up to {backup}")
+                    logger.critical(f"Unreadable credentials copied to {backup}")
                 except Exception as backup_err:
-                    logger.error(f"Could not back up corrupt credentials: {backup_err}")
-                self._credentials = self._deep_copy(DEFAULT_CREDENTIALS)
-                self._save()
+                    logger.error(f"Could not copy the unreadable credentials: {backup_err}")
+                kept = self._credentials is not None
+                if not kept:
+                    self._credentials = self._deep_copy(DEFAULT_CREDENTIALS)
+                self.corrupt_error = (
+                    f"Your saved keys and passwords ({CREDENTIALS_FILE}) can't be read ({e}). Sapphire is "
+                    + ("keeping the ones she already had" if kept else "running without them")
+                    + " and won't save over the file. Fix the file and restart, or start fresh"
+                    + (f" (a copy is kept at {backup})." if backup else "."))
+                return
+            self._credentials = loaded
+            self.corrupt_error = None
+            try:
+                self._ensure_schema()      # fills what a newer version expects
+            except Exception as e:
+                logger.error(f"Credentials loaded, but the schema pass failed (file left as it is): {e}")
+            logger.info(f"Loaded credentials from {CREDENTIALS_FILE}")
         else:
             logger.info(f"Credentials file does not exist, creating with defaults")
             self._credentials = self._deep_copy(DEFAULT_CREDENTIALS)
@@ -147,6 +165,16 @@ class CredentialsManager:
             if not self._save():
                 logger.warning("Could not save initial credentials file - will operate in memory only")
     
+    def start_fresh(self) -> str:
+        """The repair for an unreadable file: begin again with no saved keys.
+        The unreadable file was already copied aside by _load()."""
+        with self._lock:
+            self.corrupt_error = None
+            self._credentials = self._deep_copy(DEFAULT_CREDENTIALS)
+            if not self._save():
+                raise RuntimeError("could not write a fresh credentials file")
+        return "Started fresh. Your old file is kept beside it as credentials.json.corrupt.<date>."
+
     def _deep_copy(self, d: dict) -> dict:
         """Deep copy a nested dict."""
         return json.loads(json.dumps(d))
@@ -418,6 +446,9 @@ class CredentialsManager:
         Uses atomic write (temp + rename) to prevent corruption on crash.
         Thread-safe: acquires _lock to serialize all mutation+save cycles."""
         with self._lock:
+            if self.corrupt_error:
+                logger.error("[CREDENTIALS] save refused: the credentials file is unreadable - fix it or start fresh")
+                return False
             try:
                 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 

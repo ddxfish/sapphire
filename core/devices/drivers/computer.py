@@ -75,7 +75,10 @@ def _windows():
 def _sh(cmd, timeout=QUICK, text_in=None):
     """(exit code, output, errors). A missing program is exit code 127."""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=text_in)
+        # utf-8 with replacement, never the locale default: on Windows that is
+        # cp1252, and one byte outside it raised UnicodeDecodeError out of here.
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                           timeout=timeout, input=text_in)
         return r.returncode, r.stdout or '', r.stderr or ''
     except FileNotFoundError:
         return 127, '', f"{cmd[0]} is not installed"

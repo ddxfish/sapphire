@@ -44,6 +44,9 @@ _spawner = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_pref
 def _spawn(*args, **kwargs):
     """subprocess.Popen, from the long-lived spawner thread on Unix."""
     if IS_WINDOWS:
+        # No console window per child: under pythonw (no console of its own)
+        # every spawn flashed one on the desktop.
+        kwargs.setdefault('creationflags', subprocess.CREATE_NO_WINDOW)
         return subprocess.Popen(*args, **kwargs)
     return _spawner.submit(subprocess.Popen, *args, **kwargs).result()
 

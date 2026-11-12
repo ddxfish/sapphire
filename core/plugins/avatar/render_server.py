@@ -427,4 +427,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=draw, daemon=True, name="draw").start()
     logger.info(f"Her avatar's screen renderer on 127.0.0.1:{PORT}")
+    # Windows lets a second process bind a port that is in use when address
+    # reuse is on (the default here): two renderers, one port, requests split
+    # between them. Off on Windows, so the second one fails to start instead.
+    ThreadingHTTPServer.allow_reuse_address = (os.name != "nt")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

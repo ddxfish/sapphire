@@ -188,13 +188,14 @@ def _safe_rename_corrupted(db_path):
     else:
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         target = db_path.with_name(db_path.name + f'.corrupted.{ts}')
-    try:
-        db_path.rename(target)
+    # Sidecars travel with their DB (core.fs_utils.move_db_aside): a -wal left
+    # behind is replayed over the salvage that takes this name next.
+    from core.fs_utils import move_db_aside
+    if move_db_aside(db_path, target):
         logger.info(f"[REPAIR] Original preserved at {target}")
         return True
-    except Exception as e:
-        logger.error(f"[REPAIR] Could not preserve corrupted DB at {target}: {e}")
-        return False
+    logger.error(f"[REPAIR] Could not preserve corrupted DB at {target}")
+    return False
 
 
 def _repair_db(db_path):
@@ -271,7 +272,8 @@ def _repair_db(db_path):
     try:
         conn = sqlite3.connect(tmp_path, timeout=10)
         cursor = conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
+        # No WAL here: the salvage must be ONE file, so the swap below carries
+        # all of it. _ensure_db turns WAL on once it sits at db_path.
         # Full 2.6 schema. Missing columns from salvage get padded to NULL.
         cursor.execute('''
             CREATE TABLE memories (

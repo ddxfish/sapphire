@@ -778,10 +778,13 @@ export const getTtsStatus = () => fetchWithTimeout('/api/tts/status', {}, 2000);
 // streamId: the streaming-TTS pump the browser is hearing — the server mutes
 // exactly that one (never the next turn still thinking). 2026-09-08.
 // chatWide: the person meant this chat's voice (mic button, Stop) - see the route.
-export const stopLocalTts = (streamId = null, chatWide = false) => fetchWithTimeout('/api/tts/stop', {
+// speakers=false: housekeeping (a chat switch, the page closing) - this tab's own
+// audio stops, the computer's speakers keep playing what she is saying.
+export const stopLocalTts = (streamId = null, chatWide = false, speakers = true) => fetchWithTimeout('/api/tts/stop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(streamId ? { stream_id: streamId } : {}), ...(chatWide ? { chat_wide: true } : {}) })
+    body: JSON.stringify({ ...(streamId ? { stream_id: streamId } : {}), ...(chatWide ? { chat_wide: true } : {}),
+                           ...(speakers ? {} : { speakers: false }) })
 }, 2000);
 
 // Image upload

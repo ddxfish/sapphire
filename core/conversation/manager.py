@@ -135,10 +135,31 @@ class ConversationManager:
             **kw,
         )
 
+    def _refuse_without_stt(self):
+        """Conversation mode is speech in, speech out: with speech recognition
+        off every utterance was heard and dropped without a word. Refuse to
+        start, and say why (self.refused, a toast and a notification)."""
+        self.refused = ""
+        from core.stt.stt_null import NullWhisperClient
+        if not isinstance(getattr(self.system, "whisper_client", None), NullWhisperClient):
+            return False
+        self.refused = ("Conversation mode needs speech recognition, and it is off. "
+                        "Pick a speech-to-text provider in Settings › STT, then try again.")
+        logger.warning(f"[CONV] not started: {self.refused}")
+        try:
+            from core import notify
+            notify.notify("Conversation mode did not start", 'warning', self.refused, source='conversation',
+                          key='conversation-no-stt', go={'view': 'settings', 'tab': 'stt'})
+        except Exception as e:
+            logger.debug(f"[CONV] notice skipped: {e}")
+        return True
+
     def start_local(self):
         """Enter true speech mode on the local mic. Returns True if active."""
         if self.active:
             return True
+        if self._refuse_without_stt():
+            return False
         self.driver = self._build_driver()
         gate = self._build_gate()
 
@@ -156,7 +177,7 @@ class ConversationManager:
         it onto its asyncio loop. Returns the BrowserConversationSource (the route
         pumps PCM/control into it) or None if the mode couldn't start.
         """
-        if self.active:
+        if self.active or self._refuse_without_stt():
             return None
         self.driver = self._build_driver()
         gate = self._build_gate()

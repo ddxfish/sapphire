@@ -372,16 +372,24 @@ def execute(function_name, arguments, config):
                 # Filter added list to only plugins that actually loaded
                 actually_loaded = []
                 failed_to_load = []
-                for name in added:
+                reloaded = []
+                why = {}
+                for entry in added:
+                    # rescan() lists a plugin it reloaded as "<name> (reloaded)".
+                    # Looked up under that label it was never found, so every
+                    # UPDATE of a tool was reported as "FAILED ... unsigned".
+                    was_reload = entry.endswith(" (reloaded)")
+                    name = entry[:-len(" (reloaded)")] if was_reload else entry
                     info = plugin_loader.get_plugin_info(name)
                     if info and info.get("loaded"):
-                        actually_loaded.append(name)
+                        (reloaded if was_reload else actually_loaded).append(name)
                     else:
                         failed_to_load.append(name)
+                        why[name] = (info or {}).get("verify_msg") or "see the log"
+                added = [e[:-len(" (reloaded)")] if e.endswith(" (reloaded)") else e for e in added]
 
                 # Reload already-loaded toolmaker plugins (handles tool updates);
                 # never bounce unrelated user plugins' services.
-                reloaded = []
                 if _USER_PLUGINS.exists():
                     for child in _USER_PLUGINS.iterdir():
                         if not child.is_dir() or not _is_ours(child):
@@ -421,7 +429,10 @@ def execute(function_name, arguments, config):
                 if reloaded:
                     parts.append(f"Reloaded {len(reloaded)} updated: {', '.join(reloaded)}")
                 if failed_to_load:
-                    parts.append(f"FAILED to load {len(failed_to_load)}: {', '.join(failed_to_load)} (your plugins are unsigned: they load only when unsigned plugins are allowed, the switch on the Settings > Plugins banner; ask the user)")
+                    listed = ', '.join(f"{n} ({why.get(n)})" for n in failed_to_load)
+                    parts.append(f"FAILED to load {len(failed_to_load)}: {listed}. A plugin you wrote is unsigned: "
+                                 f"it loads only when unsigned plugins are allowed (the switch on the "
+                                 f"Settings > Plugins banner; ask the user). Any other reason is a fault in the plugin")
                 if parts:
                     return f"{'. '.join(parts)}. Tools are now available.", not failed_to_load
                 else:

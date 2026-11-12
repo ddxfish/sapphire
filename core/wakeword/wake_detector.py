@@ -225,6 +225,15 @@ class WakeWordDetector:
             self._reset_detection_state()
             return
 
+        # The wake word while she is speaking on this machine is the stop
+        # button: she goes quiet, nothing is recorded. Say it again to talk.
+        # (It also means her own voice tripping the detector can only cut her
+        # short, never record her and answer herself.)
+        if self._stop_her_voice():
+            logger.info("Wakeword heard while she was speaking - stopped her voice, not listening")
+            self._reset_detection_state()
+            return
+
         publish(Events.WAKEWORD_DETECTED)
 
         # on_wake hook — plugins can react to wakeword detection
@@ -242,6 +251,32 @@ class WakeWordDetector:
         # Audio buffer accumulated during processing, OWW has stale feature state
         self._reset_detection_state()
                 
+    def _stop_her_voice(self) -> bool:
+        """If her voice is playing on this machine's speakers, stop it (the
+        speakers, the active chat's speech pump, and any face that plays it).
+        True when there was something to stop."""
+        system = self.system
+        tts = getattr(system, 'tts', None) if system else None
+        if tts is None or getattr(tts, '_is_playing', False) is not True:
+            return False
+        try:
+            tts.stop()
+        except Exception as e:
+            logger.warning(f"Wakeword stop: tts.stop failed: {e}")
+        try:
+            chat = system.llm_chat.session_manager.get_active_chat_name()
+            mgr = getattr(system, '_conversation_manager', None)
+            calls = mgr.external_chats() if mgr else set()      # a phone call's voice is not ours to stop
+            if chat not in calls:
+                system.llm_chat.stop_tts_streams(chat_name=chat, exclude_chats=(None if chat else calls))
+                from core.hooks import hook_runner, HookEvent
+                if hook_runner.has_handlers("tts_stop"):
+                    hook_runner.fire("tts_stop", HookEvent(config=config, metadata={
+                        "stream_id": None, "chat_wide": True, "chat": chat, "system": system}))
+        except Exception as e:
+            logger.warning(f"Wakeword stop: could not mute the speech stream: {e}")
+        return True
+
     def wake_word_detected(self):
         """Handle wake word detection by recording and processing user speech."""
         from core.stt.utils import can_transcribe

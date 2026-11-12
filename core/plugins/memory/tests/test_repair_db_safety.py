@@ -232,3 +232,34 @@ def test_repair_salvages_full_12col_schema(corrupt_db_with_data):
                 'embedding_dim', 'private_key'}
     assert expected.issubset(cols), \
         f"Fresh DB missing columns: {expected - cols}"
+
+
+def test_repair_moves_the_wal_with_the_db(tmp_path, monkeypatch):
+    """A -wal that outlives the corrupt DB's last close (a failed checkpoint)
+    must leave WITH it. Left behind, SQLite replays it over the salvage that
+    takes the name next; and the .corrupted copy loses its newest writes."""
+    from plugins.memory.tools import memory_tools
+
+    db = tmp_path / "m.db"
+    held = sqlite3.connect(db)
+    held.execute("PRAGMA journal_mode=WAL")
+    held.execute("PRAGMA wal_autocheckpoint=0")
+    held.execute("CREATE TABLE memories (id INTEGER PRIMARY KEY, content TEXT NOT NULL, "
+                 "timestamp TEXT, importance INTEGER, keywords TEXT, context TEXT, "
+                 "scope TEXT NOT NULL DEFAULT 'default', label TEXT, embedding BLOB)")
+    held.executemany("INSERT INTO memories (content) VALUES (?)", [(f"m{i}",) for i in range(50)])
+    held.commit()
+    wal = tmp_path / "m.db-wal"
+    assert wal.exists() and wal.stat().st_size > 0   # `held` stays open: the WAL survives
+
+    try:
+        memory_tools._repair_db(db)
+        assert not wal.exists(), "the old WAL must not sit beside the salvage"
+        assert (tmp_path / "m.db.corrupted").exists()
+        assert (tmp_path / "m.db.corrupted-wal").exists(), "the WAL travels with its DB"
+        conn = sqlite3.connect(db)
+        assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 50
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        conn.close()
+    finally:
+        held.close()

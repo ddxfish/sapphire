@@ -394,6 +394,14 @@ class AudioRecorder:
                 # Handle audio system errors (like ALSA underruns)
                 logger.warning(f"Audio read error (continuing): {e}")
                 time.sleep(0.01)
+                # The deadlines live in the try above, which this branch never
+                # reaches: a device that errors on EVERY read (unplugged mid-
+                # recording) used to spin here forever, holding the recorder.
+                elapsed = time.time() - start_time
+                if elapsed > max_seconds or (not has_speech and elapsed > no_speech_timeout):
+                    logger.error(f"Audio device kept failing for {elapsed:.1f}s - giving up on this recording: "
+                                 f"{classify_audio_error(e)}")
+                    break
                 continue
                 
             except Exception as e:

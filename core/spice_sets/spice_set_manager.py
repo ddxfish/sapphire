@@ -23,6 +23,7 @@ class SpiceSetManager:
 
         self._sets = {}
         self._active_name = 'default'
+        self.corrupt_error = None    # why the user file can't be read; saves are refused while set
 
         self._lock = threading.Lock()
         self._watcher_thread = None
@@ -50,10 +51,15 @@ class SpiceSetManager:
             try:
                 with open(user_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("the file is not a JSON object")
                 self._sets = {k: v for k, v in data.items() if not k.startswith('_')}
+                self._readable(True)
             except Exception as e:
-                logger.error(f"Failed to load user spice sets: {e}")
-                self._sets = {}
+                # Keep the sets already loaded (none at boot) and refuse every
+                # save: the next one used to write an empty file over all of them.
+                logger.error(f"Failed to load user spice sets (file left as it is): {e}")
+                self._readable(False, e)
             logger.info(f"Loaded {len(self._sets)} spice sets")
             return
 
@@ -69,6 +75,24 @@ class SpiceSetManager:
         if self._sets:
             self._save_to_user()
             logger.info(f"First run — seeded {len(self._sets)} spice sets from defaults")
+
+    def _readable(self, ok, why=None):
+        """Set or clear corrupt_error, and say it once per change."""
+        was = self.corrupt_error
+        self.corrupt_error = None if ok else (
+            f"Your spice sets file (user/spice_sets/spice_sets.json) can't be read ({why}). "
+            f"Sapphire won't save spice sets over it. Fix the file, or delete it to start from the defaults.")
+        if bool(was) == bool(self.corrupt_error):
+            return
+        try:
+            from core import notify
+            if self.corrupt_error:
+                notify.notify("Spice sets can't be read", 'error', self.corrupt_error,
+                              source='spices', key='spice-sets-corrupt')
+            else:
+                notify.forget('spice-sets-corrupt')
+        except Exception as e:
+            logger.debug(f"spice sets notice skipped: {e}")
 
     def reload(self):
         with self._lock:
@@ -132,7 +156,7 @@ class SpiceSetManager:
         return self._sets.get(name, {}).get('emoji', '')
 
     def set_emoji(self, name: str, emoji: str) -> bool:
-        if name not in self._sets:
+        if name not in self._sets or self.corrupt_error:
             return False
         with self._lock:
             if emoji:
@@ -161,6 +185,8 @@ class SpiceSetManager:
     # === CRUD ===
 
     def save_set(self, name: str, categories: list) -> bool:
+        if self.corrupt_error:
+            return False
         with self._lock:
             existing = self._sets.get(name, {})
             self._sets[name] = {"categories": categories}
@@ -169,14 +195,30 @@ class SpiceSetManager:
             return self._save_to_user()
 
     def delete_set(self, name: str) -> bool:
-        if name not in self._sets:
+        if name not in self._sets or self.corrupt_error:
             return False
         with self._lock:
             del self._sets[name]
             return self._save_to_user()
 
+    def rename_category(self, old: str, new: str) -> bool:
+        """A spice category was renamed: every set that held it holds the new name."""
+        if self.corrupt_error:
+            return False
+        with self._lock:
+            hit = False
+            for s in self._sets.values():
+                cats = s.get('categories')
+                if isinstance(cats, list) and old in cats:
+                    s['categories'] = [new if c == old else c for c in cats]
+                    hit = True
+            return self._save_to_user() if hit else True
+
     def _save_to_user(self) -> bool:
         user_path = self.USER_DIR / "spice_sets.json"
+        if self.corrupt_error:
+            logger.error("Spice sets save refused: the user file is unreadable")
+            return False
         try:
             self.USER_DIR.mkdir(parents=True, exist_ok=True)
             data = {"_comment": "Your spice sets"}

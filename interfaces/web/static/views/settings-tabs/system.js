@@ -57,7 +57,7 @@ async function _renderTokenList(listEl) {
                 <div style="flex:1;min-width:0">
                     <div style="font-weight:600;font-size:var(--font-sm)">${_escapeHtml(t.name)}</div>
                     <div class="text-muted" style="font-size:var(--font-xs);font-family:var(--mono,monospace)">
-                        sk_\u2026${_escapeHtml(t.last4)} \u00B7 created ${_fmtDate(t.created_at)} \u00B7 last used ${_fmtDate(t.last_used_at)}${t.persona ? ` \u00B7 speaks as ${_escapeHtml(t.persona)}` : ''}
+                        sk_\u2026${_escapeHtml(t.last4)} \u00B7 created ${_fmtDate(t.created_at)} \u00B7 last used ${_fmtDate(t.last_used_at)}${t.persona ? ` \u00B7 MCP only, speaks as ${_escapeHtml(t.persona)}` : ' \u00B7 master key'}
                     </div>
                 </div>
                 <button class="btn-sm danger" data-revoke-id="${_escapeHtml(t.id)}">Revoke</button>
@@ -124,8 +124,10 @@ export default {
                     Named bearer tokens for external integrations (mods, scripts, automation).
                     Tokens are shown ONCE at creation \u2014 save it then.
                     Independent of your login password. Revocable per-token.
-                    Give a key a persona and an MCP client that uses it speaks in that persona's voice
-                    and keeps that persona's memory.
+                    A key with no persona is a <b>master key</b>: it opens everything your login does,
+                    settings and plugin installs included. Keep those for your own scripts.
+                    Give a key a persona and it opens the MCP door only: an MCP client that uses it
+                    speaks in that persona's voice and keeps that persona's memory.
                 </p>
 
                 <div style="display:flex;gap:8px;margin-bottom:12px">

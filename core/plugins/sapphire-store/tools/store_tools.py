@@ -252,8 +252,15 @@ def _install(slug, plugin_settings=None):
         tmp_fd.close()
         tmp_dir = None
         try:
+            # Same limits as the REST installer (core/routes/plugins.py): the
+            # download had none, so one tool call could fill the disk.
+            max_zip, max_total = 50 * 1024 * 1024, 100 * 1024 * 1024
+            got = 0
             with open(tmp_zip, "wb") as f:
                 for chunk in zr.iter_content(8192):
+                    got += len(chunk)
+                    if got > max_zip:
+                        return "Download refused: the zip is larger than 50 MB.", False
                     f.write(chunk)
 
             if not zipfile.is_zipfile(tmp_zip):
@@ -267,6 +274,8 @@ def _install(slug, plugin_settings=None):
                         return f"Zip contains unsafe path: {info.filename}", False
                     if info.file_size > 10 * 1024 * 1024:
                         return f"File too large in zip: {info.filename}", False
+                if sum(i.file_size for i in zf.infolist()) > max_total:
+                    return "Zip refused: it unpacks to more than 100 MB.", False
                 zf.extractall(tmp_dir)
 
             # Find plugin.json (root or one level deep — GitHub wraps in {repo}-main/)

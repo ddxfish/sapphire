@@ -55,7 +55,7 @@ async def conversation_ws(websocket: WebSocket):
             src = mgr.adopt_browser(send_fn)
             if src is None:
                 logger.info("[CONV] new browser WS replacing the active one")
-                mgr.stop()
+                await asyncio.to_thread(mgr.stop)    # joins threads, closes audio: never on the loop
         else:
             await websocket.accept()
             await websocket.send_json({"type": "error", "msg": "local conversation mode is active"})
@@ -64,9 +64,10 @@ async def conversation_ws(websocket: WebSocket):
 
     await websocket.accept()
     if src is None:
-        src = mgr.start_browser(send_fn)
+        src = await asyncio.to_thread(mgr.start_browser, send_fn)
     if src is None:
-        await websocket.send_json({"type": "error", "msg": "could not start conversation mode"})
+        await websocket.send_json({"type": "error",
+                                   "msg": getattr(mgr, "refused", "") or "could not start conversation mode"})
         await websocket.close(code=4500)             # a refusal — the client doesn't retry it
         return
     mgr.remember("browser")
@@ -125,7 +126,7 @@ async def conversation_ws(websocket: WebSocket):
                 # tab (1001) or an error keeps 'browser' so that tab resumes on load
                 if code == 1000 or why == "client bye":
                     mgr.remember("off")
-                mgr.stop()
+                await asyncio.to_thread(mgr.stop)
         else:
             try:
                 src.close()

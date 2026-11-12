@@ -335,7 +335,9 @@ def build_no_proxy() -> str:
     entries += ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
                 '169.254.0.0/16', '.local', '.lan', '.home.arpa']
     entries += sorted(direct_hosts())
-    route_llm = bool(getattr(config, 'SOCKS_ROUTE_LLM', False))
+    # Settings unreadable at boot: the LLM opt-out is unknown too, so cloud
+    # LLM hosts get no exemption while the internet is held.
+    route_llm = _settings_unreadable() or bool(getattr(config, 'SOCKS_ROUTE_LLM', False))
     entries += sorted(_llm_hosts(include_cloud=not route_llm))
     extra = getattr(config, 'SOCKS_NO_PROXY_EXTRA', '') or ''
     entries += [h.strip() for h in str(extra).split(',') if h.strip()]
@@ -375,6 +377,35 @@ def _push_network_load_error(msg: str, hint: str):
         pass
 
 
+def _settings_unreadable() -> bool:
+    """user/settings.json could not be read at boot (settings_manager.forced_defaults)."""
+    try:
+        from core.settings_manager import settings
+        return bool(getattr(settings, 'forced_defaults', False))
+    except Exception:
+        return False
+
+
+def _socks_auth_and_target():
+    """(auth prefix, host, port, why-not) for the proxy URL when SOCKS is on."""
+    try:
+        username, password = get_socks_credentials()
+    except Exception as e:
+        # Fail-closed: unreadable creds -> stamp env WITHOUT auth (the
+        # proxy refuses = loud), never abort derivation (= fail-open).
+        logger.error(f"get_socks_credentials failed — stamping proxy env without auth: {e}")
+        username, password = '', ''
+    auth = ''
+    if username or password:
+        auth = f"{quote(username or '', safe='')}:{quote(password or '', safe='')}@"
+    else:
+        _env_warnings.append(
+            "SOCKS enabled but credentials are missing — proxied requests will "
+            "fail until set (traffic never falls back to direct)")
+    host, port, why = socks_target()
+    return auth, host, port, why
+
+
 def apply_proxy_env() -> None:
     """Stamp process-wide proxy env from settings (see module note above).
     Called at boot (sapphire.py, before anything spawns or dials out),
@@ -390,7 +421,8 @@ def _apply_proxy_env_inner() -> None:
     _blackholed = False
     _env_warnings.clear()
     _drop_network_load_errors()
-    if not getattr(config, 'SOCKS_ENABLED', False):
+    held = _settings_unreadable()
+    if not held and not getattr(config, 'SOCKS_ENABLED', False):
         for var in _PROXY_VARS:
             os.environ.pop(var, None)
             os.environ.pop(var.lower(), None)
@@ -411,21 +443,18 @@ def _apply_proxy_env_inner() -> None:
             os.environ.pop('NO_PROXY', None)
             os.environ.pop('no_proxy', None)
         return
-    try:
-        username, password = get_socks_credentials()
-    except Exception as e:
-        # Fail-closed: unreadable creds -> stamp env WITHOUT auth (the
-        # proxy refuses = loud), never abort derivation (= fail-open).
-        logger.error(f"get_socks_credentials failed — stamping proxy env without auth: {e}")
-        username, password = '', ''
-    auth = ''
-    if username or password:
-        auth = f"{quote(username or '', safe='')}:{quote(password or '', safe='')}@"
-    else:
+    if held:
+        # The settings file could not be read at boot, so whether the proxy
+        # was on is unknown. Defaults say "off", which would send everything
+        # direct: hold the internet instead (same refusing proxy as below),
+        # LAN stays on the NO_PROXY belt.
         _env_warnings.append(
-            "SOCKS enabled but credentials are missing — proxied requests will "
-            "fail until set (traffic never falls back to direct)")
-    host, port, why = socks_target()
+            "Your settings file can't be read, so your proxy setting is unknown — internet requests "
+            "are held until the file is fixed or settings are reset (your local network still works)")
+        _blackholed = True
+        auth, host, port, why = '', '127.0.0.1', 1, ''
+    else:
+        auth, host, port, why = _socks_auth_and_target()
     if why:
         # Fail closed (2026-10-27): SOCKS is ON, so nothing may quietly go
         # direct. Stamp a proxy that refuses every connection (port 1 on

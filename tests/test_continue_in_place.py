@@ -239,7 +239,9 @@ class TestEngine:
             fm = mock_main.function_manager
             fm.snapshot_scopes.return_value = {}
             fm.snapshot_executors.return_value = {}
-            fm.enabled_tools = []
+            # the turn is OFFERED tool "t": with no tools offered, tool-shaped
+            # text is just text (hunt 2026-11-12)
+            fm.enabled_tools = [{"type": "function", "function": {"name": "t", "parameters": {}}}]
             fm.last_dangling_toolset = None
             sm = mock_main.session_manager
             sm.get_chat_settings.return_value = {}

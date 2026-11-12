@@ -334,11 +334,17 @@ def _safe_prefix_len(raw: str) -> int:
     # avatar token `<<avatar:` is held WHOLE — not split into a leaked `<`
     # (flushed now) plus a buffered remainder that later synthesizes a stray
     # bracket. Normal prose has no `<<`, so this only affects `<<`-openers.
+    # Only a '<' that can still BECOME a tag is held: the last char so far
+    # (unknown yet), or followed by a letter, '/', '!' or '<', and recent. A
+    # stray one ("x < y", "<3") used to hold every later word until the turn
+    # ended - she went silent mid-sentence.
     last_lt = raw.rfind("<", 0, safe)
     if last_lt >= 0 and raw.find(">", last_lt, safe) < 0:
-        while last_lt > 0 and raw[last_lt - 1] == "<":
-            last_lt -= 1
-        safe = min(safe, last_lt)
+        nxt = raw[last_lt + 1:last_lt + 2]
+        if (not nxt or nxt.isalpha() or nxt in "/!<") and safe - last_lt < 64:
+            while last_lt > 0 and raw[last_lt - 1] == "<":
+                last_lt -= 1
+            safe = min(safe, last_lt)
     # A `<<` opener whose `>>` hasn't arrived: `<<avatar: wave>` + `>` split
     # across tokens passes the check above (its `>` is there) and the HTML
     # catch-all ate it, leaking the second `>` and losing the tag. Bounded so
@@ -391,7 +397,7 @@ _INLINE_PATTERNS = [
     (re.compile(r"`[^`]+`"), " "),                          # inline code
     (re.compile(r"!\[.*?\]\(.*?\)"), " "),                  # image markdown
     (re.compile(r"\|[^\n]*\|(?:\n\|[^\n]*\|)*"), " "),      # tables
-    (re.compile(r"<[^>]+>"), " "),                          # complete HTML tag
+    (re.compile(r"</?[a-zA-Z!][^<>]*>"), " "),              # complete HTML tag (never a stray '<')
     (re.compile(r"\[([^\]]+)\]\([^)]+\)"), r"\1"),          # markdown link → text
     (re.compile(r"(?<!\w)_+(?!\w)"), ""),                   # underscore emphasis
 ]
