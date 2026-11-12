@@ -1023,9 +1023,10 @@ function captionFromRail(me) {
         const bubbles = document.querySelectorAll('#chat-container .message.assistant:not(.status):not(.error) .message-content');
         const last = bubbles[bubbles.length - 1];
         if (!last) return;
-        const copy = last.cloneNode(true);
-        copy.querySelectorAll('details, .thinking, .think, .tool-call, .tool-accordion, .message-metadata, script, style').forEach(n => n.remove());
-        const text = (copy.textContent || '').replace(/<(?:seed:)?think>[\s\S]*?(?:<\/(?:seed:)?think>|$)/g, '').replace(/\s+/g, ' ').trim();
+        // the one prose reader the voice uses: no code, no tool widgets (cards,
+        // galleries, file rows), no think, paragraphs kept apart - this used to
+        // caption code and "↓ song.wav" and run paragraphs together
+        const text = ui.extractProseText(last);
         if (text) showCaption(me, firstSentences(text));
     }, 350);
 }

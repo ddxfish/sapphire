@@ -1,11 +1,7 @@
 // ui-streaming.js - Real-time streaming with typed SSE events
 
-import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries } from './ui-parsing.js';
-import { parseGalleryMarker, buildGallery } from './shared/gallery-marker.js';
-import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
-import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
-import { parseStageMarker, buildStageCards } from './shared/stage-marker.js';
-import { openImageModal } from './ui-images.js';
+import { createAccordion, fillParagraph, buildToolResult, wrapImageGalleries } from './ui-parsing.js';
+import { rollParagraphs, nextFence, fenceInfoOk, fenceLang } from './shared/prose.js';
 import { nextThinkCloser, nextThinkOpener, isSeedThink } from './shared/think.js';
 import { errWords } from './shared/fetch.js';
 
@@ -30,7 +26,7 @@ let _streamId = 0;
 export const getCurrentStreamId = () => _streamId;
 let state = {
     inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null, thinkAccEl: null,
-    inCode: false, codeLang: '', codeBuf: '', codePre: null,
+    inCode: false, codeFence: '', codeLang: '', codeBuf: '', codePre: null,
     curPara: null, paraBuf: '', procIdx: 0,
     toolAccordions: {}
 };
@@ -48,17 +44,75 @@ const createElem = (tag, attrs = {}, content = '') => {
 const resetState = (para = null) => {
     state = {
         inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null, thinkAccEl: null,
-        inCode: false, codeLang: '', codeBuf: '', codePre: null,
+        inCode: false, codeFence: '', codeLang: '', codeBuf: '', codePre: null,
         curPara: para, paraBuf: '', procIdx: 0,
         toolAccordions: {}
     };
     pendingToolEvents = [];
 };
 
-// Update paragraph with markdown rendering
+// The paragraph being written, built the way history builds it (shared/prose.js
+// + fillParagraph): a blank line closes the <p> and opens the next, so the
+// gaps are there as she writes, not only after the swap. paraBuf holds only
+// the open paragraph's text.
 const updatePara = () => {
     if (!state.curPara || !state.paraBuf) return;
-    state.curPara.innerHTML = processMarkdown(state.paraBuf);
+    const { done, open } = rollParagraphs(state.paraBuf);
+    for (const text of done) {
+        fillParagraph(state.curPara, text);
+        const next = createElem('p');
+        state.curPara.after(next);
+        state.curPara = next;
+    }
+    state.paraBuf = done.length ? open.trimStart() : open;
+    fillParagraph(state.curPara, state.paraBuf, { images: false });
+};
+
+// The open paragraph is finished (a fence, think, tool or the end follows):
+// its last fill, images and all.
+const sealPara = () => {
+    if (state.curPara && state.paraBuf.trim()) fillParagraph(state.curPara, state.paraBuf);
+};
+
+// A fence (```) or a think tag (<think>, </think>) can arrive split across
+// chunks; a trailing piece that could still become one (1-2 backticks, or a
+// `<` with the start of a tag name) is held back until the next chunk shows
+// what it is. Before this, a token-by-token stream drew every fence as prose,
+// and an inline-think model's split closer never closed its think block.
+const heldTail = (s) => s.match(/(?:`{1,2}|~{1,2}|<\/?[A-Za-z:_]{0,24})$/)?.[0].length || 0;
+
+// The stream ended: whatever was held back is the reply's last characters.
+const flushHeld = () => {
+    const rest = streamContent.slice(state.procIdx);
+    if (!rest) return;
+    if (state.inCode) { state.codeBuf += rest; updateCodePreview(); }
+    else if (state.inThink) { state.thinkBuf += rest; if (state.thinkAcc) state.thinkAcc.textContent = state.thinkBuf; }
+    else { state.paraBuf += rest; updatePara(); }
+    state.procIdx = streamContent.length;
+};
+
+// A fence or a think still open ends with its round (a tool call) or with the
+// stream, as history ends it at the part boundary: left open, the next round
+// poured into the block ABOVE the tool, and a stopped reply kept a code block
+// with no copy button and a "..." header.
+const closeOpenBlocks = () => {
+    if (state.inCode) {
+        finalizeCodeBlock();
+        Object.assign(state, { inCode: false, codeFence: '', codeLang: '', codeBuf: '', codePre: null });
+    }
+    if (state.inThink) {
+        state.thinkAccEl?.classList.remove('streaming');
+        Object.assign(state, { inThink: false, thinkAcc: null, thinkAccEl: null, thinkType: null });
+    }
+};
+
+// Leave the current paragraph and open a fresh one at the end of the bubble.
+const newPara = () => {
+    sealPara();
+    const p = createElem('p');
+    streamMsg.el.appendChild(p);
+    state.curPara = p;
+    state.paraBuf = '';
 };
 
 // Create a tool accordion with loading state
@@ -146,7 +200,12 @@ export const startStreaming = (container, messageElement, scrollCallback, adopt 
     const contentDiv = messageElement.querySelector('.message-content');
     let p = null, seeded = false;
     if (adopt) {
-        contentDiv.querySelector('.message-metadata')?.remove();
+        // the footer and the notes about how the LAST attempt ended (cut off,
+        // degraded, cancelled) go: the continuation writes its own, and the
+        // turn-end redraw brings back whatever the server still says. Left in,
+        // the "cut off" note was the last child, so the new words started a
+        // fresh paragraph BELOW it - the most common reason to press Continue.
+        contentDiv.querySelectorAll('.message-metadata, .row-note, .cancel-marker').forEach(n => n.remove());
         const last = contentDiv.lastElementChild;
         if (adopt.seed && last?.tagName === 'P' && !last.querySelector('img')) { p = last; seeded = true; }
     }
@@ -155,10 +214,12 @@ export const startStreaming = (container, messageElement, scrollCallback, adopt 
         contentDiv.appendChild(p);
     }
 
-    const existingThinks = container.querySelectorAll('details summary');
-    const thinkCount = Array.from(existingThinks).filter(s => s.textContent.includes('Think')).length;
+    // Steps count per MESSAGE, as history numbers them (ui-parsing renderThink);
+    // counting the whole chat put "Think (Step 29)" on every live reply for two
+    // years. A Continue carries on from the thinks already in its message.
+    const thinkCount = contentDiv.querySelectorAll('details.accordion-think').length;
 
-    streamMsg = { el: contentDiv, para: p, last: p };
+    streamMsg = { el: contentDiv, para: p };
     streamContent = '';
     resetState(p);
     state.thinkCnt = thinkCount;
@@ -215,6 +276,7 @@ const finalizeCodeBlock = () => {
     if (!state.codePre) return;
     
     const code = state.codePre.querySelector('code');
+    if (code) code.textContent = state.codeBuf.trimEnd();   // history's code text (shared/prose.js trims it)
     if (code && window.hljs) {
         try {
             window.hljs.highlightElement(code);
@@ -259,16 +321,12 @@ const renderCodeBlock = () => {
     
     // Finalize the streaming preview
     finalizeCodeBlock();
-    
-    // Create new paragraph for content after code
-    const newP = createElem('p');
-    streamMsg.el.appendChild(newP);
-    state.curPara = newP;
-    state.paraBuf = '';
-    
+    newPara();   // content after the code
+
     // Reset code state
     state.inCode = false;
     state.codeLang = '';
+    state.codeFence = '';
     state.codeBuf = '';
     state.codePre = null;
 };
@@ -276,7 +334,7 @@ const renderCodeBlock = () => {
 // Handle content text (with think tag and code fence parsing)
 export const appendStream = (chunk, scrollCallback) => {
     if (!streamMsg) return;
-    streamContent += chunk;
+    streamContent += String(chunk ?? '').replace(/\r/g, '');   // CRLF reads as LF, as history (shared/prose.js)
     
     const newContent = streamContent.slice(state.procIdx);
     let i = 0;
@@ -284,12 +342,15 @@ export const appendStream = (chunk, scrollCallback) => {
     while (i < newContent.length) {
         // Inside code fence
         if (state.inCode) {
-            const closePos = newContent.indexOf('```', i);
+            const closePos = newContent.indexOf(state.codeFence || '```', i);
             if (closePos === -1) {
-                // No closing fence yet, buffer and update preview
-                state.codeBuf += newContent.slice(i);
+                // No closing fence yet, buffer and update preview (a trailing
+                // ` or `` waits: it may be the closer split across chunks)
+                const rest = newContent.slice(i);
+                const hold = heldTail(rest);
+                state.codeBuf += rest.slice(0, rest.length - hold);
                 updateCodePreview();
-                i = newContent.length;
+                i = newContent.length - hold;
                 break;
             }
             // Found closing fence
@@ -312,9 +373,12 @@ export const appendStream = (chunk, scrollCallback) => {
             const endTag = closeHit ? closeHit.text : '';
             
             if (endPos === -1) {
-                state.thinkBuf += newContent.slice(i);
+                // a trailing `</thi` waits: it may be the closer split across chunks
+                const rest = newContent.slice(i);
+                const hold = heldTail(rest);
+                state.thinkBuf += rest.slice(0, rest.length - hold);
                 if (state.thinkAcc) state.thinkAcc.textContent = state.thinkBuf;
-                i = newContent.length;
+                i = newContent.length - hold;
                 break;
             }
             
@@ -341,19 +405,17 @@ export const appendStream = (chunk, scrollCallback) => {
             state.thinkAcc = null;
             state.thinkAccEl = null;
             state.thinkType = null;
-            
-            const newP = createElem('p');
-            streamMsg.el.appendChild(newP);
-            state.curPara = newP;
-            state.paraBuf = '';
-            
+            newPara();
+
             i = endPos + endTag.length;
             while (i < newContent.length && /\s/.test(newContent[i])) i++;
             continue;
         }
         
-        // Normal content - look for code fence, think tags
-        const codePos = newContent.indexOf('```', i);
+        // Normal content - look for code fence, think tags. A fence opens only
+        // at a line start (shared/prose.js, the rule history draws by).
+        const fence = nextFence(streamContent, state.procIdx + i);
+        const codePos = fence ? fence.index - state.procIdx : -1;
         // An opener only where a block can start, never one typed in backticks
         // (shared/think.js). Asked of the whole stream for the same reason.
         const opener = nextThinkOpener(streamContent, state.procIdx + i);
@@ -367,12 +429,15 @@ export const appendStream = (chunk, scrollCallback) => {
         ].filter(m => m[0] !== -1).sort((a, b) => a[0] - b[0]);
         
         if (markers.length === 0) {
-            // No markers, add all remaining content
+            // No markers, add all remaining content (a trailing ` or `` waits:
+            // it may be an opening fence split across chunks)
             let add = newContent.slice(i);
+            const hold = heldTail(add);
+            add = add.slice(0, add.length - hold);
             if (state.paraBuf === '') add = add.replace(/^\s+/, '');
             state.paraBuf += add;
             updatePara();
-            i = newContent.length;
+            i = newContent.length - hold;
             break;
         }
         
@@ -396,11 +461,23 @@ export const appendStream = (chunk, scrollCallback) => {
                 break;
             }
             
-            // Start code fence - extract language
+            // "```ls -la```" on one line is inline code, not a fence: its words
+            // go to the paragraph and the search carries on past them
+            const info = newContent.slice(pos + 3, lineEnd);
+            if (!fenceInfoOk(info)) {
+                state.paraBuf += newContent.slice(pos, lineEnd);
+                updatePara();
+                i = lineEnd;
+                continue;
+            }
+
+            // Start code fence - its language is the info's first word
             state.inCode = true;
+            state.codeFence = fence.mark;
             state.codeBuf = '';
-            state.codeLang = newContent.slice(pos + 3, lineEnd).trim();
+            state.codeLang = fenceLang(info);
             i = lineEnd + 1;
+            import('./ui.js').then(ui => ui.hideStatus());   // a reply that opens with code is visible output
             
             // Remove empty paragraph and create code preview
             if (state.curPara && !state.paraBuf.trim()) {
@@ -410,7 +487,6 @@ export const appendStream = (chunk, scrollCallback) => {
             const { pre, code } = createCodePreview(state.codeLang);
             state.codePre = pre;
             streamMsg.el.appendChild(pre);
-            streamMsg.last = pre;
         } else {
             // Think tag - hide "Generating..." status since we now have visible output
             import('./ui.js').then(ui => ui.hideStatus());
@@ -426,12 +502,14 @@ export const appendStream = (chunk, scrollCallback) => {
             state.thinkAcc = content;
             state.thinkAccEl = acc;
             
-            if (streamMsg.last.nextSibling) {
-                streamMsg.el.insertBefore(acc, streamMsg.last.nextSibling);
-            } else {
-                streamMsg.el.appendChild(acc);
-            }
-            streamMsg.last = acc;
+            // In reading order, as history draws it: before the open paragraph
+            // while it is still empty, after it once it holds words. (A `last`
+            // cursor that only blocks moved put a think ABOVE prose written
+            // since the last block, and between a tool and its picture.)
+            sealPara();
+            const open = state.curPara;
+            if (open?.isConnected && !open.textContent.trim() && !open.querySelector('img')) open.before(acc);
+            else streamMsg.el.appendChild(acc);
             i = pos + len;
         }
     }
@@ -442,8 +520,14 @@ export const appendStream = (chunk, scrollCallback) => {
 
 // Internal function to actually create tool accordion
 const doStartTool = (toolId, toolName, args, scrollCallback) => {
-    if (state.toolAccordions[toolId]) return;   // replayed tool_start (reattach) — already on screen
     const isPending = toolId.startsWith('pending-');
+    if (state.toolAccordions[toolId]) {
+        if (!isPending) return;   // replayed tool_start (reattach) — already on screen
+        // pending ids are `pending-<index>`, the same every round: one left by an
+        // earlier round (its real tool_start never came) is stale, not this one
+        state.toolAccordions[toolId].acc.remove();
+        delete state.toolAccordions[toolId];
+    }
 
     // Upgrade: real tool_start arrived for an existing pending accordion
     if (!isPending) {
@@ -480,11 +564,20 @@ const doStartTool = (toolId, toolName, args, scrollCallback) => {
                     existing.content.textContent = 'Inputs:\n' + JSON.stringify(args, null, 2);
                 } catch { /* keep existing text */ }
             }
+            existing.args = args;
             state.toolAccordions[toolId] = existing;
             if (scrollCallback) scrollCallback();
             return;
         }
     }
+
+    flushHeld();   // a held backtick belongs to the words before the tool
+    closeOpenBlocks();
+    // A tool call ends a round; the next round starts a block, as in history
+    // where each round is its own part. Without the break, a round ending
+    // "…the file is:" ran into the next round's <think>, which then sat
+    // mid-sentence (shared/think.js rule 4) and drew her reasoning as prose.
+    streamContent += '\n';
 
     // Clean up empty current paragraph
     if (state.curPara && !state.paraBuf.trim()) {
@@ -499,16 +592,10 @@ const doStartTool = (toolId, toolName, args, scrollCallback) => {
         content.textContent = 'Assembling arguments...';
     }
 
-    state.toolAccordions[toolId] = { acc, content, summary, toolName };
+    state.toolAccordions[toolId] = { acc, content, summary, toolName, args };
 
     streamMsg.el.appendChild(acc);
-    streamMsg.last = acc;
-
-    // Create new paragraph for content after tool
-    const newP = createElem('p');
-    streamMsg.el.appendChild(newP);
-    state.curPara = newP;
-    state.paraBuf = '';
+    newPara();   // content after the tool
 
     if (scrollCallback) scrollCallback();
 };
@@ -532,62 +619,33 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
 
 // Internal function to actually update tool accordion
 const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
-    let toolData = state.toolAccordions[toolId];
-    // Tiles ride a UI marker; the accordion shows the text without it.
-    const { entries: galleryEntries, title: galleryTitle, text: galleryStripped } = parseGalleryMarker(result);
-    // Players / download buttons ride their own marker (shared/files-marker.js).
-    const { groups: fileGroups, text: filesStripped } = parseFilesMarker(galleryStripped);
-    // A question card (ask_user) rides its own (shared/ask-marker.js).
-    const { cards: askCards, text: askStripped } = parseAskMarker(filesStripped);
-    // An app opened beside the chat (open_stage) rides its own (shared/stage-marker.js).
-    const { cards: stageCards, text: shownResult } = parseStageMarker(askStripped, toolName);
-
-    if (!toolData) {
-        // Fallback: create accordion now
-        if (!streamMsg) {
-            if (scrollCallback) scrollCallback();
-            return;
-        }
-        const { acc, content, summary } = createToolAccordionElement(toolName, toolId, {});
-        acc.classList.remove('loading');
-        if (isError) acc.classList.add('error');
-        setToolSummary(summary, 'Tool Result', toolName);
-        content.textContent = 'Result:\n' + shownResult;
-
-        if (state.curPara) {
-            streamMsg.el.insertBefore(acc, state.curPara);
-        } else {
-            streamMsg.el.appendChild(acc);
-        }
-        streamMsg.last = acc;
-        toolData = { acc, content, summary, toolName };
-        state.toolAccordions[toolId] = toolData;
+    if (!streamMsg) {
+        if (scrollCallback) scrollCallback();
+        return;
+    }
+    const toolData = state.toolAccordions[toolId];
+    // The finished result is built by THE tool-result renderer history uses
+    // (ui-parsing buildToolResult): same text, truncation, images, widgets.
+    // The live accordion (spinner, inputs) steps aside for it. The server sends
+    // the browser's copy of the result, markers and all (core/ui_markers.for_browser).
+    const nodes = buildToolResult({
+        name: toolData?.toolName || toolName, tool_call_id: toolId,
+        content: result, inputs: toolData?.args,
+    }, isError);
+    if (toolData) {
+        nodes[0].open = toolData.acc.open;
+        const old = toolData.nodes || [toolData.acc];      // a replayed tool_end replaces its own build
+        // ...and its picture's inline clone (core/events.js), or a replay showed it twice
+        const clone = old[old.length - 1].nextElementSibling;
+        if (clone?.dataset?.inlineClone) clone.remove();
+        old[0].replaceWith(...nodes);
+        old.slice(1).forEach(n => n.remove());
     } else {
-        const { acc, content, summary, toolName: storedName } = toolData;
-        acc.classList.remove('loading');
-        if (isError) acc.classList.add('error');
-        setToolSummary(summary, 'Tool Result', storedName || toolName);
-
-        const existingContent = content.textContent;
-        if (existingContent && existingContent !== 'Running...') {
-            content.textContent = existingContent + '\n\nResult:\n' + shownResult;
-        } else {
-            content.textContent = 'Result:\n' + shownResult;
-        }
+        // tool_end with no tool_start on screen: the result lands before the open paragraph
+        if (state.curPara?.isConnected) state.curPara.before(...nodes);
+        else streamMsg.el.append(...nodes);
     }
-
-    // Tiles under the accordion (shared renderer — the same one history uses).
-    if (!isError && streamMsg) {
-        const gallery = buildGallery(galleryEntries, openImageModal, galleryTitle);
-        if (gallery) {
-            toolData.acc.dataset.gallery = '1';    // the row shows the set; no inline clone
-            toolData.acc.after(gallery);
-        }
-        let anchor = gallery || toolData.acc;
-        buildFilesRows(fileGroups).forEach(row => { anchor.after(row); anchor = row; });
-        buildAskCards(askCards).forEach(card => { anchor.after(card); anchor = card; });
-        buildStageCards(stageCards).forEach(card => { anchor.after(card); anchor = card; });
-    }
+    state.toolAccordions[toolId] = { ...toolData, acc: nodes[0], nodes, toolName: toolData?.toolName || toolName };
 
     if (scrollCallback) scrollCallback();
 };
@@ -605,7 +663,10 @@ export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
 
 export const finishStreaming = (updateToolbarsCallback) => {
     if (!streamMsg) return;
-    
+    flushHeld();
+    closeOpenBlocks();
+    sealPara();
+
     const msg = document.getElementById('streaming-message');
     if (msg) {
         msg.removeAttribute('id');
@@ -640,6 +701,7 @@ export const finishStreaming = (updateToolbarsCallback) => {
 
 export const cancelStreaming = () => {
     _streamId++;  // any chunks still in the SSE pipeline are now stale
+    if (streamMsg) { flushHeld(); closeOpenBlocks(); sealPara(); }
     // Don't delete the partial — finalize it like finishStreaming does, so the
     // user sees what was rendered up to the stop. The full message lands in
     // history once the backend finishes draining; F5 / refresh shows the
@@ -683,6 +745,7 @@ export const cancelStreaming = () => {
 // the saved row. 2026-09-15.
 export const detachStreaming = () => {
     _streamId++;
+    if (streamMsg) { flushHeld(); closeOpenBlocks(); sealPara(); }
     const msg = document.getElementById('streaming-message');
     if (msg) {
         msg.removeAttribute('id');

@@ -9,8 +9,8 @@
 // Tiles are numbered 1..N — the same numbers as her contact sheet, so "#3" means
 // the same picture to both of you. `full` is the lightbox target (a proxied
 // original for web hits); if it won't load, the lightbox falls back to the tile.
-// Both renderers — history (ui-parsing renderToolResult) and the live stream
-// (ui-streaming doEndTool) — parse + build through here. Never hand-roll a
+// THE tool-result renderer (ui-parsing buildToolResult) builds through here,
+// for history and the live stream alike. Never hand-roll a
 // gallery. The marker is UI-only: strip_ui_markers drops it from the LLM copy.
 
 export const GALLERY_RE = /<!--GALLERY:([\[{][^\n]*[\]}])-->[ \t]*\n?/;

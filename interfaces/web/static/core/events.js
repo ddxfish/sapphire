@@ -126,24 +126,27 @@ function handleImageReady(event) {
 
     const message = loadedImg.closest('.message');
     if (!message) return;
+    // Only a tool's picture is cloned out: one in prose or a user's event row
+    // is already inline, and cloning it drew it twice (UI scout, 2026-11-12).
+    const tool = loadedImg.closest('details');
+    if (!tool || loadedImg.dataset.inlineClone) return;
     // A result that carried a gallery row already shows its pictures (numbered,
     // in the bubble); its contact sheet stays inside the accordion only.
-    if (loadedImg.closest('details')?.dataset.gallery) return;
+    if (tool.dataset.gallery) return;
 
-    const content = message.querySelector('.message-content');
-    if (!content) return;
-
-    const accordions = content.querySelectorAll('details');
-    const lastAccordion = accordions[accordions.length - 1];
-
+    // Right after the tool that made it, in the tool's own order (grid first,
+    // then the singles), whatever order they finish loading in. "After the last
+    // accordion" depended on WHEN it loaded: live, later tool rounds were not
+    // there yet, so the picture jumped down at the end of the turn.
+    const order = [...tool.querySelectorAll('img[data-image-id]')].indexOf(loadedImg);
     const inlineImg = loadedImg.cloneNode(true);
     inlineImg.dataset.inlineClone = 'true';
+    inlineImg.dataset.cloneOrder = String(order);
+    inlineImg.addEventListener('click', () => import('../ui-images.js').then(m => m.openImageModal(inlineImg.src)));
 
-    if (lastAccordion) {
-        lastAccordion.insertAdjacentElement('afterend', inlineImg);
-    } else {
-        content.insertBefore(inlineImg, content.firstChild);
-    }
+    let at = tool;
+    while (at.nextElementSibling?.dataset?.inlineClone && +at.nextElementSibling.dataset.cloneOrder < order) at = at.nextElementSibling;
+    at.insertAdjacentElement('afterend', inlineImg);
 
     // Follow the bottom only while the reader is stuck to it. A FORCED snap
     // here (per image, re-arming sticky) undid the transcript's scroll carry

@@ -5098,6 +5098,14 @@ span[data-image-gone] {
     margin-bottom: 12px;
     display: block;
 }
+/* ...and its copy in the reply (core/events.js): a tall portrait filled a phone
+   screen; click opens the full picture */
+.message-content > img[data-inline-clone] {
+    max-height: 600px;
+    width: auto;
+    object-fit: contain;
+    cursor: zoom-in;
+}
 
 /* =============================================================================
    MESSAGE TOOLBAR

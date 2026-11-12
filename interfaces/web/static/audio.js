@@ -3,6 +3,7 @@ import * as ui from './ui.js';
 import * as api from './api.js';
 import { dispatch, on as busOn, Events } from './core/event-bus.js';
 import { stripThink } from './shared/think.js';
+import { splitParagraphs } from './shared/prose.js';
 import { responseError } from './shared/fetch.js';
 import { micAudio, micWhy } from './shared/mic-words.js';
 
@@ -149,9 +150,12 @@ export const playText = async (txt, cacheKey = null, voiceOpts = null) => {
     let clean = stripThink(txt);
 
     // Filter paragraphs
-    const paras = clean.split(/\n\s*\n/).filter(p => {
+    const paras = splitParagraphs(clean).filter(p => {
         const t = p.trim();
-        return !t.match(/^[🧧🌁🧠💾🧠⚠️]/);
+        // whole emoji, not a class: without /u the class held lone surrogate
+        // halves shared by nearly every emoji, so a reply opening with 😊 or 💙
+        // was filtered out and never spoken (UI scout, 2026-11-12)
+        return !/^(?:🧧|🌁|🧠|💾|⚠️)/u.test(t);
     });
 
     clean = paras.join('\n\n').trim().replace(/^---\s*$/gm, '').trim();

@@ -536,8 +536,12 @@ class ConversationHistory:
 
         self.messages.append(msg)
 
-    def add_tool_result(self, tool_call_id: str, name: str, content: str, inputs: Optional[Dict] = None):
-        """Add tool result message with optional inputs - NO TRIMMING."""
+    def add_tool_result(self, tool_call_id: str, name: str, content: str, inputs: Optional[Dict] = None,
+                        error: bool = False):
+        """Add tool result message with optional inputs - NO TRIMMING.
+        error: the tool failed - the transcript draws it red, as the live
+        stream does (display only: get_messages_for_llm rebuilds tool rows
+        from named keys, so it never reaches a provider)."""
         msg = {
             "role": "tool",
             "tool_call_id": tool_call_id,
@@ -547,6 +551,8 @@ class ConversationHistory:
         }
         if inputs:
             msg["tool_inputs"] = inputs
+        if error:
+            msg["tool_error"] = True
         self.messages.append(msg)
 
     def add_assistant_final(
@@ -4432,9 +4438,10 @@ class ChatSessionManager:
             )
             self._save_current_chat()
 
-    def add_tool_result(self, tool_call_id: str, name: str, content: str, inputs: Optional[Dict] = None):
+    def add_tool_result(self, tool_call_id: str, name: str, content: str, inputs: Optional[Dict] = None,
+                        error: bool = False):
         with self._lock:
-            self._effective_chat().add_tool_result(tool_call_id, name, content, inputs)
+            self._effective_chat().add_tool_result(tool_call_id, name, content, inputs, error=error)
             self._save_current_chat()
 
     def add_assistant_final(

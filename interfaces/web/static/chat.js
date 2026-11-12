@@ -6,6 +6,9 @@ import { releaseOwnership } from './core/state.js';
 import { getBoundChat } from './core/bound-chat.js';
 import { isCommand } from './shared/slash.js';
 import { restorePending } from './ui-images.js';
+import { proseBlocks } from './shared/prose.js';
+import { thinkSegments } from './shared/think.js';
+import { parseFilesMarker } from './shared/files-marker.js';
 
 const handleError = (e, action) => {
     if (e.message === 'Cancelled') return console.log(`${action} cancelled by user`);
@@ -191,15 +194,12 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                 if (streamOk && refused) {
                     await ui.finishStreaming(false, true);    // nothing ran: keep its words, say nothing more
                 } else if (streamOk) {
-                    await ui.finishStreaming();
+                    const said = await ui.finishStreaming();   // THIS turn's words (ui.finishStreaming)
                     // Note: finishStreaming already syncs with history - no refresh needed
 
                     // Whole-blob playback ONLY when the server's streaming-TTS
                     // pump never ran this turn (see send-handlers.handleSend).
-                    if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
-                        const el = document.querySelector('.message.assistant:last-child .message-content');
-                        if (el) audioFn(ui.extractProseText(el));
-                    }
+                    if (!ttsStreamed && audioFn && said && ui.getCurrentStreamId() === myStreamId) audioFn(said);
                 }
             },
             async (e, statusCode) => {
@@ -347,7 +347,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
             },
             async (ephemeral, { ttsStreamed = false, refused = false } = {}) => {
                 // Captured synchronously: at llm_done this is OUR stream. Send
-                // returns during finishStreaming's sleep (llm-done split), so
+                // returns during finishStreaming's history refresh (llm-done split), so
                 // a newer turn can bump the id before the fallback below runs.
                 const myStreamId = ui.getCurrentStreamId();
                 if (isCancellingGetter && isCancellingGetter()) {
@@ -367,15 +367,12 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                 if (streamOk && refused) {
                     await ui.finishStreaming(false, true);    // nothing ran: keep its words, say nothing more
                 } else if (streamOk) {
-                    await ui.finishStreaming();
+                    const said = await ui.finishStreaming();   // THIS turn's words (ui.finishStreaming)
                     // Note: finishStreaming already syncs with history - no refresh needed
 
                     // Whole-blob playback ONLY when the server's streaming-TTS
                     // pump never ran this turn (see send-handlers.handleSend).
-                    if (!ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
-                        const el = document.querySelector('.message.assistant:last-child .message-content');
-                        if (el) audioFn(ui.extractProseText(el));
-                    }
+                    if (!ttsStreamed && audioFn && said && ui.getCurrentStreamId() === myStreamId) audioFn(said);
                 }
             },
             async (e, statusCode) => {
@@ -522,8 +519,18 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
             ui.showToast('Reply not on screen — refresh and try again', 'error');
             return null;
         }
-        const paras = prose.trim().split(/\n\s*\n/);
-        ui.continueStreaming(msgEl, paras[paras.length - 1].trim());
+        // The seed is the same last block the renderer drew (shared/prose.js):
+        // a paragraph keeps writing into its <p>; after a code block there is
+        // no paragraph to adopt (a blank-line split took the fence as the seed
+        // and drew the code a second time, as prose).
+        // Seeded from what the renderer SHOWED (ui-parsing parseContent): no
+        // FILES marker, no avatar tags when they are stripped, no think block.
+        // The raw row put "<think>x</think>Answer" back into the <p> as text.
+        let shown = parseFilesMarker(prose).text;
+        if (window._avatarStripTags) shown = shown.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '');
+        const lastSeg = thinkSegments(shown).at(-1);
+        const lastBlock = lastSeg?.type === 'text' ? proseBlocks(lastSeg.text).at(-1) : null;
+        ui.continueStreaming(msgEl, lastBlock?.type === 'para' ? lastBlock.text : '');
         ui.showStatus();
         ui.updateStatus('Continuing...');
 
@@ -536,14 +543,11 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
             async (ephemeral, { ttsStreamed = false, refused = false } = {}) => {
                 const myStreamId = ui.getCurrentStreamId();   // see handleRegen
                 if (isCancellingGetter && isCancellingGetter()) return;
-                await ui.finishStreaming();   // swaps the bubble for the saved row
+                const said = await ui.finishStreaming();   // THIS turn's words, then the saved row
                 // Whole-blob playback ONLY when the server's streaming-TTS
                 // pump never ran this turn (see send-handlers.handleSend).
                 // A refused Continue added nothing: nothing to say (it re-read the reply).
-                if (!refused && !ttsStreamed && audioFn && ui.getCurrentStreamId() === myStreamId) {
-                    const el = document.querySelector('.message.assistant:last-child .message-content');
-                    if (el) audioFn(ui.extractProseText(el));
-                }
+                if (!refused && !ttsStreamed && audioFn && said && ui.getCurrentStreamId() === myStreamId) audioFn(said);
             },
             async (e) => {
                 if (e.feedLost) {   // see handleRegen — the turn goes on server-side

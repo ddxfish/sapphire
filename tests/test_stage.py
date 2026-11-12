@@ -117,7 +117,9 @@ def test_the_chat_view_runs_the_stage_only_while_shown():
 
 
 def test_stage_cards_render_from_history_and_the_asking_tab_opens_live():
-    assert _src('ui-parsing.js').count('buildStageCards(stageCards)') == 2
+    # ONE tool-result builder (ui-parsing buildToolResult) - history and the live stream
+    assert _src('ui-parsing.js').count('buildStageCards(stageCards)') == 1
+    assert 'buildToolResult(' in _src('ui-streaming.js')
     assert "new CustomEvent('sapphire:stage_open'" in _src('api.js')
     assert "addEventListener('sapphire:stage_open'" in _src('shared/stage-marker.js')
 
@@ -128,7 +130,7 @@ def test_the_live_tool_end_carries_stage_payloads_only():
     assert stage_cards(text) == [{'app': 'browser', 'label': 'Browser', 'icon': 'x'}]
     assert stage_cards('<!--STAGE:{torn-->') == [] and stage_cards(None) == []
     src = (ROOT / 'core' / 'chat' / 'chat_streaming.py').read_text(encoding='utf-8')
-    assert 'stage = stage_cards(result_str)' in src and '"result": clean_result[:500]' in src
+    assert 'stage = stage_cards(result_str)' in src and '"result": for_browser(result_str)' in src
 
 
 # --- the 2026-10-27 hunt ---------------------------------------------------------
@@ -137,7 +139,6 @@ def test_only_open_stage_makes_a_card():
     s = _src('shared/stage-marker.js')
     assert "if (tool !== 'open_stage') return '';" in s
     assert 'parseStageMarker(askStripped, toolName)' in _src('ui-parsing.js')
-    assert 'parseStageMarker(askStripped, toolName)' in _src('ui-streaming.js')
     src = (ROOT / 'core' / 'chat' / 'chat_streaming.py').read_text(encoding='utf-8')
     assert "stage_cards(result_str) if function_name == 'open_stage' else None" in src
 

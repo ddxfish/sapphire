@@ -237,6 +237,8 @@ def format_messages_for_display(messages: List[Dict[str, Any]]) -> List[Dict[str
 
             if "tool_inputs" in msg:
                 tool_part["inputs"] = msg["tool_inputs"]
+            if msg.get("tool_error"):
+                tool_part["error"] = True      # drawn red after the swap too (ui-parsing buildToolResult)
 
             current_block["parts"].append(tool_part)
 

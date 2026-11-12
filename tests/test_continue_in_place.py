@@ -262,7 +262,7 @@ class TestEngine:
             te = mock_main.tool_engine
             te.extract_function_call_from_text.side_effect = [
                 {"function_call": {"name": "t", "arguments": {}}}, None, None, None]
-            te.execute_text_based_tool_call.return_value = (None, [])
+            te.execute_text_based_tool_call.return_value = (None, [], "", True)
             sc = StreamingChat(mock_main)
             with patch.object(config, 'TTS_ENABLED', False, create=True), \
                  patch.object(config, 'TTS_STREAMING_ENABLED', False, create=True), \

@@ -172,8 +172,8 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
     };
     // The ONE place this send gives anything back - and only what it still
     // owns: a send that never ran owns nothing; once a later turn armed itself
-    // the slot is that turn's (finishStreaming's 500 ms sleep is long enough
-    // for the inbox to have started it).
+    // the slot is that turn's (the inbox can start it while finishStreaming's
+    // history refresh is still in flight).
     const release = () => {
         if (ctl.state === 'done') return;
         ctl.state = 'done';
@@ -276,8 +276,17 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             return;
         }
         if (!ctl.streamOk) return;
-        if (refused) { await ui.finishStreaming(false, true); return; }   // nothing ran: keep its words, say nothing more
-        await ui.finishStreaming();
+        if (refused) {
+            // nothing ran and nothing was saved, so the turn-end redraw wiped her
+            // refusal AND the user's bubble: the words go back in the box (as a
+            // failed or gated send's do) and the reason stays as a notice
+            const why = ui.extractProseText(document.getElementById('streaming-message')?.querySelector('.message-content'));
+            await ui.finishStreaming(false, true);
+            restoreDraft();
+            ui.showToast(why || 'Not sent', 'warning');
+            return;
+        }
+        const said = await ui.finishStreaming();   // THIS turn's words, read before the redraw
         // Note: finishStreaming already syncs with history - no refresh needed
         //
         // Whole-blob playback ONLY when the server's streaming-TTS pump never
@@ -285,13 +294,12 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         // can't stream, privacy gate — the server says so on llm_done), or this
         // tab followed the turn after her voice had already started (the
         // reattach says `attached: audio=false`). streamStillMine: Send is back
-        // during finishStreaming's sleep now; a new turn bumps the stream id
+        // during finishStreaming's history refresh; a new turn bumps the stream id
         // and owns audio.
-        if (!ttsStreamed && audioFn && streamStillMine()) {
-            const el = document.querySelector('.message.assistant:last-of-type .message-content')
-                    || document.querySelector('.message.assistant:last-child .message-content');
-            if (el) audioFn(ui.extractProseText(el));
-        }
+        // `said` is this turn's own bubble, not "the last assistant row on the
+        // page": a queued send sitting last went silent, and a chat switched
+        // during the redraw spoke the other chat's line (finisher scout).
+        if (!ttsStreamed && audioFn && said && streamStillMine()) audioFn(said);
     };
     const onToolStart = (id, name, args) => {
         armLive();

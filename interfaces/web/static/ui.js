@@ -312,8 +312,13 @@ const historyKey = (m) => {
     if (!m || typeof m !== 'object') return '';
     const c = typeof m.content === 'string' ? m.content.length
         : (Array.isArray(m.content) ? m.content.length : 0);
-    const p = Array.isArray(m.parts) ? m.parts.length : 0;
-    return `${m.role || 'user'}|${m.timestamp || ''}|${c}|${p}`;
+    const parts = Array.isArray(m.parts) ? m.parts : [];
+    // An assistant row is ALL parts (no content field): without their text
+    // length a Continue (same row, same timestamp, same part count) kept its
+    // streamed bubble forever - no footer - and another tab never showed an
+    // assistant edit (finisher scout, 2026-11-12).
+    const t = parts.reduce((n, x) => n + String(x?.text ?? x?.content ?? x?.result ?? '').length, 0);
+    return `${m.role || 'user'}|${m.timestamp || ''}|${c}|${parts.length}|${t}`;
 };
 
 const createMessage = (msg, idx = null, total = null, isHistoryRender = false) => {
@@ -542,6 +547,38 @@ export const addUserMessage = (txt, images = null, files = null) => {
     scrollToBottomIfSticky(true);
 };
 
+// What the user is IN carries across a rebuild (2026-11-12). The rows from
+// the first key mismatch are rebuilt from the server - the end of every turn
+// rebuilds its streamed bubble - and a rebuilt row is a fresh row: a playing
+// take stopped dead, an ask card lost its picks and typed answer (and, rebuilt
+// before the answer row existed, could be sent twice), an accordion being read
+// snapped shut. Matched by identity: media by src, ask cards by id, open
+// accordions by tool id / step. Not matched → the fresh one stands.
+const collectLive = (rows) => {
+    const q = (sel) => rows.flatMap(r => [...r.querySelectorAll(sel)]);
+    return {
+        media: q('audio, video').filter(m => m.getAttribute('src') && (!m.paused || m.currentTime > 0)),
+        asks: q('.ask-card[data-ask-id]'),
+        tools: new Set(q('details.accordion-tool[open][data-tool-id]').map(d => d.dataset.toolId)),
+        thinks: new Set(q('details.accordion-think[open] > summary').map(s => s.textContent)),
+    };
+};
+
+const graftLive = (live, rows) => {
+    if (!rows.length) return;
+    const q = (sel) => rows.flatMap(r => [...r.querySelectorAll(sel)]);
+    for (const m of live.media) {
+        const twin = q(m.tagName.toLowerCase()).find(n => n !== m && n.getAttribute('src') === m.getAttribute('src'));
+        twin?.replaceWith(m);
+    }
+    for (const card of live.asks) {
+        const twin = q(`.ask-card[data-ask-id="${CSS.escape(card.dataset.askId)}"]`).find(n => n !== card);
+        twin?.replaceWith(card);
+    }
+    if (live.tools.size) q('details.accordion-tool[data-tool-id]').forEach(d => { if (live.tools.has(d.dataset.toolId)) d.open = true; });
+    if (live.thinks.size) q('details.accordion-think > summary').forEach(s => { if (live.thinks.has(s.textContent)) s.parentElement.open = true; });
+};
+
 export const renderHistory = (hist) => {
     Images.clearPendingImages();
     // Background refreshes (turn end, edit save, trim, a remote message) used
@@ -577,11 +614,13 @@ export const renderHistory = (hist) => {
     // after the server's rows, where they belong: nothing persisted comes
     // after a turn that has not run.
     const inflight = existing.slice(keep).filter(el => el.classList.contains('queued') && el.dataset.ticket);
+    const live = collectLive(existing.slice(keep));
     // INVARIANT: no layout reads between this removal and the re-append below.
     // A forced layout here would clamp scrollTop to 0 → the scroll listener
     // reads it as a user scroll-up → sticky reader stranded at the top (D1#11).
     for (let i = keep; i < existing.length; i++) existing[i].remove();
 
+    const added = [];
     for (let i = keep; i < hist.length; i++) {
         const msg = hist[i];
         if (!msg || typeof msg !== 'object') continue;
@@ -594,9 +633,10 @@ export const renderHistory = (hist) => {
         }
         const { clone } = createMessage(msg, i, hist.length, true);
         const el = clone.querySelector('.message');
-        if (el) el.dataset.key = key;
+        if (el) { el.dataset.key = key; added.push(el); }
         chat.appendChild(clone);
     }
+    graftLive(live, added);
     for (const el of inflight) chat.appendChild(el);   // the queued sends, still in line
     // the status line ("X is generating...") is NOW: it follows the rows, never sits above them
     const status = document.getElementById('status-message');
@@ -758,12 +798,20 @@ export const finishStreaming = async (ephemeral = false, keep = false) => {
     const streamingMsg = document.getElementById('streaming-message');
 
     Streaming.finishStreaming(updateToolbars);
+    // THIS bubble stops being live, whatever the streamer's state: a leftover
+    // #streaming-message holds every refresh (chat.js fetchAndRender), and when
+    // two live bubbles overlapped (a door line during a seat, typing while a
+    // voice reply finished) the streamer's own cleanup hit the other one and
+    // the transcript stopped reconciling until reload (finisher scout, 2026-11-12).
+    if (streamingMsg) {
+        streamingMsg.removeAttribute('id');
+        delete streamingMsg.dataset.streaming;
+    }
 
     // keep: a refused turn (the server ran nothing and saved nothing). Its
     // words stay where they streamed; a swap put the previous reply there as
     // if it were this turn's. The keyless bubble goes at the next redraw.
     if (keep) {
-        streamingMsg?.removeAttribute('id');
         scrollToBottomIfSticky();
         return;
     }
@@ -777,70 +825,33 @@ export const finishStreaming = async (ephemeral = false, keep = false) => {
         return;
     }
     
+    // ONE finisher: the keyed reconcile every refresh runs (core/state.refresh
+    // → renderHistory). The streamed bubble has no key, so the server's rows
+    // replace it, whole turns included (a tool step + its error row), avatar
+    // tags stripped and answered question cards locked, as for any refresh.
+    // The bus's own turn-end refresh then finds every key matching and
+    // changes nothing. The row is written before llm_done, so nothing to wait
+    // for; a NEWER live bubble (a room's next seat) holds the refresh and it
+    // replays at that turn's end (chat.js fetchAndRender). Until 2026-11-12 a
+    // 500 ms sleep and a hand-swap of the last row lived here: the bus
+    // refresh beat it every turn, and even when it won, its row had no key,
+    // so the next refresh rebuilt it anyway.
+    // Returned: THIS turn's words, read from its own bubble before the redraw,
+    // for the whole-blob voice (callers used to read "the last assistant row
+    // on the page" after it - silent behind a queued send, and another chat's
+    // line when the view switched during the fetch).
+    let said = '';
     if (streamingMsg) {
-        const chatAtFinish = document.getElementById('chat-select')?.value;
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // Bail if chat switched during the delay
-        const chatNow = document.getElementById('chat-select')?.value;
-        if (chatNow !== chatAtFinish || !document.contains(streamingMsg)) {
-            console.log('[SWAP] Chat switched during delay, skipping history swap');
-        } else {
-            try {
-                const hist = await api.fetchHistory();
-                if (hist && hist.length > 0) {
-                    // THIS turn's row is the last ASSISTANT row, not the last row:
-                    // the inbox starts the next turn within milliseconds of this
-                    // one ending, and its user row was already last by the time
-                    // the 500 ms passed — her finished reply vanished, replaced
-                    // by the next message's text (race scout, 2026-10-07). An
-                    // assistant row of the NEXT turn cannot exist yet: it lands
-                    // only when that turn ends.
-                    let li = hist.length - 1;
-                    while (li > 0 && hist[li]?.role !== 'assistant') li--;
-                    const lastMsg = hist[li]?.role === 'assistant' ? hist[li] : hist[hist.length - 1];
-                    // Strip avatar tags from history if setting is enabled
-                    if (window._avatarStripTags && lastMsg.content) {
-                        lastMsg.content = lastMsg.content.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '');
-                    }
-                    if (window._avatarStripTags && lastMsg.parts) {
-                        lastMsg.parts = lastMsg.parts.map(p => p.type === 'content' && p.text
-                            ? { ...p, text: p.text.replace(/<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>/g, '') }
-                            : p);
-                    }
-                    // A turn that ended as more than one row (a tool step, then
-                    // its error row) is not one bubble: swapping in the last row
-                    // dropped the step and left the buttons one row off (Delete
-                    // took two). Redraw it all, when no next turn has begun (hunt 20).
-                    // Never while a newer turn is live: a chat room starts the next
-                    // seat within the 500 ms, and the redraw deleted her live bubble
-                    // and stranded her status line mid-transcript (Krem 2026-11-04).
-                    // In a room, back-to-back assistant rows are different seats, not
-                    // one turn; the held refresh (chat.js) reconciles at her end.
-                    let first = li;
-                    while (first > 0 && hist[first - 1]?.role === 'assistant') first--;
-                    if (first < li && li === hist.length - 1 && !document.getElementById('streaming-message')) {
-                        streamingMsg.remove();
-                        renderHistory(hist);
-                    } else {
-                        const { clone } = createMessage(lastMsg, li, hist.length, true);
-                        streamingMsg.replaceWith(clone);
-                    }
-                    // a question card rebuilt from history is live again; if the
-                    // user already answered (their reply queued while she wrote)
-                    // it must stay locked - Send never fires twice
-                    lockAnsweredAskCards(chat);
-                }
-            } catch (e) {
-                console.error('[SWAP] Failed:', e);
-            }
-        }
+        said = Parsing.extractProseText(streamingMsg.querySelector('.message-content'));
+        const { refresh } = await import('./core/state.js');
+        await refresh(false);
     }
-    
+
     scrollToBottomIfSticky();   // a reader who scrolled up mid-reply stays put
 
     // Update scene state (spice tooltip, etc.) after generation completes
     import('./features/scene.js').then(scene => scene.updateScene());
+    return said;
 };
 
 export const cancelStreaming = () => {

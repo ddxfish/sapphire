@@ -734,7 +734,7 @@ class ExecutionContext:
                     if len(self.tool_log) > 500:
                         del self.tool_log[:-500]
                     filtered = filter_to_thinking_only(response_msg.content)
-                    _, tool_images = _exec_with_loop_counts(
+                    _, tool_images, _, _ = _exec_with_loop_counts(
                         self.tool_engine.execute_text_based_tool_call,
                         fn_data, filtered, messages, None, self.provider, scopes=self.scopes,
                         allowed_tools=self._allowed_tool_names, loop_counts=loop_counts,

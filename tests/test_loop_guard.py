@@ -156,7 +156,7 @@ def test_register_and_unregister_loop_warn_map():
 def test_warn_appends_to_llm_msg_not_history():
     fm = _bare_fm()
     fm._loop_warn_map = {"gen": (2, "LOOP {count}")}
-    fm.execute_function = lambda name, args, **kw: "TOOL OUTPUT"
+    fm.execute_function = lambda name, args, **kw: ("TOOL OUTPUT", True) if kw.get("with_success") else "TOOL OUTPUT"
     engine = ToolCallingEngine(fm)
 
     history = MagicMock()

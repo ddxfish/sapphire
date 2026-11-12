@@ -143,11 +143,12 @@ class TestBrowserWiring:
 
     def test_renderers_import_the_one_module(self):
         static = ROOT / 'interfaces' / 'web' / 'static'
-        for f in ('ui-streaming.js', 'ui-parsing.js'):
-            src = (static / f).read_text(encoding='utf-8')
-            assert "from './shared/ask-marker.js'" in src and 'parseAskMarker(' in src and 'buildAskCards(' in src
+        # ONE tool-result renderer (ui-parsing buildToolResult); the live stream builds through it
+        src = (static / 'ui-parsing.js').read_text(encoding='utf-8')
+        assert "from './shared/ask-marker.js'" in src and 'parseAskMarker(' in src and 'buildAskCards(' in src
+        assert 'buildToolResult(' in (static / 'ui-streaming.js').read_text(encoding='utf-8')
         ui = (static / 'ui.js').read_text(encoding='utf-8')
-        assert ui.count('lockAnsweredAskCards(chat)') == 3        # history render + user message + finish swap
+        assert ui.count('lockAnsweredAskCards(chat)') == 2        # history render (the finish runs it too) + user message
         ev = (static / 'core' / 'events.js').read_text(encoding='utf-8')
         assert "'sapphire:ask_answer'" in ev and 'triggerSendWithText(text, { card: true })' in ev
         # the card's answer is its OWN send: the composer's draft and staged

@@ -1726,8 +1726,8 @@ def _seat_turn(chat, seat, rt, prep=None):
     why = ('said: ' + repr(text) if passed else 'ran out of time' if cut else '' if text
            else str(report.get('why') or (f"failed: {_cause(failed)}" if failed is not None else 'no answer')))
     if not why:
-        # her row is in BEFORE her END goes out: the browser swaps the live bubble for the
-        # saved row 500 ms after END, which used to be a race it mostly won
+        # her row is in BEFORE her END goes out: the browser redraws the live bubble from
+        # the saved rows the moment END lands (ui.finishStreaming, a keyed reconcile)
         thought = _thinking_of(own, before)
         # rt.chat, as the guest and door paths: a rename during her turn lost her line (hunt 2026-11-04)
         append_line(rt.chat, 'assistant', f"{thought}\n\n{text}" if thought else text, seat['id'], seat.get('name'),

@@ -221,6 +221,9 @@ export const setChatArchived = (name, archived) => fetchWithTimeout(`/api/chats/
     body: JSON.stringify({ archived })
 }, 10000);
 
+// open_stage calls whose stage this tab already opened (tool_call ids, bounded)
+const _stageOpened = new Set();
+
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {
     const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLlmDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
@@ -286,8 +289,12 @@ const processSSEData = (data, handlers) => {
     }
     
     if (data.type === 'tool_end') {
-        // open_stage: only the tab running this stream hears it (shared/stage-marker.js)
-        if (Array.isArray(data.stage) && data.stage.length) {
+        // open_stage: only the tab running this stream hears it (shared/stage-marker.js),
+        // once per call - a reattach replays its tool_end, and re-opened a stage
+        // the user had already closed
+        if (Array.isArray(data.stage) && data.stage.length && !_stageOpened.has(data.id)) {
+            if (_stageOpened.size > 200) _stageOpened.clear();
+            _stageOpened.add(data.id);
             document.dispatchEvent(new CustomEvent('sapphire:stage_open', { detail: data.stage }));
         }
         if (onToolEnd) {

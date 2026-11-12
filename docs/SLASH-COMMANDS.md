@@ -36,12 +36,28 @@ Typed with no number, `/remove` opens a dialog that warns it can't be undone. Wi
 
 ### /compact-daily
 
-One labelled summary per day, for the last **5** days (`COMPACT_DAILY_DAYS`). A day starts at **4 AM** (`DAY_START_HOUR`), so a late night counts toward the day it began. Older days roll off. Today is never summarized: it stays as it is until it ends, so each day is always one summary. Both settings are on **Settings → Tools → Daily Compact**.
+Turns the chat's history into one labelled summary per day, for the last **5** days (`COMPACT_DAILY_DAYS`). A day starts at **4 AM** (`DAY_START_HOUR`), so a late night counts toward the day it began. Both settings are on **Settings → Tools → Daily Compact**.
 
-- Size per day defaults to about 2.5K tokens; give a size to change it, e.g. `/compact-daily 4K` (500 to 20K).
-- It runs in the background with the chat's own model and persona and keeps the last turn as it is.
-- A JSON backup is written first, except for private chats.
+- **Today is never summarized.** It stays as it is until it ends, so each day is always one summary.
+- **Earlier summaries pass through untouched.** A run only writes the finished days that have no summary yet. Run it twice in a day and the second run says there is nothing new, and spends nothing.
+- **Older days roll off.** Anything older than the window leaves the chat, summarized or not. The JSON backup still has it.
+- **What she reads afterwards.** Each day is a pair: a marker, `[Day summary: Monday, November 2, 2026 (48 messages)]`, then the summary, written in the first person as her own memory of that day. In the chat each one carries the **Compressed summary** badge.
+- **Size per day** defaults to about 2.5K tokens; give a size to change it, e.g. `/compact-daily 4K` (500 to 20K).
+- **What a summary keeps** comes from the compress instructions, shared with `/compact`: the **Advanced** box in the compress dialog ([CHATS.md](CHATS.md#compress--summarize-old-history)).
+- It runs in the background with the chat's own model and persona and keeps the last turn as it is. One compress job runs at a time.
+- A JSON backup is written first to `user/history/exports/`, except for private chats. A private chat is summarized by a local provider only.
+- **Write-last.** The chat isn't touched until every day's summary has succeeded. If the chat changed while the job ran, or the summaries came out bigger than what they replace, the job fails and the chat stays as it was.
 - It's refused in rooms, game chats, live phone calls, and while she's replying.
+
+#### Every night
+
+There is no built-in timer: a scheduled task runs it ([CONTINUITY.md](CONTINUITY.md)).
+
+1. Make a task whose **Chat Name** is the chat to compact, with a toolset that carries `slash_command`.
+2. **Initial Message**: something like `Run /compact-daily.`
+3. **Schedule** it a little *after* the day-start hour, e.g. 4:05 AM for a 4 AM day. Before that hour, yesterday is still "today" and stays raw.
+
+The compact starts when the task's turn ends. That turn is part of the new day, so it stays raw until the next night.
 
 ---
 
@@ -69,4 +85,7 @@ USER COMMANDS: /compact, /compact-daily [tokens], /context, /status, /prompt, /c
 
 YOUR TOOL: slash_command(command) — only /remove N and /compact-daily are yours (ai=True). Toolset membership is the permission (ships in `personality`).
 - /remove N: runs after your turn ends; removes the N turns before this one AND this turn (the request and your reply go too). To undo the last exchange, /remove 1. Only when the user asks. The user is notified; /undo restores. Stopping the turn drops it. One pending at a time. Refused in agent runs.
-- /compact-daily [tokens]: one labelled summary per day for the last COMPACT_DAILY_DAYS (5) days, days start DAY_START_HOUR (4); today stays raw (one pair per day); default ~2.5K tokens/day (500-20K); background, chat's own model + persona; keeps the last turn; JSON backup unless private; refused in rooms, game chats, live calls, mid-reply.
+- /compact-daily [tokens]: one labelled summary per day for the last COMPACT_DAILY_DAYS (5) days, days start DAY_START_HOUR (4); today stays raw (one pair per day); earlier pairs pass through untouched, only finished days without a pair are written, a second run the same day = "Nothing new" and no LLM spend; older than the window rolls off; default ~2.5K tokens/day (500-20K); background, chat's own model + persona; keeps the last turn; JSON backup unless private (private = local provider only); write-last (chat changed mid-job or summaries bigger than the source = fails, chat untouched); refused in rooms, game chats, live calls, mid-reply. Runs after your turn ends, in a scheduled task's turn too.
+- Pair shape: user row `[Day summary: Monday, November 2, 2026 (N messages)]` + assistant row = the summary, first person as you; rows carry compressed, compressed_day (YYYY-MM-DD).
+- Summary wording = the compress instructions (shared with /compact; user/prompts/compress_instructions.txt, default in core/chat/compress.py); rooms use fixed ones.
+- Nightly: no built-in timer; a scheduled task in that chat with slash_command in its toolset, message "Run /compact-daily.", scheduled just AFTER DAY_START_HOUR (before it, yesterday is still today).

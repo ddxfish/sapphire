@@ -10,13 +10,18 @@ def _src(rel):
     return (STATIC / rel).read_text(encoding='utf-8')
 
 
-def test_the_finish_swap_takes_this_turns_assistant_row_not_the_last_row():
+def test_the_finish_is_the_keyed_reconcile_not_a_positional_swap():
+    # 2026-11-12: one finisher. The old hand swap guessed "this turn's row" by
+    # position (the inbox's next turn made the last row the wrong one); the
+    # keyed reconcile matches every row by key, so there is nothing to guess.
     ui = _src('ui.js')
     body = ui.split('export const finishStreaming')[1].split('\n};')[0]
-    assert "while (li > 0 && hist[li]?.role !== 'assistant') li--;" in body
-    assert 'const lastMsg = hist[hist.length - 1];' not in body
+    assert "const { refresh } = await import('./core/state.js');" in body
+    assert 'await refresh(false);' in body
+    assert 'setTimeout(resolve, 500)' not in body and 'replaceWith(clone)' not in body
     # a card rebuilt from history is re-locked when the user already answered
-    assert 'lockAnsweredAskCards(chat);' in body.split('replaceWith(clone)')[1]
+    rh = ui.split('export const renderHistory')[1].split('\n};')[0]
+    assert 'lockAnsweredAskCards(chat);' in rh
 
 
 def test_the_server_decides_queued_and_the_live_slot_is_owned():

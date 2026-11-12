@@ -14,6 +14,7 @@ Your AI doesn't have to wait for you to talk first. Continuity lets Sapphire wak
 - **Random hellos** — 20% chance every hour to say something unexpected
 - **Scheduled research** — Check news on a topic every morning
 - **Journaling prompts** — Daily nudge to write
+- **Nightly compact** — She runs `/compact-daily` on her own chat so each finished day becomes one summary ([recipe](SLASH-COMMANDS.md#every-night))
 
 ## How It Works
 

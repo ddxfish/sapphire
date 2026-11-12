@@ -5,7 +5,7 @@ import time
 from typing import Generator, Union, Dict, Any
 import config
 from .chat_tool_calling import strip_ui_markers, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text, bad_args_result, cut_call
-from core.ui_markers import stage_cards
+from core.ui_markers import stage_cards, for_browser
 from core import think as _think
 from .llm_providers import LLMResponse, get_generation_params
 from .llm_providers.base import LENGTH_FINISH
@@ -1199,7 +1199,7 @@ class StreamingChat:
                             )
                             messages.append(wrapped_err)
                             self.main_chat.session_manager.add_tool_result(
-                                tool_call_id, function_name, error_result
+                                tool_call_id, function_name, error_result, error=True
                             )
                             yield {
                                 "type": "tool_end",
@@ -1222,7 +1222,9 @@ class StreamingChat:
                         publish(Events.TOOL_EXECUTING, {"name": function_name})
 
                         try:
-                            function_result = self.main_chat.function_manager.execute_function(function_name, function_args, scopes=_scopes, allowed_tools=_allowed_tool_names, executor_snapshot=_executor_snapshot)
+                            # the tool's own verdict (a failure returns text, it doesn't raise):
+                            # live accordion, stored row and TOOL_COMPLETE all say the same
+                            function_result, tool_ok = self.main_chat.function_manager.execute_function(function_name, function_args, scopes=_scopes, allowed_tools=_allowed_tool_names, executor_snapshot=_executor_snapshot, with_success=True)
                             result_str, tool_imgs = _extract_tool_images(function_result, self.main_chat.session_manager, provider, function_name)
                             if tool_imgs:
                                 iteration_tool_images.extend(tool_imgs)
@@ -1230,15 +1232,16 @@ class StreamingChat:
                             clean_result = strip_ui_markers(result_str)
                             clean_result += self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
 
-                            publish(Events.TOOL_COMPLETE, {"name": function_name, "success": True})
+                            publish(Events.TOOL_COMPLETE, {"name": function_name, "success": tool_ok})
 
-                            # Emit typed tool_end event
+                            # Emit typed tool_end event: the browser's copy (history's
+                            # form, markers kept), never the model's clean_result
                             end = {
                                 "type": "tool_end",
                                 "id": tool_call_id,
                                 "name": function_name,
-                                "result": clean_result[:500] if len(clean_result) > 500 else clean_result,
-                                "error": False
+                                "result": for_browser(result_str),
+                                "error": not tool_ok
                             }
                             # open_stage's own card only: a STAGE marker in a web page or an email is not one
                             stage = stage_cards(result_str) if function_name == 'open_stage' else None
@@ -1258,7 +1261,8 @@ class StreamingChat:
                                 tool_call_id,
                                 function_name,
                                 result_str,
-                                inputs=function_args
+                                inputs=function_args,
+                                error=not tool_ok
                             )
 
                         except Exception as tool_error:
@@ -1290,7 +1294,8 @@ class StreamingChat:
                                 tool_call_id,
                                 function_name,
                                 error_result,
-                                inputs=function_args
+                                inputs=function_args,
+                                error=True
                             )
 
                     # Inject tool-returned images for next LLM turn
@@ -1353,7 +1358,7 @@ class StreamingChat:
                         # allowed_tools + executor_snapshot were missing here for a year
                         # (validation-bypass drift vs the native tool_calls path above and
                         # the old blocking lane) — closed in the 2026-08-17 merge.
-                        _, text_tool_images = self.tool_engine.execute_text_based_tool_call(
+                        text_tool_id, text_tool_images, text_tool_result, text_tool_ok = self.tool_engine.execute_text_based_tool_call(
                             function_call_data,
                             full_content,
                             messages,
@@ -1373,14 +1378,20 @@ class StreamingChat:
                         # Emit tool events for UI
                         tool_name = function_call_data["function_call"]["name"]
                         tool_args = function_call_data["function_call"].get("arguments", {})
-                        yield {"type": "tool_start", "id": f"text_{iteration}", "name": tool_name, "args": tool_args}
+                        # The real call id (the one history keeps), so the live
+                        # accordion's delete button removes the right row
+                        tid = text_tool_id or f"text_{iteration}"
+                        yield {"type": "tool_start", "id": tid, "name": tool_name, "args": tool_args}
 
-                        # Get the result that was added to messages
-                        last_msg = messages[-1] if messages else {}
-                        result = last_msg.get("content", "Tool executed")
-                        is_error = "Error:" in result or "not currently available" in result
-
-                        yield {"type": "tool_end", "id": f"text_{iteration}", "name": tool_name, "result": result[:500], "error": is_error}
+                        # The browser's copy and the tool's own verdict, as on the native
+                        # path above (a sniff for "Error:" drew real failures green and a
+                        # web page that said "Error:" red)
+                        end = {"type": "tool_end", "id": tid, "name": tool_name,
+                               "result": for_browser(text_tool_result or ""), "error": not text_tool_ok}
+                        stage = stage_cards(text_tool_result) if tool_name == 'open_stage' else None
+                        if stage:
+                            end["stage"] = stage      # the stage opens on this path too, not only natively
+                        yield end
 
                         logger.info(f"[TOOL] Text-based tool iteration {iteration + 1} completed")
                         continue

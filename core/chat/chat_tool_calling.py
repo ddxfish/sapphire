@@ -533,15 +533,15 @@ class ToolCallingEngine:
                 messages.append(wrapped_msg)
 
                 if history:
-                    history.add_tool_result(tool_call["id"], function_name, error_result)
+                    history.add_tool_result(tool_call["id"], function_name, error_result, error=True)
                 tools_executed += 1     # a round the model gets back, not a hallucinated name
                 continue
 
             try:
-                function_result = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot)
+                function_result, tool_ok = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot, with_success=True)
             except Exception as tool_error:
                 logger.error(f"Tool execution failed for {function_name}: {tool_error}", exc_info=True)
-                function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
+                function_result, tool_ok = f"Tool '{function_name}' failed: {str(tool_error)}", False
 
             # Extract images if tool returned structured result
             result_str, images = _extract_tool_images(function_result, history or image_sink, provider, function_name)
@@ -566,7 +566,7 @@ class ToolCallingEngine:
 
             if history:
                 logger.info(f"[SAVE] Saving tool result for: {function_name}")
-                history.add_tool_result(tool_call["id"], function_name, result_str, inputs=function_args)
+                history.add_tool_result(tool_call["id"], function_name, result_str, inputs=function_args, error=not tool_ok)
             else:
                 logger.debug(f"[ISOLATED] No history manager, skipping save for: {function_name}")
 
@@ -586,7 +586,9 @@ class ToolCallingEngine:
             history: History manager to save to
             provider: Optional provider for format_tool_result (Claude compatibility)
         
-        Returns tool call ID.
+        Returns (tool_call_id, tool_images, result_str, ok): result_str is the
+        browser's copy (history's form, UI markers kept); ok is the tool's own
+        verdict (function_manager with_success), never a sniff of its text.
         """
         tool_call_id = f"call_{uuid.uuid4().hex[:8]}"
         function_name = function_call_data["function_call"]["name"]
@@ -634,10 +636,10 @@ class ToolCallingEngine:
                 function_args = {}
 
         try:
-            function_result = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot)
+            function_result, tool_ok = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot, with_success=True)
         except Exception as tool_error:
             logger.error(f"Text-based tool failed for {function_name}: {tool_error}")
-            function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
+            function_result, tool_ok = f"Tool '{function_name}' failed: {str(tool_error)}", False
 
         result_str, tool_images = _extract_tool_images(function_result, history or image_sink, provider, function_name)
         if tool_images:
@@ -654,9 +656,9 @@ class ToolCallingEngine:
         messages.append(wrapped_msg)
 
         if history:
-            history.add_tool_result(tool_call_id, function_name, result_str, inputs=function_args)
+            history.add_tool_result(tool_call_id, function_name, result_str, inputs=function_args, error=not tool_ok)
         else:
             logger.debug(f"[ISOLATED] No history manager, skipping save for: {function_name}")
 
         logger.info(f"[OK] Executed text-based tool: {function_name}")
-        return tool_call_id, tool_images
+        return tool_call_id, tool_images, result_str, tool_ok

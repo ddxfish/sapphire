@@ -14,7 +14,12 @@ import re
 import threading
 import time
 
-UI_MARKER_PATTERN = (r'<<[A-Z]+::[^>]+>>\s*'
+# A <<X::id>> marker is a short token (an id, `tool:abc`): `[^>]+` also matched
+# across newlines, so a web page's `<<AB::` + 300K of text + `>>` counted as
+# one "marker" - hidden from her copy, and never capped in the live tool_end
+# (tool_end scout, 2026-11-12).
+_TOKEN = r'[^>\s]{1,128}'
+UI_MARKER_PATTERN = (rf'<<[A-Z]+::{_TOKEN}>>\s*'
                      r'|<!--GALLERY:[\[{][^\n]*[\]}]-->\s*'
                      r'|<!--FILES:\{[^\n]*\}-->\s*'
                      r'|<!--ASK:\{[^\n]*\}-->\s*'
@@ -25,7 +30,28 @@ UI_MARKER_RE = re.compile(UI_MARKER_PATTERN)
 # copy, so there the browser's markers must survive: only the other <<X::…>>
 # markers go. IMG, GALLERY, FILES and ASK ride along as bounded noise within
 # the one run; the history read path cleans them before the next run's wire.
-UI_MARKER_KEEP_IMG_RE = re.compile(r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*')
+UI_MARKER_KEEP_IMG_RE = re.compile(rf'<<(?!IMG::)[A-Z]+::{_TOKEN}>>\s*')
+
+# The live tool_end's words are capped (a result can run to 200K and the event
+# rides the reattach ring and every bus listener); the browser shows 500-1500
+# with a Show-more, and the history swap brings the whole text.
+LIVE_RESULT_CHARS = 4000
+
+
+def for_browser(text, limit=LIVE_RESULT_CHARS) -> str:
+    """The live tool_end's copy of a tool result: the BROWSER form history keeps,
+    every marker whole, the words capped. Until 2026-11-12 the stream sent the
+    model's copy (markers stripped, loop-warn added, cut at 500), so a tool's
+    pictures, rows and cards showed only after the history swap."""
+    if not isinstance(text, str):
+        return ''
+    words = UI_MARKER_RE.sub('', text)
+    if len(words) <= limit:
+        return text
+    # one marker per line: the browser's GALLERY/FILES readers take a marker to
+    # the end of its line, so two glued together lost both widgets
+    markers = ''.join(m.group(0).rstrip() + '\n' for m in UI_MARKER_RE.finditer(text))
+    return markers + words[:limit] + '...'
 
 
 # --- provenance: a widget marker in a tool result must be one core MADE ------
@@ -122,9 +148,9 @@ _STAGE_RE = re.compile(r'<!--STAGE:(\{[^\n]*?\})-->')
 
 
 def stage_cards(text) -> list:
-    """The STAGE payloads in a tool result ({app, label, icon} dicts). The
-    stream strips every marker from the live tool_end, so these ride it as
-    their own field: the tab that ran the turn opens the stage at once."""
+    """The STAGE payloads in a tool result ({app, label, icon} dicts). They ride
+    the live tool_end as their own field: opening the stage is an ACTION for the
+    tab that ran the turn (api.js), apart from the card drawn from the marker."""
     out = []
     for m in _STAGE_RE.finditer(text if isinstance(text, str) else ''):
         try:

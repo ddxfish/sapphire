@@ -390,24 +390,13 @@ export const extractImagePlaceholders = (content, isHistoryRender = false, scrol
     let imgIndex = 0;
     
     const processedContent = content.replace(imgPattern, (match, imageId) => {
-        const placeholder = `__IMAGE_PLACEHOLDER_${imgIndex}__`;
+        // no `_` or `*`: "__IMAGE_PLACEHOLDER_0__ __IMAGE_PLACEHOLDER_1__" on one
+        // line was read as __bold__ and both pictures vanished (2026-11-12)
+        const placeholder = `@@IMGSLOT${imgIndex}@@`;
         images.push({ placeholder, imageId });
         imgIndex++;
         return placeholder;
     });
     
     return { processedContent, images };
-};
-
-/**
- * Replace image placeholders in an element with actual image elements
- */
-export const replaceImagePlaceholdersInElement = (element, images, isHistoryRender = false, scrollCallback = null) => {
-    images.forEach(({ placeholder, imageId }) => {
-        const placeholderImgs = element.querySelectorAll(`img[src*="${placeholder}"]`);
-        placeholderImgs.forEach(img => {
-            const newImg = createImageElement(imageId, isHistoryRender, scrollCallback);
-            img.replaceWith(newImg);
-        });
-    });
 };

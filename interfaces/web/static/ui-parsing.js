@@ -6,6 +6,7 @@ import { parseFilesMarker, buildFilesRows } from './shared/files-marker.js';
 import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
 import { parseStageMarker, buildStageCards } from './shared/stage-marker.js';
 import { thinkSegments, stripThink, isSeedThink } from './shared/think.js';
+import { proseBlocks, dedent } from './shared/prose.js';
 import { errWords } from './shared/fetch.js';
 
 let globalThinkCounter = 0;
@@ -42,26 +43,6 @@ export const createAccordion = (type, title, content = '') => {
     return { acc: details, content: inner };
 };
 
-export const cloneImagesInline = (contentEl) => {
-    const thinkAccordions = Array.from(contentEl.querySelectorAll('details')).filter(details => {
-        const summary = details.querySelector('summary');
-        return summary && summary.textContent.includes('Think');
-    });
-    
-    if (thinkAccordions.length === 0) return;
-    const lastThinkAccordion = thinkAccordions[thinkAccordions.length - 1];
-    
-    thinkAccordions.forEach(accordion => {
-        const imgs = accordion.querySelectorAll('img[data-image-id]');
-        imgs.forEach(img => {
-            if (img.dataset.inlineClone) return;
-            const clone = img.cloneNode(true);
-            clone.dataset.inlineClone = 'true';
-            lastThinkAccordion.insertAdjacentElement('afterend', clone);
-        });
-    });
-};
-
 export const extractProseText = (el) => {
     if (!el) return '';
     const clone = el.cloneNode(true);
@@ -80,6 +61,10 @@ export const extractProseText = (el) => {
     clone.querySelectorAll('[class*="code"]').forEach(c => c.remove());    // Any code-related class
     clone.querySelectorAll('.message-metadata').forEach(m => m.remove()); // Metadata footer
     clone.querySelectorAll('.row-note, .tool-block').forEach(n => n.remove()); // the app's notes about a row (never content)
+    // the widgets that ride under a tool (shared/*-marker.js) are UI, not her words:
+    // 🔊 read a question card, gallery captions, "↓ song.wav" and "🌐 Browser" aloud
+    clone.querySelectorAll('.ask-card, .stage-card, .gallery-row, .files-row, .image-gallery, .cancel-marker')
+        .forEach(n => n.remove());
     
     // Add periods after list items for TTS pauses (before textContent extraction)
     clone.querySelectorAll('li').forEach(li => {
@@ -132,26 +117,6 @@ export const extractProseText = (el) => {
     txt = txt.replace(/\s+/g, ' ').trim();
     
     return txt;
-};
-
-// Extract fenced code blocks and replace with placeholders
-const extractCodeBlocks = (text) => {
-    const codeBlocks = [];
-    let counter = 0;
-    
-    // Match ```lang\ncode\n``` - language is optional
-    const processed = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
-        const placeholder = `__CODE_BLOCK_${counter}__`;
-        codeBlocks.push({
-            placeholder,
-            language: lang || 'plaintext',
-            code: code.trimEnd()
-        });
-        counter++;
-        return placeholder;
-    });
-    
-    return { processed, codeBlocks };
 };
 
 const COPY_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
@@ -255,25 +220,8 @@ export const processMarkdown = (text) => {
                     i++;
                     continue;
                 }
-                // Loose list: bridge blank lines when the next non-blank line is a
-                // same-kind list item (ordered stays ordered, bullet stays bullet)
-                if (!cur.trim()) {
-                    let j = i;
-                    while (j < lines.length && !lines[j].trim()) j++;
-                    const nm = j < lines.length ? lines[j].match(/^(\s*)([-*+]|\d+\.)\s+/) : null;
-                    if (nm) {
-                        // Compare kind against the last item at the resuming depth,
-                        // not the last item overall (may be a nested sublist)
-                        let ref = prev;
-                        for (let k = listLines.length - 1; k >= 0; k--) {
-                            if (listLines[k].indent <= nm[1].length) { ref = listLines[k]; break; }
-                        }
-                        if (/^\d+\.$/.test(nm[2]) === /^\d+\.$/.test(ref.marker)) {
-                            i = j;
-                            continue;
-                        }
-                    }
-                }
+                // A blank line never reaches here: shared/prose.js splits paragraphs
+                // first, so a loose list is one <ol start=…> per paragraph.
                 break;
             }
             output.push({ type: 'block', html: parseList(listLines) });
@@ -365,7 +313,9 @@ const parseTable = (lines) => {
     const isSeparator = /^[\s|:\-]+$/.test(lines[1]);
     const startRow = isSeparator ? 2 : 1;
     
-    let html = '<table><thead><tr>';
+    // in the scroll wrapper style.css defines (.message-content is overflow:hidden,
+    // so a wide table was clipped with no way to see its right side)
+    let html = '<div class="table-wrapper"><table><thead><tr>';
     headerCells.forEach(cell => {
         html += `<th>${processInlineMarkdown(escapeHtml(cell))}</th>`;
     });
@@ -382,7 +332,7 @@ const parseTable = (lines) => {
         html += '</tr>';
     }
     
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     return html;
 };
 
@@ -445,10 +395,18 @@ const parseList = (items) => {
 };
 
 // Process inline markdown elements
+// A value going inside "…" in an attribute. escapeHtml (textContent→innerHTML)
+// escapes & < > but NOT quotes: `![x" onerror="…"](https://…)` closed the
+// attribute and ran a handler in the user's tab - any text reaching the
+// renderer (her reply after a prompt injection, a room guest, a pasted line)
+// could do it (UI scout, 2026-11-12).
+const attr = (s) => s.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 const processInlineMarkdown = (html) => {
-    // Checkboxes: [x] or [X] = checked, [ ] = unchecked
-    html = html.replace(/\[x\]/gi, '<input type="checkbox" checked disabled>');
-    html = html.replace(/\[ \]/g, '<input type="checkbox" disabled>');
+    // Checkboxes: [x] or [X] = checked, [ ] = unchecked - never the start of a
+    // link: "[X](https://x.com/…)" drew a ticked box and a raw url
+    html = html.replace(/\[x\](?!\s*\()/gi, '<input type="checkbox" checked disabled>');
+    html = html.replace(/\[ \](?!\s*\()/g, '<input type="checkbox" disabled>');
     
     // Bold+italic: ***text*** or ___text___
     html = html.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
@@ -465,34 +423,26 @@ const processInlineMarkdown = (html) => {
     // Strikethrough: ~~text~~
     html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
     
-    // Inline code: `code`
-    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    // Inline code: `code`, or ```code``` on one line (never a block: shared/prose.js)
+    html = html.replace(/(`{1,3})([^`\n]+)\1/g, '<code>$2</code>');
     
     // Images: ![alt](url) - MUST be before links
     // Balanced parens in URL for Wikipedia etc, tolerates space between ] and (
     html = html.replace(/!\[([^\]]*)\]\s*\(([^()]*(?:\([^)]*\)[^()]*)*)\)/g, (m, alt, url) => {
         url = url.trim().replace(/ /g, '%20');
-        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" class="chat-img" referrerpolicy="no-referrer" loading="lazy">`;
+        if (/^https?:\/\//i.test(url)) return `<img src="${attr(url)}" alt="${attr(alt)}" class="chat-img" referrerpolicy="no-referrer" loading="lazy">`;
         return m;
     });
 
     // Links: [text](url) - allow http(s), mailto, and local paths starting with /
     html = html.replace(/\[([^\]]+)\]\s*\(([^()]*(?:\([^)]*\)[^()]*)*)\)/g, (m, text, url) => {
         url = url.trim().replace(/ /g, '%20');
-        if (/^(https?:\/\/|mailto:)/i.test(url)) return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
-        if (/^\/[a-zA-Z]/.test(url)) return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+        if (/^(https?:\/\/|mailto:)/i.test(url)) return `<a href="${attr(url)}" target="_blank" rel="noopener">${text}</a>`;
+        if (/^\/[a-zA-Z]/.test(url)) return `<a href="${attr(url)}" target="_blank" rel="noopener">${text}</a>`;
         return m;
     });
     
     return html;
-};
-
-// Process inline code (single backticks)
-const processInlineCode = (html) => {
-    // Match `code` but not inside already-escaped contexts
-    return html.replace(/`([^`\n]+)`/g, (match, code) => {
-        return `<code>${escapeHtml(code)}</code>`;
-    });
 };
 
 // Check if element contains only images and whitespace/br (no text content)
@@ -552,7 +502,9 @@ export const wrapImageGalleries = (container) => {
 
     // Phase 1: Multi-image paragraphs (2+ images in a <p>)
     Array.from(container.querySelectorAll('p')).forEach(p => {
-        const imgs = Array.from(p.querySelectorAll('.chat-img'));
+        // not ones Phase 0 already put in a gallery (a ghost row of captions
+        // with no pictures), nor a table's: they belong in their cells
+        const imgs = Array.from(p.querySelectorAll('.chat-img')).filter(img => !img.closest('.image-gallery, table'));
         if (imgs.length < 2) return;
 
         if (isImageOnly(p)) {
@@ -682,14 +634,12 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
                 renderToolResult(el, part);
             }
         });
-        cloneImagesInline(el);
         wrapImageGalleries(el);
         appendFiles(el, partGroups);
         return;
     }
 
     renderContentText(el, txt, isHistoryRender, scrollCallback, 0);
-    cloneImagesInline(el);
     wrapImageGalleries(el);
     appendFiles(el, textFiles);
 };
@@ -725,7 +675,12 @@ const addToolDeleteButton = (acc, toolCallId) => {
     summary.appendChild(deleteBtn);
 };
 
-const renderToolResult = (el, part) => {
+const renderToolResult = (el, part) => el.append(...buildToolResult(part, !!part.error));
+
+// THE tool-result renderer: history and the live stream (ui-streaming
+// doEndTool) both build here. Returns the accordion and the widgets that ride
+// under it. `isError`: the live tool_end's flag, or the stored row's `error`.
+export const buildToolResult = (part, isError = false) => {
     const toolName = part.name || 'Unknown Tool';
     const toolCallId = part.tool_call_id;
     // Tiles ride a UI marker (shared/gallery-marker.js); the accordion text drops it.
@@ -746,57 +701,9 @@ const renderToolResult = (el, part) => {
     // Check for image markers. A tool can return SEVERAL (e.g. z-image returns a
     // grid + the individual full-size images), so match + strip ALL of them.
     const imgIds = [...fullResult.matchAll(/<<IMG::([^>]+)>>/g)].map(m => m[1]);
-    if (imgIds.length) {
-        const textWithoutMarker = fullResult.replace(/<<IMG::[^>]+>>\n?/g, '').trim();
-        const isTruncated = textWithoutMarker.length > maxLen;
-        const truncatedText = isTruncated
-            ? textWithoutMarker.substring(0, maxLen) + '...'
-            : textWithoutMarker;
-
-        let inputsPrefix = '';
-        if (part.inputs && Object.keys(part.inputs).length > 0) {
-            try {
-                inputsPrefix = 'Inputs:\n' + JSON.stringify(part.inputs, null, 2) + '\n\n';
-            } catch (e) {}
-        }
-
-        const { acc, content } = createAccordion('tool', `Tool Result: ${toolName}`,
-            inputsPrefix + 'Result:\n' + truncatedText);
-        addToolDeleteButton(acc, toolCallId);
-
-        // Add expand/collapse toggle if truncated
-        if (isTruncated) {
-            addExpandToggle(content, inputsPrefix + 'Result:\n', truncatedText, textWithoutMarker);
-        }
-
-        // Render every returned image. Inserting each before firstChild in marker
-        // order yields the natural top-to-bottom order (grid first, then individuals).
-        // NOTE — PATH 1 of 2 for tool images: this renders them INSIDE the accordion.
-        // PATH 2 is the inline clone in core/events.js `handleImageReady`, which clones
-        // each of these into the reply body once it loads. A tool image shows in BOTH.
-        for (const imageId of imgIds) {
-            const img = Images.createImageElement(imageId, false, null);
-            img.className = 'tool-result-image';   // (a gone-image span keeps its data attr)
-            content.insertBefore(img, content.firstChild);
-        }
-
-        el.appendChild(acc);
-        // Her contact sheet stays in the accordion; the row IS the user's view of
-        // the same numbered set (the inline clone in core/events.js skips flagged
-        // accordions — a sheet AND a row would show the pictures twice).
-        if (galleryEntries.length) acc.dataset.gallery = '1';
-        appendGallery(el, galleryEntries, galleryTitle);
-        appendFiles(el, fileGroups);
-        appendAskCards(el, askCards);
-        buildStageCards(stageCards).forEach(card => el.appendChild(card));
-        return;
-    }
-
-    // Regular tool result (no image)
-    const isTruncated = fullResult.length > maxLen;
-    const truncatedResult = isTruncated
-        ? fullResult.substring(0, maxLen) + '...'
-        : fullResult;
+    const text = imgIds.length ? fullResult.replace(/<<IMG::[^>]+>>\n?/g, '').trim() : fullResult;
+    const isTruncated = text.length > maxLen;
+    const shown = isTruncated ? text.substring(0, maxLen) + '...' : text;
 
     let inputsPrefix = '';
     if (part.inputs && Object.keys(part.inputs).length > 0) {
@@ -806,37 +713,40 @@ const renderToolResult = (el, part) => {
     }
 
     const { acc, content } = createAccordion('tool', `Tool Result: ${toolName}`,
-        inputsPrefix + 'Result:\n' + truncatedResult);
+        inputsPrefix + 'Result:\n' + shown);
+    if (isError) acc.classList.add('error');
+    if (toolCallId) acc.dataset.toolId = toolCallId;   // a rebuild keeps it open (ui.js graftLive)
     addToolDeleteButton(acc, toolCallId);
 
-    // Add expand/collapse toggle if truncated
-    if (isTruncated) {
-        addExpandToggle(content, inputsPrefix + 'Result:\n', truncatedResult, fullResult);
+    if (isTruncated) addExpandToggle(content, inputsPrefix + 'Result:\n', shown, text);
+
+    // Render every returned image. Inserting each before firstChild in marker
+    // order yields the natural top-to-bottom order (grid first, then individuals).
+    // NOTE — PATH 1 of 2 for tool images: this renders them INSIDE the accordion.
+    // PATH 2 is the inline clone in core/events.js `handleImageReady`, which clones
+    // each of these into the reply body once it loads. A tool image shows in BOTH.
+    for (const imageId of imgIds) {
+        const img = Images.createImageElement(imageId, false, null);
+        img.className = 'tool-result-image';   // (a gone-image span keeps its data attr)
+        content.insertBefore(img, content.firstChild);
     }
 
-    el.appendChild(acc);
-
-    appendGallery(el, galleryEntries, galleryTitle);
-    appendFiles(el, fileGroups);
-    appendAskCards(el, askCards);
-    buildStageCards(stageCards).forEach(card => el.appendChild(card));
+    // Her contact sheet stays in the accordion; the row IS the user's view of
+    // the same numbered set (the inline clone in core/events.js skips flagged
+    // accordions — a sheet AND a row would show the pictures twice).
+    if (galleryEntries.length) acc.dataset.gallery = '1';
+    return [
+        acc,
+        buildGallery(galleryEntries, Images.openImageModal, galleryTitle),
+        ...buildFilesRows(fileGroups),
+        ...buildAskCards(askCards),
+        ...buildStageCards(stageCards),
+    ].filter(Boolean);
 };
 
 // Players + download buttons — the ONE renderer (shared/files-marker.js).
 const appendFiles = (el, groups) => {
     buildFilesRows(groups).forEach(row => el.appendChild(row));
-};
-
-// Question cards — the ONE renderer (shared/ask-marker.js). Live cards here
-// are locked afterwards by ui.js when a user message follows them.
-const appendAskCards = (el, cards) => {
-    buildAskCards(cards).forEach(card => el.appendChild(card));
-};
-
-// Tiles under a tool result — the ONE renderer (history + live stream share it).
-const appendGallery = (el, entries, title = '') => {
-    const gallery = buildGallery(entries, Images.openImageModal, title);
-    if (gallery) el.appendChild(gallery);
 };
 
 // Helper to add expand/collapse toggle for truncated content
@@ -846,26 +756,19 @@ const addExpandToggle = (contentEl, prefix, shortText, fullText) => {
     const toggle = document.createElement('button');
     toggle.className = 'tool-expand-toggle';
     toggle.textContent = `Show more (${(fullText.length / 1000).toFixed(1)}k chars)`;
+    // Its OWN text node, held by reference: the tool's images are prepended
+    // after this runs, so "the first child" was an <img> and the old fallback
+    // (textContent = …) wiped the pictures on the first click.
+    const textNode = document.createTextNode(contentEl.textContent);
     toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         isExpanded = !isExpanded;
-        // contentEl is the accordion-inner div, update its textContent directly
-        // But we need to preserve the toggle button, so use a text node approach
-        const textNode = contentEl.firstChild;
-        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-            textNode.textContent = prefix + (isExpanded ? fullText : shortText);
-        } else {
-            // Fallback: rebuild content
-            contentEl.textContent = prefix + (isExpanded ? fullText : shortText);
-            contentEl.appendChild(toggle);
-        }
+        textNode.textContent = prefix + (isExpanded ? fullText : shortText);
         toggle.textContent = isExpanded ? 'Show less' : `Show more (${(fullText.length / 1000).toFixed(1)}k chars)`;
     });
 
-    // Convert existing text to a text node so we can update it separately
-    const currentText = contentEl.textContent;
     contentEl.textContent = '';
-    contentEl.appendChild(document.createTextNode(currentText));
+    contentEl.appendChild(textNode);
     contentEl.appendChild(toggle);
 };
 
@@ -898,68 +801,43 @@ const renderThink = (el, seg) => {
 
 const renderProse = (el, txt, isHistoryRender, scrollCallback) => {
     if (!txt || !txt.trim()) return;
+    // The same blocks the live stream builds (shared/prose.js): a <p> per
+    // paragraph, code as its own <pre> beside them, never inside one.
+    for (const b of proseBlocks(txt)) {
+        if (b.type === 'code') { el.appendChild(createCodeBlock(b.lang, b.code)); continue; }
+        const p = el.appendChild(createElem('p'));   // in place first: fillParagraph reads its neighbour
+        fillParagraph(p, b.text, { isHistoryRender, scrollCallback });
+    }
+};
 
-    // Step 1: Extract code blocks first (before any other processing)
-    const { processed: textWithoutCode, codeBlocks } = extractCodeBlocks(txt);
-    txt = textWithoutCode;
-    
-    // Step 2: Extract image placeholders
-    const { processedContent, images } = Images.extractImagePlaceholders(txt, isHistoryRender, scrollCallback);
-    txt = processedContent;
-    
-    // Step 3: Build safe HTML replacement function
-    const safeReplaceImagePlaceholders = (content) => {
-        // processMarkdown handles escapeHtml internally
-        let result = processMarkdown(content);
-        
-        // Replace image placeholders (they survive escaping as __IMG_xxx__)
-        images.forEach(({ placeholder, imageId }) => {
-            if (result.includes(placeholder)) {
-                const img = Images.createImageElement(imageId, isHistoryRender, scrollCallback);
-                const tempDiv = document.createElement('div');
-                tempDiv.appendChild(img);
-                result = result.replace(placeholder, tempDiv.innerHTML);
-            }
-        });
-        
-        return result;
-    };
-    
-    // Step 4: Replace code block placeholders with actual elements
-    const replaceCodePlaceholders = (container) => {
-        codeBlocks.forEach(({ placeholder, language, code }) => {
-            // Find text nodes containing placeholder
-            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
-            let node;
-            while (node = walker.nextNode()) {
-                if (node.textContent.includes(placeholder)) {
-                    const codeEl = createCodeBlock(language, code);
-                    const parts = node.textContent.split(placeholder);
-                    const parent = node.parentNode;
-                    
-                    // Replace text node with: before text, code block, after text
-                    if (parts[0]) {
-                        parent.insertBefore(document.createTextNode(parts[0]), node);
-                    }
-                    parent.insertBefore(codeEl, node);
-                    if (parts[1]) {
-                        parent.insertBefore(document.createTextNode(parts[1]), node);
-                    }
-                    parent.removeChild(node);
-                    break;
-                }
-            }
-        });
-    };
-    
-    // Regular paragraphs
-    const paragraphs = txt.split(/\n\s*\n/).filter(p => p.trim());
-    
-    paragraphs.forEach(para => {
-        const p = createElem('p');
-        p.innerHTML = safeReplaceImagePlaceholders(para.trim());
-        Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
-        replaceCodePlaceholders(p);
-        el.appendChild(p);
+// One paragraph into its <p>: markdown, and <<IMG::id>> markers as real image
+// elements (placed as nodes, so their load/retry listeners live). History and
+// the live stream both fill paragraphs here. `images: false` leaves markers
+// out: the stream's still-open paragraph re-fills every chunk, and an image
+// made each time would re-fetch and re-clone (core/events.js) on every one.
+export const fillParagraph = (p, text, { isHistoryRender = false, scrollCallback = null, images = true } = {}) => {
+    const { processedContent, images: found } = Images.extractImagePlaceholders(dedent(text));
+    let html = processMarkdown(processedContent);
+    found.forEach(({ placeholder }, i) => {
+        html = html.replace(placeholder, images ? `<span data-img-slot="${i}"></span>` : '');
     });
+    p.innerHTML = html;
+    p.querySelectorAll('span[data-img-slot]').forEach(slot => {
+        slot.replaceWith(Images.createImageElement(found[+slot.dataset.imgSlot].imageId, isHistoryRender, scrollCallback));
+    });
+    continueLooseList(p);
+};
+
+// A loose list a model numbers "1." every item (blank lines between) is ONE
+// list in markdown; split into paragraphs it read 1, 1, 1. A list-only
+// paragraph that starts at 1 right after another list-only paragraph carries
+// its numbering on. An explicit "2." (a start attribute) is left alone.
+const listOnly = (p) => p?.tagName === 'P' && p.childElementCount === 1
+    && p.firstElementChild.tagName === 'OL' && p.textContent.trim() === p.firstElementChild.textContent.trim();
+const continueLooseList = (p) => {
+    const prev = p.previousElementSibling;
+    if (!listOnly(p) || !listOnly(prev)) return;
+    const ol = p.firstElementChild, before = prev.firstElementChild;
+    if (ol.hasAttribute('start')) return;
+    ol.start = (before.start || 1) + before.children.length;
 };
