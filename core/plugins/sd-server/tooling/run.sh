@@ -39,7 +39,7 @@ dl() {  # $1=url  $2=dest
     wget -q --show-progress -O "$2" "$1" || { echo "!! download failed: $1"; echo "   (401/403 -> 'huggingface-cli login'; 404 -> verify filename at the repo URL)"; rm -f "$2"; exit 1; }
 }
 dl "https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/$ZIMG_GGUF" "$MODELS/$ZIMG_GGUF"
-dl "https://huggingface.co/ffxvs/vae-flux/resolve/main/ae.safetensors" "$MODELS/$VAE_FILE"
+dl "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" "$MODELS/$VAE_FILE"   # FLUX VAE, Apache 2.0: same sha256 as the gated official copy
 dl "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf" "$MODELS/$LLM_FILE"
 
 echo "==> launching sd-server on $LISTEN_IP:$LISTEN_PORT (offload=$OFFLOAD)"

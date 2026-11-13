@@ -12,7 +12,7 @@ import { escapeHtml as esc } from '../../shared/modal.js';
 const API = '/api/wakeword';
 const FAMILY = { onnx: 'openWakeWord', tflite: 'microWakeWord' };
 const COLUMN = { onnx: 'PC', tflite: 'Satellite' };
-const SOURCE = { user: '', core: 'ships with Sapphire', builtin: "openWakeWord's own" };
+const SOURCE = { user: '', core: 'ships with Sapphire', builtin: "openWakeWord's own, CC BY-NC-SA 4.0: not for commercial use" };
 
 export default {
     id: 'wakeword',

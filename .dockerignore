@@ -1,5 +1,14 @@
 user/
 user_backups/
+user.old/
+user.old.prev/
+user_restore/
+wakeword/
+firmware/
+WORKSHOP.md
+CLAUDE-*.md
+.coverage
+.pytest_cache/
 tmp/
 claude/
 infra/

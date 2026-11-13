@@ -28,11 +28,11 @@
         "type": "select",
         "label": "Voice",
         "default": "en_US-hfc_female-medium",
-        "help": "Downloaded on first use into user/piper-voices/. Medium = better quality; low = 16kHz, faster, smaller data.",
+        "help": "Downloaded on first use into user/piper-voices/. Medium = better quality; low = 16kHz, faster, smaller data. Each voice has its own license (its MODEL_CARD on huggingface.co/rhasspy/piper-voices): HFC Female and Lessac are non-commercial; Kristin, LJSpeech and Kathleen are public domain or CC0.",
         "options": [
           {
             "value": "en_US-hfc_female-medium",
-            "label": "HFC Female — medium (default)"
+            "label": "HFC Female — medium (default; non-commercial license)"
           },
           {
             "value": "en_US-kristin-medium",
@@ -40,7 +40,7 @@
           },
           {
             "value": "en_US-lessac-medium",
-            "label": "Lessac — medium"
+            "label": "Lessac — medium (non-commercial license)"
           },
           {
             "value": "en_US-ljspeech-medium",
@@ -60,7 +60,7 @@
           },
           {
             "value": "en_US-lessac-low",
-            "label": "Lessac — low (fast, 16kHz)"
+            "label": "Lessac — low (fast, 16kHz; non-commercial license)"
           }
         ]
       },

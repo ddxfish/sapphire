@@ -295,14 +295,14 @@ class PiperTTSProvider(BaseTTSProvider):
     def list_voices(self) -> List[dict]:
         """Curated voices (the manifest dropdown). Marks which are downloaded."""
         curated = [
-            ("en_US-hfc_female-medium", "HFC Female (medium)", "American Female"),
+            ("en_US-hfc_female-medium", "HFC Female (medium, non-commercial)", "American Female"),
             ("en_US-kristin-medium", "Kristin (medium)", "American Female"),
-            ("en_US-lessac-medium", "Lessac (medium)", "American Female"),
+            ("en_US-lessac-medium", "Lessac (medium, non-commercial)", "American Female"),
             ("en_US-ljspeech-medium", "LJSpeech (medium)", "American Female"),
             ("en_US-amy-medium", "Amy (medium)", "American Female"),
             ("en_US-amy-low", "Amy (low)", "American Female"),
             ("en_US-kathleen-low", "Kathleen (low)", "American Female"),
-            ("en_US-lessac-low", "Lessac (low)", "American Female"),
+            ("en_US-lessac-low", "Lessac (low, non-commercial)", "American Female"),
         ]
         return [{"voice_id": vid, "name": nm, "category": cat,
                  "downloaded": self._model_path(vid).exists()} for vid, nm, cat in curated]

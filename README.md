@@ -232,6 +232,8 @@ A 4.5-hour playlist covering everything in Sapphire end-to-end — install, pers
 
 [AGPL-3.0](LICENSE) - Free to use, modify, and distribute. If you modify and deploy it as a service, you must share your source code changes.
 
+Third-party code, models and their licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Acknowledgments
 
 Built with:
