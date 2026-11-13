@@ -20,6 +20,7 @@ def jpeg(shade=0, side=64):
 class FakeGlass:
     def __init__(self, boards=(("kitchen", 240),), av=(), fps=5):
         self.boards, self.av, self.fps = list(boards), set(av), fps
+        self.beats, self.specs, self.lost, self.raw, self.modes, self.shown = {}, {}, {}, [], {}, {}
         self.frames, self.packets, self.cleared = [], [], []
         self.stoppers, self.claims, self.released = {}, {}, []
         self.got = threading.Event()
@@ -31,7 +32,14 @@ class FakeGlass:
         return [b for b in self.boards if b[0] in self.av]
 
     def takes(self, device_id):
-        return {"fps": self.fps}
+        return {"fps": self.beats.get(device_id, self.fps), "avatar": self.modes.get(device_id, "talking")}
+
+    def av_spec(self, device_id):
+        side = dict(self.boards).get(device_id, 240)
+        return {"w": side, "h": side, "frames": 32, "v": 1, "plays": {}, "fps": self.fps, **self.specs.get(device_id, {})}
+
+    def av_lost(self, device_id):
+        return self.lost.get(device_id, 0)
 
     def face_frame(self, device_id, data, seconds=3):
         self.frames.append((device_id, time.monotonic(), data))
@@ -40,6 +48,7 @@ class FakeGlass:
     def av_packet(self, device_id, packet, voice=True):
         n = struct.unpack(">I", packet[:4])[0]
         self.packets.append((device_id, json.loads(packet[4:4 + n]), voice))
+        self.raw.append(packet)
         self.got.set()
 
     def av_on_stop(self, device_id, fn, was=None):
@@ -54,7 +63,7 @@ class FakeGlass:
         self.claims.pop(device_id, None)
 
     def av_shown(self, device_id):
-        return True
+        return self.shown.get(device_id, True)
 
     def av_carried(self, device_id, sid):
         return bool(sid) and self.claims.get(device_id) == sid
@@ -67,10 +76,16 @@ class FakeGlass:
         self.claims.pop(device_id, None)             # as glass: the claim ends with it
 
 
+    def forget(self, device_id=None):
+        pass
+
+
 @pytest.fixture
 def glass(monkeypatch):
+    import config
     g = FakeGlass()
     monkeypatch.setattr(feed, "_glass", lambda: g)
+    monkeypatch.setattr(config, "AVATAR_FACE_SOURCE", "", raising=False)    # never chosen: the first that asks
     yield g
     for name in ("one", "two"):
         feed.release(name)
@@ -108,26 +123,53 @@ def test_a_slice_reaches_a_board_at_its_beat(glass):
     assert feed.watching() == {"boards": ["kitchen"], "av": [], "fps": 5, "open": True}
 
 
-def test_talking_screens_skip_her_idle_and_always_show_it(glass):
-    feed.register("one", screens="talking")
+def test_a_screen_set_while_she_talks_skips_her_idle_and_one_set_always_shows_it(glass):
+    glass.modes = {"kitchen": "talking"}
+    feed.register("one")
     feed.packet("one", "idle", [jpeg()], 2)
     time.sleep(0.5)
     assert glass.frames == []
-    feed.register("one", screens="always")                          # the same source again: its new mind
+    glass.modes = {"kitchen": "always"}                              # its Devices page changed
+    feed.nudge()
+    assert settle(lambda: feed._hub.modes == {"kitchen": "always"})
     feed.packet("one", "idle", [jpeg()], 2)
     assert settle(lambda: glass.frames)
 
 
-def test_off_and_no_boards_send_nothing(glass):
-    feed.register("one", screens="off")
+def test_a_screen_set_off_and_no_screens_send_nothing(glass):
+    glass.modes = {"kitchen": "off"}
+    feed.register("one")
     feed.packet("one", "speech", [jpeg()], 25)
     time.sleep(0.4)
-    assert glass.frames == [] and feed.status()["open"] is False
-    glass.boards = []
-    feed.register("one", screens="always")
+    assert glass.frames == [] and feed.status()["open"] is False and feed.watching()["boards"] == []
+    glass.modes, glass.boards = {}, []
+    feed.nudge()
     feed.packet("one", "speech", [jpeg()], 25)
     time.sleep(0.4)
     assert glass.frames == [] and feed.watching()["boards"] == []
+
+
+def test_her_idle_goes_only_to_the_screens_set_always(glass):
+    glass.boards = [("kitchen", 240), ("hall", 240), ("den", 240)]
+    glass.av = {"den"}
+    glass.modes = {"kitchen": "always", "hall": "talking", "den": "talking"}
+    feed.register("one")
+    for i in range(6):
+        feed.packet("one", "idle", [jpeg(i * 30)], 2)
+    assert settle(lambda: glass.frames)
+    time.sleep(0.5)
+    assert {d for d, _, _ in glass.frames} == {"kitchen"} and glass.packets == []   # the hall and the den rest between her lines
+
+
+def test_only_the_avatar_chosen_in_devices_is_her_face(glass, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "AVATAR_FACE_SOURCE", "two")
+    assert "two" in feed.register("one") and feed.source() is None
+    assert feed.mode_for("one") == "off"
+    assert feed.register("two") == "" and feed.source() == "two"
+    monkeypatch.setattr(config, "AVATAR_FACE_SOURCE", "off")
+    assert feed.mode_for("two") == "off"                              # its loop lets go at its next look
+    assert {"one", "two"} <= set(feed.offered())
 
 
 def test_one_stream_board_gets_voice_only_for_its_own_claimed_reply(glass):
@@ -237,8 +279,9 @@ def test_woken_boards_wait_for_a_slow_first_word_and_keep_the_claim(glass, monke
 
 def test_a_slice_that_is_not_one_is_refused_at_the_door(glass):
     import array
+    glass.modes = {"kitchen": "always"}
     feed.register("one", screens="ALWAYS", face_px="big")           # settings from anywhere
-    assert feed.status()["screens"] == "always"
+    assert settle(lambda: feed.status()["screens"] == "always")
     one = jpeg()
     for kind, frames, fps in (("speech", [one], 0), ("speech", [one], None), ("speech", [one], float("nan")),
                               ("talk", [one], 25), ("speech", [None], 25), ("speech", "abc", 25)):
@@ -298,3 +341,219 @@ def test_a_short_reply_is_made_before_its_first_slice_and_is_still_voiced(glass)
     glass.av_release(sid="r1"); glass.claims.clear()                # core: the reply is made, before a slice of it was drawn
     feed.packet("one", "speech", [], 25, pcm=b"\0\0" * 2400, sid="r1", device="kitchen")
     assert settle(lambda: glass.packets) and glass.packets[-1][2] is True
+
+
+# ── changes only, the fitter, the packet's shapes (2026-11-12) ─────────────────────
+
+def face(marks=(), w=240, h=240):
+    """Her 'face': a dark field with bright boxes (x, y, side) on it, as JPEG."""
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", (w, h), (20, 26, 36))
+    d = ImageDraw.Draw(im)
+    for x, y, side in marks:
+        d.rectangle((x, y, x + side - 1, y + side - 1), fill=(240, 200, 120))
+    b = io.BytesIO()
+    im.save(b, "JPEG", quality=95)
+    return b.getvalue()
+
+
+@pytest.fixture
+def builder(glass):
+    glass.av = {"kitchen"}
+    feed.register("one")
+    b = feed._AvBuilder(feed._hub, ("kitchen", 240))
+    yield b
+    b.close()
+
+
+def test_a_still_face_sends_nothing_and_two_far_changes_go_as_two_boxes(builder):
+    first = builder._frame(0, face([(20, 20, 32), (180, 190, 32)]))
+    assert len(first) == 1 and first[0][0]["key"] is True                       # the first is whole
+    assert builder._frame(40, face([(20, 20, 32), (180, 190, 32)])) == []      # nothing moved
+    moved = builder._frame(80, face([(36, 20, 32), (180, 206, 32)]))            # an eye and a shoulder, far apart
+    assert len(moved) == 2 and not any(e["key"] for e, _ in moved)
+    assert {e["t"] for e, _ in moved} == {80}                                   # one moment, two boxes
+    assert all(e["x"] % 16 == 0 and e["y"] % 16 == 0 and e["w"] % 16 == 0 and e["h"] % 16 == 0 for e, _ in moved)
+    assert sum(e["w"] * e["h"] for e, _ in moved) < 240 * 240 // 4              # one box round both was most of the face
+
+
+def test_a_change_over_most_of_the_face_is_a_key(builder):
+    builder._frame(0, face())
+    out = builder._frame(40, face([(0, 0, 240)]))
+    assert len(out) == 1 and out[0][0]["key"] is True
+
+
+def test_a_packet_lost_on_the_way_brings_a_key(builder, glass):
+    import numpy as np
+    builder._frame(0, face())
+    glass.claims["kitchen"] = "r"
+    head = {"kind": "speech", "sr": 24000, "sid": "r", "device": "kitchen", "taken": False, "ms": 40}
+    builder._send(time.monotonic(), dict(head), b"\0\0" * 960, [(0, face([(20, 20, 32)]))])
+    assert glass.packets[-1][1]["frames"][0]["key"] is False
+    glass.lost["kitchen"] = 1                                                   # glass dropped one, or the board asked
+    builder.next = None
+    builder._send(time.monotonic() + 1, dict(head), b"\0\0" * 960, [(0, face([(20, 36, 32)]))])
+    assert glass.packets[-1][1]["frames"][0]["key"] is True
+    assert builder.status()["lost"] == 1 and builder.status()["kbps"] > 0
+
+
+def test_her_voice_is_fitted_to_the_rate_the_board_plays(builder, glass):
+    glass.specs["kitchen"] = {"plays": {"type": "audio/wav", "rate": 16000, "channels": 1}}
+    builder.spec = builder._spec()
+    glass.claims["kitchen"] = "r"
+    head = {"kind": "speech", "sr": 24000, "sid": "r", "device": "kitchen", "taken": False, "ms": 1000}
+    builder._send(time.monotonic(), dict(head), b"\1\0" * 24000, [])
+    meta = glass.packets[-1][1]
+    assert meta["sr"] == 16000 and meta["audio"] == 2 * 16000 and "codec" not in meta     # plain PCM keeps the old head
+
+
+def ima_decode(body, block, samples):
+    """IMA ADPCM blocks (mono) to int16: the reference the boards' C decoder mirrors."""
+    steps = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97,
+             107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+             876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
+             5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623,
+             27086, 29794, 32767]
+    moves = [-1, -1, -1, -1, 2, 4, 6, 8]
+    out = []
+    for at in range(0, len(body), block):
+        blk = body[at:at + block]
+        pred = struct.unpack("<h", blk[:2])[0]
+        idx = min(88, blk[2])
+        out.append(pred)
+        for byte in blk[4:]:
+            for nib in (byte & 15, byte >> 4):
+                st = steps[idx]
+                diff = st >> 3
+                if nib & 4: diff += st
+                if nib & 2: diff += st >> 1
+                if nib & 1: diff += st >> 2
+                pred = max(-32768, min(32767, pred - diff if nib & 8 else pred + diff))
+                idx = max(0, min(88, idx + moves[nib & 7]))
+                out.append(pred)
+    return out[:samples]
+
+
+def test_ima_adpcm_on_the_stream_door_decodes_back_to_her_voice(builder, glass):
+    import numpy as np
+    glass.specs["kitchen"] = {"plays": {"type": "audio/wav", "rate": 16000, "channels": 1, "codec": "ima_adpcm"}, "v": 2}
+    builder.spec = builder._spec()
+    glass.claims["kitchen"] = "r"
+    t = np.arange(24000) / 24000
+    pcm = (0.4 * np.sin(2 * np.pi * 300 * t) * 32767).astype("<i2").tobytes()
+    head = {"kind": "speech", "sr": 24000, "sid": "r", "device": "kitchen", "taken": False, "ms": 1000}
+    builder._send(time.monotonic(), dict(head), pcm, [(0, face())])
+    raw, meta = glass.raw[-1], glass.packets[-1][1]
+    assert meta["v"] == 2 and meta["codec"] == "ima_adpcm" and meta["sr"] == 16000 and meta["samples"] == 16000
+    assert meta["audio"] < 16000 * 2 // 3                                       # about 4:1 against 16-bit
+    n = struct.unpack(">I", raw[:4])[0]
+    table = raw[4 + n:4 + n + 16 * meta["nf"]]
+    entry = struct.unpack(">HHHHHHI", table[:16])
+    assert meta["nf"] == 1 and entry[:6] == (0, 0, 0, 240, 240, 1)              # t, x, y, w, h, key
+    audio = raw[4 + n + 16 * meta["nf"]:4 + n + 16 * meta["nf"] + meta["audio"]]
+    assert raw[4 + n + 16 * meta["nf"] + meta["audio"]:][:2] == b"\xff\xd8"   # the JPEG follows the voice
+    got = np.array(ima_decode(audio, meta["block"], meta["samples"]), dtype=float)
+    want = 0.4 * np.sin(2 * np.pi * 300 * np.arange(16000) / 16000) * 32767
+    lag = int(np.argmax(np.correlate(got[2000:4000], want[2000:2100], "valid")))  # the filter's fixed delay
+    assert len(got) == 16000 and np.corrcoef(got[2000 + lag:14000 + lag], want[2000:14000])[0, 1] > 0.99
+
+
+def test_a_landscape_board_gets_her_whole_in_its_own_box(builder, glass):
+    glass.specs["kitchen"] = {"w": 320, "h": 224}
+    builder.spec = builder._spec()
+    out = builder._frame(0, face())                                             # a square source
+    assert out[0][0]["w"] == 320 and out[0][0]["h"] == 224 and out[0][0]["key"] is True
+    from PIL import Image
+    assert Image.open(io.BytesIO(out[0][1])).size == (320, 224)
+
+
+def test_each_board_takes_its_own_beat(glass):
+    glass.boards = [("pendant", 240), ("speaker", 240)]
+    glass.av = {"pendant"}
+    glass.beats = {"pendant": 12, "speaker": 3}
+    glass.claims["pendant"] = "r"
+    feed.register("one")
+    feed.wake("one", wait=2)
+    assert settle(lambda: feed._hub.fps == 12)                                  # the fastest, not the slowest
+    feed.packet("one", "speech", [jpeg(i * 9) for i in range(25)], 25, pcm=b"\0\0" * 24000, sid="r", device="pendant")
+    assert settle(lambda: glass.packets)
+    assert 11 <= len(glass.packets[-1][1]["frames"]) <= 13                      # the pendant's 12, not the speaker's 3
+
+
+def test_a_board_that_tells_gets_nothing_while_she_is_hidden_and_a_key_when_she_shows(builder, glass):
+    glass.specs["kitchen"] = {"tells": True}
+    builder.spec = builder._spec()
+    head = {"kind": "idle", "sr": 24000, "sid": "", "device": "", "taken": False, "ms": 1000}
+    builder._send(time.monotonic(), dict(head), b"", [(0, face([(20, 20, 32)]))])
+    assert len(glass.packets) == 1                                   # shown: her idle goes
+    glass.shown["kitchen"] = False                                    # her tile went (the board said so)
+    for i in range(5):
+        builder._send(time.monotonic() + i + 1, dict(head), b"", [(0, face([(20 + 16 * i, 20, 32)]))])
+    assert len(glass.packets) == 1                                    # nothing at all while hidden (no key every 2 s)
+    glass.shown["kitchen"] = True
+    builder._send(time.monotonic() + 9, dict(head), b"", [(0, face([(100, 100, 32)]))])
+    assert len(glass.packets) == 2 and glass.packets[-1][1]["frames"][0]["key"] is True   # her face here was stale: whole
+
+
+def test_cover_fills_a_tall_glass_and_crops_in_the_hub(builder, glass):
+    import numpy as np
+    from PIL import Image
+    stripe = face([(0, y, 48) for y in range(0, 512, 48)], w=512, h=512)   # a bright stripe down the left edge, 48 px wide
+    glass.specs["kitchen"] = {"w": 240, "h": 288, "fit": "contain"}      # the pendant, overscanned past its 284 rows
+    builder.spec = builder._spec()
+    shown = np.asarray(Image.open(io.BytesIO(builder._frame(0, stripe)[0][1])))
+    assert shown.shape[:2] == (288, 240) and shown[100:180, 8:16].mean() > 150   # contain: all of her, the stripe kept
+    glass.specs["kitchen"]["fit"] = "cover"
+    builder.spec, builder.last = builder._spec(), None
+    shown = np.asarray(Image.open(io.BytesIO(builder._frame(0, stripe)[0][1])))
+    assert shown.shape[:2] == (288, 240) and shown[100:180, 8:16].mean() < 80     # cover: the glass filled, her edge cropped here
+
+
+def test_a_saved_fit_reaches_a_stream_already_running(builder, glass):
+    glass.claims["kitchen"] = "r"
+    head = {"kind": "speech", "sr": 24000, "sid": "r", "device": "kitchen", "taken": False, "ms": 40}
+    builder._send(time.monotonic(), dict(head), b"\0\0" * 960, [(0, face(w=512, h=512))])
+    glass.specs["kitchen"] = {"w": 320, "h": 240, "fit": "cover"}       # the Devices page saved: the hub looked again
+    builder.respec, builder.next = True, None
+    builder._send(time.monotonic() + 1, dict(head), b"\0\0" * 960, [(0, face([(20, 20, 32)], w=512, h=512))])
+    entry = glass.packets[-1][1]["frames"][0]
+    assert entry["key"] is True and (entry["w"], entry["h"]) == (320, 240) and builder.spec["fit"] == "cover"
+
+
+def test_the_same_avatar_registering_again_keeps_her_stream(glass):
+    feed.register("one")
+    h = feed._hub
+    feed.wake("one", wait=2)
+    assert settle(lambda: h.session is not None)
+    s = h.session
+    assert feed.register("one", screens="always", fps=12) == ""
+    assert feed._hub is h and h.session is s and h.cap == 12            # kept: no screens rest, no rebuild
+
+
+def test_a_claim_lives_on_the_hub_and_survives_a_rebuilt_session(glass):
+    glass.av = {"kitchen"}
+    feed.register("one")
+    feed.wake("one", wait=2)
+    assert feed.claim("one", "kitchen", "r1")
+    h = feed._hub
+    h._rest()                                                          # the session rested before her first slice (a long think)
+    feed.packet("one", "speech", [jpeg(1)], 25, pcm=b"\0\0" * 2400, sid="r1", device="kitchen")
+    assert settle(lambda: glass.packets) and glass.packets[-1][2] is True     # the new builder voices it
+
+
+def test_face_px_registered_again_reaches_a_running_board(glass):
+    glass.av = {"kitchen"}
+    feed.register("one")
+    feed.wake("one", wait=2)
+    assert settle(lambda: feed._hub.session and "kitchen" in feed._hub.session.builders)
+    b = feed._hub.session.builders["kitchen"]
+    feed.register("one", face_px=160)
+    assert settle(lambda: b.respec is False and b.spec["w"] == 160, 3) or b._spec()["w"] == 160
+
+
+def test_mode_for_follows_the_boards_that_answered(glass):
+    glass.modes = {"kitchen": "talking"}
+    feed.register("one")
+    assert settle(lambda: feed._hub.looked is not None)
+    assert feed.mode_for("one") == "talking"                             # not the rows' strongest (an offline Always board)
+

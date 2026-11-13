@@ -59,7 +59,7 @@ function drawPage(container) {
     page = container;
     container.innerHTML = `
         <div id="dev-tabs" style="margin-bottom:14px">${renderSectionTabs(PANES, 'list')}</div>
-        <div id="dev-pane-settings" style="display:none"></div>
+        <div id="dev-pane-settings" style="display:none"><div id="dev-face" style="margin-bottom:22px"></div><div id="dev-fw"></div></div>
         <div id="dev-pane-ir" style="display:none"></div>
         <div id="dev-pane-list">
         <div class="setting-help" style="margin-bottom:12px">Machines and gadgets Sapphire can use by name. Only this page can add or change them.</div>
@@ -90,7 +90,7 @@ function drawPage(container) {
         container.querySelector('#dev-pane-list').style.display = view === 'list' ? '' : 'none';
         container.querySelector('#dev-pane-settings').style.display = view === 'settings' ? '' : 'none';
         container.querySelector('#dev-pane-ir').style.display = view === 'ir' ? '' : 'none';
-        if (view === 'settings') drawSettings(container.querySelector('#dev-pane-settings'));
+        if (view === 'settings') { drawFace(container.querySelector('#dev-face')); drawSettings(container.querySelector('#dev-fw')); }
         if (view === 'ir') mountIr(container.querySelector('#dev-pane-ir'));
     });
     container.querySelector('#dev-add-btn').addEventListener('click', () => openAdd());
@@ -113,6 +113,40 @@ function drawPage(container) {
         if (!page || !page.isConnected) { clearInterval(timer); timer = null; return; }
         if (!document.hidden && page.offsetParent) loadList();     // not while another view is up (the router only hides this one)
     }, POLL_MS);
+}
+
+// ---- settings for every device: which avatar is her face on her screens ---------------------
+// One seat: one avatar's picture goes to every screen; each screen's own Devices page says when
+// it shows her (off, while she talks, always). core/avatar_feed.py
+
+const AVATAR_NAMES = { avatar: '3D avatar', flashhead: 'FlashHead' };
+
+async function drawFace(el) {
+    let st;
+    try { st = await fetchWithTimeout(API + '/face-feed', {}, 15000); }
+    catch (e) { el.innerHTML = `<p style="color:var(--error)">Could not read her face's state: ${esc(e.message)}</p>`; return; }
+    const names = [...new Set([...(st.offered || []), ...(st.source ? [st.source] : [])])];
+    const now = st.source || (st.seat === 'off' ? 'off' : st.seat || '');
+    const opt = (v, label) => `<option value="${esc(v)}"${v === now ? ' selected' : ''}>${esc(label)}</option>`;
+    const help = !names.length ? 'No avatar is on. Turn one on in Settings > Plugins (the 3D avatar or FlashHead) and it shows here.'
+        : st.source ? `Her face goes to ${(st.boards || []).length} screen${(st.boards || []).length === 1 ? '' : 's'} now.`
+        : 'Each screen\'s own Devices page says when it shows her: off, while she talks, or always.';
+    el.innerHTML = `
+        <b style="display:block;margin-bottom:4px">Her face on screens</b>
+        <div class="setting-help" style="margin-bottom:10px">Which avatar's picture goes to the boards with a glass. One at a time.</div>
+        <div class="setting-row" style="align-items:center">
+            <div class="setting-label">Her face comes from<div class="setting-help">${esc(help)}</div></div>
+            <div class="setting-input"><select id="dev-face-source">${opt('off', 'None')}${names.map(n => opt(n, AVATAR_NAMES[n] || n)).join('')}${
+                now && now !== 'off' && !names.includes(now) ? opt(now, `${AVATAR_NAMES[now] || now} (not on now)`) : ''}${!now ? opt('', 'Not chosen') : ''}</select></div>
+        </div>`;
+    el.querySelector('#dev-face-source').addEventListener('change', async e => {
+        try {
+            await fetchWithTimeout(API + '/face-feed/source', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: e.target.value }) }, 15000);
+            showToast(e.target.value === 'off' ? 'Her face goes to no screen' : `Her face comes from ${AVATAR_NAMES[e.target.value] || e.target.value}`, 'success');
+        } catch (err) { showToast(err.message, 'error'); }
+        setTimeout(() => drawFace(el), 1500);       // the old avatar lets go and the new one takes her at their next look
+    });
 }
 
 // ---- settings for every device: where board firmware comes from -------------------------
@@ -721,6 +755,9 @@ async function openDevice(id, tab, opts = {}) {
             parts[part.driver] = {};
             for (const f of part.schema) {
                 const k = fieldKey(part.driver, f.key);
+                // a default that follows the board (default_unless) and was never set stays unset: saving brightness
+                // must not freeze "Her face here" at what this board could do today (the engine decides at use)
+                if (f.default_unless && part.values[f.key] == null && form[k] === f.default) continue;
                 if (k in form) parts[part.driver][f.key] = form[k];
             }
         }

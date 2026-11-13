@@ -5,7 +5,7 @@ sidebar draws, from a camera in front of her face, and serves what it drew as
 slices: a run of JPEG frames with the voice of the same span, the shape
 core.avatar_feed takes (screen.py reads the stream and hands them over).
 
-    GET  /health            {"status": "ready" | "starting" | "error", ...}
+    GET  /health            {"status": "ready" | "starting" | "error", "drawn_fps", ...}
     GET  /stream            packets until the reader leaves: >I head length, the head
                             (JSON: kind, fps, sr, audio, frames [sizes], sid, device,
                             taken, fresh), her voice (16-bit mono), the JPEGs
@@ -47,6 +47,9 @@ SLICE = 12                      # frames in a slice of her idle (about half a se
 TALK_SLICE = 25                 # ... and of her speech
 FADE = 0.3                      # seconds one clip blends into the next
 ATTACK, RELEASE, FOLLOW = 0.05, 0.09, 22    # her mouth, as web/mouth.js has it
+SWAY = 0.3                      # how much of her spine, neck and head's turning a board sees. Every pixel of a turn is a
+                                # whole new frame over a board's WiFi: with this and the camera riding her head, a reply
+                                # went 871 -> 410 kbps and her idle 910 -> 326 (2026-11-12). The sidebar keeps all of it.
 HERE = Path(__file__).parent
 
 _lock = threading.Lock()
@@ -56,6 +59,16 @@ _viewers = []                   # a deque per reader of /stream
 _want = {"model": "", "gain": 1.6, "rails": {}, "speaking": ""}
 _health = {"status": "starting", "phase": "waiting for her model"}
 _now = {"job": None, "flushed": False}      # the sentence being drawn; a flush since the draw thread last looked
+_drawn = collections.deque(maxlen=250)      # when each of the last frames was drawn: /health's drawn_fps
+
+
+def _nlerp(a, b, t):
+    """Between two rotations (quaternions, x y z w), t of the way: near enough to a slerp for a sway."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if np.dot(a, b) < 0:
+        b = -b
+    q = a * (1 - t) + b * t
+    return q / np.linalg.norm(q)
 
 
 def _visemes():
@@ -134,18 +147,22 @@ class Stage:
         key = gfx.DirectionalLight(intensity=2.6)
         key.local.position = (1.0, 2.5, 3.0)
         scene.add(key)
-        self.meshes, self.head = [], None
+        self.meshes, self.head, self.sway = [], None, []
 
         def walk(o):
             if isinstance(o, gfx.Mesh) and getattr(o, "morph_target_names", None):
                 self.meshes.append((o, {n: i for i, n in enumerate(o.morph_target_names)}))
             if isinstance(o, gfx.Bone) and o.name == "Head":
                 self.head = o
+            if isinstance(o, gfx.Bone) and any(k in o.name.lower() for k in ("spine", "chest", "neck", "head")):
+                self.sway.append(o)
             for c in o.children:
                 walk(c)
         walk(g.scene)
         box = g.scene.get_world_bounding_box()
         self.height = float(box[1][1] - box[0][1]) or 1.7
+        self.rest = {b: tuple(b.local.rotation) for b in self.sway}             # her bind pose: what SWAY is measured from
+        self.head_rest = tuple(self.head.world.rotation) if self.head is not None else None
         self.mixer = gfx.AnimationMixer()
         self.clips = {a.name: a for a in g.animations or []}
         self.actions, self.playing, self.once_until = {}, None, 0.0
@@ -175,8 +192,11 @@ class Stage:
 
     def frame(self, dt, mouth=None, gain=1.6):
         """One frame, dt later: RGB array."""
+        import pylinalg as la
         self.t += dt
         self.mixer.update(dt)
+        for bone, rest in self.rest.items():
+            bone.local.rotation = _nlerp(rest, bone.local.rotation, SWAY)
         self.blink_at -= dt
         if self.blink_at <= 0:
             self.blink_at, self.blink = random.uniform(2.5, 6), 0.14
@@ -196,12 +216,16 @@ class Stage:
         if self.head is not None:
             at = np.array(self.head.world.position, dtype=float)
             at[1] += 0.045 * self.height
-            # Locked to her head: on a board a face that drifts in its frame changes every pixel,
-            # so every frame goes as a whole one (215 keys to 48 regions on the pendant) and her
-            # voice shares that air. Locked, only what moves in her face is sent.
+            # Locked to her head, where it is AND how it is turned: on a board a face that drifts or
+            # turns in its frame changes every pixel, so every frame goes as a whole one (215 keys to
+            # 48 regions on the pendant for the place; the turn was most of the rest) and her voice
+            # shares that air. Locked, only what moves in her face, and her shoulders, is sent.
             self.face_at = at
-            self.camera.local.position = (self.face_at[0], self.face_at[1], self.face_at[2] + 0.62 * self.height)   # closer than the sidebar's 0.8: a board's glass is small
-            self.camera.look_at(tuple(self.face_at))
+            turn = la.quat_mul(np.asarray(self.head.world.rotation, dtype=float), la.quat_inv(np.asarray(self.head_rest, dtype=float)))
+            back = la.vec_transform_quat(np.array([0.0, 0.0, 0.62 * self.height]), turn)   # closer than the sidebar's 0.8: a board's glass is small
+            self.camera.local.position = tuple(at + back)
+            self.camera.local.rotation = turn
+        _drawn.append(time.monotonic())
         return np.asarray(self.canvas.draw())[..., :3]
 
 
@@ -342,7 +366,10 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/health":
             with _lock:
-                return self._json({**_health, "viewers": len(_viewers), "waiting": len(_jobs)})
+                now, seen = time.monotonic(), list(_drawn)
+                recent = [t for t in seen if now - t < 5]
+                drawn = round((len(recent) - 1) / (recent[-1] - recent[0]), 1) if len(recent) > 2 and recent[-1] > recent[0] else 0
+                return self._json({**_health, "viewers": len(_viewers), "waiting": len(_jobs), "drawn_fps": drawn})
         if path != "/stream":
             return self._json({"error": "no such page"}, 404)
         q = collections.deque()

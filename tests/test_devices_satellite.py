@@ -534,21 +534,21 @@ LOOKS = {'look_resting': 'sapphire heartbeat bpm=33 ceiling=0.1', 'look_listenin
 
 
 def test_the_looks_are_checked_at_save():
-    good = dict(CFG, **LOOKS, lights_from='07:00', lights_until='23:00')
+    good = dict(CFG, **LOOKS, awake_from='07:00', awake_until='23:00')
     assert sat.validate(dict(good))[1] == ''
     assert 'Listening' in sat.validate(dict(good, look_listening='yellow spin fast wobble'))[1]
     assert 'has no time' in sat.validate(dict(good, look_thinking='rainbow spin 5s'))[1]
     assert 'Night' in sat.validate(dict(good, look_night='sapphire pulse 2h'))[1]
     assert sat.validate(dict(good, look_tool='purple pulse 3s'))[1].startswith('Tool:')
-    assert 'clock times' in sat.validate(dict(good, lights_from='7pm'))[1]
-    assert sat.validate(dict(good, lights_from='', lights_until=''))[1] == ''
+    assert 'clock times' in sat.validate(dict(good, awake_from='7pm'))[1]
+    assert sat.validate(dict(good, awake_from='', awake_until=''))[1] == ''
     assert sat.validate(dict(good, look_night='sapphire pulse ceiling=0.05'))[1] == ''
 
 
 def test_a_new_satellite_rests_dark_from_midnight_to_eight():
     """One truth with the boards' built-in: the page starts where they start."""
     by = {f['key']: f for f in sat.SPEC['config_schema']}
-    assert (by['lights_from']['default'], by['lights_until']['default']) == ('08:00', '00:00')
+    assert (by['awake_from']['default'], by['awake_until']['default']) == ('08:00', '00:00')
     assert by['look_night']['default'] == 'off'
 
 

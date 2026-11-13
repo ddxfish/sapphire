@@ -229,6 +229,60 @@ def fit(audio, kind, plays):
         return None, f"Her voice could not be converted for this device ({type(e).__name__})."
 
 
+class StreamFit:
+    """What fit_pcm carries from one slice to the next for one board: the filter's last
+    input samples and where the next output sample falls, so a voice cut into seconds
+    is resampled as one (filtering each second alone clicked at every edge)."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.rates, self.hist, self.prev, self.pos = None, None, None, 0.0
+
+
+def fit_pcm(pcm, rate, plays, state):
+    """A slice of her voice (16-bit mono PCM at `rate`) for a board's stream door, in the
+    rate and codec its `plays` states: (bytes, {'sr', 'codec', 'samples', 'block'}).
+    Nothing trimmed: on that door the voice is the clock. Raises ValueError when the
+    board stated a sound this cannot make."""
+    import numpy as np
+    from core.devices.audio_codecs import encode_stream, normalize
+    want = wanted(plays) if plays else {'rate': rate, 'codec': 'pcm'}
+    if want is None:
+        raise ValueError("this board stated a sound format I cannot make")
+    to, codec = want['rate'], normalize(want['codec'])
+    pcm = bytes(pcm)[:len(pcm) // 2 * 2]
+    if to == rate and codec == 'pcm':
+        state.reset()
+        return pcm, {'sr': to, 'codec': 'pcm', 'samples': len(pcm) // 2, 'block': 0}   # already what it plays: untouched
+    x = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768.0
+    if to != rate:
+        if state.rates != (rate, to):
+            state.reset()
+            state.rates = (rate, to)
+        if to < rate:                            # what the new rate cannot carry goes first, as _resample
+            edge = 0.46 * to / rate
+            reach = 16 * int(np.ceil(rate / to))
+            n = np.arange(-reach, reach + 1)
+            taps = 2 * edge * np.sinc(2 * edge * n) * np.hamming(len(n))
+            taps /= taps.sum()
+            if state.hist is None:
+                state.hist = np.zeros(len(taps) - 1, dtype=np.float32)
+            buf = np.concatenate([state.hist, x])
+            state.hist = buf[len(buf) - (len(taps) - 1):]
+            x = np.convolve(buf, taps, mode='valid')    # one output an input: a fixed delay of `reach` samples
+        y = x if state.prev is None else np.concatenate([[state.prev], x])
+        step = rate / to
+        at = np.arange(state.pos, len(y) - 1 + 1e-9, step)
+        out = np.interp(at, np.arange(len(y)), y) if len(y) else y
+        state.pos = (at[-1] + step - (len(y) - 1)) if len(at) else state.pos - (len(y) - 1)
+        state.prev = y[-1] if len(y) else state.prev
+        x = out
+    body, block = encode_stream(np.clip(x, -1.0, 1.0), to, codec)
+    return body, {'sr': to, 'codec': codec, 'samples': int(len(x)), 'block': block}
+
+
 def duration(audio):
     """Seconds of sound in a WAV body, from its header (any codec, no decode).
     0 when it cannot be read. For a log line, not a decision."""

@@ -300,6 +300,18 @@ async def devices_face_feed(_=Depends(require_login)):
     return avatar_feed.status()
 
 
+@router.put("/api/devices/face-feed/source")
+async def devices_face_feed_source(request: Request, _=Depends(require_login)):
+    """Which avatar is her face on her screens: {"source": "<avatar>" | "off"}."""
+    _open(request, write=True)
+    from core import avatar_feed
+    source = str((await _body(request)).get("source") or "").strip()
+    if source != "off" and source not in avatar_feed.offered() and source != avatar_feed.source():
+        raise HTTPException(status_code=422, detail=f"No avatar named {source!r} is on to be her face.")
+    await asyncio.to_thread(avatar_feed.choose, source)
+    return avatar_feed.status()
+
+
 @router.get("/api/devices/here")
 async def devices_here(request: Request, _=Depends(require_login)):
     _open(request)
@@ -646,6 +658,16 @@ async def devices_chat(device_id: str, request: Request):
     from core.devices import voice
     body = await _body(request)
     return await asyncio.to_thread(voice.pick_chat, device_id, body.get('name'))
+
+
+@router.post("/api/devices/{device_id}/face/shown")
+async def devices_face_shown(device_id: str, request: Request):
+    """A board says her tile came up on its lit screen, or went: {"shown": bool} (firmware 1.0.0).
+    While she is hidden nothing of her idle crosses its air; the first frame after is a whole one."""
+    await _device_key(device_id, request, 'face-shown')
+    from core.devices import glass
+    glass.av_tell_shown(device_id, bool((await _body(request)).get('shown')))
+    return {"ok": True}
 
 
 @router.get("/api/devices/{device_id}/history")

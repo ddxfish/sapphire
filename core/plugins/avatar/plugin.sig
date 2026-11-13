@@ -14,9 +14,9 @@
     "hooks/prompt_inject.py": "sha256:561459f9b8c348165e9549561825b1efc01cc5528f2b89db35440c0cf56698e9",
     "mouth.py": "sha256:7598715dfe31c90f59bf4905e06674013b189bc15c25f8d7b839b7a0435060c0",
     "plugin.json": "sha256:9118820357be7102aed4050ab28314b1844bf1d0e953e3dae6c2dac36da7f417",
-    "render_server.py": "sha256:f1fbb18d02f7c28d81092a34de28c13fb559a1f9f6f1268f96bf3b3a1bce0f0d",
+    "render_server.py": "sha256:6484e97c283bc1a2ae1dd6c92daafd509418576d39a6449d0e8053b09dcedda9",
     "routes/api.py": "sha256:f95c848b5aaaba8229c81c6a5aa54dc297078e77f9e2df47bd5fa891ff2702f9",
-    "screen.py": "sha256:a0600c4473cdcf2b8d9a7969d3b912ac720238bc69b4f33c97776672a545d4b3",
+    "screen.py": "sha256:0a3f691c7ea833185461b51c20157c1096a01ccae1ca51f5c24ce43d2f6d7103",
     "web/camera-orbits.js": "sha256:f8fea04c3113efda2c5bda5d066a589d53e4a942f4e4cd954fd167e859d71586",
     "web/environment.js": "sha256:591e515585034d671f849bec899e70b01426fb7ea01e6a4085da4a383e8eaf99",
     "web/index.js": "sha256:5d8c13009a538b8ba8d3d186d8641374acd6f03c8e4bfe5a4df7e5b5be474c10",
@@ -34,5 +34,5 @@
     "web/stage.js": "sha256:de93699cf7830219bfbad287670ce468e78484cf1632de54f061a6b7fdc246ba",
     "web/visemes.json": "sha256:d59fd0d349b1b2fec3d70597da36d56931956e89dc8c1675af83a1a704e086ac"
   },
-  "signature": "OkzlnXD2nVCvl+WAaUAwJhEb6kgd0QaB7RdKysnXxhphQ0rjAz6OHQB+YavJoD5zBs4+1xFL8zVii27rbgwWCw=="
+  "signature": "HcHtzhtUMiho18k2BTBPKB+mlVj4KXbQ/W+fq0pgjiRkktujwD60GlUPTgnJ6/FU5xLqxH3CrqMWlJf2PriFBw=="
 }

@@ -96,6 +96,10 @@
     "short": "More places board firmware comes from: release URLs or folders, read before Sapphire's own",
     "long": "Firmware sources you added in Settings > Devices > Settings, each a release URL or a folder on this machine holding index.json and one .bin per board. They are read first, then Sapphire's own release; a board two sources have comes from the first. Firmware from a source that is not Sapphire's is someone else's code: the page says so on every board it offers."
   },
+  "AVATAR_FACE_SOURCE": {
+    "short": "Which avatar is her face on her screens",
+    "long": "Set in Settings > Devices > Settings: the avatar plugin whose picture goes to the boards with a glass (the 3D avatar, FlashHead), or off. Empty until chosen: then the first avatar that is on takes it. Each screen says on its own Devices page whether it shows her: off, while she talks, or always."
+  },
   "DEVICE_FIRMWARE_SOURCES_OFF": {
     "short": "Firmware sources that are listed but not read",
     "long": "The firmware sources switched off in Settings > Devices > Settings. A source that is off stays in the list and offers no boards. Sapphire's own release can be switched off too, for an install that runs only firmware of its own."

@@ -26,7 +26,7 @@ from pathlib import PurePosixPath
 
 logger = logging.getLogger(__name__)
 
-MAX_FIELDS = 40
+MAX_FIELDS = 64                   # the satellite reached 39 of 40 (2026-11-12): one more field and every satellite would vanish; tests keep headroom
 MAX_CAPABILITIES = 16
 CORE = 'core'                     # the owner name of a driver that ships inside core
 CORE_DRIVERS = ('satellite', 'computer', 'sapphire')     # their ids (core/devices/drivers/<id>.py): no plugin may claim one

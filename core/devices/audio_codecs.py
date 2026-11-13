@@ -47,3 +47,44 @@ def normalize(codec):
 def encode(samples, rate, channels, codec):
     """(body_bytes, content_type) for the PCM `samples` in the stated codec."""
     return _CODECS[normalize(codec)](samples, rate, channels)
+
+
+# ── the stream door (/face/packet): bare samples, no container ──────────────────
+# A packet's voice is a second of her at a time with its frames beside it, so it goes
+# bare: `pcm` = int16 little-endian, `ima_adpcm` = the WAV's IMA blocks as they are
+# (mono: int16 first sample, u8 step index, u8 0, then nibbles, low first), the last
+# block cut to the samples it holds rather than padded with silence. Every block starts
+# afresh, so a packet decodes on its own. Returns (bytes, block_align); 0 for pcm.
+
+def _riff(data, want):
+    """The body of chunk `want` in a RIFF WAV."""
+    import struct
+    i = 12
+    while i + 8 <= len(data):
+        tag, n = data[i:i + 4], struct.unpack('<I', data[i + 4:i + 8])[0]
+        if tag == want:
+            return data[i + 8:i + 8 + n]
+        i += 8 + n + (n & 1)
+    raise ValueError(f"no {want!r} chunk")
+
+
+def encode_stream(samples, rate, codec):
+    """(bytes, block_align) for mono float32 `samples` at `rate` in `codec`."""
+    import struct
+    import numpy as np
+    c = normalize(codec)
+    if c == 'pcm':
+        return (np.clip(samples, -1.0, 1.0) * 32767).astype('<i2').tobytes(), 0
+    if c != 'ima_adpcm':
+        raise ValueError(f"{c} has no stream form")
+    n = len(samples)
+    if not n:
+        return b'', 0
+    wav, _ = _CODECS[c](np.asarray(samples, dtype=np.float32).reshape(-1, 1), rate, 1)
+    block = struct.unpack('<H', _riff(wav, b'fmt ')[12:14])[0]
+    per = (block - 4) * 2 + 1                     # samples a mono block holds: the header's one + two a byte
+    blocks = -(-n // per)
+    last = n - (blocks - 1) * per
+    body = _riff(wav, b'data')[:(blocks - 1) * block + 4 + (last - 1 + 1) // 2]
+    return body, block
+

@@ -61,6 +61,7 @@
     "DEVICE_FIRMWARE_SOURCE": "https://github.com/ddxfish/sapphire-firmware/releases/latest/download/",
     "DEVICE_FIRMWARE_SOURCES": [],
     "DEVICE_FIRMWARE_SOURCES_OFF": [],
+    "AVATAR_FACE_SOURCE": "",
     "BACKUPS_EXCLUDE_PATTERNS": [],
     "BACKUPS_MAX_SIZE_WARN_MB": 2048
   },

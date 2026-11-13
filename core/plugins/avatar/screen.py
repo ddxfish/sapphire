@@ -52,11 +52,12 @@ def _state():
 
 
 def _mode():
+    """off | talking | always, as core says: off unless Settings > Devices > Settings chose this avatar
+    as her face, else the strongest mode her screens ask for (each screen's own, Devices page)."""
     try:
-        s = _state()
-        if s.get("enabled", True) is False:
+        if _state().get("enabled", True) is False:
             return "off"
-        return s.get("screens") or "off"         # off until asked for: on, it takes the feed's one seat from any other avatar
+        return _feed().mode_for(NAME)
     except Exception:
         return "off"
 
@@ -212,7 +213,7 @@ def _run():
             _wake.clear()
             _again.clear()
             continue
-        if not _ours or _again.is_set():
+        if not _ours or _again.is_set() or _feed().source() != NAME:   # the seat moved away and back behind our back (Devices picker): take it again
             _again.clear()
             if not _register():
                 _stop.wait(10)                   # another avatar is her face: ask again when it may have let go

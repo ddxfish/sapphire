@@ -967,6 +967,7 @@ class SettingsManager:
             'BACKUPS_ENABLED', 'BACKUPS_KEEP_DAILY', 'BACKUPS_KEEP_WEEKLY',
             'BACKUPS_KEEP_MONTHLY', 'BACKUPS_KEEP_MANUAL', 'BACKUPS_ENCRYPT_LOCAL', 'BACKUPS_DIR',
             'DEVICE_FIRMWARE_SOURCE', 'DEVICE_FIRMWARE_SOURCES', 'DEVICE_FIRMWARE_SOURCES_OFF',   # read when the Devices page's flasher opens
+            'AVATAR_FACE_SOURCE',     # core/avatar_feed reads it at every avatar's look
             # Setup wizard state (core/routes/setup.py) - read per request
             'SETUP_COMPLETE', 'SETUP_STEP', 'SETUP_CONSENT',
             'LAUNCHER_LLM_ADOPTED',   # core/launcher_llm.py's once-only marker

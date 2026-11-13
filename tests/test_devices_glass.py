@@ -172,7 +172,7 @@ def test_a_board_is_shown_only_what_it_says_it_takes():
     schema = {f['key']: f for f in sat.DRIVER['config_schema']} if hasattr(sat, 'DRIVER') else None
     fields = schema or {f['key']: f for f in next(v for v in vars(sat).values() if isinstance(v, dict) and 'config_schema' in v)['config_schema']}
     shown = {k for k, f in fields.items() if engine.taken(f, part)}
-    assert 'flip' in shown and 'look_night' in shown and 'lights_from' in shown
+    assert 'flip' in shown and 'look_night' in shown and 'awake_from' in shown
     assert not shown & {'brightness', 'dim', 'look_resting', 'look_thinking', 'question_max_s'}
     assert all(engine.taken(f, {}) for f in fields.values())            # a device that never said takes everything
     glass_board = {'has': ['screen', 'mic'], 'screen': {'w': 320, 'h': 240, 'format': 'rgb565be', 'brightness': 80}, 'mic': {'max_s': 30}}
@@ -342,3 +342,107 @@ def test_wanted_names_where_voice_lands_not_the_chat_view():
     class Sys: llm_chat = type('L', (), {'session_manager': SM()})()
     with patch('core.api_fastapi.get_system', return_value=Sys()), patch.object(glass, '_brain', return_value='opus'):
         assert glass.wanted({'config': {}})['chat'] == 'kitchen room'      # a chat room holds the landing: the glass says so, as the voice does
+
+
+# ── the one-stream door: what a board says it takes, and what a refusal teaches (2026-11-12) ──
+
+def test_learn_reads_the_face_box_packet_limits_and_sound():
+    plays = {'type': 'audio/wav', 'rate': 16000, 'channels': 1, 'codec': 'ima_adpcm'}
+    with patch.object(glass, '_known', {}):
+        glass._learn(ROW, {}, {}, {'w': 320, 'h': 240, 'jpeg': True, 'fps': 12, 'av': True,
+                                   'av_w': 320, 'av_h': 224, 'av_frames': 96, 'av_v': 2}, plays)
+        sp = glass.av_spec('esp')
+    assert sp == {'w': 320, 'h': 224, 'frames': 96, 'v': 2, 'plays': plays, 'fps': 12, 'tells': False, 'fit': 'contain'}
+    with patch.object(glass, '_known', {}):                                     # a board before 0.6.0 says none of it
+        glass._learn(ROW, {}, {}, {'w': 240, 'h': 284, 'jpeg': True, 'fps': 25, 'av': True})
+        sp = glass.av_spec('esp')
+    assert (sp['w'], sp['h'], sp['frames'], sp['v'], sp['plays']) == (240, 240, glass.AV_FRAMES, 1, {})
+    with patch.object(glass, '_known', {}):                                     # a box bigger than its glass: the square
+        glass._learn(ROW, {}, {}, {'w': 320, 'h': 240, 'jpeg': True, 'av': True, 'av_w': 640, 'av_h': 480})
+        assert (glass.av_spec('esp')['w'], glass.av_spec('esp')['h']) == (240, 240)
+
+
+def test_a_refused_sound_is_lost_and_asks_the_board_again():
+    import time
+    from core.devices.drivers import satellite
+    known = {**_known_board(25), 'av': True, 'door': 81, 'at': time.monotonic()}
+    refused = satellite.Problem('wrong rate')
+    refused.status = 415
+    with patch.object(glass, '_known', {'b': known}), patch.object(glass, '_av', {}), \
+         patch('core.devices.drivers.satellite._call', side_effect=refused):
+        glass.av_packet('b', b'\0' * 8)
+        s = glass._av['b']
+        for _ in range(50):
+            if s.lost:
+                break
+            time.sleep(0.02)
+        assert s.lost == 1 and s.failed == 1 and glass.av_lost('b') == 1
+        assert known['at'] == 0.0                                               # the next look asks the board, not the cache
+        s.alive = False
+
+
+def test_her_face_here_follows_the_devices_page_else_what_the_board_can_do():
+    assert glass.face_mode(None, True) == 'talking'                 # an S3 that takes her as one stream
+    assert glass.face_mode('', False) == 'off'                      # a CYD reader: a frames-only glass
+    assert glass.face_mode('Always', False) == 'always' and glass.face_mode('junk', True) == 'talking'
+    with patch.object(glass, '_known', {}):
+        glass._learn(dict(ROW, parts=[]), {'avatar': 'off'}, {}, {'w': 240, 'h': 284, 'jpeg': True, 'av': True})
+        assert glass.takes('esp')['avatar'] == 'off'
+        glass._learn(ROW, {}, {}, {'w': 320, 'h': 240, 'jpeg': True})
+        assert glass.takes('esp')['avatar'] == 'off'
+        glass.forget('esp')
+        assert 'esp' not in glass._known
+
+
+def test_a_saved_device_leaves_a_board_following_default_unset():
+    from core.devices import engine
+    from core.devices.drivers import satellite
+    field = next(f for f in satellite.SPEC['config_schema'] if f['key'] == 'avatar')
+    config, _ = engine._clean([field], {}, {})
+    assert 'avatar' not in config                                   # glass.face_mode decides from what the board takes
+    config, _ = engine._clean([field], {'avatar': 'always'}, {})
+    assert config == {'avatar': 'always'}
+
+
+def test_pictures_are_dithered_but_exact_levels_stay_exact():
+    import numpy as np
+    from PIL import Image
+    flat = Image.new('RGB', (8, 8), (255, 0, 0))
+    assert set(np.frombuffer(glass.pack565(flat), '>u2')) == {0xF800}       # a level is a level
+    assert set(np.frombuffer(glass.pack565(Image.new('RGB', (8, 8), (0, 0, 0))), '>u2')) == {0}
+    between = Image.new('RGB', (8, 8), (12, 12, 12))                          # between two 5-bit levels (8 and 16)
+    reds = {int(v) >> 11 for v in np.frombuffer(glass.pack565(between), '>u2')}
+    assert reds == {1, 2}                                                     # spread over both, not one hard step
+    ramp = Image.fromarray(np.tile(np.linspace(20, 60, 64).astype(np.uint8), (16, 1))[..., None].repeat(3, 2))
+    rows = np.frombuffer(glass.pack565(ramp), '>u2').reshape(16, 64) >> 11
+    assert rows.mean(axis=0)[0] < rows.mean(axis=0)[-1]                      # the gradient survives, as a mix
+
+
+def test_awake_hours_carry_the_light_hours_they_replaced():
+    from core.devices import engine
+    from core.devices.drivers import satellite
+    fields = [f for f in satellite.SPEC['config_schema'] if f['key'] in ('awake_from', 'awake_until')]
+    config, _ = engine._clean(fields, {}, {'lights_from': '08:00', 'lights_until': '02:00'})
+    assert config == {'awake_from': '08:00', 'awake_until': '02:00'}       # the speaker's own 02:00, not the default 00:00
+    assert satellite.awake_hours({'lights_from': '07:00', 'lights_until': '23:00'}) == ('07:00', '23:00')
+    assert satellite.awake_hours({'awake_from': '09:00', 'awake_until': '21:00', 'lights_from': '07:00'}) == ('09:00', '21:00')
+
+
+def test_a_face_box_may_overscan_its_glass_by_one_grid_step():
+    with patch.object(glass, '_known', {}):
+        glass._learn(ROW, {'avatar_fit': 'Cover'}, {}, {'w': 240, 'h': 284, 'jpeg': True, 'av': True, 'av_w': 240, 'av_h': 288})
+        sp = glass.av_spec('esp')
+    assert (sp['w'], sp['h'], sp['fit']) == (240, 288, 'cover')
+
+
+def test_the_satellite_schema_keeps_headroom_under_the_registry_cap():
+    from core.devices import registry
+    from core.devices.drivers import satellite
+    assert len(satellite.SPEC['config_schema']) <= registry.MAX_FIELDS - 10      # one field past the cap drops the driver: every satellite gone
+
+
+def test_a_board_whose_stream_found_no_room_does_not_take_her():
+    from core.devices.drivers import satellite
+    assert 'screen.av' not in satellite._takes({'screen': {'w': 240, 'h': 284, 'jpeg': True, 'av': False}})
+    assert 'screen.av' in satellite._takes({'screen': {'w': 240, 'h': 284, 'jpeg': True, 'av': True}})
+

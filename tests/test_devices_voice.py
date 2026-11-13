@@ -118,7 +118,7 @@ def test_the_satellite_driver_is_present_without_any_plugin(home):
                                           'look_listening': 'yellow spin', 'look_thinking': 'rainbow spin',
                                           'look_tool': 'purple pulse', 'look_speaking': 'cyan solid',
                                           'look_nolink': 'red pulse',
-                                          'lights_from': '08:00', 'lights_until': '00:00', 'look_night': 'off',
+                                          'awake_from': '08:00', 'awake_until': '00:00', 'look_night': 'off', 'avatar_fit': 'contain',
                                           'keep_daily': 7, 'keep_weekly': 4, 'keep_monthly': 3}}
     assert [c['capability'] for c in engine.describe(row)] == ['speaker', 'mic', 'light', 'wake', 'camera', 'power', 'storage', 'screen', 'keyboard', 'buttons', 'sensors', 'ir', 'picker']   # firmware: only a board that says it has two slots
     view = engine.public(row)
@@ -806,3 +806,36 @@ def test_a_renamed_or_deleted_chat_follows_into_the_device_settings(home):
         voice._chat_moved('kitchen-old', '')                                   # deleted: its own setting goes, voice lands where it lands
         assert engine._part(engine.get('pi2'), 'satellite')['config']['chat'] == ''
         assert sync.call_count == 2
+
+
+# ── the stream door's fitter: a voice cut into seconds, resampled as one (2026-11-12) ──
+
+def test_fit_pcm_hands_on_what_already_fits_untouched():
+    from core.devices import voice
+    pcm = bytes(range(256)) * 10
+    body, said = voice.fit_pcm(pcm, 24000, {'type': 'audio/wav', 'rate': 24000, 'channels': 1}, voice.StreamFit())
+    assert body == pcm and said == {'sr': 24000, 'codec': 'pcm', 'samples': len(pcm) // 2, 'block': 0}
+
+
+def test_fit_pcm_resamples_slices_with_no_step_at_their_edges():
+    import numpy as np
+    from core.devices import voice
+    sr, st, outs = 24000, voice.StreamFit(), []
+    sig = (0.5 * np.sin(2 * np.pi * 440 * np.arange(sr * 3) / sr) * 32767).astype('<i2')
+    for i in range(3):
+        body, said = voice.fit_pcm(sig[i * sr:(i + 1) * sr].tobytes(), sr, {'type': 'audio/wav', 'rate': 16000}, st)
+        assert said['sr'] == 16000 and said['samples'] == 16000 and len(body) == 32000
+        outs.append(np.frombuffer(body, '<i2'))
+    steps = np.abs(np.diff(np.concatenate(outs).astype(float)))
+    worst = np.percentile(steps[100:], 99.9)
+    assert steps[15999] <= worst * 1.05 and steps[31999] <= worst * 1.05     # each slice's edge is just another sample
+
+
+def test_ima_stream_cuts_the_last_block_to_the_samples_it_holds():
+    import numpy as np
+    from core.devices.audio_codecs import encode_stream
+    for n in (1, 1017, 1018, 16000):
+        body, block = encode_stream(np.zeros(n, dtype=np.float32), 16000, 'ima_adpcm')
+        per = (block - 4) * 2 + 1
+        full, last = divmod(n, per)
+        assert block == 512 and len(body) == full * block + (4 + last // 2 if last else 0)

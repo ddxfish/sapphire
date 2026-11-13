@@ -120,14 +120,30 @@ SPEC = {
         {'key': 'sleep_after_min', 'takes': 'screen.sleep_after_min', 'type': 'number', 'label': 'Sleeps after (minutes)', 'capability': 'screen',
          'default': 0, 'min': 0, 'max': 1440,
          'help': '0 = never. A board on a battery: everything off but its brain, and it goes offline here. Its BOOT key wakes it.'},
+        # her face on this glass (core/avatar_feed): Sapphire's own setting, the board never sees it. A board that
+        # takes her as one stream (an S3 with PSRAM) starts at While she talks, a frames-only glass (a CYD) at Off
+        {'key': 'avatar', 'takes': 'screen.jpeg', 'type': 'select', 'label': 'Her face here', 'capability': 'screen', 'tab': 'Avatar',
+         'default': 'talking', 'default_unless': {'takes': 'screen.av', 'value': 'off'},
+         'options': [{'value': 'off', 'label': 'Off'}, {'value': 'talking', 'label': 'While she talks'},
+                     {'value': 'always', 'label': 'Always'}],
+         'help': "Her avatar on this screen (the one Settings > Devices > Settings names). While she talks: from her "
+                 "reply's start until a few seconds after its last word. Always: her idle too, while the screen shows her "
+                 "(inside its awake hours, Power tab)."},
+        # how her picture meets this glass's shape (core/avatar_feed): the hub crops or bars it, so only what shows crosses the air
+        {'key': 'avatar_fit', 'takes': 'screen.av', 'type': 'select', 'label': 'Her face fills', 'capability': 'screen', 'tab': 'Avatar',
+         'default': 'contain',
+         'options': [{'value': 'contain', 'label': 'Contain: all of her, bars where the glass is another shape'},
+                     {'value': 'cover', 'label': 'Cover: the whole glass, her edges cropped'}],
+         'help': "Her avatar is drawn square. Contain shows all of it; Cover fills this glass and crops what does not fit "
+                 "(a FlashHead face loses more than the 3D avatar, whose camera rides her head)."},
         # the pendant from 0.1.43: the beat her face is painted on is a setting (the sender paces to it within a minute)
-        {'key': 'beat', 'takes': 'screen.beat', 'type': 'number', 'label': 'Face frames a second', 'capability': 'screen',
+        {'key': 'beat', 'takes': 'screen.beat', 'type': 'number', 'label': 'Face frames a second', 'capability': 'screen', 'tab': 'Avatar',
          'default': 25, 'min': 1, 'max': 25,
          'help': 'The beat her face is painted on. A board that takes her as one stream paints only what changed, so 12 or more holds; a board taking frames alone sustains about 7. The face server renders 25.'},
-        {'key': 'av_buffer', 'takes': 'screen.av_buffer', 'type': 'number', 'label': 'Stream slack (packets)', 'capability': 'screen',
+        {'key': 'av_buffer', 'takes': 'screen.av_buffer', 'type': 'number', 'label': 'Stream slack (packets)', 'capability': 'screen', 'tab': 'Avatar',
          'default': 2, 'min': 1, 'max': 3,
          'help': 'Packets of her voice and face held before her stream plays, about a second each. 1 starts sooner but any late packet is a hole in her voice; 2 is smooth.'},
-        {'key': 'face_lag_ms', 'takes': 'screen.face_lag_ms', 'type': 'number', 'label': 'Face sync delay (ms)', 'capability': 'screen',
+        {'key': 'face_lag_ms', 'takes': 'screen.face_lag_ms', 'type': 'number', 'label': 'Face sync delay (ms)', 'capability': 'screen', 'tab': 'Avatar',
          'default': 700, 'min': 0, 'max': 2000,
          'help': 'While her face streams to this board, her voice waits this long at the start of a reply so the two meet (her face takes the face server\'s render time). Tune by ear; 0 = no wait.'},
         {'key': 'rotation', 'takes': 'screen.rotation', 'type': 'select', 'label': 'Rotation', 'capability': 'screen', 'default': '0',
@@ -160,18 +176,28 @@ SPEC = {
          'default': 'cyan solid'},
         {'key': 'look_nolink', 'takes': 'look.nolink', 'type': 'string', 'label': 'No link to Sapphire', 'capability': 'light',
          'default': 'red pulse'},
-        {'key': 'lights_from', 'type': 'string', 'label': 'Lights on from', 'capability': 'light',
-         'default': '08:00', 'placeholder': '08:00',
-         'help': 'Outside these hours the ring shows the look below instead of resting. '
-                 'Both empty = always on. Listening, thinking and speaking show at any hour, '
-                 'and so does what she sets.'},
-        {'key': 'lights_until', 'type': 'string', 'label': 'until', 'capability': 'light',
-         'default': '00:00', 'placeholder': '00:00'},
-        {'key': 'look_night', 'takes': 'look.night', 'type': 'string', 'label': 'Outside those hours', 'capability': 'light',
+        {'key': 'look_night', 'takes': 'look.night', 'type': 'string', 'label': 'Outside awake hours', 'capability': 'light',
          'default': 'off', 'help': 'off = dark. Or something soft: sapphire pulse ceiling=0.05'},
+        # its day (1.0.0, 2026-11-12; was "Lights on from/until" on the Light tab): inside, the ring rests as set,
+        # an idle screen dims and her face lives as "Her face here" says; outside, the ring's night look, an idle
+        # screen goes dark and her face comes only with a reply. Fresh keys: lights_from/until are read as the old values
+        {'key': 'awake_from', 'was': 'lights_from', 'type': 'string', 'label': 'Awake from', 'capability': ['power', 'light'],
+         'default': '08:00', 'placeholder': '08:00',
+         'help': 'Inside these hours the ring rests as set, an idle screen dims, and her face moves on a screen set Always. '
+                 'Outside them the ring shows its night look, an idle screen goes dark, and her face comes only with a reply. '
+                 'Both the same = always awake. Listening, thinking and speaking show at any hour.'},
+        {'key': 'awake_until', 'was': 'lights_until', 'type': 'string', 'label': 'until', 'capability': ['power', 'light'],
+         'default': '00:00', 'placeholder': '00:00'},
         *KEEP_FIELDS,
     ],
 }
+
+
+def awake_hours(config):
+    """(from, until) as the board takes them: the Power tab's awake hours, or the light hours they replaced."""
+    config = config or {}
+    pick = lambda new, old: str(config.get(new) if config.get(new) is not None else config.get(old) or '')
+    return pick('awake_from', 'lights_from'), pick('awake_until', 'lights_until')
 
 SCREEN_KEYS = ('brightness', 'dim', 'dim_after_s', 'off_after_min', 'sleep_after_min', 'beat', 'face_lag_ms', 'av_buffer')
 LOOKS = ('resting', 'listening', 'thinking', 'tool', 'speaking', 'nolink', 'night')
@@ -248,10 +274,10 @@ def validate(config):
         if 'duration_s' in words:
             return config, f"{name.capitalize()}: a look has no time. Example: yellow spin bpm=60"
         config[f'look_{name}'] = text
-    for key in ('lights_from', 'lights_until'):
+    for key in ('awake_from', 'awake_until'):
         text = str(config.get(key) or '').strip()
         if text and not _CLOCK.match(text):
-            return config, f"Lights on from and until are clock times like 07:00 and 23:00, not '{text}'."
+            return config, f"Awake from and until are clock times like 07:00 and 23:00, not '{text}'."
         config[key] = text
     return config, ''
 
@@ -275,6 +301,11 @@ def _apply(device, config, secrets):
     First what needs no answer from the board: its chat is made when it is
     not one yet, and its stream is told what its buttons do now."""
     from core.devices import voice
+    try:
+        from core import avatar_feed
+        avatar_feed.nudge()                    # her face here may have changed: the hub looks again now
+    except Exception as e:
+        logger.info(f"[DEVICES] {device['id']}: the avatar feed not told of the save ({e})")
     if config.get('chat'):
         try:
             voice.chat_for(config, device['id'])
@@ -286,8 +317,7 @@ def _apply(device, config, secrets):
         voice.cue(device['id'], 'buttons', bound=jobs, **({'labels': labels} if labels else {}))
     body = {name: parse_light(config.get(f'look_{name}')) for name in LOOKS}
     body = {k: v for k, v in body.items() if v}
-    body['from'] = str(config.get('lights_from') or '')
-    body['until'] = str(config.get('lights_until') or '')
+    body['from'], body['until'] = awake_hours(config)       # the board's one day: ring, screen, her face
     try:
         _call('PUT', '/led/looks', config, secrets, json=body)
     except Missing:
@@ -462,7 +492,9 @@ def _call(method, path, config, secrets, timeout=QUICK, headers=None, keep=False
         except ValueError:
             said = None
         text = str(said or f"The satellite answered HTTP {r.status_code}.")[:300]
-        raise Missing(text) if r.status_code == 404 else Problem(text)
+        e = Missing(text) if r.status_code == 404 else Problem(text)
+        e.status = r.status_code                 # the words may be the board's own: the code says what kind of no it was
+        raise e
     return r
 
 
@@ -1010,7 +1042,7 @@ def _takes(h):
     lists none takes them all, as every board did)."""
     takes = []
     screen = h.get('screen') if isinstance(h.get('screen'), dict) else {}
-    takes += [f'screen.{k}' for k in screen if isinstance(k, str)]
+    takes += [f'screen.{k}' for k in screen if isinstance(k, str) and not (k == 'av' and not screen[k])]   # takes = CAN: an S3 whose stream found no room says av:false
     if all(k in screen for k in ('w', 'h', 'format')):
         takes.append('screen.picture')
     if 'max_s' in (h.get('mic') if isinstance(h.get('mic'), dict) else {}):
@@ -1237,15 +1269,13 @@ def rgb565(raw, width, height):
     inside width x height: (bytes, w, h). A landscape image on a portrait
     screen is turned a quarter turn so it uses the glass; the board centres
     what it gets on black."""
-    import numpy as np
     from PIL import Image, ImageOps
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
     if (img.width > img.height) != (width > height):
         img = img.transpose(Image.Transpose.ROTATE_90)
     img.thumbnail((width, height), Image.Resampling.LANCZOS)
-    a = np.asarray(img, dtype=np.uint16)
-    packed = (a[..., 0] >> 3) << 11 | (a[..., 1] >> 2) << 5 | (a[..., 2] >> 3)
-    return packed.astype('>u2').tobytes(), img.width, img.height
+    from core.devices.glass import pack565
+    return pack565(img), img.width, img.height                # dithered: a photo's smooth shades never band
 
 
 def _upright(b64, turn, width, height):

@@ -824,7 +824,7 @@ def test_the_routes_are_all_behind_login():
     import inspect
     from core.auth import require_login
     found = [r for r in routes.router.routes if r.path.startswith('/api/devices')]
-    assert len(found) == 38            # + face-feed (the avatar hub, 2026-11-10), + room, chats, chat, history (the glass, 2026-10-25), + the pick list's setup door (found/{driver}/do, 2026-10-12), + a job a board asks for (2026-10-11), + add and remove a connection, + the firmware sources (2026-10-10), + provision, here, firmware index + part, flash ports/chip/start/status/ask/close (2026-10-07), a firmware file of the user's own and a press (2026-10-09)
+    assert len(found) == 40            # + the face's source and a board's face/shown (2026-11-12), + face-feed (the avatar hub, 2026-11-10), + room, chats, chat, history (the glass, 2026-10-25), + the pick list's setup door (found/{driver}/do, 2026-10-12), + a job a board asks for (2026-10-11), + add and remove a connection, + the firmware sources (2026-10-10), + provision, here, firmware index + part, flash ports/chip/start/status/ask/close (2026-10-07), a firmware file of the user's own and a press (2026-10-09)
     assert not [r.path for r in routes.router.routes if r.path.startswith('/api/body')]
     open_doors = []
     for r in found:
@@ -835,7 +835,7 @@ def test_the_routes_are_all_behind_login():
     assert open_doors == ['/api/devices/{device_id}/wake', '/api/devices/{device_id}/voice',
                           '/api/devices/{device_id}/room',
                           '/api/devices/{device_id}/text', '/api/devices/{device_id}/press', '/api/devices/{device_id}/ask',
-                          '/api/devices/{device_id}/chats', '/api/devices/{device_id}/chat',
+                          '/api/devices/{device_id}/chats', '/api/devices/{device_id}/chat', '/api/devices/{device_id}/face/shown',
                           '/api/devices/{device_id}/history', '/api/devices/{device_id}/text',
                           '/api/devices/{device_id}/events']
 

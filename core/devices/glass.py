@@ -31,17 +31,34 @@ def _name(text, most=NAME_MAX):
     return str(text or '').encode('utf-8')[:most].decode('utf-8', 'ignore')
 
 
+# A 4x4 ordered dither (Bayer), as fractions of one step: RGB565 keeps 5 bits of red and blue and 6 of
+# green, so a smooth dark gradient steps, and where red steps where blue does not, a thin band reads
+# warmer (Krem saw one in her scene's fog on the speaker, "very slight but I can tell every time",
+# 2026-11-12). A fixed pattern spreads each step over its neighbours and repaints identically; the offset
+# is under one step, so a colour that is exactly a level (pure red, black, white) is left as it is.
+_BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+
+
+def pack565(img):
+    """A PIL RGB image as the bytes a small panel paints: RGB565 big-endian, dithered."""
+    import numpy as np
+    a = np.asarray(img, dtype=np.uint16)
+    h, w = a.shape[:2]
+    t = np.tile(np.array(_BAYER, dtype=np.uint16), (h // 4 + 1, w // 4 + 1))[:h, :w]
+    r = np.minimum(a[..., 0] + (t >> 1), 255) >> 3          # a step of 8: offsets 0..7
+    g = np.minimum(a[..., 1] + (t >> 2), 255) >> 2          # a step of 4: offsets 0..3
+    b = np.minimum(a[..., 2] + (t >> 1), 255) >> 3
+    return (r << 11 | g << 5 | b).astype('>u2').tobytes()
+
+
 def cover(raw, width, height):
     """An image cropped to fill width x height, as the bytes a small panel
     paints (RGB565 big-endian). A background fills the glass; her `picture`
     fits inside it instead (satellite.rgb565)."""
-    import numpy as np
     from PIL import Image, ImageOps
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB')
     img = ImageOps.fit(img, (width, height), Image.Resampling.LANCZOS)
-    a = np.asarray(img, dtype=np.uint16)
-    packed = (a[..., 0] >> 3) << 11 | (a[..., 1] >> 2) << 5 | (a[..., 2] >> 3)
-    return packed.astype('>u2').tobytes()
+    return pack565(img)
 
 
 BRAIN_MAX = 47                # bytes of the model's name the board keeps
@@ -340,14 +357,43 @@ def _zones(said):
     return out
 
 
-def _learn(row, config, secrets, screen):
+FACE_MODES = ('off', 'talking', 'always')   # her face on a glass: never, while she talks, or always (a Devices page field, `avatar`)
+
+
+def face_mode(said, av):
+    """A board's mode for her face: what its Devices page says, else While she talks on a board that
+    takes her as one stream (an S3 with PSRAM: the pendant) and Off on a glass that only takes frames
+    (a CYD reader: a chat and status reader first). Krem, 2026-11-12."""
+    said = str(said or '').strip().lower()
+    return said if said in FACE_MODES else ('talking' if av else 'off')
+
+
+def _int(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _learn(row, config, secrets, screen, plays=None):
     w, h = int(screen.get('w') or 0), int(screen.get('h') or 0)
     if not (screen.get('jpeg') and screen.get('on', True) and min(w, h) >= 64):
         return None
     zones = _zones(screen.get('zones'))
+    side = min(w, h) // 16 * 16
+    av_w, av_h = _int(screen.get('av_w'), side) // 16 * 16, _int(screen.get('av_h'), side) // 16 * 16
+    if not (64 <= av_w <= w + OVERSCAN and 64 <= av_h <= h + OVERSCAN):
+        av_w = av_h = side                       # a face box the glass cannot hold: the square, as every board before 0.6.0
     known = {'config': config, 'secrets': secrets, 'w': w, 'h': h, 'fps': int(screen.get('fps') or STREAM_FPS), 'at': time.monotonic(),
              'door': int(screen.get('door') or 0),       # a second port the board takes frames on, in its own task (the pendant from 0.1.45)
              'av': bool(screen.get('av')),               # takes her voice and her face as ONE stream: POST /face/packet (the pendant from 0.2.0)
+             'av_w': av_w, 'av_h': av_h,                 # the face box a packet's frames fill (0.6.0; before, the glass's square)
+             'av_frames': max(1, _int(screen.get('av_frames'), AV_FRAMES)),   # frame entries a packet may carry: past it the board refuses the packet whole
+             'av_v': _int(screen.get('av_v'), 1),        # the packet's shape: 1 = a JSON frame list, 2 = a binary frame table (avatar.h)
+             'av_tells': bool(screen.get('av_tells')),   # it says when her tile comes up or goes (face/shown): nothing is sent while she is hidden
+             'plays': plays if isinstance(plays, dict) else {},   # the sound it plays (/health plays): the stream's voice is fitted to it
+             'avatar': face_mode((config or {}).get('avatar'), screen.get('av')),   # her face here: off | talking | always (Devices page)
+             'fit': 'cover' if str((config or {}).get('avatar_fit') or '').lower() == 'cover' else 'contain',   # Devices page, Avatar tab
              'taps': bool(screen.get('taps')) and bool(zones), 'zones': zones}
     with _lock:
         _known[row['id']] = known
@@ -374,7 +420,7 @@ def _lookup(device_id):
             logger.info(f"[DEVICES] {device_id}: not answering ({e}); its glass as last known")
             return known
         raise
-    known = _learn(row, config, secrets, health.get('screen') or {})
+    known = _learn(row, config, secrets, health.get('screen') or {}, health.get('plays'))
     if not known:
         raise LookupError(f"{device_id} has no glass that takes frames (firmware 0.7.7+, its screen on)")
     return known
@@ -399,10 +445,10 @@ def stream_boards(online_only=False):
             continue
         try:
             config, secrets = part.get('config') or {}, engine._part_secrets(row['id'], 'satellite')
-            screen = satellite._health(row, config, secrets).get('screen') or {}
+            said = satellite._health(row, config, secrets)
         except Exception:
             continue
-        known = _learn(row, config, secrets, screen)
+        known = _learn(row, config, secrets, said.get('screen') or {}, said.get('plays'))
         if known:
             out.append((row['id'], known['w'], known['h'], known['fps']))
     return out
@@ -413,7 +459,8 @@ def takes(device_id):
     `taps` = a stream may own its taps (claim), `zones` the places a tap is
     named by. Raises LookupError for a board with no glass that takes frames."""
     k = _lookup(device_id)
-    return {'w': k['w'], 'h': k['h'], 'fps': k['fps'], 'max_bytes': FRAME_MAX, 'taps': k['taps'], 'zones': list(k['zones'])}
+    return {'w': k['w'], 'h': k['h'], 'fps': k['fps'], 'max_bytes': FRAME_MAX, 'taps': k['taps'], 'zones': list(k['zones']),
+            'avatar': k.get('avatar') or face_mode(None, k.get('av'))}
 
 
 def stream_frame(device_id, jpeg):
@@ -527,6 +574,8 @@ def face_frame(device_id, jpeg, seconds=3):
 # voice is in the packets. (2026-11-03: two clocks drifted however they were glued.)
 
 AV_HOLD_S = 0.25                   # a full queue: ask again this soon
+AV_FRAMES = 32                     # frame entries a packet may carry when a board states none (avatar.h AV_FRAMES_MAX before 0.6.0)
+OVERSCAN = 16                      # a face box may run this far past its glass: the 16 px grid rounded up (the pendant's 284 rows -> 288, 2 px under each curved edge)
 AV_LIVE_S = 3.0                    # a voice packet this recent: something of hers was going (av_clear's honest "Stopped"); never ownership
 _av = {}
 _av_last = {}
@@ -542,6 +591,8 @@ class _AvSender:
         self.cv = threading.Condition()
         self.alive = True
         self.sent = self.held = self.failed = 0
+        self.lost = 0                           # packets that never painted whole: dropped here, failed, or the board asked for a key. A rise = the builder sends a key
+        self.refused_rate = False               # the board said 415 once: told in the log once, not every second
         self.last_error = ''
         self.shown = True                       # the board's last answer: her tile is up on a lit screen
         self.thread = threading.Thread(target=self._run, daemon=True, name=f'glass-av-{device_id}')
@@ -551,6 +602,7 @@ class _AvSender:
         with self.cv:
             while len(self.items) > 4:              # four seconds ahead is plenty: the oldest goes
                 self.items.popleft()
+                self.lost += 1
             self.items.append(packet)
             self.cv.notify()
 
@@ -560,7 +612,8 @@ class _AvSender:
             self.items.clear()
 
     def status(self):
-        return {'sent': self.sent, 'held': self.held, 'failed': self.failed, 'queued': len(self.items), 'shown': self.shown, 'last_error': self.last_error}
+        return {'sent': self.sent, 'held': self.held, 'failed': self.failed, 'lost': self.lost, 'queued': len(self.items),
+                'shown': self.shown, 'last_error': self.last_error}
 
     def _run(self):
         from core.devices.drivers import satellite
@@ -580,12 +633,20 @@ class _AvSender:
                 r = satellite._call('POST', '/face/packet', k['config'], k['secrets'], timeout=5, data=packet,
                                     headers={'Content-Type': 'application/octet-stream'}, keep=True, port=k.get('door') or None)
             except satellite.Problem as e:
-                if '429' in str(e) or 'full' in str(e).lower():
+                if getattr(e, 'status', 0) == 429 or '429' in str(e) or 'full' in str(e).lower():
                     self.held += 1
                     time.sleep(AV_HOLD_S)
                     continue                            # the same packet, again
                 self.failed += 1
+                if getattr(e, 'status', 0) == 415:                 # it plays another rate or codec than it said a minute ago (a speaker_rate switch): ask it again now
+                    with _lock:
+                        k['at'] = 0.0                          # BEFORE the loss is counted: the builder re-reads on the count (scout)
+                self.lost += 1
                 self.last_error = str(e)[:160]
+                if getattr(e, 'status', 0) == 415:
+                    if not self.refused_rate:
+                        self.refused_rate = True
+                        logger.warning(f"[DEVICES] {self.device_id}: her stream's sound refused (415): its format is asked again")
                 with self.cv:
                     if self.items and self.items[0] is packet:
                         self.items.popleft()
@@ -593,6 +654,7 @@ class _AvSender:
                 continue
             except Exception as e:
                 self.failed += 1
+                self.lost += 1
                 self.last_error = str(e)[:160]
                 with self.cv:
                     if self.items and self.items[0] is packet:
@@ -603,6 +665,11 @@ class _AvSender:
             try:
                 ans = r.json()
                 self.shown = bool(ans.get('shown', True))
+                if not (k or {}).get('av_tells'):           # a board that tells (face/shown) is believed: an answer in flight was older than its push
+                    with _lock:
+                        _shown[self.device_id] = self.shown
+                if ans.get('need_key'):             # a region the board could not paint: its face is not ours until a key (0.6.0)
+                    self.lost += 1
                 if ans.get('stopped'):              # the board is stopped, or hears a question: it dropped her voice, and what waits here goes too (0.5.0)
                     self.drop()
             except Exception:
@@ -627,6 +694,31 @@ def av_boards():
         except Exception:
             pass
     return out
+
+
+def av_spec(device_id):
+    """What a one-stream board takes, for whoever builds its packets: {'w', 'h' (the face box),
+    'frames' (entries a packet may carry), 'v' (the packet's shape), 'plays' (its sound), 'fps'}."""
+    k = _lookup(device_id)
+    return {'w': k.get('av_w') or min(k['w'], k['h']) // 16 * 16, 'h': k.get('av_h') or min(k['w'], k['h']) // 16 * 16,
+            'frames': k.get('av_frames') or AV_FRAMES, 'v': k.get('av_v') or 1, 'plays': dict(k.get('plays') or {}), 'fps': k['fps'],
+            'tells': bool(k.get('av_tells')), 'fit': k.get('fit') or 'contain'}
+
+
+def forget(device_id=None):
+    """What glass learned of a board (or of all): its next use asks it again (a device was saved)."""
+    with _lock:
+        if device_id is None:
+            _known.clear()
+        else:
+            _known.pop(device_id, None)
+
+
+def av_lost(device_id):
+    """Packets to that board that never painted whole, so far: a rise means its face is not the one last sent."""
+    with _lock:
+        s = _av.get(device_id)
+    return s.lost if s else 0
 
 
 def av_packet(device_id, packet, voice=True):
@@ -694,11 +786,24 @@ def av_clear(device_id, upstream=True):
     return was                                  # only when something of hers was going: a stop with nothing playing is "Nothing to stop" (scouts 2026-11-05)
 
 
+_shown = {}                        # device id -> her tile is up on its lit screen: the last word, a packet's answer or the board's own push
+
+
 def av_shown(device_id):
-    """Her tile is up on that board's lit screen, as its last answer said (True until a board says otherwise)."""
+    """Her tile is up on that board's lit screen, as it last said (True until a board says otherwise)."""
     with _lock:
-        s = _av.get(device_id)
-        return s.shown if s else True
+        return _shown.get(device_id, True)
+
+
+def av_tell_shown(device_id, shown):
+    """The board says her tile came up or went (POST /api/devices/{id}/face/shown, 1.0.0): a board that
+    tells is sent nothing while she is hidden, and its first frame after is a key."""
+    device_id = str(device_id or '').strip().lower()
+    with _lock:
+        was = _shown.get(device_id)
+        _shown[device_id] = bool(shown)
+    if was != bool(shown):
+        logger.info(f"[DEVICES] {device_id}: her tile {'up' if shown else 'hidden'} (the board says)")
 
 
 def av_claim(device_id, sid):

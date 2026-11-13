@@ -454,7 +454,9 @@ def _clean(schema, incoming, previous):
             config[key] = _coerce(field, incoming[key])
         elif key in previous:
             config[key] = previous[key]
-        else:
+        elif field.get('was') and field['was'] in previous:          # a field that replaced another: its value carries over
+            config[key] = _coerce(field, previous[field['was']])
+        elif not isinstance(field.get('default_unless'), dict):   # a default that follows the board stays unset: its reader decides (glass.face_mode)
             config[key] = _coerce(field, field.get('default'))
     return config, ops
 
@@ -1050,9 +1052,16 @@ def public(row):
                 schema.append(dict(f, menu=_menu(row, part, f)))
             elif f.get('dynamic') and f.get('type') == 'select':   # its choices are this device's own (driver.options)
                 schema.append(dict(f, options=_options(row, part, f)))
+            elif isinstance(f.get('default_unless'), dict):        # a default that follows what the board takes
+                alt = f['default_unless']
+                said = part.get('takes') if isinstance(part.get('takes'), list) else []
+                schema.append(dict(f, default=f.get('default') if alt.get('takes') in said else alt.get('value')))
             else:
                 schema.append(f)
         values = dict(part.get('config') or {})
+        for f in schema:                                               # a field that replaced another shows the old value until saved
+            if f.get('was') and f['key'] not in values and f['was'] in values:
+                values[f['key']] = values[f['was']]
         unreadable = []
         for field in schema:
             if field.get('secret'):
