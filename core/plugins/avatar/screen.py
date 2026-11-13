@@ -20,7 +20,8 @@ import time
 from urllib.parse import quote
 
 import numpy as np
-import requests
+
+from core import net
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,10 @@ _voiced = False
 _ours = False
 _said = {}
 _speech = queue.Queue(maxsize=1024)   # segments on their way to the renderer, in order (a reply made whole lands at once)
-_http = requests.Session()
+# The render service is on this machine: core.net's local session never rides a
+# proxy. A bare requests session reads the proxy env, so with SOCKS on, these
+# loopback calls could be sent to the proxy and her face never reached a board.
+_http = net.session_for(BASE)
 _threads = []
 
 

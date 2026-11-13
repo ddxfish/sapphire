@@ -83,6 +83,8 @@ Click the **Personas** nav item (in the Persona group, alongside Prompts, Toolse
 
 Scope dropdowns are driven by the live scope registry, so a plugin that registers a scope shows up in the persona editor without any core change — and a persona keeps a plugin's scope binding even while that plugin is unloaded.
 
+**A scope a persona doesn't name is off.** New personas start with every scope on None, and you pick what each one gets. A scope from a plugin you turn on later is None too, until you choose. (Personas from before this rule had a missing scope read as `default`; on update Sapphire wrote that down for each of them once, so nothing they had went quiet. A copy of the file from before is kept beside it as `personas.json.pre-scope-pin.bak`.)
+
 ---
 
 ## Creating Personas
@@ -219,7 +221,7 @@ FAVORITES:
 
 ACTIVATION:
 - Loading a persona stamps its settings into the active chat
-- Scope keys reset to "default" unless the persona specifies them
+- Every scope key is stamped; one the persona doesn't name is stamped "none" (off), the same answer every reader of a persona gets
 - background and motion are always stamped (persona's value, or cleared) — nothing inherits from the previous persona
 - The chat's private flag is never changed by persona activation
 - Voice, prompt, toolset all apply immediately

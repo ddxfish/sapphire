@@ -123,7 +123,8 @@ class CredentialsManager:
         
         if CREDENTIALS_FILE.exists():
             try:
-                with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
+                # utf-8-sig: a BOM from a Notepad edit must not make every key unreadable
+                with open(CREDENTIALS_FILE, 'r', encoding='utf-8-sig') as f:
                     loaded = json.load(f)
                 if not isinstance(loaded, dict):
                     raise ValueError("the file is not a JSON object")

@@ -139,6 +139,24 @@ def _writable():
         raise HTTPException(status_code=409, detail=settings.corrupt_error)
 
 
+def _key_saved(ok):
+    """A key that did not reach the disk says so. The setters keep it in
+    memory and return False (an unreadable credentials file refuses every
+    save); three routes dropped that and answered "saved" - the key worked
+    all session and was gone at the next boot (scout hunt 2026-11-13)."""
+    if not ok:
+        from core.credentials_manager import credentials
+        raise HTTPException(status_code=409, detail=getattr(credentials, 'corrupt_error', None)
+                            or "The key could not be saved to disk (see the log).")
+
+
+def _keys_writable():
+    """Refuse BEFORE a key is put in memory while the credentials file is unreadable."""
+    from core.credentials_manager import credentials
+    if getattr(credentials, 'corrupt_error', None):
+        raise HTTPException(status_code=409, detail=credentials.corrupt_error)
+
+
 @router.post("/api/settings/reload")
 async def reload_settings(request: Request, _=Depends(require_login)):
     """Reload settings from disk."""
@@ -425,7 +443,8 @@ def _store_service_key(key, value) -> bool:
     """True when `key` is a service API key and was stored in credentials."""
     if key in _SERVICE_CRED_MAP and value and isinstance(value, str) and value.strip():
         from core.credentials_manager import credentials
-        credentials.set_service_api_key(_SERVICE_CRED_MAP[key], value.strip())
+        _keys_writable()
+        _key_saved(credentials.set_service_api_key(_SERVICE_CRED_MAP[key], value.strip()))
         return True
     return False
 
@@ -686,7 +705,8 @@ async def update_llm_provider(provider_key: str, request: Request, _=Depends(req
     api_key = data.pop('api_key', None)
     if api_key is not None and api_key.strip():
         from core.credentials_manager import credentials
-        credentials.set_llm_api_key(provider_key, api_key.strip())
+        _keys_writable()
+        _key_saved(credentials.set_llm_api_key(provider_key, api_key.strip()))
 
     # Determine if core or custom — one lock around each read-modify-write
     with _PROVIDER_MAP_LOCK:
@@ -1008,7 +1028,8 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
     api_key = data.pop('api_key', None)
     if api_key and api_key.strip():
         from core.credentials_manager import credentials
-        credentials.set_llm_api_key(name, api_key.strip())
+        _keys_writable()
+        _key_saved(credentials.set_llm_api_key(name, api_key.strip()))
     provider_config = {
         'template': template,
         'display_name': data.get('display_name', name),

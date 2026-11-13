@@ -184,3 +184,52 @@ def test_non_ephemeral_with_chat_target_uses_it():
         {"trigger_config": {"ephemeral": False}, "chat_target": "support_line"})
     assert chat == "support_line"
     assert ephemeral is False
+
+
+# ── the call's voice: one rule for the greeting and her turns (2026-11-13) ────
+
+def test_default_voice_rule_speaks_in_her_voice_as_of_this_call(monkeypatch):
+    """The caller's chat is reused between calls and kept the voice it was
+    created with: changing her voice never reached a caller who had rung before."""
+    monkeypatch.setattr(daemon, "_default_voice", lambda: "ash")
+    system = _system(existing_chats=("_phone_acct1_15551234567",))      # rang before
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567", {"trigger_config": {"ephemeral": True}})
+    assert calls["patch"]["voice"] == "ash"
+    assert calls["patch"]["tts_voice"] == ""             # a rule voice set back to default is cleared
+
+
+def test_a_rule_that_names_a_voice_keeps_it(monkeypatch):
+    monkeypatch.setattr(daemon, "_default_voice", lambda: "ash")
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567",
+                         {"trigger_config": {"ephemeral": True, "tts_voice": "af_heart"}})
+    assert calls["patch"]["tts_voice"] == "af_heart" and "voice" not in calls["patch"]
+
+
+def test_an_unreadable_default_voice_leaves_the_chats_own(monkeypatch):
+    monkeypatch.setattr(daemon, "_default_voice", lambda: "")
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567", {"trigger_config": {"ephemeral": True}})
+    assert "voice" not in calls["patch"]
+
+
+def test_the_greeting_and_her_turns_read_the_voice_the_same_way():
+    """She answered in one voice and went on in another: the greeting read the
+    call chat's tts_voice only and fell to the global voice (the web chat on
+    screen), while her turns read tts_voice, else voice."""
+    src = _DAEMON.read_text(encoding="utf-8")
+    greeting = src.split("greeting_audio = None")[1].split("greeting_audio = system.tts.generate_audio_data")[0]
+    assert '_cs.get("tts_voice") or _cs.get("voice")' in greeting
+    pump = (_DAEMON.parents[3] / "core" / "tts" / "stream_pump.py").read_text(encoding="utf-8")
+    assert '_st.get("tts_voice") or _st.get("voice")' in pump
+
+
+def test_an_outbound_call_goes_out_in_the_origin_chats_voice():
+    system = _system()
+    system.llm_chat.session_manager.read_chat_settings.return_value = {"prompt": "sapphire", "voice": "ash"}
+    calls = _capture_patch(system)
+    daemon._setup_outbound_chat(system, "acct1", "+15551234567", "", "main")
+    assert calls["patch"]["tts_voice"] == "ash"

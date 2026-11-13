@@ -352,6 +352,7 @@ class SettingsManager:
         'gemini-3.1-pro-preview': (0.65, 0.85)}
 
     _PROVIDER_MAPS = ('LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS')
+    _PROVIDER_IDENTITY = ('model', 'base_url', 'enabled', 'template')
 
     def _thin_providers(self, key, value):
         """A provider map as only what the user changed: per stock provider,
@@ -361,8 +362,16 @@ class SettingsManager:
         (lmstudio's URL, a core card's model) into settings.json, so no
         shipped change ever reached that install (scout 2026-11-08). Runtime
         overrides never persist: an lmstudio base_url equal to
-        LMSTUDIO_BASE_URL is the env's, not the user's."""
+        LMSTUDIO_BASE_URL is the env's, not the user's.
+
+        The brain itself is never taken back (Krem 2026-11-13): a model, URL,
+        on/off or template the user's file already holds stays there even when
+        it equals stock today. Thinned, the next release's stock change moved
+        that person's model under them - someone who went back to the stock
+        model, or an install whose file predates thinning. A field the file
+        never held is still only the merge's echo and stays out."""
         stock = self._defaults.get(key) or {}
+        held = self._user.get(key) if isinstance(self._user.get(key), dict) else {}
         env_lms = os.environ.get('LMSTUDIO_BASE_URL') if key == 'LLM_CUSTOM_PROVIDERS' else None
         out = {}
         for name, p in (value or {}).items():
@@ -370,7 +379,9 @@ class SettingsManager:
             if not (isinstance(p, dict) and isinstance(base, dict)):
                 out[name] = p
                 continue
-            mine = {k: v for k, v in p.items() if base.get(k, object()) != v
+            theirs = held.get(name) if isinstance(held.get(name), dict) else {}
+            mine = {k: v for k, v in p.items()
+                    if (base.get(k, object()) != v or (k in self._PROVIDER_IDENTITY and k in theirs))
                     and not (name == 'lmstudio' and k == 'base_url' and env_lms and v == env_lms)}
             out[name] = mine      # kept even when empty: the entry is still there
         return out

@@ -3,6 +3,9 @@
 Hermetic: tmp persona dir, stubbed prompt savers, fake system — nothing
 touches the real stores. Shares fixtures with test_rename_ownership.py.
 """
+import json
+import threading
+
 import pytest
 
 from test_rename_ownership import mgr, world, presets  # noqa: F401 — fixtures
@@ -507,3 +510,155 @@ def test_card_prompt_taken_keeps_existing_by_code(importer, presets, mgr):
     res = importer._install_prompt_bundle('ronnie', {'type': 'assembled', 'components': {}},
                                           None, use_existing=True)
     assert res['kept_existing'] is True
+
+
+# ── A scope a persona doesn't name is off, for every reader (hunt 2026-11-13) ──
+
+def test_get_states_every_scope_and_never_hands_out_the_record(mgr, two_scopes):
+    mgr._personas['zed']['settings']['memory_scope'] = 'zed'
+    got = mgr.get('zed')
+    assert got['settings']['memory_scope'] == 'zed'          # the record's own value wins
+    assert got['settings']['email_scope'] == 'none'          # never named: off, not 'default'
+    got['settings']['email_scope'] = 'sapphire'
+    assert 'email_scope' not in mgr._personas['zed']['settings']
+    assert mgr.get('nobody') is None
+
+
+def test_activation_stamps_none_for_a_scope_the_persona_never_named():
+    # the same answer get() gives: the old "default" here is what the editor
+    # (which showed None) then saved over a working account
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "routes" / "content.py").read_text(encoding="utf-8")
+    body = src.split("async def load_persona")[1].split("\n@router")[0]
+    assert 'settings[key] = "none"' in body and 'settings[key] = "default"' not in body
+
+
+def test_pin_writes_down_what_a_missing_scope_used_to_mean(mgr, two_scopes):
+    (mgr.USER_DIR / 'personas.json').write_text('{"before": true}')
+    (mgr.USER_DIR / mgr.PHANTOM_MARKER).write_text('done')
+    mgr._personas['zed']['settings']['email_scope'] = 'none'        # a choice: kept
+    mgr._personas['amy']['settings']['memory_scope'] = 'amy'        # a choice: kept
+    changed = mgr.pin_absent_scopes()
+    # registered scopes + the four store scopes, plugin loaded or not
+    assert changed['zed'] == ['goal_scope', 'knowledge_scope', 'memory_scope', 'people_scope']
+    assert changed['amy'] == ['email_scope', 'goal_scope', 'knowledge_scope', 'people_scope']
+    z, a = mgr._personas['zed']['settings'], mgr._personas['amy']['settings']
+    assert z['memory_scope'] == 'default' and z['email_scope'] == 'none'
+    assert a['email_scope'] == 'default' and a['memory_scope'] == 'amy'
+    assert (mgr.USER_DIR / 'personas.json.pre-scope-pin.bak').read_text() == '{"before": true}'
+    saved = json.loads((mgr.USER_DIR / 'personas.json').read_text())
+    assert saved[mgr._STATED] is True and saved['zed']['settings']['memory_scope'] == 'default'
+    # the pins are 'default' by name: the phantom release judges them again
+    assert not (mgr.USER_DIR / mgr.PHANTOM_MARKER).exists()
+    # once per file
+    del z['memory_scope']
+    assert mgr.pin_absent_scopes() is None and 'memory_scope' not in z
+
+
+def test_pin_runs_again_for_a_restored_old_file(mgr, two_scopes):
+    from core.personas.persona_manager import PersonaManager
+    assert mgr.pin_absent_scopes()
+    # an old backup restored over it: no flag in the file
+    (mgr.USER_DIR / 'personas.json').write_text(json.dumps(
+        {'old': {'name': 'old', 'settings': {'prompt': 'ronnie'}}}))
+    m2 = PersonaManager.__new__(PersonaManager)
+    m2._lock, m2.BASE_DIR, m2.USER_DIR, m2.USER_AVATARS = mgr._lock, mgr.BASE_DIR, mgr.USER_DIR, mgr.USER_AVATARS
+    m2._personas = {}
+    m2._load()
+    assert m2._scopes_stated is False
+    assert m2.pin_absent_scopes()['old'] == ['email_scope', 'goal_scope', 'knowledge_scope',
+                                             'memory_scope', 'people_scope']
+    # ...and the file it wrote is stated
+    m3 = PersonaManager.__new__(PersonaManager)
+    m3._lock, m3.BASE_DIR, m3.USER_DIR, m3.USER_AVATARS = mgr._lock, mgr.BASE_DIR, mgr.USER_DIR, mgr.USER_AVATARS
+    m3._personas = {}
+    m3._load()
+    assert m3._scopes_stated is True and m3.pin_absent_scopes() is None
+
+
+def test_a_failed_pin_save_keeps_the_pins_in_memory_and_tries_again(mgr, two_scopes, monkeypatch):
+    monkeypatch.setattr(mgr, '_save_to_user', lambda: False)
+    with pytest.raises(RuntimeError):
+        mgr.pin_absent_scopes()
+    assert mgr._personas['zed']['settings']['memory_scope'] == 'default'    # this session behaves as before
+    assert mgr._scopes_stated is False                                      # the next boot tries again
+
+
+def test_pin_never_writes_an_empty_personas_file(mgr, two_scopes):
+    mgr._personas = {}
+    assert mgr.pin_absent_scopes() is None
+    assert not (mgr.USER_DIR / 'personas.json').exists()     # an empty file would stop the next boot's seed
+
+
+def test_a_fresh_seed_is_stated(tmp_path, two_scopes):
+    from core.personas.persona_manager import PersonaManager
+    (tmp_path / 'personas.json').write_text(json.dumps(
+        {'sapphire': {'name': 'sapphire', 'settings': {'memory_scope': 'default'}}}))
+    m = PersonaManager.__new__(PersonaManager)
+    m._lock = threading.RLock()
+    m.BASE_DIR, m.USER_DIR = tmp_path, tmp_path / 'personas'
+    m.USER_AVATARS = m.USER_DIR / 'avatars'
+    m.BUILTIN_AVATARS = tmp_path / 'none'
+    m.USER_AVATARS.mkdir(parents=True)
+    m._personas = {}
+    m._load()
+    assert m._scopes_stated is True and m.pin_absent_scopes() is None
+    assert 'email_scope' not in m._personas['sapphire']['settings']      # nothing bound, nothing pinned
+    assert m.get('sapphire')['settings']['email_scope'] == 'none'
+
+
+def test_phantom_release_leaves_a_scope_whose_default_is_implicit(mgr, monkeypatch):
+    # Social reads 'default' as "the only profile": releasing it switched off
+    # a working binding
+    monkeypatch.setattr(type(mgr), '_implicit_default_scopes', staticmethod(lambda: {'social'}))
+    mgr._personas['zed']['settings'].update({'social_scope': 'default', 'email_scope': 'default'})
+    assert mgr.release_phantom_scopes({'social': ['anita'], 'email': ['work']}) == {'zed': ['email_scope']}
+    assert mgr._personas['zed']['settings']['social_scope'] == 'default'
+
+
+def test_phantom_release_does_nothing_when_the_manifests_cannot_be_read(mgr, monkeypatch):
+    def boom():
+        raise RuntimeError('no manifests')
+    monkeypatch.setattr(type(mgr), '_implicit_default_scopes', staticmethod(boom))
+    mgr._personas['zed']['settings']['email_scope'] = 'default'
+    with pytest.raises(RuntimeError):
+        mgr.release_phantom_scopes({'email': ['work']})
+    assert mgr._personas['zed']['settings']['email_scope'] == 'default'
+    assert not (mgr.USER_DIR / mgr.PHANTOM_MARKER).exists()
+
+
+def test_social_says_its_default_is_implicit():
+    from pathlib import Path
+    m = json.loads((Path(__file__).resolve().parent.parent / "core" / "plugins" / "social"
+                    / "plugin.json").read_text(encoding="utf-8"))
+    assert [d.get('implicit_default') for d in m['capabilities']['scopes'] if d['key'] == 'social'] == [True]
+
+
+def test_the_persona_editor_saves_only_what_was_touched():
+    from pathlib import Path
+    s = (Path(__file__).resolve().parent.parent / "interfaces" / "web" / "static" / "views"
+         / "personas.js").read_text(encoding="utf-8")
+    save = s.split("async function doSave()")[1].split("\n}\n")[0]
+    assert "settings: collectSettings()" not in save                      # the whole form, chosen or not
+    assert "[...keys].filter(k => k in shown)" in save
+    assert "selectedData.settings = { ...selectedData.settings, ...data.settings };" in save
+
+
+def test_duplicate_fork_stays_in_its_sources_store(mgr, presets, piece_store, monkeypatch):
+    # No origin = "a new name follows the vault's lock state": a plain persona
+    # duplicated with the vault open got a private, vault-only prompt.
+    import core.prompt_crud as crud
+    seen = []
+    real_prompt, real_piece = crud.save_prompt, crud.save_component
+    monkeypatch.setattr(crud, 'save_prompt', lambda *a, **k: (seen.append(('prompt', k.get('origin'))), real_prompt(*a, **k))[1])
+    monkeypatch.setattr(crud, 'save_component', lambda *a, **k: (seen.append(('piece', k.get('origin'))), real_piece(*a, **k))[1])
+    piece_store['character']['ronnie'] = 'I am Ronnie.'
+    assert mgr.duplicate('zed', 'Seraphina')
+    assert seen == [('piece', 'regular'), ('prompt', 'regular')]
+
+    # ...and a vault prompt's copy is a vault save, which a locked vault refuses
+    seen.clear()
+    monkeypatch.setattr(crud, 'is_vault_prompt', lambda name: True)
+    assert mgr.duplicate('zed', 'Nyx')
+    assert ('prompt', 'vault') in seen
+    assert mgr._personas['nyx']['settings']['prompt'] == 'ronnie'      # refused: the pointer is kept

@@ -273,6 +273,14 @@ class StreamingTTSPump:
             return self.provider is not None
         return bool(getattr(config, "TTS_ENABLED", False) and self.provider is not None)
 
+    def _unheard(self) -> bool:
+        """Would this pump's audio reach nobody? It plays here, the switch
+        is off, and no plugin listens for the chunks (their text or audio)."""
+        if not self._plays_here or getattr(config, "TTS_LOCAL_PLAYBACK", True):
+            return False
+        from core.hooks import hook_runner
+        return not (hook_runner.has_handlers("tts_chunk_audio") or hook_runner.has_handlers("tts_chunk_text"))
+
     def push(self, text: str) -> list:
         """Push LLM content text; return SSE event dicts to yield."""
         if not self.enabled or not text or self._closed or self._skip_turn:
@@ -292,6 +300,18 @@ class StreamingTTSPump:
                 self._skip_turn = True
                 self._closed = True
                 return [{"type": "notice", "severity": "warning", "message": _gate}]
+            # A WHOLE reply nobody would get: it plays here, "Play speech
+            # here" is off, and no plugin takes the chunks. Not asked of the
+            # engine. The blob lane this pump replaced (2026-11-10) answered
+            # before it called the engine; the pump then made every reply
+            # anyway - a cloud voice was billed, and her words left the box,
+            # for speech that was dropped (scout hunt 2026-11-13). A streamed
+            # reply is still made, as Settings > Voice says.
+            if self._whole and self._unheard():
+                logger.info("[TTS-STREAM] whole reply not made: speech is not played here and no plugin takes it")
+                self._skip_turn = True
+                self._closed = True
+                return []
         out: list = []
         if not self._stream_started:
             self._stream_started = True

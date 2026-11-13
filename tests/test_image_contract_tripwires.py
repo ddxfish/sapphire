@@ -66,7 +66,8 @@ def test_no_sdxl_proxy_in_the_frontend():
 
 def test_only_the_core_lanes_read_the_disk_fallback_dir():
     allowed = {'core/chat/chat_tool_calling.py', 'core/images.py',
-               'core/routes/media.py'}          # /api/tool-image/ serves the disk fallback
+               'core/routes/media.py',          # /api/tool-image/ serves the disk fallback
+               'core/chat/history.py'}          # names the SQL TABLE tool_images (vault delete), never the dir
     hits = {p.relative_to(ROOT).as_posix() for p in _py_files()
             if 'tool_images' in p.read_text(encoding='utf-8', errors='replace')
             and re.search(r'["\']tool_images["\']', p.read_text(encoding='utf-8', errors='replace'))}

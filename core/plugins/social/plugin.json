@@ -27,7 +27,8 @@
         "data_key": "profiles",
         "value_field": "name",
         "name_field": "name",
-        "label_template": "{label}"
+        "label_template": "{label}",
+        "implicit_default": true
       }
     ],
     "routes": [

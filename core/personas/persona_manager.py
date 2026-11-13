@@ -67,6 +67,7 @@ class PersonaManager:
         self.BUILTIN_AVATARS = project_root / "interfaces" / "web" / "static" / "personas" / "avatars"
 
         self._personas = {}
+        self._scopes_stated = False     # see pin_absent_scopes
         self._lock = threading.Lock()
 
         try:
@@ -92,6 +93,7 @@ class PersonaManager:
                 with open(user_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 self._personas = {k: v for k, v in data.items() if not k.startswith('_')}
+                self._scopes_stated = bool(data.get(self._STATED))
                 logger.info(f"Loaded {len(self._personas)} personas")
                 return
             except Exception as e:
@@ -140,6 +142,7 @@ class PersonaManager:
             self._seed_avatar(persona.get('avatar'))
 
         if self._personas:
+            self._scopes_stated = True      # a fresh seed has nothing older to keep
             self._save_to_user()
             logger.info(f"First run — seeded {len(self._personas)} personas from defaults")
         else:
@@ -164,6 +167,8 @@ class PersonaManager:
         try:
             self.USER_DIR.mkdir(parents=True, exist_ok=True)
             data = {"_comment": "Your personas"}
+            if self._scopes_stated:
+                data[self._STATED] = True
             data.update(self._personas)
             tmp_path = user_path.with_suffix('.tmp')
             with open(tmp_path, 'w', encoding='utf-8') as f:
@@ -181,7 +186,16 @@ class PersonaManager:
         return self._personas.copy()
 
     def get(self, name: str) -> dict | None:
-        return self._personas.get(name)
+        """One persona with every scope stated: a scope its record doesn't name
+        is off ('none'), for every reader alike - activation, new-chat defaults,
+        tasks, room seats, agents, the editor. They used to disagree: activation
+        filled a missing key with 'default' while the editor showed None and
+        saved it, so an untouched Sapphire lost her email at the first edit
+        (scout hunt 2026-11-13). A copy: the record changes through update()."""
+        p = self._personas.get(name)
+        if not isinstance(p, dict):
+            return p
+        return {**p, "settings": {**_scopes_off(), **(p.get("settings") or {})}}
 
     def exists(self, name: str) -> bool:
         return name in self._personas
@@ -370,8 +384,16 @@ class PersonaManager:
         (no prompt, a sentinel, or one the locked vault hides)."""
         if not src or src in ("default", "__story__"):
             return None
-        from core import prompt_crud as pc
+        from core import prompt_crud as pc, prompt_vault
         from core.prompt_manager import prompt_manager
+        # The fork lives where its source lives, decided BEFORE the text is
+        # read. With no origin a new name follows the vault's lock state: a
+        # plain persona duplicated while the vault was open got a private,
+        # vault-only prompt (local models only, no card export, asleep at the
+        # next lock), and a vault prompt whose vault idle-locked mid-fork
+        # would have been written out in plaintext (scout hunt 2026-11-13).
+        # 'vault' is refused once the vault is locked: the pointer is kept.
+        origin = 'vault' if pc.is_vault_prompt(src) else 'regular'
         data = pc.get_prompt(src)
         if not data:
             return None
@@ -390,18 +412,23 @@ class PersonaManager:
         else:
             comps = dict(data["components"])
             char = comps.get("character")
+            piece_origin = 'vault' if (isinstance(char, str)
+                                       and prompt_vault.vault_has_piece("character", char)
+                                       and char not in prompt_manager._components.get("character", {})) \
+                else 'regular'
             text = prompt_manager.components.get("character", {}).get(char) \
                 if isinstance(char, str) else None
             if isinstance(text, str):
                 piece = free(lambda k: pc.piece_key_problem("character", k))
                 if piece and pc.save_component("character", piece, text,
-                                               reason=f"copied from '{char}' for '{base}'")[0]:
+                                               reason=f"copied from '{char}' for '{base}'",
+                                               origin=piece_origin)[0]:
                     comps["character"] = piece
                 else:
                     piece = None
             new["components"] = comps
         ok, msg = pc.save_prompt(name, new, allow_overwrite=False,
-                                 reason=f"forked from '{src}' for persona '{base}'")
+                                 reason=f"forked from '{src}' for persona '{base}'", origin=origin)
         if not ok:
             logger.warning(f"Duplicate kept the shared prompt '{src}': {msg}")
             if piece:
@@ -433,6 +460,66 @@ class PersonaManager:
             self._vault_ref_sync(settings.get("prompt"), None)
         return ok
 
+    # === One-time: scopes a persona never named ===
+
+    _STATED = "_scopes_stated"      # top-level flag in personas.json
+    _scopes_stated = False          # class default: test doubles skip __init__
+
+    def pin_absent_scopes(self) -> dict | None:
+        """Once per personas file: write down, as 'default', every scope a
+        persona doesn't name. Until 2026-11-13 a missing key MEANT 'default'
+        (activation filled it in); from here it means off (get()). This keeps
+        what each existing persona had before the meaning changed - nobody's
+        memory or accounts go quiet on update.
+
+        The four store scopes are pinned whether or not their plugin loaded
+        this boot: her memory must not ride on one bad boot. Account scopes
+        are pinned for the plugins that are on; one enabled later starts off.
+        The file itself carries the flag, so an old backup restored later is
+        pinned again. Call after plugins registered their scopes. Backs up
+        personas.json first. Returns {persona: [keys]} written, or None when
+        the file was already stated."""
+        if self._scopes_stated or not self._personas:
+            return None     # nothing loaded: writing an empty file would stop the next boot's seed
+        from core.chat.function_manager import scope_setting_keys
+        keys = sorted(set(scope_setting_keys()) | {f"{k}_scope" for k in self._STORE_SCOPES})
+        changed = {}
+        with self._lock:
+            for name, p in self._personas.items():
+                if not isinstance(p, dict):
+                    continue
+                st = p.get("settings") if isinstance(p.get("settings"), dict) else {}
+                missing = [k for k in keys if k not in st]
+                if missing:
+                    changed[name] = missing
+            if changed:
+                src = self.USER_DIR / "personas.json"
+                bak = src.with_name("personas.json.pre-scope-pin.bak")
+                if src.exists() and not bak.exists():       # the oldest copy is the one to keep
+                    shutil.copy2(src, bak)
+                for name, missing in changed.items():
+                    p = self._personas[name]
+                    if not isinstance(p.get("settings"), dict):
+                        p["settings"] = {}
+                    for k in missing:
+                        p["settings"][k] = 'default'
+            self._scopes_stated = True
+            if not self._save_to_user():
+                # Memory keeps the pins (this session behaves as before); the
+                # file has no flag, so the next boot tries again.
+                self._scopes_stated = False
+                raise RuntimeError("personas.json save failed")
+            if changed:
+                # The pins are 'default' by name; where no such account exists
+                # the one-time release below turns them off, so it runs again.
+                try:
+                    (self.USER_DIR / self.PHANTOM_MARKER).unlink(missing_ok=True)
+                except OSError as e:
+                    logger.warning(f"[PERSONAS] could not clear the phantom-release marker: {e}")
+        if changed:
+            logger.warning(f"[PERSONAS] wrote down scopes that were implied 'default': {changed}")
+        return changed
+
     # === One-time: phantom 'default' scopes ===
 
     # Scopes where 'default' is a real bucket memories land in (created on
@@ -452,10 +539,11 @@ class PersonaManager:
         marker = self.USER_DIR / self.PHANTOM_MARKER
         if marker.exists():
             return None
+        implicit = self._implicit_default_scopes()      # raises: nothing is released on a guess
         changed, judged = {}, False
         with self._lock:
             for key, values in (lists or {}).items():
-                if key in self._STORE_SCOPES or not values:
+                if key in self._STORE_SCOPES or key in implicit or not values:
                     continue
                 judged = True                # a real list came back for this scope
                 if 'default' in values:
@@ -467,9 +555,9 @@ class PersonaManager:
                         changed.setdefault(name, []).append(setting)
             if changed:
                 src = self.USER_DIR / "personas.json"
-                if src.exists():
-                    import shutil
-                    shutil.copy2(src, src.with_name("personas.json.pre-scope-release.bak"))
+                bak = src.with_name("personas.json.pre-scope-release.bak")
+                if src.exists() and not bak.exists():       # a second run keeps the first copy
+                    shutil.copy2(src, bak)
                 for name, keys in changed.items():
                     for k in keys:
                         self._personas[name]["settings"][k] = 'none'
@@ -484,6 +572,22 @@ class PersonaManager:
         if changed:
             logger.warning(f"[PERSONAS] released phantom 'default' scopes: {changed}")
         return changed
+
+    @staticmethod
+    def _implicit_default_scopes() -> set:
+        """Scope keys where 'default' works with no account of that name -
+        the plugin says so with "implicit_default": true on its scope. Social
+        reads it as "the only profile", so releasing it switched off a
+        working binding (scout hunt 2026-11-13). Not caught on purpose: if
+        the manifests can't be read, the release must not run."""
+        from core.plugin_loader import plugin_loader
+        out = set()
+        for info in list(plugin_loader._plugins.values()):
+            caps = ((info or {}).get("manifest") or {}).get("capabilities") or {}
+            for d in caps.get("scopes") or []:
+                if isinstance(d, dict) and d.get("implicit_default") and d.get("key"):
+                    out.add(d["key"])
+        return out
 
     # === Avatar ===
 

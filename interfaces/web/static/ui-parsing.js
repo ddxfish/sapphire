@@ -7,6 +7,7 @@ import { parseAskMarker, buildAskCards } from './shared/ask-marker.js';
 import { parseStageMarker, buildStageCards } from './shared/stage-marker.js';
 import { thinkSegments, stripThink, isSeedThink } from './shared/think.js';
 import { proseBlocks, dedent } from './shared/prose.js';
+import { inlineMarkdown as processInlineMarkdown } from './shared/inline-md.js';
 import { errWords } from './shared/fetch.js';
 
 let globalThinkCounter = 0;
@@ -394,56 +395,9 @@ const parseList = (items) => {
     return buildList(0, 0).html;
 };
 
-// Process inline markdown elements
-// A value going inside "…" in an attribute. escapeHtml (textContent→innerHTML)
-// escapes & < > but NOT quotes: `![x" onerror="…"](https://…)` closed the
-// attribute and ran a handler in the user's tab - any text reaching the
-// renderer (her reply after a prompt injection, a room guest, a pasted line)
-// could do it (UI scout, 2026-11-12).
-const attr = (s) => s.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-
-const processInlineMarkdown = (html) => {
-    // Checkboxes: [x] or [X] = checked, [ ] = unchecked - never the start of a
-    // link: "[X](https://x.com/…)" drew a ticked box and a raw url
-    html = html.replace(/\[x\](?!\s*\()/gi, '<input type="checkbox" checked disabled>');
-    html = html.replace(/\[ \](?!\s*\()/g, '<input type="checkbox" disabled>');
-    
-    // Bold+italic: ***text*** or ___text___
-    html = html.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
-    html = html.replace(/___([^_]+)___/g, '<strong><em>$1</em></strong>');
-    
-    // Bold: **text** or __text__
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-    
-    // Italic: *text* or _text_
-    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    html = html.replace(/(?<![a-zA-Z0-9])_([^_]+)_(?![a-zA-Z0-9])/g, '<em>$1</em>');
-    
-    // Strikethrough: ~~text~~
-    html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-    
-    // Inline code: `code`, or ```code``` on one line (never a block: shared/prose.js)
-    html = html.replace(/(`{1,3})([^`\n]+)\1/g, '<code>$2</code>');
-    
-    // Images: ![alt](url) - MUST be before links
-    // Balanced parens in URL for Wikipedia etc, tolerates space between ] and (
-    html = html.replace(/!\[([^\]]*)\]\s*\(([^()]*(?:\([^)]*\)[^()]*)*)\)/g, (m, alt, url) => {
-        url = url.trim().replace(/ /g, '%20');
-        if (/^https?:\/\//i.test(url)) return `<img src="${attr(url)}" alt="${attr(alt)}" class="chat-img" referrerpolicy="no-referrer" loading="lazy">`;
-        return m;
-    });
-
-    // Links: [text](url) - allow http(s), mailto, and local paths starting with /
-    html = html.replace(/\[([^\]]+)\]\s*\(([^()]*(?:\([^)]*\)[^()]*)*)\)/g, (m, text, url) => {
-        url = url.trim().replace(/ /g, '%20');
-        if (/^(https?:\/\/|mailto:)/i.test(url)) return `<a href="${attr(url)}" target="_blank" rel="noopener">${text}</a>`;
-        if (/^\/[a-zA-Z]/.test(url)) return `<a href="${attr(url)}" target="_blank" rel="noopener">${text}</a>`;
-        return m;
-    });
-    
-    return html;
-};
+// Inline markdown (bold, code, images, links) lives in shared/inline-md.js:
+// pure string work with its own corpus, and the one place a tag's attributes
+// are built from chat text.
 
 // Check if element contains only images and whitespace/br (no text content)
 const isImageOnly = (el) => {

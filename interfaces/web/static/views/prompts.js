@@ -1305,7 +1305,9 @@ async function duplicatePrompt() {
     try {
         const data = { ...selectedData };
         delete data.name;
-        await savePrompt(name.trim(), data, { create: true });
+        // the copy of a vault prompt says so: unstamped, a vault that locked
+        // while this editor still held the text wrote the copy out in plaintext
+        await savePrompt(name.trim(), promptSaveData(selected, data), { create: true });
         selected = name.trim();
         openAccordion = null;
         editTarget = {};

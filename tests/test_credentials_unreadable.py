@@ -35,3 +35,31 @@ def test_a_reload_of_a_broken_file_keeps_what_was_loaded(tmp_path):
         assert cm.corrupt_error
         assert cm._credentials['llm']['claude']['api_key'] == 'sk-good'
         assert f.read_text(encoding='utf-8') == '{"llm": '
+
+
+def test_a_bom_does_not_make_the_keys_unreadable(tmp_path):
+    for cm, f in _manager(tmp_path, '﻿{"llm": {"claude": {"api_key": "sk-good"}}}'):
+        assert cm.corrupt_error is None
+        assert cm._credentials['llm']['claude']['api_key'] == 'sk-good'
+
+
+def test_key_routes_refuse_while_the_file_is_unreadable():
+    # "saved" for a key the disk refused: it worked all session and was gone
+    # at the next boot (scout hunt 2026-11-13)
+    import pytest
+    from fastapi import HTTPException
+    import core.api_fastapi  # noqa: F401 - the route modules import through it
+    import core.routes.settings as rs
+    from core.credentials_manager import credentials
+    with patch.object(credentials, 'corrupt_error', 'keys unreadable'), \
+         patch.object(credentials, 'set_service_api_key') as setter:
+        with pytest.raises(HTTPException) as e:
+            rs._store_service_key('EMBEDDING_API_KEY', 'sk-x')
+        assert e.value.status_code == 409 and e.value.detail == 'keys unreadable'
+        setter.assert_not_called()                  # not even in memory
+    with pytest.raises(HTTPException) as e:
+        rs._key_saved(False)                        # any other failed write
+    assert e.value.status_code == 409
+    src = open(rs.__file__, encoding='utf-8').read()
+    assert src.count('_key_saved(credentials.set_') == 3
+    assert '        credentials.set_llm_api_key(' not in src      # a bare call drops the answer

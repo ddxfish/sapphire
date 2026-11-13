@@ -304,6 +304,17 @@ def place_call(to_number, to_name, goal, origin_chat, ephemeral=True,
                   f"call, which runs in {where}. Goal noted: {goal}")
 
 
+def _default_voice():
+    """Her default voice right now: the new-chat defaults (the default persona
+    on top), checked against the voice engine that is on. '' when it can't be read."""
+    try:
+        from core.chat.history import get_user_defaults
+        return str(get_user_defaults().get("voice") or "").strip()
+    except Exception as e:
+        logger.warning(f"[TWILIO] default voice unreadable ({e}); the call chat keeps its own")
+        return ""
+
+
 def _setup_outbound_chat(system, scope, to_number, prompt, origin_chat,
                          provider=None, memory=False):
     """Fresh per-call side chat, marked for the ephemeral reaper.
@@ -337,8 +348,10 @@ def _setup_outbound_chat(system, scope, to_number, prompt, origin_chat,
             patch["prompt"] = prompt                    # explicit per-call persona
         elif origin.get("prompt"):
             patch["prompt"] = origin["prompt"]          # inherit who she is
-        if origin.get("tts_voice"):
-            patch["tts_voice"] = origin["tts_voice"]    # and how she sounds
+        # ...and how she sounds: the origin chat's voice, as of this call. Only
+        # its `tts_voice` used to ride, which an ordinary chat never sets: she
+        # went out in whatever voice the side chat was first created with.
+        patch["tts_voice"] = str(origin.get("tts_voice") or origin.get("voice") or "").strip()
         acct = credentials.get_twilio_account(scope)
         if provider:
             patch["llm_primary"] = provider             # per-call choice wins
@@ -557,9 +570,14 @@ def _on_call(scope, caller, session):
         try:
             _voice = ((task or {}).get("trigger_config", {}).get("tts_voice") or "").strip() or None
             if not _voice:
-                # Outbound (and rule-less) greetings speak in the call chat's voice.
+                # The call chat's voice, by the SAME rule her turns use
+                # (core/tts/stream_pump: tts_voice, else voice). Reading only
+                # tts_voice left a default-voice rule's greeting to the global
+                # voice - whatever the web chat on screen last set - so she
+                # answered in one voice and went on in another (2026-11-13).
                 try:
-                    _voice = (system.llm_chat.session_manager.read_chat_settings(chat) or {}).get("tts_voice") or None
+                    _cs = system.llm_chat.session_manager.read_chat_settings(chat) or {}
+                    _voice = _cs.get("tts_voice") or _cs.get("voice") or None
                 except Exception:
                     _voice = None
             greeting_audio = system.tts.generate_audio_data(greeting, voice=_voice)
@@ -831,8 +849,17 @@ def _resolve_chat(system, scope, caller, task):
                 patch[_sk] = (task or {}).get(_sk) or safe
         except Exception as _se:
             logger.warning(f"[TWILIO] scope isolation fallback failed ({_se})")
-        if tc.get("tts_voice"):                     # rule's voice -> per-stream TTS
-            patch["tts_voice"] = tc["tts_voice"]
+        # The call's voice (Krem 2026-11-13). A rule that names one speaks in it
+        # (per-stream TTS). A rule on "default" speaks in her default voice AS OF
+        # THIS CALL: the caller's chat is reused between calls and kept the voice
+        # it was created with, so changing her voice never reached a caller who
+        # had rung before. Always written: a rule voice later set back to
+        # default used to stay on the chat.
+        patch["tts_voice"] = (tc.get("tts_voice") or "").strip()
+        if not patch["tts_voice"]:
+            _dv = _default_voice()
+            if _dv:
+                patch["voice"] = _dv
         _to = _llm_timeout()
         if _to > 0:
             # Snappy provider read deadline for call turns — rides chat settings

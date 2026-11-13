@@ -378,22 +378,46 @@ def _pinned(key, model, cfg, private, timeout, health, require_images, conversat
     return Selection(key, provider, model)
 
 
+def _adopt_launcher():
+    try:
+        from core import launcher_llm
+        return launcher_llm.adopt()
+    except Exception as e:
+        logger.debug(f"launcher LLM not adopted: {e}")
+        return None
+
+
 def _auto(cfg, order, private, timeout, health, require_images, conversation=None) -> Selection:
     import config
-    if order is None:
-        order = getattr(config, 'LLM_FALLBACK_ORDER', None) or list(cfg.keys())
-        # A provider missing from the saved order (a deleted default the
-        # settings merge brought back, an order saved before it existed) is
-        # still tried, last: Auto is the mode meant to work most.
-        order = list(order) + [k for k in cfg if k not in order]
-    trail = []
-    result = _lp().get_first_available_provider(
-        cfg, order, timeout,
-        force_privacy=bool(private),
-        health_cache=_HEALTH_CACHE if health == 'cached' else None,
-        probe=(health != 'skip'),
-        require_images=bool(require_images),
-        trail=trail)
+    own_order = order is None
+
+    def scan(cfg, order):
+        if own_order:
+            order = getattr(config, 'LLM_FALLBACK_ORDER', None) or list(cfg.keys())
+            # A provider missing from the saved order (a deleted default the
+            # settings merge brought back, an order saved before it existed) is
+            # still tried, last: Auto is the mode meant to work most.
+            order = list(order) + [k for k in cfg if k not in order]
+        trail = []
+        return _lp().get_first_available_provider(
+            cfg, order, timeout,
+            force_privacy=bool(private),
+            health_cache=_HEALTH_CACHE if health == 'cached' else None,
+            probe=(health != 'skip'),
+            require_images=bool(require_images),
+            trail=trail), trail
+
+    result, trail = scan(cfg, order)
+    if not result:
+        # No brain at all. The Sapphire Launcher's LLM is looked for at boot
+        # and on the wizard's Brain step only: one that came up after both was
+        # never found, and a launcher install answered "No LLM" until a
+        # restart (scout hunt 2026-11-13). adopt() is once-only by its own
+        # marker and costs one loopback probe; when it adds the provider,
+        # look again.
+        added = _adopt_launcher()
+        if added:
+            result, trail = scan(providers_config(), order if own_order else list(order) + [added])
     why = ' · '.join(f"{display_name(k)}: {w}" for k, w in trail)
     if not result:
         logger.warning(f"Auto found no LLM for '{conversation or '?'}' (private={bool(private)}): {why or 'nothing configured'}")

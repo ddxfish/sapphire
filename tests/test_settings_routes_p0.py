@@ -43,6 +43,7 @@ def settings_client(client, mock_system, monkeypatch):
 
     from core import credentials_manager as cred_mod
     fresh_cred = MagicMock()
+    fresh_cred.corrupt_error = None    # a readable credentials file (key saves refuse otherwise)
     fresh_cred.set_service_api_key = MagicMock(return_value=True)
     monkeypatch.setattr(cred_mod, 'credentials', fresh_cred)
 

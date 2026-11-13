@@ -278,3 +278,27 @@ def test_prompt_preview_binds_the_name_across_its_await():
     p = _src("views/prompts.js")
     rp = _between(p, "async function refreshPreview()", "const previewEl")
     assert "const name = selected;" in rp and "if (fresh && name === selected) {" in rp
+
+
+def test_a_door_line_during_a_live_turn_never_takes_the_bubble():
+    """The streamer draws one bubble at a time. A door's out-of-turn line
+    (core/rooms._door_line: START, CHUNK, END back to back) painted over a
+    seat that was still writing: it took the stream over, its END finished the
+    wrong bubble, and its own kept id="streaming-message", which holds every
+    refresh - the transcript froze until reload (scout hunt 2026-11-13)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    js = (root / "interfaces" / "web" / "static" / "main.js").read_text(encoding="utf-8")
+    start = js.split("eventBus.on('voice_turn_start'")[1].split("eventBus.on('voice_turn_chunk'")[0]
+    guard = "if (_voiceTurnActive && data?.kind === 'door' && turnId !== null && turnId !== _voiceTurnId) {"
+    assert guard in start and start.index(guard) < start.index("ui.startStreaming(")
+    for ev in ("voice_turn_chunk", "voice_turn_tool"):
+        body = js.split(f"eventBus.on('{ev}'")[1].split("eventBus.on(")[0]
+        assert "if (_voiceOverlap.has(data?.message_id)) return;" in body, ev
+    end = js.split("eventBus.on('voice_turn_end'")[1].split("eventBus.on(")[0]
+    assert end.index("if (_voiceOverlap.delete(data?.message_id)) return;") < end.index("if (!_voiceTurnActive)")
+    assert "_voiceOverlap.clear();" in end
+    # the server names the line a door's, with its own message id on all three events
+    rooms = (root / "core" / "rooms.py").read_text(encoding="utf-8")
+    door = rooms.split("def _door_line(")[1].split("\ndef ")[0]
+    assert "'kind': DOOR" in door and door.count("'message_id': mid") == 3

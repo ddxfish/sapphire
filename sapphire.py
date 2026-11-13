@@ -176,9 +176,11 @@ class VoiceChatSystem:
         logger.info("Agent manager initialized")
 
         # Load plugins (hooks, voice commands, tools, etc.)
+        _plugins_scanned = False
         try:
             from core.plugin_loader import plugin_loader
             plugin_loader.scan(function_manager=self.llm_chat.function_manager)
+            _plugins_scanned = True
         except Exception as e:
             logger.critical(f"Plugin loader failed — ALL plugins unavailable: {e}", exc_info=True)
             try:
@@ -188,6 +190,16 @@ class VoiceChatSystem:
                     'hint': 'see the log, then restart'})
             except Exception:
                 pass
+
+        # Personas from before "a scope a persona doesn't name is off": write
+        # down what they had (once per personas file). Needs the plugins'
+        # scopes, so not on a boot where the loader itself failed.
+        if _plugins_scanned:
+            try:
+                from core.personas import persona_manager
+                persona_manager.pin_absent_scopes()
+            except Exception as e:
+                logger.error(f"Persona scope pin failed (tried again next boot): {e}")
 
         # Re-derive proxy env now that plugins have registered their
         # direct hosts (register_direct_hosts): the boot stamp ran

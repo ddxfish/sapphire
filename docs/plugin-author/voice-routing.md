@@ -24,6 +24,8 @@ Audio exists only on the streaming lane (Kokoro or Piper, Settings > TTS > Strea
 
 Key `TTS_LOCAL_PLAYBACK`, Settings > TTS, default on. Your plugin never reads it; users flip it and the hooks keep firing.
 
+One case makes no speech at all: the switch is off, the reply would be voiced whole (Stream speech off, or a voice with no streaming such as ElevenLabs), and no plugin has a `tts_chunk_text` or `tts_chunk_audio` handler. Nobody would get that audio, so the engine is never asked and no stream hooks fire. Register a chunk handler and it is made as usual.
+
 Off means every lane that plays on **this computer or in its browser** goes quiet after its hooks fire: web chat (streaming and whole-blob), the Replay button, wake-word turns on the speakers, continuity tasks of every kind (heartbeat, scheduled, daemons, webhooks), chat rooms, local conversation mode, the MCP persona voices.
 
 Not governed, because they were never "here": satellites and other devices, phone calls, Discord voice, Telegram voice notes, the voice preview button, the chime.

@@ -88,6 +88,11 @@ to `none`**, and memory/knowledge scopes default to an isolated per-caller scope
 stranger on the line never touches your default memory. Grant capability on purpose,
 per rule.
 
+**Voice.** A rule that names a voice speaks in it. A rule left on the default voice
+speaks in her default voice as of that call: the voice new chats start with (your
+default persona's, if you set one). Change it and the next call uses it, also for a
+caller who rang before. The greeting and the rest of the call always use the same voice.
+
 ### Outbound calls — the `phone_call` tool
 
 Sapphire can place calls, but **only to whitelisted people**:
@@ -240,6 +245,7 @@ INBOUND:
 - On/off = enabled Realtime rule (Triggers → Realtime, source "Answer Phone Calls") per number. No matching rule → call declined.
 - Rules most-specific-wins: caller-filter match beats catch-all; comma list, digit-tail phone matching.
 - Rule carries: greeting, phone context ghost note ({caller} substitution), TTS voice, chat routing, public-line rails, elevation config.
+- Voice: rule's voice, else her default voice re-stamped on the ephemeral chat at each call (new-chat defaults); greeting and turns read it the same way. Outbound: the origin chat's voice.
 - Chat routing: saved chat (persistent, chat's own prompt/toolset/scopes) or per-caller ephemeral chat (📞, TTL minutes after last call, resumes within window). Ephemeral defaults: toolset none, isolated per-caller scopes. Saved rule with no chat → call refused.
 
 OUTBOUND (phone_call tool):

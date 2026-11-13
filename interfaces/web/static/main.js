@@ -482,6 +482,8 @@ function initEventBus() {
     // closed kept streaming into the Chat view (scout, 2026-10-11).
     const _roomsNotMine = (data) => data?.source === 'room' && getBoundChat() !== data?.chat;
     let _voiceTurnId = null;      // the live turn's message id: its END settles the rail even after the view moved on
+    // Turns that started while another was live here: never painted (see voice_turn_start).
+    const _voiceOverlap = new Set();
 
     // The chat the mirror was armed for. Its END releases the mirror whatever
     // `foreign` says by then: a pointer that moved mid-turn turned the END
@@ -523,6 +525,7 @@ function initEventBus() {
             const st = await fetchStatus();
             if (st && !st.is_streaming && (_mirrored() || _voiceTurnActive)) {
                 _voiceTurnActive = false;   // a voice turn whose end we missed (SSE was down)
+                _voiceOverlap.clear();
                 if (document.getElementById('streaming-message')) ui.detachStreaming();
                 ui.hideStatus();
                 setProc(false);
@@ -586,6 +589,20 @@ function initEventBus() {
         // the end-of-turn reconcile (2026-07-04 outbound-call bug). Chunks/end are
         // gated on _voiceTurnActive, so skipping start skips the whole turn.
         if (_notMine(data) || _roomsNotMine(data)) return;
+        // A second turn starting while one is live here: a door's line out of
+        // turn (core/rooms._door_line) while a seat is still writing. The
+        // streamer draws ONE bubble at a time: painted, the second took the
+        // first's stream over, its end finished the wrong bubble, and its own
+        // kept the live id that holds every refresh - the transcript froze
+        // until reload (scout hunt 2026-11-13). Its row is saved already, so
+        // it is left to the redraw at the end of the turn that is live.
+        // Door lines only: any other start while one is "live" is the next
+        // turn after an END this tab missed, and painting it is the recovery.
+        const turnId = data?.message_id ?? null;
+        if (_voiceTurnActive && data?.kind === 'door' && turnId !== null && turnId !== _voiceTurnId) {
+            _voiceOverlap.add(turnId);
+            return;
+        }
         try {
             if (data?.user_text) ui.addUserMessage(data.user_text);
             // a chat room's seat turn names its speaker: that face, that name - and says who is
@@ -613,6 +630,7 @@ function initEventBus() {
     // paint the start bubble, then get no chunks and no end — Stop lit and
     // every refresh suppressed until reload (scout 3, 2026-09-10).
     eventBus.on('voice_turn_chunk', (data) => {
+        if (_voiceOverlap.has(data?.message_id)) return;
         if (_notMine(data) || _roomsNotMine(data) || !_voiceTurnActive) return;
         try {
             if (data?.source === 'room' && data?.text) ui.hideStatus();   // her words are here: the status line goes
@@ -623,6 +641,7 @@ function initEventBus() {
     // (an agent's report turn used to show think › think › prose live, the
     // tools between them only after a refresh; 2026-10-08).
     eventBus.on('voice_turn_tool', (data) => {
+        if (_voiceOverlap.has(data?.message_id)) return;
         if (_notMine(data) || _roomsNotMine(data) || !_voiceTurnActive) return;
         try {
             if (data?.phase === 'start') ui.startTool(data.id, data.name, data.args || {});
@@ -630,6 +649,7 @@ function initEventBus() {
         } catch (e) { /* ignore */ }
     });
     eventBus.on('voice_turn_end', async (data) => {
+        if (_voiceOverlap.delete(data?.message_id)) return;     // a turn that was never painted
         if (!_voiceTurnActive) {
             // a room turn's end we were not tracking must never leave Stop lit or a
             // status line standing (Krem saw Stop after generation, 2026-10-12)
@@ -645,6 +665,7 @@ function initEventBus() {
         if (!mine && (data?.message_id ?? null) !== _voiceTurnId) return;
         _voiceTurnActive = false;
         _voiceTurnId = null;
+        _voiceOverlap.clear();      // an overlap whose own end was lost must not outlive this turn
         try {
             if (data?.source === 'room') ui.hideStatus();
             if (!getAbortController()) setProc(false);

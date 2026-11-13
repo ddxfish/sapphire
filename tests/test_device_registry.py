@@ -35,7 +35,8 @@ def test_bad_declarations_rejected():
     assert not m.register_driver('a', {**SSH, 'capabilities': ['Not A Slug']}, 'p')
     assert not m.register_driver('a', {**SSH, 'config_schema': 'nope'}, 'p')
     assert not m.register_driver('a', {**SSH, 'config_schema': [{'label': 'no key'}]}, 'p')
-    assert not m.register_driver('a', {**SSH, 'config_schema': [{'key': 'k'}] * 41}, 'p')
+    assert not m.register_driver('a', {**SSH, 'config_schema': [{'key': 'k'}] * (m.MAX_FIELDS + 1)}, 'p')
+    assert m.MAX_FIELDS >= 64     # the satellite alone has ~40 fields (2026-11-12): keep headroom
     assert m.list_drivers() == [] and m.generation() == 0
 
 

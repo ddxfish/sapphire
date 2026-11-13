@@ -233,6 +233,57 @@ def test_pump_here_emits_when_on(enable_streaming, fresh_hooks, playback_on):
     assert chunks and notices == []
 
 
+# A WHOLE reply (Stream speech off, or a blob voice like ElevenLabs) that nobody
+# would get is not asked of the engine: it was made, billed and dropped.
+
+@pytest.fixture
+def streaming_off(monkeypatch):
+    monkeypatch.setattr(config, "TTS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "TTS_STREAMING_ENABLED", False, raising=False)
+
+
+def _whole_pump(**kw):
+    pump = _pump(**kw)
+    pump.provider.generate = MagicMock(return_value=b"OGGS\x00fake")
+    return pump
+
+
+def test_a_whole_reply_nobody_hears_is_not_made(streaming_off, fresh_hooks, playback_off):
+    starts = []
+    fresh_hooks.register("tts_stream_start", lambda ev: starts.append(1), plugin_name="x")
+    pump = _whole_pump()
+    assert pump._whole is True
+    assert pump.push("Hello there, friend. ") == [] and pump.push("More to say here.") == []
+    assert list(pump.flush_and_close()) == []
+    pump.provider.generate.assert_not_called()
+    assert starts == []                                     # as the blob lane it replaced: silent
+
+
+def test_a_whole_reply_a_plugin_takes_is_still_made(streaming_off, fresh_hooks, playback_off):
+    heard = []
+    fresh_hooks.register("tts_chunk_audio", lambda ev: heard.append(ev.metadata["chunk_text"]), plugin_name="avatar")
+    pump = _whole_pump()
+    chunks, notices = _run(pump)
+    assert heard and chunks == [] and notices == []
+    assert pump.provider.generate.called
+
+
+def test_a_whole_reply_is_made_when_it_plays_here_or_elsewhere(streaming_off, fresh_hooks, playback_off, monkeypatch):
+    elsewhere = _whole_pump(plays_here=False, force=True)   # a satellite's pump: never muted by the switch
+    chunks, _ = _run(elsewhere)
+    assert chunks
+    monkeypatch.setattr(config, "TTS_LOCAL_PLAYBACK", True, raising=False)
+    chunks, _ = _run(_whole_pump())
+    assert chunks
+
+
+def test_a_streamed_reply_is_still_made_with_the_switch_off(enable_streaming, fresh_hooks, playback_off):
+    pump = _whole_pump()
+    assert pump._whole is False
+    _run(pump)
+    assert pump.provider.generate.called                    # Settings > Voice: still synthesized
+
+
 # --- conversation mode: a muted local turn ends on its own ------------------------
 
 SR = 16000

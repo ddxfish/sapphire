@@ -10,7 +10,7 @@
     "errors.py": "sha256:da617f55c9de0abe3d2cccd56f8c1ffe84df7f07bf4cf24aaba04836329e9037",
     "hooks/ready.py": "sha256:3951ca27ac1074a3f5c75c2d6973ef2e68f1bcdaa6e4219a0fc71225fe315088",
     "outbox.py": "sha256:00121f96de8c5752fcee963cca0b27db5b1e797d2acf1756ae49fca63b1ddc9f",
-    "plugin.json": "sha256:2c1cfea5e8279e2d080531c999987e79158e2306f72f7e8e424afb5bf0ff9a10",
+    "plugin.json": "sha256:93a1d6a2a6fbc33188f0d493e03c916079e0e33d22793197cab55b31d38e03a1",
     "providers/__init__.py": "sha256:475d9b94d1684f5d2947ebbe9d45ac09d8f72c0f3e46903a5c9a104ffc4c623a",
     "providers/_common.py": "sha256:a1ea8d819d0bbf51a696269e48f1ce4e402e8b5d061bcbd7f13279e0a8310ba3",
     "providers/_meta.py": "sha256:a50584652bfab64fcf626417d0445f3e3fca24f2610fc897a6fbf70540f52d00",
@@ -28,5 +28,5 @@
     "tools/social.py": "sha256:095d6a9a40bf6f06f8c7db7c4eadc0e2b5a6f644a0fec63800a6bcf418aa64a3",
     "web/index.js": "sha256:34e923bd21b77d34a8bca1fe0038a486db2faed5fbec209e70a94b98261a08c5"
   },
-  "signature": "cv5ZC2yZToGbyte9VhUmYk2jZjzq9RB1TvLmjRql9RVNfE1d5Vms/0CHUgx5klvBs2QpImPQ3ptWYYLIqsGQCg=="
+  "signature": "ifTIZ2KWeeKF+odeUd8CcwGMIMhE14wneJdMExqxhtrtgg7NBxKsUyj9Jb8aSw/2irPNumBcGpJtYSPgiSV0Bg=="
 }

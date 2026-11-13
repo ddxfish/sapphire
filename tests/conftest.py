@@ -133,6 +133,22 @@ def _no_real_vault_seal(monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _core_local_voice_engines(monkeypatch):
+    """The voice-privacy gate reads the LIVE TTS/STT_PROVIDER, and a plugin's
+    engine (unregistered under pytest) reads as cloud. On a dev box running
+    Audio8 or Piper every test that drives a voice turn with a mock chat was
+    refused ("voice turns disabled") - nine failures that were this machine's
+    settings, not the code (2026-11-13). Pin the baseline to the core local
+    engines; a test about another engine sets its own."""
+    try:
+        import config as _config
+        monkeypatch.setattr(_config, "TTS_PROVIDER", "kokoro", raising=False)
+        monkeypatch.setattr(_config, "STT_PROVIDER", "faster_whisper", raising=False)
+    except Exception:
+        pass
+
+
 # _hermetic_notify (the notification center's tmp store) lives in the REPO ROOT
 # conftest.py so core/plugins/*/tests get it too.
 

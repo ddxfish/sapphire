@@ -1146,12 +1146,14 @@ async def load_persona(name: str, request: Request, _=Depends(require_login), sy
     # stamp, update_chat_settings MERGES and the previous persona's motion
     # kept running forever on this chat.
     settings.setdefault("motion", "")
-    # Reset scope keys to defaults if persona doesn't specify them,
-    # otherwise old persona's scopes persist through dict merge
+    # Every scope is stamped, or the previous persona's would persist through
+    # the dict merge. A scope the persona doesn't name is OFF - the same
+    # answer persona_manager.get() gives every reader; this used to stamp
+    # 'default' while the editor showed None (scout hunt 2026-11-13).
     from core.chat.function_manager import scope_setting_keys
     for key in scope_setting_keys():
         if key not in settings:
-            settings[key] = "default"
+            settings[key] = "none"
     # Privacy belongs to the CHAT, not the persona: carry the chat's current
     # private_chat through the switch (the eyeball is the only thing that
     # flips it). A persona's stored flag is ignored either direction.

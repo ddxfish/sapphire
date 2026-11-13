@@ -65,7 +65,7 @@ Where her voice comes out:
 - **Wake word turns** — audio plays on the server's speakers.
 - **Conversation mode** — server speakers (Local mic) or your browser (Browser mic).
 
-**Play speech here** (Settings → TTS, `TTS_LOCAL_PLAYBACK`, on by default) is the switch for all of the above. Off: speech is still made and every TTS hook still fires, but nothing plays on this computer or in its browser. That is the switch for sending her voice to an avatar or robot plugin instead ([plugin-author/voice-routing.md](plugin-author/voice-routing.md)). It doesn't govern satellites, phone calls, Discord, Telegram voice notes, the voice preview, or the chime.
+**Play speech here** (Settings → TTS, `TTS_LOCAL_PLAYBACK`, on by default) is the switch for all of the above. Off: speech is still made and every TTS hook still fires, but nothing plays on this computer or in its browser. That is the switch for sending her voice to an avatar or robot plugin instead ([plugin-author/voice-routing.md](plugin-author/voice-routing.md)). With no such plugin on, a reply that would be voiced whole (Stream speech off, or a voice with no streaming such as ElevenLabs) is not made at all: nothing is billed for speech nobody hears. It doesn't govern satellites, phone calls, Discord, Telegram voice notes, the voice preview, or the chime.
 
 ### Streaming TTS
 
@@ -101,6 +101,8 @@ Changing the model in Settings hot-swaps the detector — no restart. The **thre
 **Who listens for what.** Each listener has its own switch: this computer is the `WAKEWORD_MODEL` dropdown, each satellite is its board's **Wake word** tab in Devices (a library model or the board's own built-in word). A board restarts on the change; one that is offline keeps the request and gets it when next seen. The switch applies the model's own threshold.
 
 **A wake turn, start to finish:** wake word detected → short acknowledgment tone → she records until you stop talking (or aborts after a few seconds of no speech) → transcribe → voice-command check → the reply streams live into any open web page *and* speaks on the server's speakers. The Stop button on the page works on wake turns too.
+
+**The wake word while she is speaking is the stop button.** If her voice is playing on the server's speakers when she hears the wake word, she goes quiet and nothing is recorded: no tone, no turn. Say the wake word again to talk. This also means her own voice tripping the detector can only cut her short; it can never make her record herself and answer. A phone call's voice is not stopped this way.
 
 Wake word needs a working STT provider — with STT disabled she'll hear her name but can't understand what follows. Detection is suppressed while you're actively using the web UI (recording or mid-chat) and while Conversation mode is running.
 

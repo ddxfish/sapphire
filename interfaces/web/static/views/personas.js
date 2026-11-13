@@ -43,6 +43,13 @@ let personas = [];
 let selectedName = null;
 let selectedData = null;
 let saveTimer = null;
+// The settings keys the person changed since the last save. A save sends
+// THESE, never the whole form: the form also shows what was never chosen (a
+// scope nobody picked, a prompt renamed in another tab while a field here had
+// focus), and sending it all wrote those back over the record - an untouched
+// Sapphire lost her email at the first tagline edit (scout hunt 2026-11-13).
+let touched = new Set();
+let touchedFor = null;      // the persona those keys belong to
 let defaultPersona = '';
 
 function updateSliderFill(slider) {
@@ -595,6 +602,7 @@ function bindEvents() {
         onDelete: async () => {
             if (!confirm(`Delete persona "${selectedName}"?`)) return;
             if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }   // edits to a doomed persona
+            touched = new Set();
             if (_savePromise) await _savePromise;
             try {
                 await deletePersona(selectedName);
@@ -814,7 +822,7 @@ function bindEvents() {
     if (providerSelect) {
         providerSelect.addEventListener('change', () => {
             updateModelSelector(providerSelect.value, '');
-            debouncedSave();
+            debouncedSave(...keysOf(providerSelect));
         });
     }
 
@@ -833,7 +841,7 @@ function bindEvents() {
             }
             if (el.type === 'range') updateSliderFill(el);
             if (el.id === 'pa-s-trim_color') applyTrimColor(el.value);
-            debouncedSave();
+            debouncedSave(...keysOf(el));
         });
     });
 
@@ -852,10 +860,19 @@ function bindEvents() {
             onSelect: (name) => {
                 const hidden = container.querySelector('#pa-s-background');
                 if (hidden) hidden.value = name;
-                debouncedSave();
+                debouncedSave('background');
             }
         });
     }
+}
+
+// The settings key(s) a form control stands for: its data-key, or the scope
+// its dropdown belongs to. The brain is a pair - provider and model go together.
+function keysOf(el) {
+    const scope = el.closest?.('[data-scope-key]')?.dataset.scopeKey;
+    const key = scope ? `${scope}_scope` : el.dataset?.key;
+    if (!key) return [];
+    return key.startsWith('llm_') ? ['llm_primary', 'llm_model'] : [key];
 }
 
 function collectSettings() {
@@ -897,7 +914,10 @@ function collectSettings() {
 // persona's settings into the other (playwright hunt 2026-11-08).
 let _savePromise = null;
 
-function debouncedSave() {
+function debouncedSave(...keys) {
+    // keys left by a save that failed belong to the persona it was for
+    if (touchedFor !== selectedName) { touched = new Set(); touchedFor = selectedName; }
+    keys.forEach(k => touched.add(k));
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
         saveTimer = null;   // the softRender hold reads this — never nulled before = held forever
@@ -925,9 +945,12 @@ async function flushSave() {
 async function doSave() {
     const name = selectedName;   // bound before any await
     if (!name || !selectedData) return;
+    const keys = touched;
+    touched = new Set();
+    const shown = collectSettings();
     const data = {
         tagline: container.querySelector('#pa-tagline')?.value || '',
-        settings: collectSettings()
+        settings: Object.fromEntries([...keys].filter(k => k in shown).map(k => [k, shown[k]]))
     };
     // Check for name change
     // Name commits on blur only — a tagline/slider save firing while the
@@ -945,6 +968,7 @@ async function doSave() {
         if (nameInput && data.name) nameInput.value = finalName;
         if (finalName !== name) {
             selectedName = finalName;
+            if (touchedFor === name) touchedFor = finalName;   // edits made during the rename ride along
             await loadData();
             // Rename repaints the roster — but the user has usually tabbed on
             // to the tagline by now; a full render() here yanked the cursor.
@@ -952,12 +976,18 @@ async function doSave() {
             softRender();
         } else {
             selectedData.tagline = data.tagline;
-            selectedData.settings = data.settings;
+            selectedData.settings = { ...selectedData.settings, ...data.settings };
         }
     } catch (e) {
+        // Nothing was saved: these keys still wait (unless the selection moved on).
+        if (selectedName === name) keys.forEach(k => touched.add(k));
         // A refused rename (409/400) refuses the whole save — put the real
-        // name back so the next edit doesn't resend the bad one.
-        if (nameInput && data.name) nameInput.value = name;
+        // name back so the next edit doesn't resend the bad one, and send the
+        // rest again without it: the edits made beside the rename were lost.
+        if (nameInput && data.name) {
+            nameInput.value = name;
+            if (selectedName === name) queueSave();
+        }
         ui.showToast(e.message || 'Persona not saved', 'error');
     } finally {
         _saveInFlight--;

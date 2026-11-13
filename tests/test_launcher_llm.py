@@ -262,6 +262,25 @@ def test_stock_values_are_never_frozen_into_the_user_file(monkeypatch):
     assert sm._persisted('LLM_FALLBACK_ORDER', ['a']) == ['a']
 
 
+def test_a_brain_the_file_already_holds_is_never_taken_back(monkeypatch):
+    # thinned, the next release's stock change moved that person's model
+    sm, _ = _sm(monkeypatch)
+    # someone who picked another model, then went back to the stock one
+    sm._user = {'LLM_PROVIDERS': {'claude': {'model': 'claude-sonnet-5-5'}}}
+    back = {'claude': {'model': 'claude-opus-5-5', 'enabled': False, 'max_tokens': 4096}}
+    assert sm._persisted('LLM_PROVIDERS', back) == {'claude': {'model': 'claude-opus-5-5', 'max_tokens': 4096}}
+    # an install whose file predates thinning: the whole map, frozen
+    sm._user = {'LLM_PROVIDERS': {'claude': {'model': 'claude-opus-5-5', 'enabled': False, 'timeout': 5}}}
+    sm._defaults['LLM_PROVIDERS']['claude']['timeout'] = 5
+    assert sm._persisted('LLM_PROVIDERS', {'claude': {'model': 'claude-opus-5-5', 'enabled': False, 'timeout': 5}}) \
+        == {'claude': {'model': 'claude-opus-5-5', 'enabled': False}}      # the brain stays; the rest follows stock
+    # the env's lmstudio URL is still never the user's
+    monkeypatch.setenv('LMSTUDIO_BASE_URL', 'http://host.docker.internal:1234/v1')
+    sm._user = {'LLM_CUSTOM_PROVIDERS': {'lmstudio': {'base_url': 'http://host.docker.internal:1234/v1'}}}
+    assert sm._persisted('LLM_CUSTOM_PROVIDERS', {'lmstudio': {
+        'template': 'openai', 'base_url': 'http://host.docker.internal:1234/v1', 'enabled': True}}) == {'lmstudio': {}}
+
+
 # ── Auto's words when the brain is up but its model is not ready ──
 
 def test_auto_names_the_server_that_answered_without_a_model(monkeypatch):
@@ -312,3 +331,56 @@ def test_the_registry_builds_the_launcher_at_the_live_port(fake, tmp_path):
             'other': {'template': 'openai', 'base_url': 'http://127.0.0.1:8642/v1', 'enabled': True, 'is_local': True}}
     assert R.get_provider_by_key(L.KEY, conf).base_url.startswith('http://127.0.0.1:9101')
     assert R.get_provider_by_key('other', conf).base_url.startswith('http://127.0.0.1:8642')
+
+
+# ── Auto with no brain looks for the launcher once more (hunt 2026-11-13) ──
+
+def test_auto_with_no_brain_adopts_the_launcher_and_looks_again(monkeypatch):
+    # boot came before llama-server and the wizard's Brain step was passed:
+    # nothing looked again, and every turn said "No LLM" until a restart
+    from core.chat.llm_providers import resolve as R
+    seen = []
+
+    class _LP:
+        @staticmethod
+        def get_first_available_provider(cfg, order, timeout, **kw):
+            seen.append((sorted(cfg), list(order)))
+            return ('sapphire_launcher', type('P', (), {'model': 'qwen'})()) if 'sapphire_launcher' in cfg else None
+
+    monkeypatch.setattr(R, '_lp', lambda: _LP)
+    monkeypatch.setattr(R, 'providers_config', lambda: {'lmstudio': {}, 'sapphire_launcher': {}})
+    adopts = []
+    monkeypatch.setattr(L, 'adopt', lambda: adopts.append(1) or L.KEY)
+    sel = R._auto({'lmstudio': {}}, ['lmstudio'], False, 240.0, 'cached', False)
+    assert sel.key == 'sapphire_launcher' and adopts == [1]
+    assert seen[1] == (['lmstudio', 'sapphire_launcher'], ['lmstudio', 'sapphire_launcher'])
+
+
+def test_auto_with_no_brain_and_no_launcher_says_so_once(monkeypatch):
+    from core.chat.llm_providers import resolve as R
+    calls = []
+
+    class _LP:
+        @staticmethod
+        def get_first_available_provider(cfg, order, timeout, **kw):
+            calls.append(1)
+            return None
+
+    monkeypatch.setattr(R, '_lp', lambda: _LP)
+    monkeypatch.setattr(L, 'adopt', lambda: None)
+    with pytest.raises(R.NoProvidersAvailable):
+        R._auto({'lmstudio': {}}, ['lmstudio'], False, 240.0, 'cached', False)
+    assert calls == [1]                                 # no second scan without a new provider
+
+
+def test_auto_that_found_a_brain_never_probes_for_the_launcher(monkeypatch):
+    from core.chat.llm_providers import resolve as R
+
+    class _LP:
+        @staticmethod
+        def get_first_available_provider(cfg, order, timeout, **kw):
+            return ('claude', type('P', (), {'model': 'm'})())
+
+    monkeypatch.setattr(R, '_lp', lambda: _LP)
+    monkeypatch.setattr(L, 'adopt', lambda: (_ for _ in ()).throw(AssertionError('probed')))
+    assert R._auto({'claude': {}}, ['claude'], False, 240.0, 'cached', False).key == 'claude'

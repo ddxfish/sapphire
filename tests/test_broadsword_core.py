@@ -95,6 +95,7 @@ def test_h11_store_service_key_routes_to_credentials():
     import core.api_fastapi  # noqa: F401 — the app imports it first; routes import it back (cycle-safe only in that order)
     from core.routes import settings as routes
     fake = MagicMock()
+    fake.corrupt_error = None          # a readable credentials file (the route refuses otherwise)
     with patch("core.credentials_manager.credentials", fake):
         assert routes._store_service_key("STT_FIREWORKS_API_KEY", " abc ") is True
         fake.set_service_api_key.assert_called_once_with("stt_fireworks", "abc")
