@@ -71,7 +71,7 @@ Where her voice comes out:
 
 On by default. With **Streaming** on (Settings → TTS → **Streaming (Kokoro)** section), Sapphire synthesizes and starts speaking each chunk as the LLM finishes it — speech starts a second or two after generation begins instead of after the whole reply. Only streaming-capable providers do this (Kokoro, Piper); others fall back to whole-reply playback automatically, no harm done.
 
-Tuning lives in the same section: split mode (`paragraph` keeps prosody natural, `sentence` gets audio out faster), min/max chunk sizes, pauses after paragraph/sentence boundaries, and how `*stage directions*` and `(parentheticals)` are rendered as pauses.
+Tuning lives in the same section: split mode (`auto`, the default, starts with the first sentence and then grows the pieces as fast as the voice engine keeps ahead; `whole_paragraph` makes each paragraph whole for the smoothest voice and the slowest start; `sentence` cuts at every sentence), min/max chunk sizes, pauses after paragraph/sentence boundaries, and how `*stage directions*` and `(parentheticals)` are rendered as pauses.
 
 **Streaming TTS is also what gives Conversation mode its voice** — see below.
 
@@ -209,7 +209,7 @@ Per-chat voice, pitch, and speed are in the chat sidebar (**TTS (Voice)** accord
 | `TTS_FALLBACK_TIMEOUT` | `0.2` | Seconds the primary gets to answer before the fallback is tried | TTS tab, advanced |
 | `TTS_SHARE_ENABLED` / `TTS_SHARE_PORT` | `false` / `5013` | Share this Kokoro: a second door, TLS with a pinned self-signed cert and a key per computer (`core/worker_door.py`, keys in `user/worker_door/kokoro/`); add computers in the panel under the Test button, paste each one's pairing string as its primary. Her words are never logged | TTS tab, advanced |
 | `TTS_STREAMING_ENABLED` | `true` | Speak sentence-sized chunks as the LLM writes. Off: the reply is voiced whole after it is written (same hooks; an avatar's face gets the GPU after the voice is made) | TTS tab, Streaming |
-| `TTS_STREAMING_SPLIT_MODE` | `paragraph` | Chunk on paragraphs (natural) or sentences (faster first audio) | TTS tab, Streaming |
+| `TTS_STREAMING_SPLIT_MODE` | `auto` | `auto` (first sentence early, then as much as the engine keeps ahead), `whole_paragraph` (smoothest, slowest start) or `sentence`; a stored `paragraph` means `auto` | TTS tab, Streaming |
 | `TTS_STREAMING_MIN_CHARS` | `15` | Smallest chunk emitted at a boundary | TTS tab, Streaming |
 | `TTS_STREAMING_MAX_CHARS` | `750` | Force-split cap | TTS tab, Streaming |
 | `TTS_STREAMING_PAUSE_PARAGRAPH_MS` | `80` | Silence after a paragraph chunk | TTS tab, Streaming |

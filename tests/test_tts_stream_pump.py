@@ -1088,3 +1088,50 @@ def test_measured_engine_speed_feeds_the_ramp(enable_streaming, monkeypatch):
     list(pump.flush_and_close())
     assert 4 < sp._SPEEDS["_FakeProvider"] < 11          # 2 s of audio in ~0.2 s
     assert pump.chunker.speed == sp._SPEEDS["_FakeProvider"]
+
+
+# ── split mode: auto (default) / whole_paragraph / sentence (2026-11-14) ──────
+
+def _chunk_texts(mode, monkeypatch, speed=None):
+    import config
+    import core.tts.stream_pump as sp
+    monkeypatch.setitem(sp._TAKEN, "last", False)
+    monkeypatch.setattr(sp, "_SPEEDS", {})
+    monkeypatch.setattr(config, "TTS_STREAMING_SPLIT_MODE", mode, raising=False)
+    fp = _FakeProvider()
+    pump = StreamingTTSPump(system=_make_system(provider=fp))
+    if speed is not None:
+        pump.chunker.speed = speed
+    for word in ("The lamp is lit tonight. The sea is calm and the gulls are quiet. "
+                 "Nobody has come by the pier since noon.\n\nA second paragraph starts here. It ends too.").split(" "):
+        pump.push(word + " ")
+    list(pump.flush_and_close())
+    return pump, [c[0] for c in fp.calls]
+
+
+def test_auto_starts_with_the_first_sentence(enable_streaming, monkeypatch):
+    pump, texts = _chunk_texts("auto", monkeypatch)
+    assert pump.chunker.ramp is True
+    assert texts[0] == "The lamp is lit tonight."
+
+
+def test_a_stored_paragraph_is_auto(enable_streaming, monkeypatch):
+    # Every install that saved the TTS tab holds 'paragraph', and since the ramp
+    # it has meant this: its meaning must never flip to the strict mode.
+    _, auto = _chunk_texts("auto", monkeypatch)
+    pump, legacy = _chunk_texts("paragraph", monkeypatch)
+    assert pump.chunker.ramp is True and legacy == auto
+    pump, unknown = _chunk_texts("a typo", monkeypatch)
+    assert pump.chunker.ramp is True and unknown == auto
+
+
+def test_whole_paragraph_makes_each_paragraph_whole_on_any_engine(enable_streaming, monkeypatch):
+    for speed in (None, 0.8, 5.5):
+        pump, texts = _chunk_texts("whole_paragraph", monkeypatch, speed=speed)
+        assert pump.chunker.ramp is False
+        assert len(texts) == 2 and texts[0].endswith("since noon.") and texts[1].startswith("A second paragraph"), (speed, texts)
+
+
+def test_sentence_mode_cuts_every_sentence(enable_streaming, monkeypatch):
+    _, texts = _chunk_texts("sentence", monkeypatch, speed=5.5)
+    assert len(texts) == 5 and texts[0] == "The lamp is lit tonight."

@@ -203,13 +203,24 @@ class StreamingTTSPump:
         min_chars = max(5, int(getattr(config, "TTS_STREAMING_MIN_CHARS", 15) or 15))
         max_chars = max(min_chars + 5, int(getattr(config, "TTS_STREAMING_MAX_CHARS", 750) or 750))
         # Split mode + pause overrides — see Settings → TTS → Streaming.
-        # 'paragraph' (default) preserves prosody across sentences;
-        # 'sentence' lowers latency at the cost of flatter prosody.
+        # 'auto' (default): the first sentence alone, then chunks grow as
+        #   fast as the engine stays ahead (the chunker's ramp); an engine
+        #   slower than speech goes a sentence at a time.
+        # 'whole_paragraph': each paragraph made whole, no ramp: the smoothest
+        #   prosody and the slowest start (what 'paragraph' did on a slow
+        #   engine until 2026-11-14, kept as a choice).
+        # 'sentence': every sentence its own chunk, flatter prosody.
+        # A stored 'paragraph' is 'auto': that is what it has done since the
+        # ramp (2026-11-10), and every install that ever saved the TTS tab
+        # holds it. Its meaning never flips under them; the strict mode got a
+        # name of its own.
         # split_override: per-pump forcing (phone calls force 'sentence' —
         # paragraph mode defers ALL synth to end-of-generation on a typical
         # one-paragraph spoken reply, which is seconds of dead air on a call).
         split_mode = ((split_override or "").strip().lower()
-                      or (getattr(config, "TTS_STREAMING_SPLIT_MODE", "paragraph") or "paragraph").strip().lower())
+                      or (getattr(config, "TTS_STREAMING_SPLIT_MODE", "auto") or "auto").strip().lower())
+        strict = split_mode == "whole_paragraph"
+        split_mode = "sentence" if split_mode == "sentence" else "paragraph"   # the chunker's two cuts; auto = paragraph + ramp
         if self._whole:
             split_mode = "paragraph"    # nothing plays early: the best prosody is free
         pause_overrides = {
@@ -232,7 +243,7 @@ class StreamingTTSPump:
         # A provider whose engine runs on another computer (`remote`) never shares
         # the face's GPU: the ramp stays (first words early) whoever plays them.
         self._remote = bool(getattr(self.provider, "remote", False))
-        self.chunker.ramp = not (_TAKEN["last"] and not self._remote) and not self._whole
+        self.chunker.ramp = not (_TAKEN["last"] and not self._remote) and not self._whole and not strict
         self._taken = False             # a plugin took this turn's audio (see _TAKEN)
         self.pending: deque = deque()
         self.executor = None

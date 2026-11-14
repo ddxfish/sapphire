@@ -83,9 +83,11 @@ class SpeechChunker:
                     intonation across consecutive sentences). max_chars
                     still applies as a safety cap so a long paragraph
                     doesn't buffer forever. DEFAULT
-                    A reply still starts with its first sentence alone,
-                    then chunks ramp up to what the engine can make while
-                    the audio ahead plays (see _drain; `speed`, `ramp`).
+                    With `ramp` on (the pump's 'auto' split mode) a reply
+                    still starts with its first sentence alone, then chunks
+                    ramp up to what the engine can make while the audio
+                    ahead plays (see _drain; `speed`, `ramp`). With `ramp`
+                    off (the pump's 'whole_paragraph') paragraphs come whole.
     pause_overrides: dict mapping boundary name → ms (overrides PAUSE_AFTER_MS).
     """
 

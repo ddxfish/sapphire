@@ -328,11 +328,14 @@ export function createHost(shell = {}) {
         }
         if (key === 'TTS_STREAMING_SPLIT_MODE') {
             const opts = [
-                ['paragraph', 'Paragraph (smoother prosody)'],
-                ['sentence',  'Sentence (lower latency)'],
+                ['auto',            'Auto (starts fast, then follows the voice engine)'],
+                ['whole_paragraph', 'Paragraph (smoothest, slower start)'],
+                ['sentence',        'Sentence (fast start, flatter voice)'],
             ];
+            // A stored 'paragraph' is Auto: what it has done since the ramp (core/tts/stream_pump.py).
+            const cur = opts.some(([v]) => v === value) ? value : 'auto';
             return `<select id="${id}" data-key="${key}">
-                ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+                ${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}
             </select>`;
         }
         if (key === 'CONVERSATION_DTLN') {
