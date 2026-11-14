@@ -16,7 +16,7 @@ import pytest
 
 
 @pytest.fixture
-def settings_client(client, mock_system, monkeypatch):
+def settings_client(client, mock_system, monkeypatch, tmp_path):
     """TestClient + settings_manager with disk-write stubbed + snapshot/restore.
 
     Same setup as test_settings_routes_p0's fixture but tailored for
@@ -26,12 +26,10 @@ def settings_client(client, mock_system, monkeypatch):
     path. Other production paths bypass save() and write the user settings
     file directly — `_remove_key_from_file()` (DELETE handler), `_migrate_
     providers()`, and `reset_to_defaults()`. Tests in this module hit DELETE
-    /api/settings/{key}, so we additionally snapshot the actual file bytes
-    on entry and restore them on teardown. Without this, every pytest run
-    silently nuked the developer's `DEFAULT_USERNAME` override on disk —
-    name reverted to "Human Protagonist" on next Sapphire restart. The
-    fixture's existing in-memory `_user`/`_runtime`/`_config` snapshot
-    only covered the singleton state, not the file. 2026-05-11.
+    /api/settings/{key}, so the manager is pointed at a tmp tree (below).
+    Unprotected, every pytest run silently nuked the developer's
+    `DEFAULT_USERNAME` override on disk — name reverted to "Human Protagonist"
+    on next Sapphire restart (2026-05-11).
     """
     c, csrf = client
 
@@ -41,11 +39,21 @@ def settings_client(client, mock_system, monkeypatch):
     orig_runtime = dict(sm_mod.settings._runtime)
     orig_config = dict(sm_mod.settings._config)
 
-    # Snapshot the live user/settings.json bytes before any test touches it.
     # Routes that call _remove_key_from_file() / reset_to_defaults() bypass
-    # the save() stub and write to disk directly.
-    user_settings_path = sm_mod.settings.BASE_DIR / 'user' / 'settings.json'
-    file_snapshot = user_settings_path.read_bytes() if user_settings_path.exists() else None
+    # the save() stub and write to disk directly, and every writer derives its
+    # path from BASE_DIR: so the manager gets a tmp tree (the shipped defaults,
+    # an empty user file). Until 2026-11-14 this read the real file and wrote
+    # it back after every test: ~25 rewrites of the dev box's settings per run
+    # from outside the running app, each one a window where a setting it had
+    # just saved was reverted.
+    import shutil
+    root = tmp_path / 'settings_root'
+    (root / 'core').mkdir(parents=True)
+    (root / 'user').mkdir()
+    shutil.copy(sm_mod.settings.BASE_DIR / 'core' / 'settings_defaults.json', root / 'core')
+    (root / 'user' / 'settings.json').write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(sm_mod.settings, '_last_mtime', sm_mod.settings._last_mtime)
+    monkeypatch.setattr(sm_mod.settings, 'BASE_DIR', root)
 
     from core import credentials_manager as cred_mod
     fresh_cred = MagicMock()
@@ -77,13 +85,6 @@ def settings_client(client, mock_system, monkeypatch):
             sm_mod.settings._user = orig_user
             sm_mod.settings._runtime = orig_runtime
             sm_mod.settings._config = orig_config
-        # Restore the file too — tests may have written via the bypass paths
-        # above. If the file didn't exist at entry and a test created it,
-        # delete it to leave the filesystem in its original state.
-        if file_snapshot is not None:
-            user_settings_path.write_bytes(file_snapshot)
-        elif user_settings_path.exists():
-            user_settings_path.unlink()
 
 
 # ─── GET /api/settings/{key} ─────────────────────────────────────────────────

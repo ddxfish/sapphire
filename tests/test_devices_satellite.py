@@ -326,7 +326,13 @@ def test_wake_word(pi):
 # --- when it goes wrong --------------------------------------------------------
 
 def test_every_example_in_the_help_really_runs(pi):
-    with patch.object(voice, 'render', return_value=(b'OggS', 'audio/ogg')), \
+    # storage 'backup' is one of the examples: backup_now starts a thread that
+    # makes a real manual backup and rotates. Unpatched, every full run left a
+    # 150 MB backup of the dev box's real user/ in its real user_backups/, from
+    # a thread that outlived this test (found 2026-11-14). The backup itself is
+    # tests/test_devices_storage.py's.
+    with patch('core.devices.storage.backup_now', return_value=('A backup is on its way.', True)), \
+         patch.object(voice, 'render', return_value=(b'OggS', 'audio/ogg')), \
          patch.object(voice, 'stt_refusal', return_value=''), \
          patch.object(voice, 'transcribe', return_value=('hi', '')), \
          patch.object(voice, 'pressed', return_value={'ok': True, 'accepted': False}), \

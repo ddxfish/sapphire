@@ -554,4 +554,26 @@ def test_ramp_follows_the_engine_speed():
     fast, slow = run(4.0), run(1.5)
     assert fast[0] == slow[0] == 22                  # one sentence first either way
     assert fast[1] > slow[1]                         # a faster engine ramps faster
-    assert len(run(1.1)) == 1 and len(run(ramp=False)) == 1   # too slow / off: one paragraph chunk
+    assert len(run(ramp=False)) == 1                 # off: one paragraph chunk
+
+
+def test_a_slow_engine_speaks_a_sentence_at_a_time():
+    # No cliff: under 1.3x the reply used to wait whole (a CPU at 1.29x was
+    # silent ~10 s where 1.30x spoke in 2). An engine that cannot get ahead
+    # takes one sentence per chunk, as a satellite's lane always did.
+    s = "The lamp turns slowly. " * 30
+
+    def run(speed):
+        c = SpeechChunker(split_mode="paragraph")
+        c.speed = speed
+        out = []
+        for w in s.split(" "):
+            out += c.push(w + " ")
+        return [len(x["text"]) for x in out + c.flush()]
+
+    for speed in (0.3, 0.8):
+        assert set(run(speed)) == {22}, speed        # never ahead: every chunk one sentence
+    assert run(1.0)[:8] == [22] * 8                  # level with speech: the same
+    near = run(1.1)
+    assert near[0] == 22 and len(near) > 6           # barely ahead: grows, slowly
+    assert run(1.29)[:4] == run(1.3)[:4]             # the old cliff edge: the same reply either side

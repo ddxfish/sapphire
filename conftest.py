@@ -25,6 +25,93 @@ except Exception:
     pass
 
 
+# Her real data is never a test fixture (2026-11-14). The full suite was found
+# writing the dev box's real install on every run: user/history/.active_chat
+# (a ChatSessionManager() built on the default folder also OPENS the real
+# history database), user/settings.json (read and written back about 25 times
+# by one fixture), and a 150 MB "manual" backup in user_backups/ whose rotation
+# can delete a backup the person made. These refuse at the class, for the whole
+# process and from import time, so a fresh instance, the module singleton and a
+# thread that outlives its test's monkeypatch all meet the same refusal, and
+# every attempt is listed at the end of the run with the test that made it.
+import os
+
+_REAL = Path(__file__).parent.resolve()
+_LEAKS = []
+
+
+def _same(a, b):
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, TypeError):
+        return False
+
+
+def _refuse(what):
+    line = f"{what}  [{os.environ.get('PYTEST_CURRENT_TEST', 'no test running: collection or a stray thread')}]"
+    _LEAKS.append(line)
+    raise RuntimeError(f"a test reached the real install: {line}. Point it at tmp_path.")
+
+
+try:
+    from core.chat import history as _hist_mod
+    _real_history_init = _hist_mod.ChatSessionManager.__init__
+
+    def _guarded_history_init(self, *a, **k):
+        folder = Path(k.get('history_dir', a[1] if len(a) > 1 else "user/history"))
+        if _same(folder if folder.is_absolute() else _REAL / folder, _REAL / "user" / "history"):
+            _refuse("ChatSessionManager() on the real user/history (pass history_dir=str(tmp_path))")
+        return _real_history_init(self, *a, **k)
+
+    _hist_mod.ChatSessionManager.__init__ = _guarded_history_init
+except Exception:
+    pass
+
+try:
+    from core import settings_manager as _sm_mod
+
+    def _guard_settings(name):
+        real = getattr(_sm_mod.SettingsManager, name)
+
+        def guarded(self, *a, **k):
+            if _same(Path(self.BASE_DIR) / 'user' / 'settings.json', _REAL / 'user' / 'settings.json'):
+                _refuse(f"SettingsManager.{name} would write the real user/settings.json")
+            return real(self, *a, **k)
+        setattr(_sm_mod.SettingsManager, name, guarded)
+
+    for _name in ('save', '_remove_key_from_file', 'reset_to_defaults'):
+        _guard_settings(_name)
+except Exception:
+    pass
+
+try:
+    from core import backup as _bk_mod
+
+    def _guard_backup(name):
+        real = getattr(_bk_mod.Backup, name)
+
+        def guarded(self, *a, **k):
+            dest = (k.get('dest_dir') or (a[2] if len(a) > 2 else None)) if name == 'create_backup' else None
+            if _same(dest or self.backup_dir, _REAL / 'user_backups'):
+                _refuse(f"Backup.{name} in the real user_backups/")
+            if name == 'create_backup' and _same(self.user_dir, _REAL / 'user'):
+                _refuse("Backup.create_backup of the real user/ folder")
+            return real(self, *a, **k)
+        setattr(_bk_mod.Backup, name, guarded)
+
+    for _name in ('create_backup', 'rotate_backups', 'delete_backup'):
+        _guard_backup(_name)
+except Exception:
+    pass
+
+
+def pytest_terminal_summary(terminalreporter):
+    if _LEAKS:
+        terminalreporter.section("REAL INSTALL REACHED BY TESTS (refused)")
+        for line in dict.fromkeys(_LEAKS):
+            terminalreporter.write_line(line)
+
+
 @pytest.fixture(autouse=True)
 def _hermetic_notify(tmp_path, monkeypatch):
     """The notification center (core/notify.py) is module state with a store

@@ -214,12 +214,16 @@ class SpeechChunker:
             # x realtime, chunk k is ready in time when
             # L_k <= L_0 + (speed - 1) * (L_0 + ... + L_k-1). A short first
             # sentence and then a whole paragraph left a ~3 s hole on a CPU
-            # laptop (2026-11-10). Chars stand in for seconds. Off (`ramp`
-            # False, or an engine too slow to get ahead): chunks as split_mode
-            # cuts them, the way they were before.
+            # laptop (2026-11-10). Chars stand in for seconds. An engine too
+            # slow to get ahead gets a cap no sentence fits, so it takes one
+            # sentence at a time: first words early, short pauses between. It
+            # used to fall back to whole paragraphs under 1.3x, and a CPU at
+            # 1.29x waited on the whole reply (~10 s) while the same engine
+            # answered a satellite at once (2026-11-14). Off (`ramp` False):
+            # chunks as split_mode cuts them.
             early = None
             r = self.speed or 2.0
-            if self.ramp and r >= 1.3:
+            if self.ramp:
                 cap = int(self._first_len + (r - 1) * self._sum_len + self._chunk_index)
                 if self._chunk_index == 0:
                     early = _sentence_cut(self._clean_buf, self.min_chars)

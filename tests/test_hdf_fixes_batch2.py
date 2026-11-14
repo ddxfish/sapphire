@@ -33,7 +33,7 @@ def test_init_tts_provider_waits_on_old_client():
 @pytest.fixture
 def session_manager_with_images(tmp_path):
     from core.chat.history import ChatSessionManager
-    sm = ChatSessionManager()
+    sm = ChatSessionManager(history_dir=str(tmp_path))
     sm._db_path = tmp_path / "chats.db"
     sm._init_db()
     sm.create_chat('imagechat')
@@ -109,7 +109,7 @@ def test_remove_tool_call_prunes_images(tmp_path):
     removing a tool result carrying an `<<IMG::tool:X>>` marker leaves the
     image blob in tool_images forever."""
     from core.chat.history import ChatSessionManager
-    sm = ChatSessionManager()
+    sm = ChatSessionManager(history_dir=str(tmp_path))
     sm._db_path = tmp_path / "chats.db"
     sm._init_db()
     sm.create_chat('trinity')

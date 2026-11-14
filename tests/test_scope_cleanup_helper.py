@@ -35,7 +35,7 @@ def session_manager_with_chats(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'CHAT_HISTORY_DIR', str(tmp_path), raising=False)
     monkeypatch.setattr(config, 'BASE_DIR', str(tmp_path), raising=False)
 
-    sm = ChatSessionManager()
+    sm = ChatSessionManager(history_dir=str(tmp_path))
     # Redirect the db path (ChatSessionManager resolves in __init__)
     sm._db_path = tmp_path / "chats.db"
     sm._init_db()

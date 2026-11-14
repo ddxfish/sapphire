@@ -19,7 +19,7 @@ import pytest
 @pytest.fixture
 def session_manager_tmp(tmp_path, monkeypatch):
     from core.chat.history import ChatSessionManager
-    sm = ChatSessionManager()
+    sm = ChatSessionManager(history_dir=str(tmp_path))
     sm._db_path = tmp_path / "chats.db"
     sm._init_db()
     sm.create_chat('trinity')
