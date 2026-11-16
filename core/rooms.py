@@ -263,6 +263,13 @@ def repoint_prompt(old, new):
     add_seat, prompt included — a rename left the seat on a dead name, and
     its turns fell back to the main chat's prompt (ultrareview 2026-11-08).
     Returns the touched room names."""
+    return repoint_seat_setting('prompt', old, new)
+
+
+def repoint_seat_setting(key, old, new):
+    """Every seat whose frozen settings[`key`] was `old` now holds `new` (a
+    prompt renamed; a scope deleted, which goes to 'none'). Returns the
+    touched room names."""
     hit = []
     with _lock:
         for r in list_rooms():
@@ -275,8 +282,8 @@ def repoint_prompt(old, new):
             moved = False
             for x in seats:
                 st = x.get('settings') if isinstance(x, dict) else None
-                if isinstance(st, dict) and st.get('prompt') == old:
-                    x['settings'] = {**st, 'prompt': new}
+                if isinstance(st, dict) and st.get(key) == old:
+                    x['settings'] = {**st, key: new}
                     moved = True
             if moved:
                 _write(chat, {**raw, 'seats': seats})

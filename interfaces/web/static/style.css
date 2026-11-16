@@ -9801,15 +9801,16 @@ body.setup-mode #app-content { margin-left: 0; margin-bottom: 0; width: 100%; he
 .easy-row-head { display: grid; grid-template-columns: 96px 1fr auto; align-items: center; gap: 12px; padding: 12px 14px; }
 .easy-row-title { font-size: var(--font-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .easy-row-pick { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.easy-row-text { font-weight: 600; }
-.easy-row-why { font-size: var(--font-sm); color: var(--text-muted); line-height: 1.4; }
+.easy-row-text { font-weight: 600; overflow-wrap: anywhere; }
+.easy-row-why { font-size: var(--font-sm); color: var(--text-muted); line-height: 1.4; overflow-wrap: anywhere; }
+.easy-row .btn-sm:disabled { opacity: 0.5; cursor: not-allowed; background: var(--bg-tertiary); }
 .easy-row-fold { padding: 4px 14px 14px; border-top: 1px solid var(--border); }
 .easy-row-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 4px; font-size: var(--font-sm); line-height: 1.4; }
 .easy-row-acts { display: flex; gap: 6px; align-items: center; }
 .easy-row-test { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 0 14px 12px 122px; }
 .easy-row-test[hidden] { display: none; }
 .easy-foot { margin: -8px 0 20px; }
-.easy-try-result { flex: 1; min-width: 200px; font-size: var(--font-sm); line-height: 1.4; color: var(--text-muted); }
+.easy-try-result { flex: 1; min-width: 200px; font-size: var(--font-sm); line-height: 1.4; color: var(--text-muted); overflow-wrap: anywhere; }
 .easy-try-result.success { color: var(--success, #22c55e); }
 .easy-try-result.error { color: var(--error, #ef5350); }
 /* the ears test: the row glows yellow while she warns and counts, red while the microphone is open */

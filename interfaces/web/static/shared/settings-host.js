@@ -27,7 +27,7 @@
 // save() reassign. commit/commitMerge/getValue/markChanged read them the same way.
 import * as api from './settings-api.js';
 import { showToast } from './toast.js';
-import { setupModalClose } from './modal.js';
+import { setupModalClose, escapeHtml as esc } from './modal.js';
 import { snapScroll, editableFocused } from './dom-guard.js';
 import { commitInto, mergeInto } from './settings-commit.js';
 import * as eventBus from '../core/event-bus.js';
@@ -708,13 +708,14 @@ export function createHost(shell = {}) {
     function _showVoicePicker(voices, targetInput, parentEl) {
         const popup = document.createElement('div');
         popup.className = 'sched-editor-overlay';
+        // escaped: a shared-library voice's name is whatever its maker typed
         const rows = voices.map(v =>
-            `<div class="voice-option" data-voice-id="${v.voice_id}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border-subtle);display:flex;justify-content:space-between;align-items:center">
+            `<div class="voice-option" data-voice-id="${esc(String(v.voice_id ?? ''))}" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border-subtle);display:flex;justify-content:space-between;align-items:center">
                 <div>
-                    <strong>${v.name}</strong>
-                    <span style="font-size:0.8em;color:var(--text-muted);margin-left:8px">${v.category || ''}</span>
+                    <strong>${esc(String(v.name ?? ''))}</strong>
+                    <span style="font-size:0.8em;color:var(--text-muted);margin-left:8px">${esc(String(v.category || ''))}</span>
                 </div>
-                <span style="font-size:0.75em;color:var(--text-muted);font-family:monospace">${v.voice_id.slice(0, 12)}...</span>
+                <span style="font-size:0.75em;color:var(--text-muted);font-family:monospace">${esc(String(v.voice_id ?? '').slice(0, 12))}...</span>
             </div>`
         ).join('');
 

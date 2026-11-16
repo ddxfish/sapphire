@@ -105,6 +105,59 @@ except Exception:
     pass
 
 
+# Her personas and the new-chat defaults (2026-11-16): the persona manager is
+# one singleton on the real user/personas/personas.json, and a scope delete now
+# releases the personas that held the scope (core/referrers.py scope_deleted).
+# A test that deletes a scope a real persona happens to hold would have
+# rewritten her file. Reading stays allowed; a write is refused.
+try:
+    from core.personas import persona_manager as _pm_singleton     # the package exports the INSTANCE under the module's name
+    _PersonaManager = type(_pm_singleton)
+    _real_persona_save = _PersonaManager._save_to_user
+
+    def _guarded_persona_save(self, *a, **k):
+        if _same(Path(self.USER_DIR) / 'personas.json', _REAL / 'user' / 'personas' / 'personas.json'):
+            _refuse("PersonaManager._save_to_user would write the real user/personas/personas.json")
+        return _real_persona_save(self, *a, **k)
+
+    _PersonaManager._save_to_user = _guarded_persona_save
+except Exception:
+    pass
+
+try:
+    import json as _json
+    _real_repoint_defaults = _hist_mod.repoint_chat_defaults
+
+    def _guarded_repoint_defaults(key, old, new):
+        path = _hist_mod._user_chat_defaults_path()
+        if _same(path, _REAL / 'user' / 'settings' / 'chat_defaults.json'):
+            try:
+                held = _json.loads(path.read_text(encoding='utf-8-sig')).get(key) == old
+            except Exception:
+                held = False
+            if held:
+                _refuse("repoint_chat_defaults would rewrite the real user/settings/chat_defaults.json")
+            return False
+        return _real_repoint_defaults(key, old, new)
+
+    _hist_mod.repoint_chat_defaults = _guarded_repoint_defaults
+except Exception:
+    pass
+
+
+@pytest.fixture(autouse=True)
+def _real_personas_hold_no_scope(monkeypatch):
+    """A scope delete releases the personas that held the scope, and any test that deletes
+    a scope reaches the persona singleton, which is loaded from the real personas.json: a
+    Mind Palace test deleting a scope one of her personas really holds changed it in memory
+    and was refused at the write (the guard above, 2026-11-16). In tests the real singleton
+    holds nothing; a test of the release builds its own manager."""
+    try:
+        monkeypatch.setattr(_pm_singleton, 'repoint_setting', lambda key, old, new: [], raising=False)
+    except Exception:
+        pass
+
+
 def pytest_terminal_summary(terminalreporter):
     if _LEAKS:
         terminalreporter.section("REAL INSTALL REACHED BY TESTS (refused)")

@@ -48,16 +48,28 @@ logger = logging.getLogger(__name__)
 _restart_requested = False
 _shutdown_requested = False
 
+def _switches_closing():
+    """A provider switch this exit cuts short is not a failed one: its pick is
+    kept and runs again at the next boot (core/provider_switch.py). Only sets
+    a flag: safe from a signal handler."""
+    try:
+        from core import provider_switch
+        provider_switch.closing()
+    except Exception:
+        pass
+
 def request_restart():
     """Signal that a restart has been requested."""
     global _restart_requested
     _restart_requested = True
+    _switches_closing()
     logger.info("Restart requested - will exit with code 42")
 
 def request_shutdown():
     """Signal that a clean shutdown has been requested."""
     global _shutdown_requested
     _shutdown_requested = True
+    _switches_closing()
     logger.info("Shutdown requested")
 
 # Bootstrap user files before any modules try to load them
@@ -1491,6 +1503,7 @@ def run():
     def handle_shutdown_signal(signum, frame):
         global _shutdown_requested
         _shutdown_requested = True
+        _switches_closing()
     
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     if hasattr(signal, 'SIGTERM'):
@@ -1623,6 +1636,13 @@ def run():
         # The Sapphire Launcher's LLM joins Auto, first, the first boot it is seen
         from core import launcher_llm
         launcher_llm.adopt_in_background()
+
+        # The setup wizard's picks that a restart cut short mid-download run again
+        try:
+            from core import provider_switch
+            provider_switch.resume()
+        except Exception as e:
+            logger.warning(f"picks left by a restart were not picked up: {e}")
 
         # Wire scheduler into plugin loader for plugin schedule tasks
         from core.plugin_loader import plugin_loader

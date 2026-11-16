@@ -267,7 +267,9 @@ def status():
 
 CLI_TIMEOUT = 2.0       # seconds; 10-20 ms on Linux, unmeasured on real Windows
 CLI_TTL = 3.0           # one ask serves this long (the Easy page polls every 4 s)
-_cli = {'at': 0.0, 'reply': None}
+CLI_REST = 60.0         # asks that never end are spaced out up to this (6, 12, 24, 48, 60 s): one slow first run is forgiven
+_cli = {'at': 0.0, 'reply': None, 'ttl': CLI_TTL, 'slow': 0}
+_asking = threading.Lock()      # one ask at a time: a second caller gets the last reply
 
 
 def _launcher_exe():
@@ -291,37 +293,67 @@ def _launcher_exe():
     return str(p) if p.is_absolute() and p.is_file() else None
 
 
+def _ask(exe):
+    """Run `<exe> --llm-status`: (its stdout, its exit code). Raises when it
+    cannot be run or does not end in CLI_TIMEOUT, and is never held longer than
+    a second past that. Not subprocess.run: on Windows it reads the pipes again
+    after the kill with NO timeout, so a child of the launcher that inherited
+    stdout parked the caller for good, one more worker thread with every poll
+    of the Easy page (hunt 2026-11-16)."""
+    import subprocess
+    p = subprocess.Popen([exe, '--llm-status'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace',
+                         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    try:
+        out, _ = p.communicate(timeout=CLI_TIMEOUT)
+        return out, p.returncode
+    except subprocess.TimeoutExpired:
+        p.kill()
+        try:
+            p.communicate(timeout=1.0)      # reap it; whoever still holds the pipe is not waited for
+        except Exception:
+            pass
+        raise
+
+
 def cli_status():
     """The launcher's --llm-status reply (a dict with ok true: phase, job,
     running, last_job), or None when it cannot be asked: no launcher that
     knows the switch, managed or Docker, it failed, or it took too long.
-    Never raises. Asked at most once per CLI_TTL."""
+    Never raises. Asked at most once per CLI_TTL, by one caller at a time, and
+    less and less often while its asks do not end (up to CLI_REST apart)."""
     import subprocess
     import time
     from core.settings_manager import settings
     if settings.is_managed() or settings.is_docker():
         return None
-    now = time.monotonic()
     with _lock:
-        if _cli['at'] and now - _cli['at'] < CLI_TTL:
+        if _cli['at'] and time.monotonic() - _cli['at'] < _cli.get('ttl', CLI_TTL):
             return _cli['reply']
-    reply = None
-    exe = _launcher_exe()
-    if exe:
-        try:
-            r = subprocess.run([exe, '--llm-status'], capture_output=True, text=True, encoding='utf-8',
-                               errors='replace', timeout=CLI_TIMEOUT, stdin=subprocess.DEVNULL,
-                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            lines = [ln for ln in (r.stdout or '').splitlines() if ln.strip()]
-            data = json.loads(lines[-1]) if lines else None
-            if isinstance(data, dict) and data.get('ok') is True and isinstance(data.get('phase'), str):
-                reply = data
-            else:
-                logger.debug(f"[LAUNCHER] --llm-status said no (exit {r.returncode}): {(r.stdout or '')[:200]}")
-        except Exception as e:      # not there any more, not runnable, too slow, not JSON
-            logger.debug(f"[LAUNCHER] --llm-status could not be asked: {e}")
-    with _lock:
-        _cli.update(at=time.monotonic(), reply=reply)
+    if not _asking.acquire(blocking=False):
+        return _cli['reply']
+    reply, ttl, slow = None, CLI_TTL, 0
+    try:
+        exe = _launcher_exe()
+        if exe:
+            try:
+                out, code = _ask(exe)
+                lines = [ln for ln in (out or '').splitlines() if ln.strip()]
+                data = json.loads(lines[-1]) if lines else None
+                if isinstance(data, dict) and data.get('ok') is True and isinstance(data.get('phase'), str):
+                    reply = data
+                else:
+                    logger.debug(f"[LAUNCHER] --llm-status said no (exit {code}): {(out or '')[:200]}")
+            except subprocess.TimeoutExpired:
+                slow = _cli.get('slow', 0) + 1
+                ttl = min(CLI_REST, CLI_TTL * 2 ** slow)
+                logger.info(f"[LAUNCHER] --llm-status did not answer in {CLI_TIMEOUT:g} s; asked again in {ttl:g} s")
+            except Exception as e:      # not there any more, not runnable, not JSON
+                logger.debug(f"[LAUNCHER] --llm-status could not be asked: {e}")
+    finally:
+        with _lock:
+            _cli.update(at=time.monotonic(), reply=reply, ttl=ttl, slow=slow)
+        _asking.release()
     return reply
 
 

@@ -208,7 +208,9 @@ def test_easy_second_run_offers_and_its_tests_install_nothing_by_themselves():
     # the tests: this computer's speakers and microphone, only where it has them
     assert "'/api/setup/easy/say'" in e and "fetch('/api/setup/easy/listen'" in e
     assert "const testable = id => id === 'brain' || (!!plan?.sound && (id === 'voice' ? plan.speakers !== false : plan.mic !== false));" in e
-    assert "if (key && !busy && key in w.host.pendingChanges && !(which in waiting)) {" in e    # "Set up now" only for a staged pick
+    # "Set up now" only for a staged pick, and never for a wake word the save would drop (her ears are off)
+    assert "if (key && !busy && !moot && key in w.host.pendingChanges && !(which in waiting)) {" in e
+    assert "const moot = key === 'WAKE_WORD_ENABLED' && deaf();" in e
     assert "if (!closed && hearing === take)" in e                               # a stream cut short says so
     assert "if (el && el._html !== html)" in e                                   # the Brain poll never replaces a button mid-click
     assert "if (brain) armBrain(); else loadBrain(false);" in e                  # the whole look once per visit, not per repaint
@@ -232,7 +234,8 @@ def test_the_page_follows_the_warning_before_the_microphone_test_listens():
     says so and beeps three times (core/setup_easy.py _warn); the Ears row glows yellow while
     it does and red while the microphone is open."""
     e = _src('views/setup-steps/easy.js')
-    assert "if (ev.warn) { glow('warning');" in e and "else if (ev.count) { glow('warning');" in e
+    assert "if (ev.warn) {\n                glow('warning');" in e and "else if (ev.count) { glow('warning');" in e
+    assert "ev.spoken === false ?" in e                                              # no voice yet: the page does not say she is speaking
     assert "else if (ev.mic) { glow('listening');" in e and "else if (ev.clear) { glow(''); show(false);" in e
     test = e.split('async function listenTest')[1].split('const TESTS')[0]
     assert "glow('');" in test.split('} finally {')[1]                               # however the test ends, the glow goes

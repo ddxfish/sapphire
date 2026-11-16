@@ -1,7 +1,10 @@
 """Regression guards for scope-orphan sweep — Scout 2 HIGH finding (2026-04-18).
 
 When a scope is deleted, chats whose settings still reference that scope by
-name must be rewritten to 'default'. Without this, apply_scopes_from_settings
+name must be rewritten: to 'none' since 2026-11-16 ('default' is a real scope, the
+stock personas' own memory, and a deleted scope's chats were moved INTO it), and
+personas, tasks, the new-chat defaults and room seats that held the name are
+released with them (core/referrers.py scope_deleted). Without this, apply_scopes_from_settings
 on next activation sets the ContextVar to the ghost string and the AI writes
 into a room the UI can't show. Same class as the Mind-view hardcoded-scope
 bug we fixed same day.
@@ -167,6 +170,12 @@ def _stub_system_with_session_manager(session_manager, monkeypatch):
     sys_mock = MagicMock()
     sys_mock.llm_chat.session_manager = session_manager
     monkeypatch.setattr(apifa, '_system', sys_mock, raising=False)
+    # the other holders of a scope name (personas, tasks, the new-chat defaults,
+    # room seats) are the REAL stores here: recorded, never touched
+    from core import referrers
+    released = []
+    monkeypatch.setattr(referrers, 'scope_deleted', lambda key, name, to='none': released.append((key, name, to)) or [])
+    return released
 
 
 def test_memory_delete_scope_triggers_sweep(session_manager_with_chats, tmp_path, monkeypatch):
@@ -177,15 +186,16 @@ def test_memory_delete_scope_triggers_sweep(session_manager_with_chats, tmp_path
     memory_tools._ensure_db()
     memory_tools.create_scope('work')
 
-    _stub_system_with_session_manager(session_manager_with_chats, monkeypatch)
+    released = _stub_system_with_session_manager(session_manager_with_chats, monkeypatch)
 
     memory_tools.delete_scope('work')
+    assert released == [('memory_scope', 'work', 'none')]       # and everyone else who held the name
 
-    # chat_work should have been swept to default
+    # chat_work is swept to NONE: 'default' is a real scope, somebody's memory
     conn = sqlite3.connect(session_manager_with_chats._db_path)
     s = json.loads(conn.execute("SELECT settings FROM chats WHERE name='chat_work'").fetchone()[0])
     conn.close()
-    assert s['memory_scope'] == 'default', "memory sweep didn't fire"
+    assert s['memory_scope'] == 'none', "memory sweep didn't fire"
 
 
 def test_goals_delete_scope_triggers_sweep(session_manager_with_chats, tmp_path, monkeypatch):
@@ -205,7 +215,7 @@ def test_goals_delete_scope_triggers_sweep(session_manager_with_chats, tmp_path,
     conn = sqlite3.connect(session_manager_with_chats._db_path)
     s = json.loads(conn.execute("SELECT settings FROM chats WHERE name='chat_work'").fetchone()[0])
     conn.close()
-    assert s['goal_scope'] == 'default', "goals sweep didn't fire"
+    assert s['goal_scope'] == 'none', "goals sweep didn't fire"
 
 
 def test_knowledge_delete_scope_triggers_sweep(session_manager_with_chats, tmp_path, monkeypatch):
@@ -226,7 +236,7 @@ def test_knowledge_delete_scope_triggers_sweep(session_manager_with_chats, tmp_p
     conn = sqlite3.connect(session_manager_with_chats._db_path)
     s = json.loads(conn.execute("SELECT settings FROM chats WHERE name='chat_work'").fetchone()[0])
     conn.close()
-    assert s['knowledge_scope'] == 'default', "knowledge sweep didn't fire"
+    assert s['knowledge_scope'] == 'none', "knowledge sweep didn't fire"
 
 
 def test_knowledge_delete_people_scope_triggers_sweep(session_manager_with_chats, tmp_path, monkeypatch):
@@ -244,7 +254,7 @@ def test_knowledge_delete_people_scope_triggers_sweep(session_manager_with_chats
     conn = sqlite3.connect(session_manager_with_chats._db_path)
     s = json.loads(conn.execute("SELECT settings FROM chats WHERE name='chat_home'").fetchone()[0])
     conn.close()
-    assert s['people_scope'] == 'default', "people_scope sweep didn't fire"
+    assert s['people_scope'] == 'none', "people_scope sweep didn't fire"
 
 
 # ─── Helper is fault-tolerant when system singleton not available ────────────
@@ -256,7 +266,57 @@ def test_sweep_helper_noop_when_system_unavailable(monkeypatch):
     import core.api_fastapi as apifa
     # Force get_system() to raise
     monkeypatch.setattr(apifa, '_system', None, raising=False)
+    from core import referrers
+    monkeypatch.setattr(referrers, 'scope_deleted', lambda key, name, to='none': [])
 
     # Should return empty list, not crash
     result = scope_cleanup.sweep_orphaned_scope_ref('memory_scope', 'anything')
     assert result == []
+
+
+# ─── Everyone else who held the name (2026-11-16) ────────────────────────────
+
+def test_a_deleted_scope_is_released_by_personas_tasks_and_room_seats(monkeypatch, tmp_path):
+    """A second persona's scope deleted: the persona kept the dead name, and re-activating it brought the
+    scope back as a ghost on the next write. Everyone goes to 'none', and only that one key."""
+    from types import SimpleNamespace
+    import sys
+    import threading
+    from core import referrers, rooms
+    import core.personas                                          # the package exports the instance under the module's name
+    pm_mod = sys.modules['core.personas.persona_manager']
+    pm = pm_mod.PersonaManager.__new__(pm_mod.PersonaManager)
+    pm._lock, pm.USER_DIR, saves = threading.RLock(), tmp_path, []
+    pm._personas = {
+        'helper': {'settings': {'memory_scope': 'workshop', 'knowledge_scope': 'workshop', 'prompt': 'helper'}},
+        'sapphire': {'settings': {'memory_scope': 'default', 'prompt': 'sapphire'}},
+    }
+    monkeypatch.setattr(pm, '_save_to_user', lambda: saves.append(1) or True)
+    monkeypatch.setattr(pm_mod, 'persona_manager', pm)
+    tasks = [{'name': 'nightly', 'memory_scope': 'workshop'}, {'name': 'other', 'memory_scope': 'default'}]
+
+    def repoint_ref(key, old, new):
+        hit = [t for t in tasks if t.get(key) == old]
+        for t in hit:
+            t[key] = new
+        return [t['name'] for t in hit]
+    monkeypatch.setattr(referrers, '_system', lambda: SimpleNamespace(continuity_scheduler=SimpleNamespace(repoint_ref=repoint_ref)))
+    monkeypatch.setattr(referrers, '_chat_defaults', lambda key, old, new: [])
+    seats = []
+    monkeypatch.setattr(rooms, 'repoint_seat_setting', lambda key, old, new: seats.append((key, old, new)) or ['den'])
+
+    touched = referrers.scope_deleted('memory_scope', 'workshop')
+    assert pm._personas['helper']['settings'] == {'memory_scope': 'none', 'knowledge_scope': 'workshop', 'prompt': 'helper'}
+    assert pm._personas['sapphire']['settings']['memory_scope'] == 'default' and saves == [1]      # 'default' is somebody's: untouched
+    assert tasks[0]['memory_scope'] == 'none' and tasks[1]['memory_scope'] == 'default'
+    assert seats == [('memory_scope', 'workshop', 'none')]
+    assert touched == ['persona helper', 'task nightly', 'room den']
+    assert referrers.scope_deleted('memory_scope', 'nobody-holds-this') == ['room den'] and saves == [1]   # nothing held: nothing written
+
+
+def test_the_sweep_never_moves_anyone_into_default():
+    import inspect
+    from core.chat import scope_cleanup
+    from core import referrers
+    assert inspect.signature(scope_cleanup.sweep_orphaned_scope_ref).parameters['reset_to'].default == 'none'
+    assert inspect.signature(referrers.scope_deleted).parameters['to'].default == 'none'

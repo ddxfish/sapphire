@@ -456,9 +456,19 @@ def _resume_wakeword(system, listener_stopped, paused):
             pass
     if listener_stopped:
         try:
-            system.wake_detector.start_listening()
-        except Exception:
-            pass
+            det, rec = system.wake_detector, system.wake_word_recorder
+            det.start_listening()
+            # A wake turn that ended while the wake word was held here found
+            # `running` False: it left the microphone closed and its thread
+            # ended, so the start above found no stream and gave up quietly,
+            # deaf while every status said ON (hunt 2026-11-16). Reopen it.
+            if not getattr(det, 'running', True) and rec.get_stream() is None:
+                if rec.start_recording_settled():
+                    det.start_listening()
+                else:
+                    logger.error("[AUDIO] the wake word's microphone did not reopen after an audio test")
+        except Exception as e:
+            logger.warning(f"[AUDIO] the wake word did not resume after an audio test: {e!r}")
 
 
 @router.post("/api/audio/test-input")

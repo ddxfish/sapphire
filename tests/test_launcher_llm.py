@@ -391,20 +391,31 @@ def test_auto_that_found_a_brain_never_probes_for_the_launcher(monkeypatch):
 
 @pytest.fixture
 def cli(fake, tmp_path, monkeypatch):
-    """A launcher program on disk named by llm.json, and a recorder where subprocess.run was."""
+    """A launcher program on disk named by llm.json, and a recorder where the process would start."""
     import subprocess
     fake()
     exe = tmp_path / 'Sapphire-Launcher.AppImage'
     exe.write_text('')
-    st = {'exe': exe, 'runs': [], 'out': json.dumps({'ok': True, 'phase': 'stopped'}), 'code': 0, 'raise': None}
+    st = {'exe': exe, 'runs': [], 'out': json.dumps({'ok': True, 'phase': 'stopped'}), 'code': 0, 'raise': None,
+          'hangs': False, 'killed': 0, 'waits': []}
 
-    def run(argv, **kw):
-        st['runs'].append((argv, kw))
-        if st['raise']:
-            raise st['raise']
-        return SimpleNamespace(stdout=st['out'], returncode=st['code'])
-    monkeypatch.setattr(subprocess, 'run', run)
-    monkeypatch.setattr(L, '_cli', {'at': 0.0, 'reply': None})
+    class Popen:
+        def __init__(self, argv, **kw):
+            st['runs'].append((argv, kw))
+            if st['raise']:
+                raise st['raise']
+            self.returncode = st['code']
+
+        def communicate(self, timeout=None):
+            st['waits'].append(timeout)
+            if st['hangs']:
+                raise subprocess.TimeoutExpired('launcher', timeout)
+            return st['out'], None
+
+        def kill(self):
+            st['killed'] += 1
+    monkeypatch.setattr(subprocess, 'Popen', Popen)
+    monkeypatch.setattr(L, '_cli', {'at': 0.0, 'reply': None, 'ttl': L.CLI_TTL, 'slow': 0})
 
     def llm_json(body):
         f = tmp_path / 'xdg' / 'sapphire' / 'llm.json'
@@ -434,7 +445,7 @@ def test_status_is_one_fixed_call_with_no_window_and_a_short_wait(cli):
     assert reply == {'ok': True, 'phase': 'stopped'}
     argv, kw = cli['runs'][0]
     assert argv == [str(cli['exe']), '--llm-status']            # the path from the file and one fixed switch, nothing else
-    assert kw['timeout'] == L.CLI_TIMEOUT and kw['stdin'] is not None and 'shell' not in kw
+    assert cli['waits'] == [L.CLI_TIMEOUT] and kw['stdin'] is not None and 'shell' not in kw
     assert L.cli_status() == reply and len(cli['runs']) == 1    # one ask serves the next few seconds
 
 
@@ -445,12 +456,32 @@ def test_a_launcher_that_fails_or_stalls_is_simply_not_known(cli):
         cli.update(out=out, code=code)
         L._cli.update(at=0.0, reply=None)
         assert L.cli_status() is None, out
-    cli['raise'] = subprocess.TimeoutExpired('launcher', 2)
-    L._cli.update(at=0.0, reply=None)
-    assert L.cli_status() is None
     cli['raise'] = OSError('Exec format error')
     L._cli.update(at=0.0, reply=None)
     assert L.cli_status() is None
+
+
+def test_a_launcher_that_never_answers_is_killed_and_never_waited_on_twice(cli):
+    """subprocess.run on Windows reads the pipes again after the kill with no timeout: a child of the
+    launcher holding stdout parked a worker thread with every poll (hunt 2026-11-16)."""
+    cli['hangs'] = True
+    assert L.cli_status() is None
+    assert cli['killed'] == 1 and cli['waits'] == [L.CLI_TIMEOUT, 1.0]     # both waits bounded
+    assert L._cli['ttl'] == 2 * L.CLI_TTL                                   # and asked less often while it stalls
+    L._cli.update(at=0.0)
+    assert L.cli_status() is None and L._cli['ttl'] == 4 * L.CLI_TTL
+    cli['hangs'] = False
+    L._cli.update(at=0.0)
+    assert L.cli_status() == {'ok': True, 'phase': 'stopped'} and L._cli['ttl'] == L.CLI_TTL and L._cli['slow'] == 0
+
+
+def test_one_ask_at_a_time_and_the_others_get_the_last_reply(cli):
+    L._cli.update(at=0.0, reply={'ok': True, 'phase': 'downloading'})
+    assert L._asking.acquire(blocking=False)
+    try:
+        assert L.cli_status() == {'ok': True, 'phase': 'downloading'} and cli['runs'] == []
+    finally:
+        L._asking.release()
 
 
 @pytest.mark.parametrize('kw', [{'managed': True}, {'docker': True}])

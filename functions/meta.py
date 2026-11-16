@@ -578,10 +578,40 @@ def _reason(args):
     return (args.get('reason') or '').strip() or None
 
 
+def _another_lane(what):
+    """The refusal for a turn that is not on the operator's open chat (a phone
+    call, a satellite or a task on another chat, a chatless background turn),
+    else None. prompt_edit and prompt_pieces set/remove work on the ONE live
+    prompt state, which is the open chat's: from another lane they rewrote the
+    operator's active prompt and stamped it onto the lane's own chat (hunt
+    2026-11-16). The same test activate_prompt makes; a voice turn that lands
+    in the open chat is the open chat."""
+    try:
+        from core.chat.stream_brain import get_override
+        ov = get_override()
+    except Exception:
+        ov = None
+    if not ov:
+        return None
+    if ov.get('ephemeral'):
+        return f"You're not in a chat right now (background task) — {what} unchanged."
+    chat = ov.get('chat')
+    try:
+        if chat and chat != _system().llm_chat.session_manager.get_active_chat_name():
+            return (f"This turn is on the chat '{chat}', not the open one whose prompt this would change — "
+                    f"{what} unchanged. prompt_switch works from here; edits and pieces need the open chat.")
+    except Exception:
+        return None
+    return None
+
+
 def _prompt_edit(args):
     from core import prompts
     from core.event_bus import publish, Events
 
+    refused = _another_lane("the prompt is")
+    if refused:
+        return refused, False
     current = prompts.get_active_preset_name()
     if not current:
         return "No active prompt to edit.", False
@@ -710,6 +740,11 @@ def _prompt_pieces(args):
         if value is None:
             return _unknown_key_msg(component, key), False
         return f"[{component}/{key}]\n\n{value}", True
+
+    if action in ('set', 'remove'):         # what she WEARS: the open chat's live state (create/edit/delete are the library's)
+        refused = _another_lane("the pieces are")
+        if refused:
+            return refused, False
 
     if action == 'set':
         _require_component(component)

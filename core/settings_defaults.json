@@ -356,6 +356,7 @@
     "SETUP_STEP": "",
     "SETUP_CONSENT": null,
     "SETUP_MODE": "",
-    "LAUNCHER_LLM_ADOPTED": false
+    "LAUNCHER_LLM_ADOPTED": false,
+    "SETUP_PENDING": {}
   }
 }

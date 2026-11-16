@@ -150,17 +150,41 @@ def _voice(usable, card, state, full=None):
                 {'TTS_PROVIDER': 'kokoro', 'KOKORO_DEVICE': 'cpu'}, was=_was('TTS_PROVIDER', 'kokoro'))
 
 
+def _whisper_can_use_a_card():
+    """Linux: Whisper's engine (CTranslate2) needs CUDA 12's cuBLAS, and never
+    borrows torch's own. A GPU torch from PyTorch's index brings that library
+    (what the Sapphire Launcher installs); PyPI's torch is CUDA 13 and does
+    not, so on that install "Whisper on your card" landed on the processor with
+    a warning right after Finish (hunt 2026-11-16). Found by name only: nothing
+    is loaded into this process. Unreadable = trusted, as before."""
+    import sys
+    if sys.platform != 'linux':
+        return True
+    try:
+        from core.stt.providers.faster_whisper import _library_dir
+        if _library_dir():
+            return True
+        import ctypes.util
+        return '.so.12' in (ctypes.util.find_library('cublas') or '')
+    except Exception as e:
+        logger.debug(f"[easy] Whisper's GPU library not looked for: {e}")
+        return True
+
+
 def _ears(usable, card, full=None):
     """`full`: the free MiB of a usable card with no room for her ears."""
-    on_card = usable and full is None
+    lacks = bool(usable and full is None and not _whisper_can_use_a_card())
+    on_card = usable and full is None and not lacks
     pick = {'STT_PROVIDER': 'faster_whisper'}
     if usable or not card:              # a card that only waits for its fix keeps the device setting
         pick['FASTER_WHISPER_DEVICE'] = 'cuda' if on_card else 'cpu'
+    note = (f"Using your {card} takes one more download (550 MB). To get it later: Settings › STT, set Whisper's "
+            "device to cuda, and it offers the install." if lacks
+            else f"Your {card} has only {_gb(full)} free right now." if usable and not on_card else '')
     return _row('ears', 'stt', 'Ears',
                 f"Whisper on your {card}" if on_card else "Whisper on the processor",
                 "She hears you here, on this computer. Nothing you say leaves it.",
-                pick, was=_was('STT_PROVIDER', 'faster_whisper'),
-                note=f"Your {card} has only {_gb(full)} free right now." if usable and not on_card else '')
+                pick, was=_was('STT_PROVIDER', 'faster_whisper'), note=note)
 
 
 # The sound server's own doors, not devices: "default", PipeWire, and Windows' mapper.
@@ -174,10 +198,13 @@ def _generic(name):
 
 
 def _has_microphone():
-    """A real input: the sound server's own doors are there with nothing plugged in."""
+    """A real input: the sound server's own doors are there with nothing plugged
+    in, and Windows lists what the speakers play as inputs too ("... [Loopback]",
+    newer PortAudio): a wake word on one of those would listen to her own voice."""
     try:
         from core.audio.device_manager import get_device_manager
-        return any(not _generic(d.name) for d in get_device_manager().get_input_devices())
+        return any(not _generic(d.name) and not str(d.name or '').strip().lower().endswith('[loopback]')
+                   for d in get_device_manager().get_input_devices())
     except Exception as e:
         logger.debug(f"[easy] microphones not read: {e}")
         return False
@@ -252,8 +279,15 @@ def _now(rid, card):
 
 
 def _labels():
-    """Provider names for a row the person changed by hand."""
-    out = {'tts': {}, 'stt': {}}
+    """Provider names for a row the person changed by hand, and each wake word's
+    phrase by its model (a made one's file name is not what you say)."""
+    out = {'tts': {}, 'stt': {}, 'wakeword': {}}
+    try:
+        from core.wakeword import library
+        out['wakeword'] = {e['name']: str(e.get('phrase') or e['name']).title()
+                           for e in library.entries() if e.get('family') == 'onnx' and e.get('ok')}
+    except Exception as e:
+        logger.debug(f"[easy] wake word phrases not read: {e}")
     try:
         from core.tts.providers import tts_registry
         from core.stt.providers import stt_registry
@@ -338,9 +372,8 @@ def _not_ready(key, what, why=''):
 def _voice_block(system):
     """'' when she can speak on this computer now, else why not."""
     from core.tts.providers.null import NullTTSProvider
-    from core.tts.tts_client import local_playback_on
     from core.settings_manager import settings
-    prov = getattr(getattr(system, 'tts', None), 'provider', None)
+    prov =getattr(getattr(system, 'tts', None), 'provider', None)
     if (settings.get('TTS_PROVIDER', 'none') or 'none') == 'none' or prov is None or isinstance(prov, NullTTSProvider):
         return _not_ready('TTS_PROVIDER', 'voice is')
     try:
@@ -348,6 +381,13 @@ def _voice_block(system):
             return _not_ready('TTS_PROVIDER', 'voice is', getattr(prov, '_health_why', None) or '')
     except Exception as e:
         return _not_ready('TTS_PROVIDER', 'voice is', str(e))
+    return _voice_kept()
+
+
+def _voice_kept():
+    """Why a voice that works is kept off this computer's speakers, '' when it
+    is not. A setting, not something on its way: the light must not wait on it."""
+    from core.tts.tts_client import local_playback_on
     if not local_playback_on():
         return "Speech is set not to play on this computer (Settings › TTS › Play speech here)."
     from core.voice_privacy import tts_gate_reason
@@ -363,20 +403,29 @@ def _spoke(system):
     playback starting, which the player publishes."""
     from core.event_bus import get_event_bus, Events
     started = threading.Event()
-
-    def playing(event):
-        started.set()
     bus = get_event_bus()
+    playing = _on_these_speakers(started)
+    tts = system.tts                           # one client for the line and its stop: a voice switch mid-wait swaps system.tts
     bus.on((Events.TTS_PLAYING,), playing)
     try:
-        if system.tts.speak(LINE) is False:
+        if tts.speak(LINE) is False:
             return False
         if started.wait(SPEAK_S):
             return True
-        system.tts.stop()                      # no sound in time: it must not start after the tone
+        tts.stop()                             # no sound in time: it must not start after the tone
         return False
     finally:
         bus.off((Events.TTS_PLAYING,), playing)
+
+
+def _on_these_speakers(started):
+    """A tts_playing handler that counts this computer's speakers only: a
+    browser tab, a phone call and conversation mode publish the same event."""
+    def playing(event):
+        data = (event or {}).get('data') if isinstance(event, dict) else getattr(event, 'data', None)
+        if not isinstance(data, dict) or data.get('surface', 'local') == 'local':
+            started.set()
+    return playing
 
 
 def say(system):
@@ -444,6 +493,10 @@ def _listen(system, emit):
         return
     last = {'error': "The microphone test stopped early.", 'done': True}
     try:
+        if getattr(getattr(system, 'tts', None), '_is_playing', False):
+            # the warning would cut her reply short, and the take would hear and transcribe her own voice
+            last = {'error': "She is speaking right now. Try again when she is done.", 'done': True}
+            return
         try:
             take = _take(system, emit)
         except Exception as e:                 # the microphone's own trouble
@@ -481,10 +534,8 @@ def _aloud(system, text):
         return False
     from core.event_bus import get_event_bus, Events
     started = threading.Event()
-
-    def playing(event):
-        started.set()
     bus = get_event_bus()
+    playing = _on_these_speakers(started)
     bus.on((Events.TTS_PLAYING,), playing)
     try:
         system.tts.speak_sync(text)
@@ -497,9 +548,11 @@ def _aloud(system, text):
 
 
 def _warn(system, emit):
-    """The sentence, then three beeps a second apart; the page counts along."""
+    """The sentence, then three beeps a second apart; the page counts along.
+    `spoken`: she has a voice to say it in (without one the beeps stand alone,
+    and the page must not say she is speaking)."""
     from core.routes.system import play_test_tone
-    emit({'warn': True})
+    emit({'warn': True, 'spoken': not _voice_block(system)})
     logger.info("[easy] the setup page's microphone test is about to listen on this computer")
     _aloud(system, WARN_LINE)
     try:
@@ -685,30 +738,44 @@ def _failed(row_key):
 
 def status(system):
     """The light on each row: what is LIVE behind it now, whatever is staged.
-    {voice|ears|wake: {state, why}}; state: 'ok' (works), 'loading' (being set
-    up, or not ready yet), 'failed' (its last switch failed and nothing is
-    set), 'off'."""
+    {voice|ears|wake: {state, why, busy}}; state: 'ok' (works), 'loading' (being
+    set up, or its engine is still starting), 'blocked' (it works, and a setting
+    keeps it from this computer: nothing is on its way), 'failed' (its last
+    switch failed and nothing is set, or it did not load), 'off'. `busy`: its
+    switch job runs now (the page's proof when the job's own event was missed).
+
+    'loading' is only for what will change by itself: the page polls while a
+    light says it, and a light that waited on a setting polled for ever."""
     from core.settings_manager import settings
 
     def light(key, row_key, off, check):
         if _busy(key):
-            return {'state': 'loading', 'why': "Being set up now: its progress shows under Downloads."}
+            return {'state': 'loading', 'why': "Being set up now: its progress shows under Downloads.", 'busy': True}
         if off:
             why = _failed(row_key)
-            return {'state': 'failed' if why else 'off', 'why': why}
+            return {'state': 'failed' if why else 'off', 'why': why, 'busy': False}
         try:
-            return check()
+            return {**check(), 'busy': False}
         except Exception as e:
-            return {'state': 'loading', 'why': str(e)}
+            return {'state': 'failed', 'why': str(e), 'busy': False}
 
     def voice():
         why = _voice_block(system)
-        return {'state': 'loading' if why else 'ok', 'why': why}
+        if not why:
+            return {'state': 'ok', 'why': ''}
+        return {'state': 'blocked' if why == _voice_kept() else 'loading', 'why': why}
 
     def ears():
         from core.stt.utils import can_transcribe
-        ok, why = can_transcribe(getattr(system, 'whisper_client', None))
-        return {'state': 'ok' if ok else 'loading', 'why': '' if ok else _not_ready('STT_PROVIDER', 'ears are', why)}
+        from core.stt.stt_null import NullWhisperClient
+        client = getattr(system, 'whisper_client', None)
+        ok, why = can_transcribe(client)
+        if ok and client is not None:
+            return {'state': 'ok', 'why': ''}
+        if client is None or isinstance(client, NullWhisperClient):
+            # set, not being set up, and nothing loaded: it failed at start (the words are the boot's)
+            return {'state': 'failed', 'why': getattr(system, 'stt_why', None) or "Her ears did not start."}
+        return {'state': 'loading', 'why': _not_ready('STT_PROVIDER', 'ears are', why)}
 
     def wake():
         from core.wakeword.wakeword_null import NullWakeWordDetector
@@ -749,11 +816,19 @@ def hear_wake(system):
     return {'ok': True, 'heard': heard, 'busy': False, 'why': ''}
 
 
-def _launcher_says():
+def _short(text, most=120):
+    """The launcher's own words, one line of a row long at most."""
+    text = ' '.join(str(text or '').split())
+    return text if len(text) <= most else text[:most - 1].rstrip() + '…'
+
+
+def _launcher_says(set_up=True):
     """The Brain row from what the launcher itself reports when nothing answers
     on its port (core/launcher_llm.py cli_status): a model downloading and how
     far, installed but stopped, a download that failed. None = it could not be
-    asked, or has nothing to add to "No LLM yet"."""
+    asked, or has nothing to add to "No LLM yet". `set_up`: core has the
+    launcher's provider, turned on."""
+    import math
     from core import launcher_llm
     try:
         told = launcher_llm.cli_status()
@@ -767,22 +842,30 @@ def _launcher_says():
     if phase == 'downloading':
         job = told.get('job') if isinstance(told.get('job'), dict) else {}
         pct = job.get('percent')
-        far = f": {round(pct)}%" if isinstance(pct, (int, float)) and not isinstance(pct, bool) else '...'
-        return {'state': 'loading', 'text': f"Downloading {job.get('label') or 'her LLM'}{far}",
+        known = isinstance(pct, (int, float)) and not isinstance(pct, bool) and math.isfinite(pct)
+        far = f": {round(min(100, max(0, pct)))}%" if known else '...'
+        return {'state': 'loading', 'text': f"Downloading {_short(job.get('label'), 60) or 'her LLM'}{far}",
                 'hint': "The launcher is fetching it. This row turns green when it runs. You can finish now."}
-    if phase in ('loading', 'running'):     # up, and not answering core yet
-        return {'state': 'loading', 'text': "The launcher's LLM is starting...",
+    if phase in ('loading', 'running'):
+        if not set_up:
+            # it runs one that core has no provider for (removed or turned off here, or the
+            # add was refused): "starting..." never ended, and Finish took it for a brain
+            return {'state': 'none', 'text': "The Sapphire Launcher runs an LLM, but it is not turned on here.",
+                    'hint': "Turn on \"Sapphire Launcher\" under Change, or add it again there. "
+                            "She cannot reply until then."}
+        return {'state': 'loading', 'text': "The launcher's LLM is starting...",     # up, and not answering core yet
                 'hint': "This row turns green when it answers. You can finish now."}
     if phase == 'stopped':
         return {'state': 'stopped', 'text': "Her LLM is installed, but not running.",
                 'hint': f"Start it in {where}. She cannot reply until it runs."}
     last = told.get('last_job') if isinstance(told.get('last_job'), dict) else {}
+    label = _short(last.get('label'), 60) or 'her LLM'
     if last.get('state') == 'failed':
-        why = str(last.get('error') or '').strip().rstrip('.')
-        return {'state': 'none', 'text': f"The download of {last.get('label') or 'her LLM'} failed.",
+        why = _short(last.get('error')).rstrip('.…')
+        return {'state': 'none', 'text': f"The download of {label} failed.",
                 'hint': f"{why + '. ' if why else ''}Try again in {where}, or add your own under Change."}
     if last.get('state') in ('cancelled', 'interrupted'):
-        return {'state': 'none', 'text': f"The download of {last.get('label') or 'her LLM'} did not finish.",
+        return {'state': 'none', 'text': f"The download of {label} did not finish.",
                 'hint': f"Start it again in {where}, or add your own under Change."}
     return None
 
@@ -831,7 +914,7 @@ def brain(light=False):
     if settings.is_managed() or settings.is_docker():
         return {'state': 'none', 'text': "No LLM answers yet.",
                 'hint': "She cannot reply until one does. Add one under Change."}
-    told = _launcher_says()
+    told = _launcher_says(bool(ls.get('provider')))
     if told:
         return told
     if ls.get('provider'):

@@ -256,8 +256,10 @@ async def post_easy_listen(request: Request, _=Depends(require_login), system=De
     check_endpoint_rate(request, 'easy_sound', max_calls=30, window=60)
     logger.info("[setup] microphone test started from the setup page")
     from core import setup_easy
+    # no proxy buffering: the page counts along with the beeps and shows the level as it listens
     return StreamingResponse((json.dumps(ev) + '\n' for ev in setup_easy.listen(system)),
-                             media_type='application/x-ndjson')
+                             media_type='application/x-ndjson',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
 def featured():

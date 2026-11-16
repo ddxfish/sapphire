@@ -129,3 +129,29 @@ def prompt_renamed(old: str, new: str) -> list:
     if touched:
         logger.info(f"[REFS] prompt '{old}' -> '{new}': {touched}")
     return touched
+
+
+def scope_deleted(key: str, name: str, to: str = 'none') -> list:
+    """Scope `name` under setting `key` (memory_scope, knowledge_scope, ...)
+    was deleted: everyone ELSE who held it by name now holds 'none'. Chats are
+    the caller's (core/chat/scope_cleanup.py, which reloads the active one).
+
+    'none', never 'default': 'default' is a real scope, the stock personas'
+    own memory, and a deleted scope's holders used to be moved into it. A
+    persona, task or room seat that kept the dead name brought the scope back
+    as a ghost on its next write (hunt 2026-11-16)."""
+    def personas():
+        from core.personas.persona_manager import persona_manager
+        return [f"persona {n}" for n in persona_manager.repoint_setting(key, name, to)]
+
+    def seats():
+        from core.rooms import repoint_seat_setting
+        return [f"room {n}" for n in repoint_seat_setting(key, name, to)]
+    touched = []
+    touched += _step("personas", personas)
+    touched += _step("tasks", lambda: _tasks(key, name, to))
+    touched += _step("new-chat defaults", lambda: _chat_defaults(key, name, to))
+    touched += _step("room seats", seats)
+    if touched:
+        logger.warning(f"[REFS] {key} '{name}' deleted — now '{to}' for: {touched}")
+    return touched

@@ -62,6 +62,83 @@ _ROW_KEY = {'STT_PROVIDER': 'switch-stt', 'TTS_PROVIDER': 'switch-tts', 'EMBEDDI
 _WHAT = {'STT_PROVIDER': 'speech-to-text', 'TTS_PROVIDER': 'voice', 'EMBEDDING_PROVIDER': 'embeddings'}
 
 
+# ── picks that outlive a restart (hunt 2026-11-16) ─────────────────────────
+#
+# A provider key lands in config only when its switch succeeded. The setup
+# wizard's Finish hands the jobs their picks and marks setup complete, so a
+# restart during the downloads (minutes; an hour on a slow line) left a
+# finished setup with no voice, no ears and no wake word. So the wizard's
+# batch (wake=True) is written down first, each key is crossed off when its
+# job ends, well or badly, and boot runs what is still there (resume, called
+# from sapphire.py). A job cut short by the exit itself is not a failure: it
+# changes nothing and stays written (closing). RESUMES bounds it: a switch
+# that takes the app down with it is not tried at every boot for ever.
+
+PENDING = 'SETUP_PENDING'                 # {'items': {key: value}, 'tries': n}
+RESUMES = 2
+_PENDING_LOCK = threading.Lock()
+_closing = False
+
+
+def closing():
+    """The app is on its way out (a signal, Restart, Shutdown): what is cut short from here on is kept for the next boot."""
+    global _closing
+    _closing = True
+
+
+def _pending():
+    from core.settings_manager import settings
+    p = settings.get(PENDING, {})
+    p = p if isinstance(p, dict) else {}
+    items = p.get('items')
+    tries = p.get('tries')
+    return ({k: v for k, v in items.items() if k in KEYS} if isinstance(items, dict) else {},
+            tries if isinstance(tries, int) and not isinstance(tries, bool) else 0)
+
+
+def _write_pending(items, tries):
+    from core.settings_manager import settings
+    try:
+        settings.set(PENDING, {'items': items, 'tries': tries} if items else {}, persist=True)
+    except Exception as e:
+        logger.warning(f"[SWITCH] the picks still to set up could not be written down: {e}")
+
+
+def _remember(fresh):
+    with _PENDING_LOCK:
+        items, _ = _pending()
+        items.update({key: value for key, value, _ in fresh})
+        _write_pending(items, 0)
+
+
+def _forget(key):
+    with _PENDING_LOCK:
+        items, tries = _pending()
+        if key in items:
+            del items[key]
+            _write_pending(items, tries)
+
+
+def resume():
+    """Boot: run the wizard's picks that a restart cut short. Returns {key: row_id}."""
+    with _PENDING_LOCK:
+        items, tries = _pending()
+        if not items:
+            return {}
+        if tries >= RESUMES:
+            logger.warning(f"[SWITCH] {', '.join(items)} did not survive {RESUMES} restarts: left as set. "
+                           "Pick them again under Settings, or run the setup wizard.")
+            _write_pending({}, 0)
+            return {}
+        _write_pending(items, tries + 1)
+    logger.info(f"[SWITCH] picking up what a restart cut short: {', '.join(items)}")
+    try:
+        return start(list(items.items()), persist=True, wake=True, _resumed=True)
+    except SwitchInProgress as e:
+        logger.warning(f"[SWITCH] {e}")
+        return {}
+
+
 class SwitchInProgress(Exception):
     def __init__(self, key, value):
         what = _WHAT.get(key, 'the wake word')
@@ -106,10 +183,11 @@ def _toggle_target(provider_key, enabled, default):
     return cur if cur and cur != 'none' else default
 
 
-def start(items, persist=True, wake=False):
+def start(items, persist=True, wake=False, _resumed=False):
     """Queue the switches. Returns {key: row_id}. Raises SwitchInProgress when a key is
     already switching to a different value (nothing is queued then). `wake`: install
-    and turn on what the provider needs first (the header)."""
+    and turn on what the provider needs first (the header); those picks are also
+    written down, so a restart mid-job runs them again at boot (resume)."""
     items = [(k, v) for k, v in items if k in KEYS]
     # Voice after ears (Easy setup, hunt 2026-11-15): the jobs run one at a time,
     # and a first voice download held the lock for minutes while she could have
@@ -135,6 +213,8 @@ def start(items, persist=True, wake=False):
             for key, _, _ in fresh:
                 _inflight[key]['thread'] = t
     if fresh:
+        if wake and persist and not _resumed:
+            _remember(fresh)                    # before the thread: a restart from here on finds them
         t.start()
     return jobs
 
@@ -177,6 +257,8 @@ def _run(fresh, persist, wake=False):
             finally:
                 with _GUARD:
                     _inflight.pop(key, None)
+                if not _closing:                  # ended, well or badly: no longer owed at the next boot
+                    _forget(key)
 
 
 def _run_one(key, value, rid, persist, wake=False):
@@ -200,6 +282,11 @@ def _run_one(key, value, rid, persist, wake=False):
         notify.finish(rid, title=_done_title(key, value))
         _publish(key, value, tier, True)
         logger.info(f"[SWITCH] {key} -> {value!r} ok")
+        return
+    if _closing:
+        # the app is going down and took this switch with it (pip killed, a worker stopped):
+        # nothing failed, nothing is saved, and the next boot runs it again (resume)
+        logger.info(f"[SWITCH] {key} -> {value!r} cut short by the exit ({why}); kept for the next start")
         return
     # Its packages or its plugin never arrived: the switch was not tried, so what
     # runs now is untouched. Re-making it was a risk for nothing (a re-make that

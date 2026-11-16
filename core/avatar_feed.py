@@ -757,8 +757,9 @@ class _AvBuilder:
         self.glass_side = board[1]   # the glass's square; the face's comes from the hub's face_px at each spec read
         self.spec = None
         self.spec = self._spec_cached()
-        self.respec = True           # the real read on this board's own thread: never a health call on the hub's
-        self.last = None             # the face as the board has it (the pixels sent)
+        self.respec = True           # the real read on this board's own thread, before its first slice (and again when
+                                     # the hub looks at the boards: a device saved): never a health call on the hub's
+        self.last = None            # the face as the board has it (the pixels sent)
         self.key_at = 0.0
         self.next = None             # when this board takes its next frame, at its own beat
         self.lost = self._lost()
@@ -766,7 +767,6 @@ class _AvBuilder:
         self.sid = ""                # the last reply whose voice this board carried: a stop at the board flushes that reply, no other's
 
         self.hidden = False          # her tile was not up at the last slice: the first frame when it is, is a key
-        self.respec = False          # the hub looked at the boards again (a device saved): read the spec before the next slice
         self.sent = self.voiced = self.keys = self.regions = self.still = self.failed = self.bad = 0
         self.bytes = {"audio": 0, "keys": 0, "regions": 0}
         self.window = collections.deque(maxlen=400)   # (when, bytes) of each packet: the kbps over RATE_S

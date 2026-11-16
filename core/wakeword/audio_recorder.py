@@ -175,9 +175,13 @@ class AudioRecorder:
                 logger.info("Wakeword audio stream closed")
 
     def pause_recording(self):
-        """Pause audio stream without closing (safer for PipeWire)."""
+        """Pause audio stream without closing (safer for PipeWire). True only when
+        THIS call stopped a running stream: a pause inside a pause is False, so its
+        own resume leaves the outer pause standing. (Stopping a stopped stream
+        raises nothing, so every nested pause read True and its resume restarted
+        the stream under the microphone test that held it; hunt 2026-11-16.)"""
         with self._stream_lock:
-            if self.stream:
+            if self.stream and getattr(self.stream, 'active', True):
                 try:
                     self.stream.stop()
                     logger.debug("Wakeword audio stream paused")

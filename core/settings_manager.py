@@ -982,6 +982,7 @@ class SettingsManager:
             # Setup wizard state (core/routes/setup.py) - read per request
             'SETUP_COMPLETE', 'SETUP_STEP', 'SETUP_CONSENT', 'SETUP_MODE',
             'LAUNCHER_LLM_ADOPTED',   # core/launcher_llm.py's once-only marker
+            'SETUP_PENDING',          # core/provider_switch.py: the wizard's picks a restart may cut short
             # Conversation (true speech) mode tunables — read fresh on each activation
             'CONVERSATION_VAD_THRESHOLD', 'CONVERSATION_BARGE_HOLD_MS',
             'CONVERSATION_MIN_SPEECH_MS', 'CONVERSATION_ENDPOINT_SILENCE_MS',

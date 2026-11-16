@@ -223,3 +223,91 @@ def test_a_crash_inside_the_job_still_ends_the_row(harness):
     assert h.rows.ended[0][1] is True and 'mic exploded' in h.rows.ended[0][3]
     assert h.settings.get('WAKE_WORD_ENABLED') is False
     assert ps.busy('WAKE_WORD_ENABLED') is None
+
+
+# ── picks that outlive a restart (hunt 2026-11-16) ──
+
+@pytest.fixture
+def wizard(harness, monkeypatch):
+    """The setup wizard's batch (wake=True), with the install and plugin step answered."""
+    monkeypatch.setattr(ps, '_wake', lambda key, value, rid: (True, ''))
+    monkeypatch.setattr(ps, '_closing', False)
+    harness.settings.set(ps.PENDING, {}, persist=False, _skip_callbacks=True)
+    for key, off in (('TTS_PROVIDER', 'none'), ('STT_PROVIDER', 'none'), ('WAKE_WORD_ENABLED', False)):
+        harness.settings.set(key, off, persist=False, _skip_callbacks=True)
+    return harness
+
+
+def test_the_wizards_picks_are_written_down_until_each_job_ends(wizard):
+    h = wizard
+    gate, seen = threading.Event(), {}
+
+    def slow(value):
+        seen['during'] = dict(h.settings.get(ps.PENDING))
+        gate.wait(5)
+        return True
+    h.sys.switch_stt_provider.side_effect = slow
+    ps.start([('STT_PROVIDER', 'faster_whisper'), ('TTS_PROVIDER', 'kokoro'), ('WAKE_WORD_ENABLED', True)], wake=True)
+    for _ in range(500):
+        if 'during' in seen:
+            break
+        threading.Event().wait(0.01)
+    # a restart now would find all three, with the provider keys themselves still unsaved
+    assert seen['during'] == {'items': {'STT_PROVIDER': 'faster_whisper', 'TTS_PROVIDER': 'kokoro',
+                                        'WAKE_WORD_ENABLED': True}, 'tries': 0}
+    gate.set()
+    ps.wait(timeout=5)
+    assert h.settings.get(ps.PENDING) == {} and h.settings.get('TTS_PROVIDER') == 'kokoro'
+
+
+def test_a_switch_that_fails_is_not_owed_at_the_next_boot_and_a_plain_save_writes_nothing_down(wizard):
+    h = wizard
+    h.sys.switch_tts_provider.return_value = False
+    ps.start([('TTS_PROVIDER', 'kokoro')], wake=True)
+    ps.wait(timeout=5)
+    assert h.settings.get(ps.PENDING) == {} and h.rows.ended[0][1] is True      # it failed, in words, once
+    ps.start([('STT_PROVIDER', 'faster_whisper')])                              # Settings' own save: not the wizard's
+    ps.wait(timeout=5)
+    assert h.settings.get(ps.PENDING) == {}
+
+
+def test_boot_runs_what_a_restart_cut_short_and_gives_up_after_two(wizard):
+    h = wizard
+    h.settings.set(ps.PENDING, {'items': {'TTS_PROVIDER': 'kokoro', 'WAKE_WORD_ENABLED': True, 'NOT_A_SWITCH': 1},
+                                'tries': 0}, persist=False, _skip_callbacks=True)
+    jobs = ps.resume()
+    ps.wait(timeout=5)
+    assert set(jobs) == {'TTS_PROVIDER', 'WAKE_WORD_ENABLED'}
+    assert h.settings.get('TTS_PROVIDER') == 'kokoro' and h.settings.get('WAKE_WORD_ENABLED') is True
+    assert h.settings.get(ps.PENDING) == {}
+    # a switch that takes the app down with it: tried at two boots, then left alone
+    h.settings.set(ps.PENDING, {'items': {'STT_PROVIDER': 'faster_whisper'}, 'tries': ps.RESUMES},
+                   persist=False, _skip_callbacks=True)
+    assert ps.resume() == {} and h.settings.get(ps.PENDING) == {} and h.sys.switch_stt_provider.call_count == 0
+    assert ps.resume() == {}                                                     # nothing owed: nothing done
+
+
+def test_a_resume_counts_itself_before_it_starts(wizard):
+    h = wizard
+    seen = {}
+    h.sys.switch_stt_provider.side_effect = lambda value: seen.setdefault('during', dict(h.settings.get(ps.PENDING))) and True
+    h.settings.set(ps.PENDING, {'items': {'STT_PROVIDER': 'faster_whisper'}, 'tries': 1}, persist=False, _skip_callbacks=True)
+    ps.resume()
+    ps.wait(timeout=5)
+    assert seen['during'] == {'items': {'STT_PROVIDER': 'faster_whisper'}, 'tries': 2}     # a crash here leaves 2: the last try
+
+
+def test_a_job_the_exit_cut_short_changes_nothing_and_stays_owed(wizard):
+    """systemd stops pip and the workers with the app: that is not a failed switch, and 'none' must not be saved over the pick."""
+    h = wizard
+    h.settings.set('TTS_PROVIDER', 'piper', persist=False, _skip_callbacks=True)
+
+    def dying(value):
+        ps.closing()                 # the signal lands while the switch runs
+        return False                 # and the switch comes back empty-handed
+    h.sys.switch_tts_provider.side_effect = dying
+    ps.start([('TTS_PROVIDER', 'kokoro')], wake=True)
+    ps.wait(timeout=5)
+    assert h.settings.get(ps.PENDING) == {'items': {'TTS_PROVIDER': 'kokoro'}, 'tries': 0}
+    assert h.settings.get('TTS_PROVIDER') == 'piper' and h.sys.switch_tts_provider.call_count == 1      # no recover, nothing saved
+    assert h.rows.ended == [] and h.events == []

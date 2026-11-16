@@ -23,6 +23,7 @@ def box(monkeypatch):
     monkeypatch.setattr(setup_easy, '_gpu', lambda: b['gpu'])
     monkeypatch.setattr(setup_easy, '_piper', lambda: b['piper'])
     monkeypatch.setattr(setup_easy, '_has_microphone', lambda: b['mic'])
+    monkeypatch.setattr(setup_easy, '_whisper_can_use_a_card', lambda: b.get('cublas', True))
     monkeypatch.setattr(setup_easy, '_free', lambda card: b.get('free'))
     monkeypatch.setattr(setup_easy, '_has_speakers', lambda: True)
     monkeypatch.setattr(setup_easy, '_no_sound', lambda: b.get('no_sound', ''))
@@ -332,7 +333,7 @@ def _hear(sound):
 
 def test_the_microphone_test_ends_after_speech_and_says_the_words(sound):
     events = _hear(sound)
-    assert events[:2] == [{'warn': True}, {'count': 3}] and {'thinking': True} in events
+    assert events[:2] == [{'warn': True, 'spoken': True}, {'count': 3}] and {'thinking': True} in events
     assert any(e.get('level', 0) > 0.2 for e in events)
     assert events[-1] == {'heard': True, 'text': 'hello there', 'ears': '', 'busy': False, 'done': True}
     assert sound['reads'] < 20                                  # speech, a second of quiet, done: not the full take
@@ -365,7 +366,7 @@ def test_a_microphone_that_will_not_open_still_gives_the_wake_word_back(sound):
 
 def test_listen_streams_until_the_closing_event(sound):
     events = list(setup_easy.listen(sound['system']))
-    assert events[:2] == [{'warn': True}, {'count': 3}] and events[-1]['done'] is True and events[-1]['text'] == 'hello there'
+    assert events[:2] == [{'warn': True, 'spoken': True}, {'count': 3}] and events[-1]['done'] is True and events[-1]['text'] == 'hello there'
     assert sum(1 for e in events if e.get('done')) == 1
 
 
@@ -489,7 +490,7 @@ def test_the_microphone_test_ends_once_and_frees_the_microphone_however_it_fails
 def test_a_page_that_leaves_mid_take_still_gets_the_wake_word_back(sound):
     import threading
     stream = setup_easy.listen(sound['system'])
-    assert next(stream) == {'warn': True}
+    assert next(stream) == {'warn': True, 'spoken': True}
     stream.close()
     for t in threading.enumerate():
         if t.name == 'easy-listen':
@@ -549,7 +550,7 @@ def test_the_sound_routes_answer_and_share_one_rate_limit(sound_routes, sound):
     r = c.post('/api/setup/easy/listen', headers=head)
     assert r.status_code == 200 and r.headers['content-type'].startswith('application/x-ndjson')
     events = [json.loads(line) for line in r.text.splitlines()]
-    assert events[:2] == [{'warn': True}, {'count': 3}] and events[-1]['done'] is True and events[-1]['text'] == 'hello there'
+    assert events[:2] == [{'warn': True, 'spoken': True}, {'count': 3}] and events[-1]['done'] is True and events[-1]['text'] == 'hello there'
     for _ in range(28):
         assert c.post('/api/setup/easy/say', headers=head).status_code == 200
     assert c.post('/api/setup/easy/say', headers=head).status_code == 429
@@ -595,6 +596,31 @@ def test_she_spoke_only_when_her_voice_reached_the_speakers(sound):
     r = setup_easy.say(sound['system'])
     assert r['kind'] == 'tone' and r['why'].startswith('Private chat') and len(sound['spoke']) == 1
     assert 'sapphire' not in setup_easy.LINE.lower()        # her own wake word must not hear the line
+
+
+def test_the_microphone_test_waits_while_she_is_speaking(sound):
+    """Its warning would cut her reply short, and the take would transcribe her own voice (hunt 2026-11-16)."""
+    sound['system'].tts._is_playing = True
+    events = _hear(sound)
+    assert events == [{'error': "She is speaking right now. Try again when she is done.", 'done': True}]
+    assert sound['wake'] == [] and sound['alerts'] == [] and sound['reads'] == 0        # nothing paused, said or opened
+    assert setup_easy._LISTENING.acquire(blocking=False)                                 # and the next test may run
+    setup_easy._LISTENING.release()
+
+
+def test_sound_in_a_browser_tab_or_on_a_call_is_not_these_speakers(sound):
+    """tts_playing is published for the web page and for phone calls too: one of those inside the
+    wait read as "She spoke" with silent speakers (hunt 2026-11-16)."""
+    from core.event_bus import publish, Events
+    said = []
+
+    def speak(text):
+        said.append(text)
+        publish(Events.TTS_PLAYING, {'surface': 'web'})     # somebody's browser tab, at that moment
+        return True
+    sound['system'].tts.speak = speak
+    r = setup_easy.say(sound['system'])
+    assert said == [setup_easy.LINE] and r['kind'] == 'tone' and 'made no sound' in r['why']
 
 
 def test_one_test_at_a_time(sound):
@@ -663,9 +689,24 @@ def test_only_real_inputs_count_as_a_microphone(monkeypatch):
         get_input_devices=lambda: [SimpleNamespace(name=n) for n in names]))
     names[:] = ['default', 'pipewire', 'pulse', 'Microsoft Sound Mapper - Input', 'Primary Sound Capture Driver']
     assert setup_easy._has_microphone() is False            # the sound server's doors, nothing plugged in
+    names.append('Speakers (Realtek(R) Audio) [Loopback]')  # Windows lists what the speakers play as an input
+    assert setup_easy._has_microphone() is False            # a wake word there would listen to her own voice
     names.append('Microphone (Realtek(R) Audio)')
     assert setup_easy._has_microphone() is True
     assert setup_easy._device('Microsoft Sound Mapper - Output', 'speakers') == 'the default speakers'
+
+
+def test_whisper_goes_on_the_card_only_where_its_library_is(box):
+    """Linux with PyPI's torch (CUDA 13): Kokoro can use the card, Whisper's engine cannot. The row said
+    "on your card", it landed on the processor, and a warning fired right after Finish (hunt 2026-11-16)."""
+    box['gpu'] = (True, 'RTX 3070', 'ok')
+    assert _rows(setup_easy.plan())['ears']['text'] == 'Whisper on your RTX 3070'
+    box['cublas'] = False
+    rows = _rows(setup_easy.plan())
+    assert rows['ears']['text'] == 'Whisper on the processor'
+    assert rows['ears']['settings'] == {'STT_PROVIDER': 'faster_whisper', 'FASTER_WHISPER_DEVICE': 'cpu'}     # no warning row
+    assert '550 MB' in rows['ears']['note'] and 'Settings › STT' in rows['ears']['note']
+    assert rows['voice']['settings']['KOKORO_DEVICE'] == 'cuda'            # her voice is torch's: still on the card
 
 
 def test_no_sound_system_says_so_and_a_waiting_card_keeps_its_reminder(box):
@@ -798,25 +839,38 @@ def test_each_rows_light_is_what_is_live_behind_it(sound, monkeypatch):
     monkeypatch.setattr(setup_easy, '_failed', lambda row_key: failed.get(row_key, ''))
     sound['settings']['WAKE_WORD_ENABLED'] = False
     st = setup_easy.status(sound['system'])
-    assert st == {'voice': {'state': 'ok', 'why': ''}, 'ears': {'state': 'ok', 'why': ''}, 'wake': {'state': 'off', 'why': ''}}
-    sound['busy'].add('TTS_PROVIDER')                               # a switch runs: yellow
-    assert setup_easy.status(sound['system'])['voice']['state'] == 'loading'
-    sound['busy'].clear()
-    sound['voice_ok'] = False                                       # set, not ready yet: yellow, with why
+    ok, off = {'state': 'ok', 'why': '', 'busy': False}, {'state': 'off', 'why': '', 'busy': False}
+    assert st == {'voice': ok, 'ears': ok, 'wake': off}
+    sound['busy'].add('TTS_PROVIDER')                               # a switch runs: yellow, and the page is told a job runs
     v = setup_easy.status(sound['system'])['voice']
-    assert v['state'] == 'loading' and 'model is loading' in v['why']
+    assert v['state'] == 'loading' and v['busy'] is True
+    sound['busy'].clear()
+    sound['voice_ok'] = False                                       # set, its engine still starting: yellow, with why
+    v = setup_easy.status(sound['system'])['voice']
+    assert v['state'] == 'loading' and 'model is loading' in v['why'] and v['busy'] is False
+    sound['voice_ok'] = True
+    sound['here'] = False                                           # it works, and a setting keeps it from these speakers:
+    v = setup_easy.status(sound['system'])['voice']                 # nothing is on its way, so the page must not wait on it
+    assert v['state'] == 'blocked' and 'Play speech here' in v['why']
+    sound['here'] = True
     sound['settings']['TTS_PROVIDER'] = 'none'                      # nothing set: grey, or red when its switch failed
-    assert setup_easy.status(sound['system'])['voice'] == {'state': 'off', 'why': ''}
+    assert setup_easy.status(sound['system'])['voice'] == off
     failed['switch-tts'] = 'pip failed (exit 1). Kept off.'
-    assert setup_easy.status(sound['system'])['voice'] == {'state': 'failed', 'why': 'pip failed (exit 1). Kept off.'}
-    sound['ears'] = (False, 'loading speech model')
+    assert setup_easy.status(sound['system'])['voice'] == {'state': 'failed', 'why': 'pip failed (exit 1). Kept off.', 'busy': False}
+    sound['ears'] = (False, 'loading speech model')                 # her ears are there and still loading: yellow
     assert setup_easy.status(sound['system'])['ears']['state'] == 'loading'
+    from core.stt.stt_null import NullWhisperClient
+    real = sound['system'].whisper_client
+    sound['system'].whisper_client = NullWhisperClient()            # set, and nothing loaded: it failed at start, in the boot's words
+    sound['system'].stt_why = "Speech-to-text couldn't start (no model)."
+    assert setup_easy.status(sound['system'])['ears'] == {'state': 'failed', 'why': "Speech-to-text couldn't start (no model).", 'busy': False}
+    sound['system'].whisper_client, sound['ears'] = real, (True, '')
     # the wake word: on, and really listening
     sound['settings']['WAKE_WORD_ENABLED'] = True
     assert setup_easy.status(sound['system'])['wake']['state'] == 'failed'      # on, with nothing behind it
     sound['system'].wake_detector = SimpleNamespace(running=True)
     sound['system'].wake_word_recorder = SimpleNamespace(stream=object())
-    assert setup_easy.status(sound['system'])['wake'] == {'state': 'ok', 'why': ''}
+    assert setup_easy.status(sound['system'])['wake'] == {'state': 'ok', 'why': '', 'busy': False}
     sound['system'].wake_word_recorder.stream = None                # the microphone did not open
     assert 'did not open' in setup_easy.status(sound['system'])['wake']['why']
 
@@ -873,8 +927,17 @@ def test_the_brain_row_says_what_the_launcher_knows_when_its_port_is_silent(laun
     assert 'did not finish' in setup_easy.brain()['text']
     launcher['cli'] = {'ok': True, 'phase': 'none', 'last_job': {'state': 'done'}}
     assert setup_easy.brain()['text'] == 'No LLM yet.'             # nothing to add: the words core always had
-    launcher['cli'] = {'ok': True, 'phase': 'running'}             # up, and not answering core yet
-    assert setup_easy.brain()['state'] == 'loading'
+    launcher['cli'] = {'ok': True, 'phase': 'running'}             # it runs one core has no provider for:
+    b = setup_easy.brain()                                         # "starting..." never ended, and Finish took it for a brain
+    assert b['state'] == 'none' and 'not turned on here' in b['text']
+    launcher['status'] = {'provider': 'sapphire_launcher', 'state': 'stopped'}
+    assert setup_easy.brain()['state'] == 'loading'                # set up here, and not answering core yet
+    launcher['status'] = {'provider': None, 'state': None}
+    # junk from the launcher never breaks the row
+    for pct, far in ((float('nan'), '...'), (float('inf'), '...'), (250, ': 100%'), (-3, ': 0%'), ('43', '...'), (True, '...')):
+        launcher['cli'] = {'ok': True, 'phase': 'downloading', 'job': {'label': 'q' * 500, 'percent': pct}}
+        text = setup_easy.brain()['text']
+        assert text.endswith(far) and len(text) < 90, (pct, text)
     # an LLM that answers is never second-guessed by the launcher's word
     launcher['cli'] = {'ok': True, 'phase': 'stopped'}
     launcher['sel'] = _Sel('claude', 'Claude', 'claude-x')

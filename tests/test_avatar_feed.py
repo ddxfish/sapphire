@@ -520,6 +520,25 @@ def test_a_saved_fit_reaches_a_stream_already_running(builder, glass):
     assert entry["key"] is True and (entry["w"], entry["h"]) == (320, 240) and builder.spec["fit"] == "cover"
 
 
+def test_a_new_board_reads_its_real_spec_before_its_first_packet(glass):
+    """Nobody sets the spec by hand here: a line in __init__ once cancelled the first read, and every
+    reply in "While she talks" (a fresh builder each) went out as v1, square, raw PCM (hunt 2026-11-16)."""
+    glass.av = {"kitchen"}
+    glass.specs["kitchen"] = {"w": 240, "h": 288, "fit": "cover", "v": 2,
+                              "plays": {"type": "audio/wav", "rate": 16000, "channels": 1}}
+    glass.claims["kitchen"] = "r"
+    feed.register("one")
+    b = feed._AvBuilder(feed._hub, ("kitchen", 240))
+    try:
+        head = {"kind": "speech", "sr": 24000, "sid": "r", "device": "kitchen", "taken": False, "ms": 1000}
+        b._send(time.monotonic(), dict(head), b"\1\0" * 24000, [(0, face(w=512, h=512))])
+        meta = glass.packets[-1][1]
+        assert meta["v"] == 2 and meta["nf"] == 1 and meta["sr"] == 16000            # the board's own packet and rate
+        assert b.status()["box"] == [240, 288] and b.spec["fit"] == "cover"          # and its own box and crop
+    finally:
+        b.close()
+
+
 def test_the_same_avatar_registering_again_keeps_her_stream(glass):
     feed.register("one")
     h = feed._hub

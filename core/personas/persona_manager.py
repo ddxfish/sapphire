@@ -217,17 +217,23 @@ class PersonaManager:
 
     # === CRUD ===
 
-    def repoint_prompt(self, old_prompt: str, new_prompt: str) -> list:
-        """Prompt-rename upkeep: personas whose prompt was `old_prompt`
-        now use `new_prompt`. Returns the touched persona names."""
+    def repoint_setting(self, key: str, old: str, new: str) -> list:
+        """Rename/delete upkeep: personas whose settings[`key`] was `old` now
+        hold `new` (a prompt renamed; a scope deleted, which goes to 'none').
+        Only that one key of the personas that held it. Returns their names."""
         with self._lock:
             hit = [n for n, p in self._personas.items()
-                   if (p.get('settings') or {}).get('prompt') == old_prompt]
+                   if (p.get('settings') or {}).get(key) == old]
             for n in hit:
-                self._personas[n]['settings']['prompt'] = new_prompt
+                self._personas[n]['settings'][key] = new
             if hit:
                 self._save_to_user()
         return hit
+
+    def repoint_prompt(self, old_prompt: str, new_prompt: str) -> list:
+        """Prompt-rename upkeep: personas whose prompt was `old_prompt`
+        now use `new_prompt`. Returns the touched persona names."""
+        return self.repoint_setting('prompt', old_prompt, new_prompt)
 
     @staticmethod
     def _vault_ref_sync(new_prompt, old_prompt):

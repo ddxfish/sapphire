@@ -34,6 +34,7 @@ const TABS = { brain: llmTab, voice: ttsTab, ears: sttTab, wake: wakewordTab };
 const PROVIDER_KEY = { voice: 'TTS_PROVIDER', ears: 'STT_PROVIDER' };
 const SWITCH_KEY = { ...PROVIDER_KEY, wake: 'WAKE_WORD_ENABLED' };       // the switch a row's test may be waiting on
 const POLL_MS = 4000;
+const QUIET_POLLS = 75;      // lights that said the same thing for five minutes are read again on the next test or paint
 const phrase = n => String(n || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 // The speakers and microphone are the Sapphire computer's: "this computer" only
 // when the browser is on it.
@@ -49,11 +50,13 @@ export default w => {
     let rowsEl = null, youEl = null, footEl = null, timer = null, lightTimer = null;
     let hearing = 0;            // the microphone test running now (0 = none): a late line from an old one is dropped
     let takes = 0;
+    let quiet = 0, lastLights = '';     // polls in a row that changed nothing
     let settingUp = false;
     const testing = new Set();  // rows whose test runs now: their button waits
     const open = new Set();     // rows whose tab is unfolded: kept across repaints
     const said = {};            // each row's last test line, kept across repaints (a save repaints the step)
     const waiting = {};         // row -> [key, value]: "Set up now" started that switch, the line says how it ended
+    const started = new Set();  // switch keys "Set up now" sent: staged again by the host until their job's event arrives
 
     const ctx = () => w.host.createCtx();
     const dropPending = () => { const p = w.host.pendingChanges; for (const k of Object.keys(p)) delete p[k]; };
@@ -64,9 +67,12 @@ export default w => {
         return p;
     };
 
+    // What you say for a wake word model: its phrase from the library (a made one's file name is not it).
+    const wakeName = model => plan?.labels?.wakeword?.[model] || phrase(model);
+
     // What a row is set to (staged or saved), by name.
     function words(r, c) {
-        if (r.id === 'wake') return c.getValue('WAKE_WORD_ENABLED') ? `On, say "${phrase(c.getValue('WAKEWORD_MODEL'))}"` : 'Off';
+        if (r.id === 'wake') return c.getValue('WAKE_WORD_ENABLED') ? `On, say "${wakeName(c.getValue('WAKEWORD_MODEL'))}"` : 'Off';
         const v = c.getValue(PROVIDER_KEY[r.id]);
         return v && v !== 'none' ? (plan.labels?.[r.tab]?.[v] || v) : 'Off';
     }
@@ -93,14 +99,16 @@ export default w => {
     }
 
     // A row's light: [dot, why]. Staged and not started = grey: Finish sets it up.
+    // Yellow and pulsing only for what is on its way (a switch job, an engine
+    // starting); a voice a setting keeps from this computer is steady yellow.
     function light(r) {
         const st = lights?.[r.id];
         if (!st) return ['', ''];
         const c = ctx();
-        if (st.state === 'loading') return ['loading', st.why];
+        if (st.busy) return ['loading', st.why];
         if (Object.keys(r.settings).some(k => c.getValue(k) !== c.settings[k])) return ['idle', ''];
         if (st.state === 'ok') return ['ok', ''];
-        return st.state === 'failed' ? ['failed', st.why] : ['idle', ''];
+        return ['loading', 'blocked', 'failed'].includes(st.state) ? [st.state, st.why] : ['idle', ''];
     }
 
     // Which rows this computer can test: the Brain always, the rest need its speakers or its microphone.
@@ -193,11 +201,27 @@ export default w => {
         try { lights = await fetchWithTimeout('/api/setup/easy/status', {}, 20000); }
         catch { /* the lights keep what they showed */ }
         if (!rowsEl || rowsEl !== el) return;
-        paintHeads();
-        settle();
-        if (Object.values(lights || {}).some(s => s.state === 'loading') || Object.keys(waiting).length) {
-            lightTimer = setTimeout(loadLights, POLL_MS);
+        // A switch that ended while the event stream was down (a laptop asleep,
+        // a reconnect: its settings_changed is not replayed) still reads as
+        // staged here, and its line said "Setting up now" for good. The server
+        // says no job runs for that key: read the settings and let it go.
+        const p = w.host.pendingChanges;
+        for (const key of [...started]) if (!(key in p)) started.delete(key);      // its event came
+        const missed = [...started].filter(key =>
+            Object.entries(SWITCH_KEY).some(([id, k]) => k === key && lights?.[id]?.busy === false));
+        if (missed.length) {
+            try { await w.host.loadSettingsOnly(); } catch { /* the next poll tries again */ }
+            if (!rowsEl || rowsEl !== el) return;
+            for (const key of missed) { delete p[key]; started.delete(key); }
         }
+        paintHeads();
+        await settle();
+        if (!rowsEl || rowsEl !== el) return;
+        const now = JSON.stringify(lights);
+        quiet = now === lastLights ? quiet + 1 : 0;
+        lastLights = now;
+        const moving = Object.values(lights || {}).some(s => s.state === 'loading');
+        if (started.size || Object.keys(waiting).length || (moving && quiet < QUIET_POLLS)) lightTimer = setTimeout(loadLights, POLL_MS);
     }
 
     // Everything staged, in one batch save: Finish, and "Set up now".
@@ -225,7 +249,9 @@ export default w => {
         el.parentElement.hidden = !text;
         el.className = `easy-try-result${kind ? ` ${kind}` : ''}`;
         el.textContent = text;
-        if (key && !busy && key in w.host.pendingChanges && !(which in waiting)) {
+        // not the wake word while her ears are off: the save drops it (nothing to wake her with)
+        const moot = key === 'WAKE_WORD_ENABLED' && deaf();
+        if (key && !busy && !moot && key in w.host.pendingChanges && !(which in waiting)) {
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'btn-sm';
@@ -245,6 +271,8 @@ export default w => {
         finally {
             testing.delete(id);
             paintHeads();
+            // the head was painted again: a keyboard's focus goes back to the button it pressed
+            if (document.activeElement === document.body) rowsEl?.querySelector(`[data-test="${id}"]`)?.focus();
             if (rowsEl) { loadLights(); if (id === 'brain') loadBrain(false); }
         }
     }
@@ -271,7 +299,7 @@ export default w => {
 
     // The wake word waits for its phrase. Nothing is recorded: it only says whether it heard.
     async function wakeTest() {
-        const name = phrase(ctx().settings.WAKEWORD_MODEL || 'hey_sapphire');
+        const name = wakeName(ctx().settings.WAKEWORD_MODEL || 'hey_sapphire');     // the model live now is the one that listens
         result('wake', `Say "${name}" now…`);
         const r = await fetchWithTimeout('/api/setup/easy/wake', { method: 'POST' }, 30000);
         if (!r.ok) result('wake', r.why || 'The wake word is not listening.', '', 'WAKE_WORD_ENABLED', r.busy);
@@ -293,7 +321,11 @@ export default w => {
             if (hearing !== take) return;       // the person went back: this take's words are nobody's
             if (ev.done) closed = true;
             // the Sapphire computer says so first: nobody near it is listened to quietly
-            if (ev.warn) { glow('warning'); result('ears', `She is saying on ${BOX} that she is about to listen…`); }
+            if (ev.warn) {
+                glow('warning');
+                result('ears', ev.spoken === false ? `${Box} beeps three times, then listens…`
+                    : `She is saying on ${BOX} that she is about to listen…`);
+            }
             else if (ev.count) { glow('warning'); result('ears', `Listening in ${ev.count}…`); }
             else if (ev.mic) { glow('listening'); mic = ev.mic; show(true); result('ears', `Listening on ${mic}. Say something…`); }
             else if (ev.clear) { glow(''); show(false); if (!said.ears?.[1]) result('ears', `Done listening: ${mic} is closed again.`); }
@@ -313,7 +345,11 @@ export default w => {
                 method: 'POST',
                 headers: { 'X-Session-ID': sessionId, 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
             });
-            if (!res.ok) throw await responseError(res);
+            if (!res.ok) {          // refused before it began: nothing "stopped early"
+                closed = true;
+                result('ears', `The microphone test did not start: ${errWords(await responseError(res))}`, 'error');
+                return;
+            }
             const reader = res.body.getReader(), text = new TextDecoder();
             let buf = '';
             for (;;) {
@@ -345,7 +381,8 @@ export default w => {
         settingUp = true;
         try {
             const p = w.host.pendingChanges;
-            const lines = Object.keys(said).filter(which => said[which][2] in p);
+            const lines = Object.keys(said).filter(which => said[which][2] in p
+                && !(said[which][2] === 'WAKE_WORD_ENABLED' && deaf()));
             for (const which of lines) {
                 waiting[which] = [said[which][2], p[said[which][2]]];
                 result(which, 'Setting up now: its progress shows under Downloads.');
@@ -358,19 +395,30 @@ export default w => {
                 }
                 return;
             }
+            // what the save handed to jobs is staged again until each job's event; a missed event is caught by the lights
+            for (const key of Object.values(SWITCH_KEY)) if (key in w.host.pendingChanges) started.add(key);
             try { plan = await readPlan(); } catch { /* the rows keep their words */ }
             paintHeads();
             loadLights();
         } finally { settingUp = false; }
     }
 
-    // A switch "Set up now" started has ended: its test line says how.
-    function settle() {
-        const c = ctx();
-        for (const [which, [key, value]] of Object.entries(waiting)) {
-            if (key in w.host.pendingChanges) continue;         // still running
+    // A switch "Set up now" started has ended: its test line says how. The host
+    // lets the staged key go BEFORE it reads the settings again, so a line that
+    // would say "could not" reads them itself first: never that over a switch
+    // that worked.
+    async function settle() {
+        const el = rowsEl;
+        const ended = () => Object.entries(waiting).filter(([, [key]]) => !(key in w.host.pendingChanges));
+        let live = ctx().settings;
+        if (ended().some(([, [key, value]]) => live[key] !== value)) {
+            // its own read: the host drops a reload that a newer one overtook
+            try { live = (await fetchWithTimeout('/api/settings', {}, 15000)).settings || live; } catch { /* judged on what is known */ }
+            if (!rowsEl || rowsEl !== el) return;
+        }
+        for (const [which, [key, value]] of ended()) {
             delete waiting[which];
-            if (c.settings[key] === value) result(which, 'It is set up. Test it again.');
+            if (live[key] === value) result(which, 'It is set up. Test it again.');
             else result(which, 'That could not be set up: its row under Downloads says why.', 'error');
         }
     }
@@ -435,6 +483,9 @@ export default w => {
             rowsEl.addEventListener('click', e => {
                 const b = e.target.closest('button');
                 if (!b || b.disabled || b.closest('.easy-row-fold')) return;       // a button inside an unfolded tab is that tab's
+                // a save is out: it ends by clearing what is staged, so a pick made now would be lost, and
+                // "Set up now" would send the same save twice. Tests stage nothing and stay live.
+                if (w.host.saving && !b.dataset.test) return;
                 if (b.dataset.setup) { setUpNow(); return; }
                 const id = b.dataset.use || b.dataset.test || b.dataset.change;
                 if (!id) return;
@@ -463,6 +514,7 @@ export default w => {
                 plan = null; brain = null; lights = null; wiped = seeded = false; open.clear();
                 for (const which of Object.keys(said)) delete said[which];
                 for (const which of Object.keys(waiting)) delete waiting[which];
+                started.clear();
                 hearing = 0;
                 return;
             }
