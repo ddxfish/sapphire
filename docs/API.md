@@ -211,7 +211,7 @@ A room is a chat with several speakers. Not a room → 404; a bad request → 40
 | GET | `/api/settings/{key}` | Get a single setting |
 | PUT | `/api/settings/{key}` | Update a single setting |
 | DELETE | `/api/settings/{key}` | Reset a setting to default |
-| PUT | `/api/settings/batch` | Batch update multiple settings |
+| PUT | `/api/settings/batch` | Batch update multiple settings. `wake_providers: true` lets a provider switch first install and turn on what the provider needs (a core engine's package set, or a plugin that is off) |
 | POST | `/api/settings/reload` | Force reload from disk |
 | POST | `/api/settings/reset` | Reset all settings to defaults |
 | GET | `/api/settings/help` | Get setting descriptions |
@@ -797,8 +797,15 @@ Who may use this computer's shared workers. A door is `kokoro`, or a loaded plug
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/setup/state` | Where setup stands: `complete`, the `step` to resume at, `consent` time, the `steps` that apply here, `managed`, `docker`, and `packages` (tts/stt/wakeword sets installed) |
-| PUT | `/api/setup/state` | `{complete?: bool, step?: id, consent?: true}`; the server stamps the consent time; a bad step is a 400 |
+| GET | `/api/setup/state` | Where setup stands: `complete`, the `step` to resume at, `consent` time, the `mode` picked (`easy`, `advanced` or empty) and the `modes` offered, the `steps` of that mode that apply here, `managed`, `docker`, and `packages` (tts/stt/wakeword sets installed) |
+| PUT | `/api/setup/state` | `{complete?: bool, mode?: 'easy'\|'advanced', step?: id, consent?: true}`; the server stamps the consent time; a step that is not one of the mode's is a 400 |
+| GET | `/api/setup/easy` | What Easy setup picks for this computer: `rows` (voice, ears, wake word: `text`, `why`, `note`, `was`, and the `settings` Finish saves), `gpu` (`state`, `name`, `usable`, and `free_mib`: what is free on the card now, which decides whether her voice and ears go on it), and provider `labels`. `rerun` is true once setup was finished: then nothing is staged, and a row whose setting differs from the pick carries `current` (what is set, shown with the pick offered). `sound`: this computer has a sound system of its own to test, with `speakers` and `mic` (a real input, not only the sound server's own) saying which test to offer, and `sound_why` saying why not when it should have one and cannot be reached |
+| POST | `/api/setup/easy/say` | The Easy page's speaker test, on this computer's speakers: `{ok, kind, device, why, busy, error}`. `kind` is `voice` (her line reached the speakers: the route waits for playback to start) or `tone` (she cannot yet, or made no sound, `why` says so, a test tone played). One test at a time. Installs nothing |
+| POST | `/api/setup/easy/listen` | The Easy page's microphone test, on this computer's microphone: JSON lines `{warn}` (she is saying she will listen), `{count: 3..1}` with each beep, `{mic}`, `{level}`..., `{clear}` (the microphone is closed again; a ping and "Done" play on this computer), `{thinking}`, then one with `done`: `{error}`, `{heard: false, why?}` (`why` = the microphone sent pure silence: muted or blocked), or `{heard: true, text, ears, busy}` (`ears` = why there are no words when her ears are not ready). This computer warns the room before its microphone opens: "I am going to listen to your microphone in 3 seconds" in her voice (skipped when she has none), then a beep a second for three seconds. Up to 6 s, ends after speech and a second of quiet; the wake word is paused for the take. A browser session only: an API token gets 403 |
+| GET | `/api/setup/easy/status` | The light on each Easy row, for what is live now: `{voice, ears, wake}`, each `{state, why}` with state `ok`, `loading` (being set up, or not ready yet), `failed` (its last switch failed and nothing is set) or `off` |
+| POST | `/api/setup/easy/hello` | The Brain row's test: the LLM Auto would use says hello. `{ok, text, name, why}` |
+| POST | `/api/setup/easy/wake` | The Wake row's test: waits up to 8 s for the wake phrase and says only whether it was heard, `{ok, heard, why, busy}`. Nothing is recorded |
+| GET | `/api/setup/easy/brain` | The Easy page's Brain row `{state, text, hint}`: `running` (the launcher's LLM), `ok` (another provider answers), `loading` (starting, or still downloading: the text carries the percent), `stopped` (installed, not running), `none`. When nothing answers on the launcher's port the launcher itself is asked (`--llm-status`, only when its `llm.json` names it). `?light=true` is the page's poll (the launcher only) |
 | GET | `/api/setup/featured` | The plugins the wizard offers `{featured: [{name, group, title, blurb, description, icon, enabled, loaded, missing_deps, legacy}]}` |
 
 The wizard itself is the `#setup` view: it hosts the real Settings tabs, so provider readiness and model downloads are the provider switch jobs and their notification rows (above). Provider status and package checks have no routes of their own any more.

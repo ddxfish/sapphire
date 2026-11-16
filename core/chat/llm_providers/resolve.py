@@ -424,6 +424,11 @@ def _auto(cfg, order, private, timeout, health, require_images, conversation=Non
         raise NoProvidersAvailable(auto_words(trail, private))
     key, provider = result
     provider.conversation = conversation or None
+    try:        # a brain answers: setup's "She has no LLM yet" row stopped being true (core/routes/setup.py)
+        from core import notify
+        notify.forget('setup-no-llm')
+    except Exception as e:
+        logger.debug(f"setup row not cleared: {e}")
     logger.info(f"Auto mode: using '{key}' ({getattr(provider, 'model', '') or 'no model'}) for '{conversation or '?'}'"
                 + (f", passed over: {why}" if why else ""))
     return Selection(key, provider, '')

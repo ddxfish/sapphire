@@ -152,12 +152,14 @@
         <form method="POST" action="/setup" id="setup-form">
             <div class="form-group">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <!-- one account, no user name: a hidden one gives a password manager something to file it under -->
+                <input type="text" name="username" value="sapphire" autocomplete="username" hidden>
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autofocus minlength="10">
+                <input type="password" id="password" name="password" required autofocus minlength="10" autocomplete="new-password">
             </div>
             <div class="form-group">
                 <label for="confirm">Confirm Password</label>
-                <input type="password" id="confirm" name="confirm" required minlength="10">
+                <input type="password" id="confirm" name="confirm" required minlength="10" autocomplete="new-password">
             </div>
             <button type="submit">Create Password</button>
         </form>

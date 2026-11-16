@@ -118,8 +118,9 @@
         <form method="POST" action="/login">
             <div class="form-group">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="username" value="sapphire" autocomplete="username" hidden>
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autofocus>
+                <input type="password" id="password" name="password" required autofocus autocomplete="current-password">
             </div>
             <button type="submit">Login</button>
         </form>

@@ -97,8 +97,9 @@ def test_voice_step_is_cards_plus_one_fold():
 def test_consent_and_name_guards():
     c = _src('views/setup-steps/consent.js')
     assert "try { await w.putState({ consent: true }); }" in c                   # the server stamps the time
-    assert "return false; }" in c                                                # a failed stamp stays on the step (hunt 19)
-    assert 'return false;' in c.split("Tick \"I understand\"")[1]
+    # one button agrees and moves on (2026-11-15); a failed stamp stays on the step (hunt 19)
+    assert 'ownNext: true' in c and 'id="setup-understand"' in c and 'type="checkbox"' not in c
+    assert "btn.disabled = false; return; }" in c and c.index("btn.disabled = false; return; }") < c.index('w.next();')
     y = _src('views/setup-steps/you.js')
     assert "const DEFAULT_NAME = 'Human Protagonist';" in y
     assert "if (v && v !== DEFAULT_NAME && v !== (ctx.settings.DEFAULT_USERNAME || '')) ctx.markChanged('DEFAULT_USERNAME', v);" in y
@@ -159,6 +160,7 @@ def test_stepper_and_registry_exports():
     st = _src('shared/stepper.js')
     assert 'export function createStepper({ el, steps, onShow, onFinish, onExit, exitLabel' in st
     assert "if (step.kind === 'gate') {" in st and 'if (ok === false) return;' in st
+    assert "right = step.ownNext ? '' : btn('next', 'Next →', 'btn-primary');" in st   # a step with its own continue
     wz = _src('shared/wizards.js')
     assert 'export function register(w) {' in wz and 'export function list(except = null) {' in wz
 
@@ -167,3 +169,89 @@ def test_setup_css_hides_the_rail_only_in_setup_mode():
     css = (STATIC / 'style.css').read_text(encoding='utf-8')
     assert 'body.setup-mode #nav-rail { display: none; }' in css
     assert 'body.setup-mode #app-content { margin-left: 0; margin-bottom: 0; width: 100%; height: 100%; }' in css
+
+
+def test_the_kind_of_setup_decides_the_steps():
+    # 2026-11-15, tmp/easy-mode-plan.md: welcome -> Easy or Advanced -> that kind's steps
+    v = _src('views/setup.js')
+    assert "const DEFAULT_STEPS = ['consent', 'mode'];" in v
+    assert "await w.putState({ mode: kind });" in v and "await build(ids[ids.indexOf('mode') + 1]);" in v
+    assert "if (agreedBefore) ids = ids.filter(id => id !== 'consent');" in v        # agreed on an earlier visit: not asked again
+    assert "agreedBefore = !!state.consent;" in v                                    # the visit that showed it keeps it in the count
+    # a visit starts with nothing staged: an earlier visit's unsaved picks must not ride its first save
+    assert "for (const k of Object.keys(host.pendingChanges)) delete host.pendingChanges[k];" in v.split('async show()')[1]
+    assert "await build(state.complete ? 'mode' : state.step);" in v                 # a second run picks the kind again
+    m = _src('views/setup-steps/mode.js')
+    assert 'ownNext: true' in m and 'await w.setMode(card.dataset.mode);' in m
+
+
+def test_easy_step_stages_the_picks_and_unfolds_the_real_tabs():
+    e = _src('views/setup-steps/easy.js')
+    assert "const TABS = { brain: llmTab, voice: ttsTab, ears: sttTab, wake: wakewordTab };" in e
+    assert "kind: 'gate'" in e                                                   # Finish is the only way on
+    assert "if (c.settings[k] !== v) c.markChanged(k, v);" in e                  # only what differs is staged
+    assert "w.host.mount(TABS[id], fold);" in e and "w.host.unmount(TABS[id], fold);" in e
+    assert "const r = await w.save({ wake_providers: true });" in e
+    back = e.split("if (dir < 0) {")[1].split('return;')[0]
+    assert 'dropPending();' in back                                              # going back drops the picks
+    assert back.index('setFold(id, false)') < back.index('open.clear()')         # and each open tab gets its detach first
+    assert "if (opts.wake_providers) body.wake_providers = true;" in _src('shared/settings-api.js')
+    assert "wake_providers: opts?.wake_providers === true" in _src('shared/settings-host.js')
+
+
+def test_easy_second_run_offers_and_its_tests_install_nothing_by_themselves():
+    e = _src('views/setup-steps/easy.js')
+    assert "for (const r of plan.rerun ? [] : plan.rows) {" in e                 # a second run stages nothing
+    assert 'data-use="${id}">Use it</button>' in e                               # the pick is one click away
+    # nothing of the row's staged: what is set, with the pick offered (a second run, or a switch that failed)
+    assert "if (keys.every(k => c.getValue(k) === c.settings[k])) {" in e and "offer: r };" in e
+    # the tests: this computer's speakers and microphone, only where it has them
+    assert "'/api/setup/easy/say'" in e and "fetch('/api/setup/easy/listen'" in e
+    assert "const testable = id => id === 'brain' || (!!plan?.sound && (id === 'voice' ? plan.speakers !== false : plan.mic !== false));" in e
+    assert "if (key && !busy && key in w.host.pendingChanges && !(which in waiting)) {" in e    # "Set up now" only for a staged pick
+    assert "if (!closed && hearing === take)" in e                               # a stream cut short says so
+    assert "if (el && el._html !== html)" in e                                   # the Brain poll never replaces a button mid-click
+    assert "if (brain) armBrain(); else loadBrain(false);" in e                  # the whole look once per visit, not per repaint
+    assert e.count('await saveStaged()') == 2                                    # Finish and "Set up now": one save
+    assert 'abort' not in e.split('async function listenTest')[1].split('async function setUpNow')[0].replace('Never aborted', '')
+    assert "if (hearing !== take) return;       // the person went back" in e    # a repaint keeps the take, going back drops it
+
+
+def test_the_stepper_owns_busy_while_it_moves_and_a_repaint_keeps_its_place():
+    """hunt 2026-11-15: a save's own busy(false) re-enabled Finish while the finish
+    was still running; the scroll reset aimed at an element that does not scroll."""
+    s = _src('shared/stepper.js')
+    assert "busy = !!b || moving;" in s
+    assert "moving = true;" in s and "finally { moving = false; setBusy(false); }" in s
+    assert "if (!again) scroller.scrollTop = 0;" in s and "if (again) scroller.scrollTop = at;" in s
+    assert "scroller: container.querySelector('.setup-view')" in _src('views/setup.js')
+
+
+def test_the_page_follows_the_warning_before_the_microphone_test_listens():
+    """Krem 2026-11-15: nobody near the Sapphire computer is listened to quietly. The server
+    says so and beeps three times (core/setup_easy.py _warn); the Ears row glows yellow while
+    it does and red while the microphone is open."""
+    e = _src('views/setup-steps/easy.js')
+    assert "if (ev.warn) { glow('warning');" in e and "else if (ev.count) { glow('warning');" in e
+    assert "else if (ev.mic) { glow('listening');" in e and "else if (ev.clear) { glow(''); show(false);" in e
+    test = e.split('async function listenTest')[1].split('const TESTS')[0]
+    assert "glow('');" in test.split('} finally {')[1]                               # however the test ends, the glow goes
+    css = _src('style.css')
+    assert '.easy-row.warning' in css and '.easy-row.listening' in css and 'red-alert' not in css
+    py = (ROOT / 'core' / 'setup_easy.py').read_text(encoding='utf-8')
+    assert py.index("_warn(system, emit)") < py.index("with sd.InputStream(")         # the warning, then the microphone
+    assert 'tkinter' not in py and 'notify-send' not in py                           # no screen flash, no alarm: a standard warning
+
+
+def test_every_easy_row_has_a_light_and_a_test_of_its_own():
+    """Krem 2026-11-15: a Test beside each Change (her LLM says hello, her voice speaks, her
+    ears hear, the wake word waits for its phrase), a light on every row, no section at the bottom."""
+    e = _src('views/setup-steps/easy.js')
+    assert "const TESTS = { brain: helloTest, voice: sayTest, ears: listenTest, wake: wakeTest };" in e
+    for route in ("'/api/setup/easy/hello'", "'/api/setup/easy/wake'", "'/api/setup/easy/status'"):
+        assert route in e
+    assert 'data-test="${id}"' in e and 'data-try=' not in e and 'Try it' not in e
+    assert "if (Object.keys(r.settings).some(k => c.getValue(k) !== c.settings[k])) return ['idle', ''];" in e   # staged: grey until Finish
+    assert "if (testing.has(id)) return;" in e                                    # one test per row at a time
+    css = _src('style.css')
+    assert '.easy-dot.failed' in css and '.easy-dot.idle' in css and '.easy-try-row' not in css

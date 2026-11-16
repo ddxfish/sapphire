@@ -980,7 +980,7 @@ class SettingsManager:
             'DEVICE_FIRMWARE_SOURCE', 'DEVICE_FIRMWARE_SOURCES', 'DEVICE_FIRMWARE_SOURCES_OFF',   # read when the Devices page's flasher opens
             'AVATAR_FACE_SOURCE',     # core/avatar_feed reads it at every avatar's look
             # Setup wizard state (core/routes/setup.py) - read per request
-            'SETUP_COMPLETE', 'SETUP_STEP', 'SETUP_CONSENT',
+            'SETUP_COMPLETE', 'SETUP_STEP', 'SETUP_CONSENT', 'SETUP_MODE',
             'LAUNCHER_LLM_ADOPTED',   # core/launcher_llm.py's once-only marker
             # Conversation (true speech) mode tunables — read fresh on each activation
             'CONVERSATION_VAD_THRESHOLD', 'CONVERSATION_BARGE_HOLD_MS',

@@ -22,6 +22,8 @@ Remote Sapphire guests
 Message queue coalesce
 Fix-it error help
 Setup wizard
+Easy setup mode
+Setup sound test
 ### History
 SQLite message rows
 Edit regen delete

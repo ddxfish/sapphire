@@ -492,6 +492,63 @@ async def test_audio_input(request: Request, _=Depends(require_login), system=De
     return await asyncio.to_thread(_test_input)
 
 
+def play_test_tone(system, device_index=None, duration=0.5, frequency=440):
+    """A short tone on an output device (None = the system default): the
+    speaker test of Settings > Audio and of Easy setup. Blocks while it plays."""
+    import numpy as np
+    from core.audio.backend import sd
+
+    # Pause wakeword stream to avoid audio device conflict
+    listener_stopped, wakeword_paused = _quiesce_wakeword(system)
+
+    try:
+        sample_rate = None
+        default_rate = 44100
+        if device_index is not None:
+            try:
+                dev_info = sd.query_devices(device_index)
+                default_rate = int(dev_info['default_samplerate'])
+            except Exception:
+                pass
+
+        for rate in [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]:
+            try:
+                stream = sd.OutputStream(device=device_index, samplerate=rate, channels=1, dtype=np.float32)
+                stream.close()
+                sample_rate = rate
+                break
+            except Exception:
+                continue
+
+        if sample_rate is None:
+            return {'success': False, 'error': "That speaker didn't accept any common sample rate. Pick another output device."}
+
+        t = np.linspace(0, duration, int(sample_rate * duration), False)
+        tone = np.sin(2 * np.pi * frequency * t)
+        fade_samples = int(sample_rate * 0.02)
+        fade_in = np.linspace(0, 1, fade_samples)
+        fade_out = np.linspace(1, 0, fade_samples)
+        tone[:fade_samples] *= fade_in
+        tone[-fade_samples:] *= fade_out
+        tone = (tone * 0.5 * 32767).astype(np.int16)
+
+        try:
+            sd.play(tone, sample_rate, device=device_index)
+            # never sd.wait(): a device that vanishes mid-play (a Bluetooth
+            # headset, a USB unplug) can stop the finished callback, and the
+            # wait then held this thread - and the paused wakeword - forever
+            import time as _t
+            _t.sleep(duration + 0.3)
+            sd.stop()
+        except Exception as e:
+            from core.audio.errors import classify_audio_error
+            logger.warning(f"[AUDIO] test-output failed: {e!r}")
+            return {'success': False, 'error': classify_audio_error(e)}
+        return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
+    finally:
+        _resume_wakeword(system, listener_stopped, wakeword_paused)
+
+
 @router.post("/api/audio/test-output")
 async def test_audio_output(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Test audio output device."""
@@ -509,61 +566,7 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
         except (ValueError, TypeError):
             device_index = None
 
-    def _test_output():
-        import numpy as np
-        from core.audio.backend import sd
-
-        # Pause wakeword stream to avoid audio device conflict
-        listener_stopped, wakeword_paused = _quiesce_wakeword(system)
-
-        try:
-            sample_rate = None
-            default_rate = 44100
-            if device_index is not None:
-                try:
-                    dev_info = sd.query_devices(device_index)
-                    default_rate = int(dev_info['default_samplerate'])
-                except Exception:
-                    pass
-
-            for rate in [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]:
-                try:
-                    stream = sd.OutputStream(device=device_index, samplerate=rate, channels=1, dtype=np.float32)
-                    stream.close()
-                    sample_rate = rate
-                    break
-                except Exception:
-                    continue
-
-            if sample_rate is None:
-                return {'success': False, 'error': "That speaker didn't accept any common sample rate. Pick another output device."}
-
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            tone = np.sin(2 * np.pi * frequency * t)
-            fade_samples = int(sample_rate * 0.02)
-            fade_in = np.linspace(0, 1, fade_samples)
-            fade_out = np.linspace(1, 0, fade_samples)
-            tone[:fade_samples] *= fade_in
-            tone[-fade_samples:] *= fade_out
-            tone = (tone * 0.5 * 32767).astype(np.int16)
-
-            try:
-                sd.play(tone, sample_rate, device=device_index)
-                # never sd.wait(): a device that vanishes mid-play (a Bluetooth
-                # headset, a USB unplug) can stop the finished callback, and the
-                # wait then held this thread - and the paused wakeword - forever
-                import time as _t
-                _t.sleep(duration + 0.3)
-                sd.stop()
-            except Exception as e:
-                from core.audio.errors import classify_audio_error
-                logger.warning(f"[AUDIO] test-output failed: {e!r}")
-                return {'success': False, 'error': classify_audio_error(e)}
-            return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
-        finally:
-            _resume_wakeword(system, listener_stopped, wakeword_paused)
-
-    return await asyncio.to_thread(_test_output)
+    return await asyncio.to_thread(play_test_tone, system, device_index, duration, frequency)
 
 
 # =============================================================================

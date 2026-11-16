@@ -669,7 +669,12 @@ class VoiceChatSystem:
                 self.wake_detector = RealWakeWordDetector(model_name=config.WAKEWORD_MODEL)
                 self.wake_detector.set_audio_recorder(self.wake_word_recorder)
                 self.wake_detector.set_system(self)
-                self.wake_word_recorder.start_recording()
+                # The same check as the resume branch above: without it a mic
+                # that did not open read as "Wake word listening" on a deaf
+                # Sapphire, and every Easy setup starts cold (hunt 2026-11-15).
+                ok = self.wake_word_recorder.start_recording()
+                if ok is False or getattr(self.wake_word_recorder, 'stream', None) is None:
+                    raise RuntimeError("the microphone did not open")
                 self.wake_detector.start_listening()
                 logger.info("Wakeword hot-started successfully")
                 return True
@@ -1194,6 +1199,11 @@ class VoiceChatSystem:
         logger.info(f"Switching TTS provider to: {provider_name}")
         base_dir = Path(__file__).parent.resolve()
         ok = self._init_tts_provider(provider_name, base_dir)
+        try:    # a voice plugin's model server runs only while its voice is the one in use
+            from core.plugin_loader import plugin_loader
+            plugin_loader.sync_voice_services(provider_name if ok else 'none')
+        except Exception as e:
+            logger.warning(f"Voice plugin services not synced: {e}")
         if ok and provider_name and provider_name != 'none':
             try:
                 self._apply_initial_chat_settings()

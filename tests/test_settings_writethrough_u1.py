@@ -53,7 +53,7 @@ def test_tab_switch_refetch_is_settings_only():
 
 def test_global_save_counts_in_flight():
     assert 'let _saveInFlight = 0;' in HOST
-    save = HOST[HOST.index('async function saveChanges()'):HOST.index('// ── Help Popup ──')]
+    save = HOST[HOST.index('async function saveChanges(opts)'):HOST.index('// ── Help Popup ──')]
     assert '_saveInFlight++;' in save and '_saveInFlight--;' in save
 
 

@@ -1,18 +1,16 @@
 // setup-steps/consent.js - Welcome, and the two lines to agree to before anything is set up.
-// The server stamps the time (SETUP_CONSENT); the box reads checked once it has.
+// One big button: "I understand" is the agreement AND the way on (2026-11-15,
+// tmp/easy-mode-plan.md). The server stamps the time (SETUP_CONSENT); a setup
+// run after that skips this step (views/setup.js).
 import { showToast } from '../../shared/toast.js';
-import { escapeHtml as esc } from '../../shared/modal.js';
 
 export default w => ({
-    id: 'consent', title: 'Welcome',
+    id: 'consent', title: 'Welcome', ownNext: true,
 
     render(body) {
-        const when = w.state?.consent;
-        let agreed = '';
-        if (when) { try { agreed = new Date(when).toLocaleString(); } catch { agreed = when; } }
         body.innerHTML = `
             <p class="setup-lead">Sapphire is an AI assistant that runs here, on your computer. This short setup
-            picks her brain, her voice and her ears, and turns on what you want. Everything here can be changed
+            sets up her brain, her voice and her ears, and turns on what you want. Everything here can be changed
             later under Settings.</p>
             <div class="setup-consent">
                 <p>Two things to know before we start:</p>
@@ -21,23 +19,18 @@ export default w => ({
                     <li><b>You</b> choose which AI model to use, and how much access to give it to your computer
                         and your accounts.</li>
                 </ul>
-                <label class="setup-check">
-                    <input type="checkbox" id="setup-consent-box" ${when ? 'checked' : ''}>
-                    <span>I understand</span>
-                </label>
-                ${agreed ? `<div class="setting-help">Agreed ${esc(agreed)}</div>` : ''}
+            </div>
+            <div class="setup-understand-wrap">
+                <button type="button" class="setup-understand" id="setup-understand">I understand</button>
             </div>`;
-    },
-
-    async leave(body, dir) {
-        if (dir < 0) return;
-        if (!body.querySelector('#setup-consent-box')?.checked) {
-            showToast('Tick "I understand" to continue', 'warning');
-            return false;
-        }
-        if (!w.state?.consent) {
-            try { await w.putState({ consent: true }); }
-            catch (e) { showToast(`Couldn't save that: ${e.message}`, 'error'); return false; }
-        }
+        const btn = body.querySelector('#setup-understand');
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            if (!w.state?.consent) {
+                try { await w.putState({ consent: true }); }
+                catch (e) { showToast(`Couldn't save that: ${e.message}`, 'error'); btn.disabled = false; return; }
+            }
+            w.next();
+        });
     },
 });

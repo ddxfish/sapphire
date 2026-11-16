@@ -570,7 +570,8 @@ export function createHost(shell = {}) {
     // result (restart_required, per-key results), undefined when nothing was
     // saved, or false when the save failed (the wizard stays on its step). The Settings shell's Save button and the wizard's Next both land here;
     // plugin tabs with their own save flow never reach it (the shell routes those).
-    async function saveChanges() {
+    // `opts.wake_providers` (the wizard's Easy step) rides to the batch route.
+    async function saveChanges(opts) {
         const valid = {};
         for (const [key, value] of Object.entries(pendingChanges)) {
             if (key && key !== 'undefined') valid[key] = value;
@@ -642,7 +643,8 @@ export function createHost(shell = {}) {
                 parsed[key] = api.parseValue(value, referenceType);
             }
 
-            result = await api.updateSettingsBatch(parsed, { confirm_embedding_swap: confirmEmbeddingSwap });
+            result = await api.updateSettingsBatch(parsed, { confirm_embedding_swap: confirmEmbeddingSwap,
+                                                             wake_providers: opts?.wake_providers === true });
             await api.reloadSettings();
             // Per-key outcomes: a key the server refused used to ride under a
             // "Saved N" toast (found 2026-10-22). Provider keys come back

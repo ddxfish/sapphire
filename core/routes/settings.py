@@ -248,6 +248,12 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # reads WAKEWORD_MODEL from config, so the model lands as a plain key here and
     # the toggle job does the rest.
     from core import provider_switch
+    # A key already switching to something else refuses the whole save, before a
+    # plain key is written (hunt 2026-11-15: the name saved, then "Save failed").
+    try:
+        provider_switch.check([it for it in (provider_switch.item_for(k, v) for k, v in settings_dict.items()) if it])
+    except provider_switch.SwitchInProgress as e:
+        raise HTTPException(status_code=409, detail=str(e))
     switch_items, switch_key_of = [], {}
     plain_wakeword_model = 'WAKE_WORD_ENABLED' in settings_dict and 'WAKEWORD_MODEL' in settings_dict
     for key, value in settings_dict.items():
@@ -308,7 +314,9 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     jobs = {}
     if switch_items:
         try:
-            jobs = provider_switch.start(switch_items, persist=persist)
+            # wake_providers: the setup wizard's Easy step, whose page named what gets
+            # installed and turned on (core/provider_switch.py, the header)
+            jobs = provider_switch.start(switch_items, persist=persist, wake=data.get('wake_providers') is True)
         except provider_switch.SwitchInProgress as e:
             raise HTTPException(status_code=409, detail=str(e))
         for r in results:

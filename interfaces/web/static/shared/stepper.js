@@ -6,6 +6,7 @@
 //
 //   const st = createStepper({ el, steps, onShow, onFinish, onExit });
 //   st.go('voice');   st.next();   st.back();   st.repaint();   st.destroy();
+// `scroller` is the element that scrolls the steps (the stepper's own by default).
 //
 // A step: { id, title, render(body), leave?(body, dir), unmount?(body),
 //           kind?: 'gate', optional?: true }
@@ -14,11 +15,13 @@
 //   unmount(body)      stop what render started (the host's unmount for a hosted tab)
 //   kind 'gate'        the required lane is done: Finish, or carry on to the optional steps
 //   optional           after the gate: Finish is always offered beside Next
+//   ownNext            the step's own control moves on (st.next()): no Next in the foot
 import { escapeHtml as esc } from './modal.js';
 
-export function createStepper({ el, steps, onShow, onFinish, onExit, exitLabel = 'Skip for now' }) {
+export function createStepper({ el, steps, onShow, onFinish, onExit, exitLabel = 'Skip for now', scroller = el }) {
     let i = -1;
     let busy = false;
+    let moving = false;         // a move in flight keeps the foot busy whatever a save says
     let body = null;
 
     el.classList.add('stepper');
@@ -64,14 +67,14 @@ export function createStepper({ el, steps, onShow, onFinish, onExit, exitLabel =
         } else {
             left = (onExit ? `<button class="btn-link" data-act="exit">${esc(exitLabel)}</button>` : '')
                  + (i > 0 ? btn('back', '← Back') : '');
-            right = btn('next', 'Next →', 'btn-primary');
+            right = step.ownNext ? '' : btn('next', 'Next →', 'btn-primary');
         }
         footEl.innerHTML = `<div class="stepper-foot-left">${left}</div><div class="stepper-foot-right">${right}</div>`;
         setBusy(busy);
     }
 
     function setBusy(b) {
-        busy = !!b;
+        busy = !!b || moving;
         footEl.querySelectorAll('button').forEach(x => { x.disabled = busy; });
         el.classList.toggle('busy', busy);
     }
@@ -83,24 +86,27 @@ export function createStepper({ el, steps, onShow, onFinish, onExit, exitLabel =
         body = null;
     }
 
-    async function show(n) {
+    async function show(n, again = false) {
+        const at = scroller.scrollTop;
         await unmountCurrent();
         i = n;
         body = document.createElement('div');
-        body.className = 'stepper-step';
+        body.className = again ? 'stepper-step again' : 'stepper-step';
         body.dataset.step = steps[i].id;
         bodyHost.appendChild(body);
         paintChrome();
-        el.scrollTop = 0;
+        if (!again) scroller.scrollTop = 0;
         try { await steps[i].render(body); } catch (e) {
             console.warn('[stepper] render failed:', e);
             body.innerHTML = `<p class="setting-help">This step could not be shown: ${esc(e.message)}</p>`;
         }
+        if (again) scroller.scrollTop = at;         // the same step, painted again: the same place
         onShow?.(steps[i]);
     }
 
     async function move(dir, after) {
         if (busy) return;
+        moving = true;
         setBusy(true);
         try {
             if (i >= 0 && dir !== 0) {
@@ -108,7 +114,7 @@ export function createStepper({ el, steps, onShow, onFinish, onExit, exitLabel =
                 if (ok === false) return;
             }
             await after();
-        } finally { setBusy(false); }
+        } finally { moving = false; setBusy(false); }
     }
 
     const go = id => { const n = steps.findIndex(s => s.id === id); return move(n > i ? 1 : -1, () => show(n < 0 ? 0 : n)); };
@@ -122,7 +128,7 @@ export function createStepper({ el, steps, onShow, onFinish, onExit, exitLabel =
         current: () => steps[i] || null,
         body: () => body,
         // paint the current step again (after a save or a data reload); same scroll
-        async repaint() { if (i < 0 || !body) return; await unmountCurrent(); await show(i); },
+        async repaint() { if (i >= 0 && body) await show(i, true); },
         setBusy,
         async destroy() { await unmountCurrent(); i = -1; el.innerHTML = ''; el.classList.remove('stepper'); },
     };

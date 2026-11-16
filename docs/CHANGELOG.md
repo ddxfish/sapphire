@@ -1,3 +1,9 @@
+# 2.16.5 - Easy mode setup wizard and LLM
+- Setup wizard has easy mode, 5 clicks in the setup wizard to talk
+- Takes user from full install to chat in 12 mouse clicks
+- Easy mode auto detects best setup, minimizing user input
+- Sapphire launcher's LLM pairs with app, auto detects on wizard
+- Avatar hub (soon to be stream hub) ADPCM support, send changed pixels only support
 # 2.16.4 - Million Dollar Bug Hunt
 - Widespread bug hunt across whole system
 - Unified chat stream rendering so it doesnt shift at the end, no re-render

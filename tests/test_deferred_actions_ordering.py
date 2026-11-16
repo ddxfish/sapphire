@@ -24,6 +24,7 @@ from core.provider_switch import WAKEWORD_KEYS
 def _sort_invariant(items):
     """Replicate the sort applied in core/provider_switch.py:start
     so we can validate the invariant directly without spinning a job."""
+    items.sort(key=lambda kv: kv[0] == 'TTS_PROVIDER')      # voice after ears (2026-11-15)
     items.sort(key=lambda kv: kv[0] in WAKEWORD_KEYS)
     return items
 
@@ -55,9 +56,11 @@ def test_non_wakeword_relative_order_preserved():
     assert non_wake == ['EMBEDDING_PROVIDER', 'STT_PROVIDER', 'TTS_PROVIDER']
 
 
-def test_no_wakeword_passes_through_unchanged():
+def test_no_wakeword_only_moves_the_voice_last():
+    """The voice goes after the others (a first voice download held the job lock
+    while she could have been hearing already); the rest keep their order."""
     items = [('TTS_PROVIDER', 'kokoro'), ('STT_PROVIDER', 'whisper'), ('EMBEDDING_PROVIDER', 'voyage')]
-    assert _sort_invariant(list(items)) == items
+    assert _sort_invariant(list(items)) == [items[1], items[2], items[0]]
 
 
 def test_wakeword_only_unchanged():
@@ -91,6 +94,7 @@ def test_sort_invariant_matches_job_implementation():
     from pathlib import Path
     src = (Path(__file__).parent.parent / "core" / "provider_switch.py").read_text(encoding='utf-8')
     expected = "items.sort(key=lambda kv: kv[0] in WAKEWORD_KEYS)"
+    assert "items.sort(key=lambda kv: kv[0] == 'TTS_PROVIDER')" in src
     assert expected in src, (
         f"core/provider_switch.py no longer contains the wake-word-last sort. "
         f"Expected literal: {expected!r}. If the implementation changed shape, "

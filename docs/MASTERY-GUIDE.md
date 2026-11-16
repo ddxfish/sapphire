@@ -10,7 +10,7 @@ This is the long-form version of the [condensed Mastery Guide](../README.md#sapp
 
 The only goal here is "she's running and she heard me."
 
-1. **Install Sapphire and link an LLM.** Follow [QUICK-START.md](QUICK-START.md). Local (LM Studio, Ollama) or cloud (Claude, GPT, Gemini, Fireworks). Setup wizard handles the basics — Welcome, You, Brain, Voice, Audio, then the optional Plugins, Look and What next.
+1. **Install Sapphire and link an LLM.** Follow [QUICK-START.md](QUICK-START.md). Local (LM Studio, Ollama) or cloud (Claude, GPT, Gemini, Fireworks). Setup wizard handles the basics — Welcome, then Easy (one page of what she picked for this computer, with an optional speaker and microphone test) or Advanced (You, Brain, Voice, Audio, then the optional Plugins, Look and What next).
 2. **Open the web UI** at https://localhost:8073. Run through the setup wizard if you haven't (rerun it any time: Settings > System > Run Setup Wizard).
 3. **Say "hey sapphire, hello."** If she replies, voice is alive. If you skipped the wizard's Voice step, [VOICE.md](VOICE.md) walks you through STT, TTS, and the wake word.
 4. **System > Help** — read what's there. Sapphire is bigger than the chat box, and the in-app help is the fastest way to see the surface area.
@@ -127,7 +127,7 @@ TOPIC → DOC:
 - Something broke: TROUBLESHOOTING.md
 
 TIER SUMMARY:
-1. First Boot — installed, wizard done (core/routes/setup.py order: consent/Welcome, you, brain, voice, audio, gate "You're set", then optional plugins, look, next), she answers
+1. First Boot — installed, wizard done (core/routes/setup.py order: consent/Welcome, mode; then easy, or advanced = you, brain, voice, audio, gate "You're set", then optional plugins, look, next), she answers
 2. Make Her Yours — prompts, toolsets, personas, spice, appearance, multiple chats, slash commands, chat room
 3. Operator — plugins (Store under System), integrations, daemons (Triggers nav group), scheduled tasks, phone, network, notifications, MCP door
 4. Living Workshop — agents, Mind Palace memory + Library, toolmaker, game room, systemd service

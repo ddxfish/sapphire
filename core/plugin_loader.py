@@ -2468,6 +2468,11 @@ class PluginLoader:
                 logger.warning(f"[PLUGINS] {name}: services not started — env {status}")
                 return
             python = str(plugin_envs.env_python(name))
+        # after the environment: a voice that still needs its Build must say so
+        if self._voice_idle(manifest):
+            info["services_blocked"] = "idle"
+            logger.info(f"[PLUGINS] {name}: its voice is not the one in use — services not started")
+            return
 
         from core import service_health
         managers, watches = {}, {}
@@ -2592,6 +2597,48 @@ class PluginLoader:
         elif not client and info.get("services_blocked") == "client":
             info.pop("services_blocked", None)
             self._start_services(name)
+
+    def _voice_idle(self, manifest) -> bool:
+        """True for a plugin that brings a voice (a `tts` provider) which is
+        not the voice in use: its services are that voice's model server, and
+        one nobody speaks through only holds memory (Audio8 kept 2.9 GB of
+        VRAM under Kokoro, 2026-11-15). The voice in use is what the last
+        switch asked for, else the setting (boot)."""
+        decl = ((manifest.get("capabilities") or {}).get("providers") or {}).get("tts")
+        if not isinstance(decl, dict) or not decl.get("key"):
+            return False
+        active = getattr(self, "_voice_in_use", None)
+        if active is None:
+            import config
+            active = getattr(config, "TTS_PROVIDER", "none")
+        return decl["key"] != active
+
+    def sync_voice_services(self, active):
+        """The voice changed to `active` (a provider key, or 'none'): the
+        services of a plugin whose voice it is start, every other voice
+        plugin's stop. Blocks while they stop: call it off the event loop."""
+        self._voice_in_use = active or "none"
+        with self._lock:
+            names = list(self._plugins.keys())
+        for name in names:
+            info = self._plugins.get(name)
+            if not info or not info.get("loaded") or not self._scheduler:
+                continue
+            manifest = info["manifest"]
+            caps = manifest.get("capabilities") or {}
+            if not caps.get("services") or not isinstance((caps.get("providers") or {}).get("tts"), dict):
+                continue
+            try:
+                if self._voice_idle(manifest):
+                    if info.get("service_managers"):
+                        self._stop_services(name)
+                        info["services_blocked"] = "idle"
+                        logger.info(f"[PLUGINS] {name}: its voice is no longer in use — services stopped")
+                elif not info.get("service_managers") and info.get("services_blocked") in (None, "idle"):
+                    info.pop("services_blocked", None)
+                    self._start_services(name)
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: services not synced to the voice: {e}", exc_info=True)
 
     def _start_pending_services(self):
         """Start services for plugins loaded before boot completed (mirrors daemons)."""

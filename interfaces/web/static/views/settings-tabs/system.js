@@ -84,7 +84,7 @@ export default {
             <div class="system-tools" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
                 <h4 style="margin:0 0 10px;font-size:var(--font-sm)">Tools</h4>
                 <button class="btn-primary" id="sys-setup-wizard">Run Setup Wizard</button>
-                <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Her brain, voice and ears, audio, featured plugins and look, step by step.</p>
+                <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Easy: one page of what fits this computer. Advanced: her brain, voice, ears, audio, plugins and look, step by step.</p>
             </div>
 
             <div class="integrity-check" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">

@@ -1345,3 +1345,51 @@ def test_client_mode_flip_stops_and_starts_services():
     loader._start_services = lambda name: calls.append("start")
     loader.sync_client_mode("face")
     assert calls == ["stop", "start"] and "services_blocked" not in loader._plugins["face"]
+
+
+# =============================================================================
+# A voice plugin's services follow the voice in use (2026-11-15: Audio8's model
+# server kept 2.9 GB of VRAM while Kokoro was the voice)
+# =============================================================================
+
+def _voice_loader(monkeypatch, configured):
+    import config
+    monkeypatch.setattr(config, "TTS_PROVIDER", configured, raising=False)
+    loader = PluginLoader.__new__(PluginLoader)
+    loader._lock = __import__("threading").Lock()
+    voice = {"name": "clone", "capabilities": {"providers": {"tts": {"key": "clone"}},
+                                               "services": [{"name": "server", "entry": "server.py"}]}}
+    face = {"name": "face", "capabilities": {"services": [{"name": "server", "entry": "server.py"}]}}
+    loader._plugins = {"clone": {"manifest": voice, "path": Path("/nonexistent"), "loaded": True},
+                       "face": {"manifest": face, "path": Path("/nonexistent"), "loaded": True}}
+    loader._scheduler = object()
+    loader.get_plugin_settings = lambda name: {}
+    return loader
+
+
+def test_a_voice_that_is_not_in_use_starts_no_server(monkeypatch):
+    loader = _voice_loader(monkeypatch, "kokoro")
+    loader._start_services("clone")
+    assert loader._plugins["clone"]["services_blocked"] == "idle" and not loader._plugins["clone"].get("service_managers")
+    assert loader._voice_idle(loader._plugins["face"]["manifest"]) is False     # not a voice: never held back
+    monkeypatch.setattr(__import__("config"), "TTS_PROVIDER", "clone")
+    assert loader._voice_idle(loader._plugins["clone"]["manifest"]) is False    # boot: the setting is the voice
+
+
+def test_a_voice_switch_stops_the_old_voices_server_and_starts_the_new(monkeypatch):
+    loader = _voice_loader(monkeypatch, "clone")
+    calls = []
+    loader._stop_services = lambda name: (calls.append(("stop", name)), loader._plugins[name].pop("service_managers", None))
+    loader._start_services = lambda name: calls.append(("start", name))
+    for name in ("clone", "face"):
+        loader._plugins[name]["service_managers"] = {"server": object()}
+    loader.sync_voice_services("kokoro")
+    assert calls == [("stop", "clone")] and loader._plugins["clone"]["services_blocked"] == "idle"
+    assert loader._plugins["face"].get("service_managers")                      # another plugin's server is not a voice's
+    loader.sync_voice_services("kokoro")
+    assert calls == [("stop", "clone")]                                         # nothing to do twice
+    loader.sync_voice_services("clone")                                         # config still says the old voice: the switch decides
+    assert calls == [("stop", "clone"), ("start", "clone")] and "services_blocked" not in loader._plugins["clone"]
+    loader._plugins["clone"]["services_blocked"] = "missing"                    # its environment is not built: not ours to start
+    loader.sync_voice_services("clone")
+    assert len(calls) == 2

@@ -225,6 +225,29 @@ def status(refresh=False):
         return dict(_cached)
 
 
+def free_mib(name=None):
+    """Free memory on the card right now, in MiB; None when it cannot be read.
+    Never cached: an LLM loads and leaves. `name` picks the card on a box with
+    several (the one status() chose), else the first is taken."""
+    exe = shutil.which('nvidia-smi')
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, '--query-gpu=name,memory.free', '--format=csv,noheader,nounits'],
+                           capture_output=True, text=True, timeout=15, **_FLAGS)
+    except Exception as e:
+        logger.debug(f"[GPU] free memory not read: {e}")
+        return None
+    rows = []
+    for line in (r.stdout or '').strip().splitlines():
+        parts = [p.strip() for p in line.rsplit(',', 1)]
+        if len(parts) == 2 and parts[1].isdigit():
+            rows.append((parts[0], int(parts[1])))
+    if not rows:
+        return None
+    return ([m for n, m in rows if n == name] or [rows[0][1]])[0]
+
+
 def peek():
     """The cached verdict without waiting: state 'probing' until the boot probe is in."""
     return dict(_cached)

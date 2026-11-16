@@ -9,6 +9,9 @@ export async function getAllSettings() {
 export async function updateSettingsBatch(settings, opts = {}) {
     const body = { settings };
     if (opts.confirm_embedding_swap) body.confirm_embedding_swap = true;
+    // the setup wizard's Easy step: a provider that is not there yet is installed
+    // and turned on by its switch job (core/provider_switch.py)
+    if (opts.wake_providers) body.wake_providers = true;
     return await fetchWithTimeout('/api/settings/batch', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

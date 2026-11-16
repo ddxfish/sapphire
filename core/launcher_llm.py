@@ -214,6 +214,11 @@ def adopt():
             MARKER: True,
         }, persist=True)
     logger.info(f"[LAUNCHER] added '{NAME}' ({url}) {'at the top' if first else 'at the end'} of the Auto order")
+    try:        # the "no LLM yet" row a finished setup left (core/routes/setup.py)
+        from core import notify
+        notify.forget('setup-no-llm')
+    except Exception as e:
+        logger.debug(f"[LAUNCHER] setup row not cleared: {e}")
     try:
         from core.event_bus import publish, Events
         publish(Events.SETTINGS_CHANGED, {"key": "LLM_CUSTOM_PROVIDERS", "value": KEY})
@@ -249,6 +254,75 @@ def status():
         'n_ctx': _n_ctx(_get(root + '/props')) if models else None,
         'first_in_auto': (settings.get('LLM_FALLBACK_ORDER', []) or [None])[0] == KEY,
     }
+
+
+# ── asking the launcher itself (2026-11-15) ────────────────────────────────
+#
+# The port only says running, loading or silent. The launcher knows the rest:
+# nothing installed, a model downloading (and how far), installed but stopped.
+# `<launcher> --llm-status` prints that as one line of JSON, with no window and
+# no launcher running. Core may call it only when llm.json carries the
+# `launcher` key: a launcher from before the switch existed would open its
+# window on it, so the key is the proof, never a probe.
+
+CLI_TIMEOUT = 2.0       # seconds; 10-20 ms on Linux, unmeasured on real Windows
+CLI_TTL = 3.0           # one ask serves this long (the Easy page polls every 4 s)
+_cli = {'at': 0.0, 'reply': None}
+
+
+def _launcher_exe():
+    """The launcher's own program from llm.json, when it is one core may run:
+    an absolute path to a file that is there. None otherwise."""
+    import time
+    f = _run_file().with_name('llm.json')
+    data = None
+    for _ in range(3):              # the launcher writes by temp + rename: a read can land in between
+        try:
+            data = json.loads(f.read_text(encoding='utf-8'))
+            break
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            time.sleep(0.05)
+    exe = data.get('launcher') if isinstance(data, dict) else None
+    if not isinstance(exe, str) or not exe.strip():
+        return None
+    p = Path(exe.strip())
+    return str(p) if p.is_absolute() and p.is_file() else None
+
+
+def cli_status():
+    """The launcher's --llm-status reply (a dict with ok true: phase, job,
+    running, last_job), or None when it cannot be asked: no launcher that
+    knows the switch, managed or Docker, it failed, or it took too long.
+    Never raises. Asked at most once per CLI_TTL."""
+    import subprocess
+    import time
+    from core.settings_manager import settings
+    if settings.is_managed() or settings.is_docker():
+        return None
+    now = time.monotonic()
+    with _lock:
+        if _cli['at'] and now - _cli['at'] < CLI_TTL:
+            return _cli['reply']
+    reply = None
+    exe = _launcher_exe()
+    if exe:
+        try:
+            r = subprocess.run([exe, '--llm-status'], capture_output=True, text=True, encoding='utf-8',
+                               errors='replace', timeout=CLI_TIMEOUT, stdin=subprocess.DEVNULL,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            lines = [ln for ln in (r.stdout or '').splitlines() if ln.strip()]
+            data = json.loads(lines[-1]) if lines else None
+            if isinstance(data, dict) and data.get('ok') is True and isinstance(data.get('phase'), str):
+                reply = data
+            else:
+                logger.debug(f"[LAUNCHER] --llm-status said no (exit {r.returncode}): {(r.stdout or '')[:200]}")
+        except Exception as e:      # not there any more, not runnable, too slow, not JSON
+            logger.debug(f"[LAUNCHER] --llm-status could not be asked: {e}")
+    with _lock:
+        _cli.update(at=time.monotonic(), reply=reply)
+    return reply
 
 
 def adopt_in_background():

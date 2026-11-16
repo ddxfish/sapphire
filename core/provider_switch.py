@@ -27,6 +27,13 @@
 #      persist; the job thread takes the lock later, briefly.
 #   settings_changed fires on finish with the LIVE value and ok: True|False.
 #
+# wake (2026-11-15, tmp/easy-mode-plan.md): start(..., wake=True) first makes the
+# provider POSSIBLE: a core engine's package set, or a plugin that is off (its
+# packages through core/extras.py, then the plugin turned on), all under the switch's
+# row. Only a caller whose page named those packages asks (the setup wizard's Easy
+# step, through the batch route's `wake_providers`); any other save of a provider
+# that is not there fails as it always did.
+#
 # A second request for a key already switching: the same value joins (its row id comes
 # back), a different value is refused (SwitchInProgress -> 409 at the routes).
 import logging
@@ -57,8 +64,23 @@ _WHAT = {'STT_PROVIDER': 'speech-to-text', 'TTS_PROVIDER': 'voice', 'EMBEDDING_P
 
 class SwitchInProgress(Exception):
     def __init__(self, key, value):
-        super().__init__(f"{key} is already switching to '{value}'; wait for it to finish")
+        what = _WHAT.get(key, 'the wake word')
+        super().__init__(f"{what[0].upper()}{what[1:]} is still being switched. Save again when its row says it is done.")
         self.key, self.value = key, value
+
+
+def _clash(items):
+    """Under _GUARD: a key already switching to a different value refuses them all."""
+    for key, value in items:
+        cur = _inflight.get(key)
+        if cur and cur['value'] != value:
+            raise SwitchInProgress(key, cur['value'])
+
+
+def check(items):
+    """Raise SwitchInProgress when start() would: asked before a save writes anything."""
+    with _GUARD:
+        _clash(items)
 
 
 # ── what a request becomes ─────────────────────────────────────────────────
@@ -84,18 +106,20 @@ def _toggle_target(provider_key, enabled, default):
     return cur if cur and cur != 'none' else default
 
 
-def start(items, persist=True):
+def start(items, persist=True, wake=False):
     """Queue the switches. Returns {key: row_id}. Raises SwitchInProgress when a key is
-    already switching to a different value (nothing is queued then)."""
+    already switching to a different value (nothing is queued then). `wake`: install
+    and turn on what the provider needs first (the header)."""
     items = [(k, v) for k, v in items if k in KEYS]
+    # Voice after ears (Easy setup, hunt 2026-11-15): the jobs run one at a time,
+    # and a first voice download held the lock for minutes while she could have
+    # been hearing already.
+    items.sort(key=lambda kv: kv[0] == 'TTS_PROVIDER')
     # Wake word last: the invariant tests/test_deferred_actions_ordering.py pins.
     items.sort(key=lambda kv: kv[0] in WAKEWORD_KEYS)
     jobs, fresh = {}, []
     with _GUARD:
-        for key, value in items:
-            cur = _inflight.get(key)
-            if cur and cur['value'] != value:
-                raise SwitchInProgress(key, cur['value'])
+        _clash(items)
         for key, value in items:
             cur = _inflight.get(key)
             if cur:
@@ -107,7 +131,7 @@ def start(items, persist=True):
             jobs[key] = rid
             fresh.append((key, value, rid))
         if fresh:
-            t = threading.Thread(target=_run, args=(fresh, persist), name='provider-switch', daemon=True)
+            t = threading.Thread(target=_run, args=(fresh, persist, wake), name='provider-switch', daemon=True)
             for key, _, _ in fresh:
                 _inflight[key]['thread'] = t
     if fresh:
@@ -142,11 +166,11 @@ def busy(key):
 
 # ── the thread ─────────────────────────────────────────────────────────────
 
-def _run(fresh, persist):
+def _run(fresh, persist, wake=False):
     for key, value, rid in fresh:
         with _LOCK:
             try:
-                _run_one(key, value, rid, persist)
+                _run_one(key, value, rid, persist, wake)
             except Exception as e:                # the job's own bug: the row must still end
                 logger.exception(f"[SWITCH] {key} -> {value!r} crashed")
                 notify.finish(rid, failed=True, title=f"{_active_title(key, value)} failed", body=str(e))
@@ -155,13 +179,17 @@ def _run(fresh, persist):
                     _inflight.pop(key, None)
 
 
-def _run_one(key, value, rid, persist):
+def _run_one(key, value, rid, persist, wake=False):
     from core.settings_manager import settings
     system = _system()
     prev = settings.get(key)
     tier = settings.validate_tier(key)
+    touched = False
     try:
-        ok, why = _apply(system, key, value, rid)
+        ok, why = _wake(key, value, rid) if wake else (True, '')
+        if ok:
+            touched = True
+            ok, why = _apply(system, key, value, rid)
     except Exception as e:
         ok, why = False, _words(e)
     if ok:
@@ -173,14 +201,97 @@ def _run_one(key, value, rid, persist):
         _publish(key, value, tier, True)
         logger.info(f"[SWITCH] {key} -> {value!r} ok")
         return
-    live = _recover(system, key, prev, value)
+    # Its packages or its plugin never arrived: the switch was not tried, so what
+    # runs now is untouched. Re-making it was a risk for nothing (a re-make that
+    # failed saved 'none' over a working provider; hunt 2026-11-15).
+    live = _recover(system, key, prev, value) if touched else prev
     if settings.get(key) != live:
         settings.set(key, live, persist=True, _skip_callbacks=True)
     kept = 'off' if live in ('none', False, None) else _label(key, live)
     logger.error(f"[SWITCH] {key} -> {value!r} failed: {why}; kept {kept}")
     notify.finish(rid, failed=True, title=f"{_active_title(key, value)} failed",
-                  body=f"{why}. Kept {kept}.")
+                  body=f"{str(why).rstrip('.')}. Kept {kept}.")
     _publish(key, live, tier, False, why)
+
+
+# A core engine's package set (core/extras.py), by the switch that needs it.
+_CORE_SETS = {('TTS_PROVIDER', 'kokoro'): 'tts', ('STT_PROVIDER', 'faster_whisper'): 'stt',
+              ('WAKE_WORD_ENABLED', True): 'wakeword'}
+_SYSTEM_OF = {'TTS_PROVIDER': 'tts', 'STT_PROVIDER': 'stt'}
+
+
+def _install(name, rid, what):
+    """One package set through the one pip engine, under its own row; waits for it."""
+    from core import extras
+    if extras.installed(name):
+        return True, ''
+    if rid:
+        notify.tick(rid, text=f"installing {what}")
+    try:
+        extras.start(name)
+    except extras.ExtraError as e:
+        return False, str(e)
+    while extras.state(name).get('state') == 'running':
+        time.sleep(1.0)
+    job = extras.state(name)
+    if job.get('state') == 'failed' or not extras.installed(name):
+        return False, job.get('error') or f"{what} did not install"
+    return True, ''
+
+
+def _provider_plugin(system_name, value):
+    """(plugin name, manifest) of the plugin that declares this provider, else (None, None)."""
+    from core.plugin_loader import plugin_loader
+    for info in plugin_loader.get_all_plugin_info():
+        manifest = (info or {}).get('manifest') or {}
+        decl = ((manifest.get('capabilities') or {}).get('providers') or {}).get(system_name)
+        if isinstance(decl, dict) and decl.get('key') == value:
+            return info['name'], manifest
+    return None, None
+
+
+def _wake(key, value, rid=None):
+    """Make the provider possible before the switch (the header): (ok, why)."""
+    core_set = _CORE_SETS.get((key, value))
+    if core_set:
+        return _install(core_set, rid, "its packages")
+    system_name = _SYSTEM_OF.get(key)
+    if not system_name or value in ('none', None):
+        return True, ''
+    from core.plugin_loader import plugin_loader
+    name, manifest = _provider_plugin(system_name, value)
+    if not name:
+        return True, ''                       # a core provider, or nobody's: the switch says which
+    if plugin_loader._check_dependencies(manifest):
+        from core import extras
+        ok, why = _install(extras.PLUGIN_PREFIX + name, rid, f"the {name} plugin's packages")
+        if not ok:
+            return False, why
+    if not (plugin_loader.get_plugin_info(name) or {}).get('enabled'):
+        if rid:
+            notify.tick(rid, text=f"turning on the {name} plugin")
+        # THE toggle (plugins.json, the live load, the toolset re-sync): the route's
+        # own function, which reads nothing from its request.
+        from fastapi import HTTPException
+        from core.routes.plugins import toggle_plugin
+        try:
+            r = toggle_plugin(name, None, None)
+        except HTTPException as e:
+            return False, str(e.detail)
+        if not (r or {}).get('enabled'):
+            return False, f"the {name} plugin did not turn on"
+    # A plugin that was on but waiting for its packages is reloaded by the install's
+    # own thread, a moment after the install reads "done": wait for the provider.
+    if system_name == 'tts':
+        from core.tts.providers import tts_registry as reg
+    else:
+        from core.stt.providers import stt_registry as reg
+    deadline = time.monotonic() + 30
+    while not reg.has_key(value):
+        if time.monotonic() >= deadline:
+            return False, f"the {name} plugin is on, but its provider did not appear"
+        time.sleep(0.25)
+    return True, ''
 
 
 def _apply(system, key, value, rid=None):

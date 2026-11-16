@@ -4,13 +4,16 @@ You've installed Sapphire and opened it in your browser. The setup wizard walks 
 
 ## Phase 1: Setup Wizard
 
-On first launch the wizard opens full-screen (later: Settings → System → Run Setup Wizard). The required lane first, then a gate, then the optional parts:
+On first launch the wizard opens full-screen (later: Settings → System → Run Setup Wizard). Press **I understand** on the welcome page, then pick the kind of setup:
 
-1. **Consent** — what runs locally and what a cloud provider would see.
-2. **You** — your name and timezone, so the AI knows who it's talking to and when.
-3. **Brain** — choose an LLM (local or cloud), enter its key or URL, and hit **Test Connection** to verify it responds.
-4. **Voice** — her voice (text-to-speech), her ears (speech-to-text) and the wake word, each a row of provider cards with everything else under Advanced. Leave them off for a text-only install. Full details: [VOICE.md](VOICE.md).
-5. **Audio** — choose and test your microphone and speakers.
+**Easy** — one page. Sapphire looks at this computer and shows what she picked: her brain (the Sapphire Launcher's LLM, or whichever LLM answers), her voice (Kokoro when a graphics card can run it, Piper on a processor), her ears (Whisper) and the wake word (on, when there is a microphone). Each row has a **Change** button that unfolds the real settings under it. Add your name, check the time zone, and press **Finish**: downloads carry on in the background and show in the notification center. Every row has a light (green works, yellow is being set up, red failed, grey waits for Finish) and a **Test** button: her LLM says hello, her voice speaks (a test tone until she has one), her ears turn a few seconds into words, and the wake word waits for you to say it. The ears test listens on the Sapphire computer's own microphone, so that computer says so first ("I am going to listen to your microphone in 3 seconds", then three beeps), and gives a ping and "Done" when the microphone is closed; the Ears row glows yellow during the warning and red while it listens. Run Easy again later and it shows what you have set, with her pick offered beside any row that differs (**Use it**): nothing changes unless you click.
+
+**Advanced** — every choice, step by step. The required lane first, then a gate, then the optional parts:
+
+1. **You** — your name and timezone, so the AI knows who it's talking to and when.
+2. **Brain** — choose an LLM (local or cloud), enter its key or URL, and hit **Test Connection** to verify it responds.
+3. **Voice** — her voice (text-to-speech), her ears (speech-to-text) and the wake word, each a row of provider cards with everything else under Advanced. Leave them off for a text-only install. Full details: [VOICE.md](VOICE.md).
+4. **Audio** — choose and test your microphone and speakers.
 
 Finish there, or carry on: **Plugins** (the featured ones, on unless you untick them), **Look** (theme, font, background) and **What next** (where everything lives). Provider switches and model downloads run as jobs with rows in the notification center; the wizard shows them too.
 
@@ -313,7 +316,7 @@ Or follow the whole ladder in order: [MASTERY-GUIDE.md](MASTERY-GUIDE.md).
 Guide users through initial Sapphire setup and first persona creation.
 
 SETUP ORDER:
-1. Setup wizard — Consent, You (name + timezone), Brain (LLM + Test Connection), Voice (TTS / STT / wake word cards, docs/VOICE.md), Audio (mic + speakers); optional after the gate: Plugins, Look, What next
+1. Setup wizard — Welcome (I understand), then the kind of setup. Easy: one page of what she picked for this computer (brain, voice, ears, wake word; Change unfolds the real settings), a light and a Test on every row, name + timezone, Finish; a second run shows what is set and offers her pick (Use it). Advanced: You (name + timezone), Brain (LLM + Test Connection), Voice (TTS / STT / wake word cards, docs/VOICE.md), Audio (mic + speakers); optional after the gate: Plugins, Look, What next
 2. Create assembled prompt (Prompts view → + → Assembled)
 3. Create toolset (Toolsets view → + → check functions)
 4. Pick a spice set + its categories (Spices view)

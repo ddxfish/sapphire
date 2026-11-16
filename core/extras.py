@@ -272,7 +272,8 @@ def _install(job, spec):
             log.write(' '.join(cmd) + '\n')
             proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace',
-                                    env=env, bufsize=1)
+                                    env=env, bufsize=1,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))    # no console flash on Windows
             # A timer, not a check per line: a pip that hangs silent (a stalled
             # download) printed nothing, so the deadline was never read and the
             # job sat 'running' until a restart, refusing every install (hunt 19).

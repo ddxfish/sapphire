@@ -7,6 +7,7 @@ and the settings merge's lmstudio fixes (managed pop, LMSTUDIO_BASE_URL)."""
 import copy
 import json
 import urllib.error
+from types import SimpleNamespace
 
 import pytest
 
@@ -384,3 +385,75 @@ def test_auto_that_found_a_brain_never_probes_for_the_launcher(monkeypatch):
     monkeypatch.setattr(R, '_lp', lambda: _LP)
     monkeypatch.setattr(L, 'adopt', lambda: (_ for _ in ()).throw(AssertionError('probed')))
     assert R._auto({'claude': {}}, ['claude'], False, 240.0, 'cached', False).key == 'claude'
+
+
+# ── asking the launcher itself: --llm-status (2026-11-15) ──
+
+@pytest.fixture
+def cli(fake, tmp_path, monkeypatch):
+    """A launcher program on disk named by llm.json, and a recorder where subprocess.run was."""
+    import subprocess
+    fake()
+    exe = tmp_path / 'Sapphire-Launcher.AppImage'
+    exe.write_text('')
+    st = {'exe': exe, 'runs': [], 'out': json.dumps({'ok': True, 'phase': 'stopped'}), 'code': 0, 'raise': None}
+
+    def run(argv, **kw):
+        st['runs'].append((argv, kw))
+        if st['raise']:
+            raise st['raise']
+        return SimpleNamespace(stdout=st['out'], returncode=st['code'])
+    monkeypatch.setattr(subprocess, 'run', run)
+    monkeypatch.setattr(L, '_cli', {'at': 0.0, 'reply': None})
+
+    def llm_json(body):
+        f = tmp_path / 'xdg' / 'sapphire' / 'llm.json'
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body if isinstance(body, str) else json.dumps(body))
+        L._cli.update(at=0.0, reply=None)
+    st['llm_json'] = llm_json
+    llm_json({'launcher': str(exe), 'at_sign_in': 'off'})
+    return st
+
+
+def test_the_launcher_is_asked_only_when_its_file_proves_it_knows_the_switch(cli, tmp_path):
+    """An older launcher opens its WINDOW on a switch it does not know: the `launcher` key is the proof."""
+    for body in ({}, {'launcher': ''}, {'launcher': 'Sapphire-Launcher.AppImage'},          # no key, empty, not absolute
+                 {'launcher': str(tmp_path / 'gone.AppImage')}, {'launcher': str(tmp_path)},  # not there, a folder
+                 {'launcher': 7}, '[1, 2]', '{half'):
+        cli['llm_json'](body)
+        assert L.cli_status() is None, body
+    (tmp_path / 'xdg' / 'sapphire' / 'llm.json').unlink()
+    L._cli.update(at=0.0, reply=None)
+    assert L.cli_status() is None
+    assert cli['runs'] == []                                    # nothing was ever run
+
+
+def test_status_is_one_fixed_call_with_no_window_and_a_short_wait(cli):
+    reply = L.cli_status()
+    assert reply == {'ok': True, 'phase': 'stopped'}
+    argv, kw = cli['runs'][0]
+    assert argv == [str(cli['exe']), '--llm-status']            # the path from the file and one fixed switch, nothing else
+    assert kw['timeout'] == L.CLI_TIMEOUT and kw['stdin'] is not None and 'shell' not in kw
+    assert L.cli_status() == reply and len(cli['runs']) == 1    # one ask serves the next few seconds
+
+
+def test_a_launcher_that_fails_or_stalls_is_simply_not_known(cli):
+    import subprocess
+    for out, code in ((json.dumps({'ok': False, 'error': "This launcher (0.9.9) doesn't know the switch"}), 1),
+                      ('<html>nope</html>', 0), ('', 0), (json.dumps({'ok': True}), 0), (json.dumps([1]), 0)):
+        cli.update(out=out, code=code)
+        L._cli.update(at=0.0, reply=None)
+        assert L.cli_status() is None, out
+    cli['raise'] = subprocess.TimeoutExpired('launcher', 2)
+    L._cli.update(at=0.0, reply=None)
+    assert L.cli_status() is None
+    cli['raise'] = OSError('Exec format error')
+    L._cli.update(at=0.0, reply=None)
+    assert L.cli_status() is None
+
+
+@pytest.mark.parametrize('kw', [{'managed': True}, {'docker': True}])
+def test_a_hosted_or_container_install_never_runs_a_launcher(cli, fake, kw):
+    fake(**kw)
+    assert L.cli_status() is None and cli['runs'] == []

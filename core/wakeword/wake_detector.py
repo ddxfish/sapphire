@@ -219,6 +219,16 @@ class WakeWordDetector:
             logger.debug("Wakeword detected but WAKE_WORD_ENABLED=False, ignoring")
             return
 
+        # Easy setup's "say it" test (core/setup_easy.py hear_wake): the
+        # detection is the whole answer. Nothing is recorded, nobody is told.
+        probe = getattr(self, 'probe', None)
+        if probe is not None:
+            self.probe = None
+            probe.set()
+            logger.info("Wakeword heard by the setup test - not listening further")
+            self._reset_detection_state()
+            return
+
         # Suppress during web UI activity (recording/chatting)
         if self.system and getattr(self.system, '_web_active', False):
             logger.info("Wakeword detected but web UI active, suppressing")

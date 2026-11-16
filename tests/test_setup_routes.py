@@ -22,23 +22,38 @@ def mem_settings(monkeypatch):
     monkeypatch.setattr(sm, 'is_managed', lambda: False)
     monkeypatch.setattr(sm, 'is_docker', lambda: False)
     monkeypatch.setattr(setup_routes, '_packages', lambda: {'tts': True, 'stt': False, 'wakeword': True})
+    monkeypatch.setattr(setup_routes, '_check_brain_after_finish', lambda: None)   # it asks the real providers
     return store
 
 
 def test_steps_follow_the_install(monkeypatch, mem_settings):
     sm = setup_routes.settings
-    assert setup_routes.step_ids() == list(setup_routes.ALL_STEPS)
+    # the kind of setup decides the steps (2026-11-15): none picked = the welcome and the pick
+    assert setup_routes.step_ids() == ['consent', 'mode']
+    mem_settings['SETUP_MODE'] = 'easy'
+    assert setup_routes.step_ids() == ['consent', 'mode', 'easy']
+    mem_settings['SETUP_MODE'] = 'nope'                 # a kind that left: nothing picked
+    assert setup_routes.step_ids() == ['consent', 'mode']
+    mem_settings['SETUP_MODE'] = 'advanced'
+    assert setup_routes.step_ids() == ['consent', 'mode'] + list(setup_routes.ADVANCED)
+    assert set(setup_routes.step_ids('easy')) | set(setup_routes.step_ids('advanced')) == set(setup_routes.ALL_STEPS)
     monkeypatch.setattr(sm, 'is_docker', lambda: True)
     assert 'audio' not in setup_routes.step_ids() and 'voice' in setup_routes.step_ids()
     monkeypatch.setattr(sm, 'is_managed', lambda: True)
     ids = setup_routes.step_ids()
     assert 'voice' not in ids and 'audio' not in ids and ids[0] == 'consent' and ids[-1] == 'next'
+    assert setup_routes.step_ids('easy') == ['consent', 'mode', 'easy']
 
 
 def test_state_reads_the_keys_and_drops_an_unknown_step(mem_settings):
-    mem_settings.update(SETUP_COMPLETE=True, SETUP_STEP='brain', SETUP_CONSENT='2026-10-22T18:00:00+00:00')
+    mem_settings.update(SETUP_COMPLETE=True, SETUP_STEP='brain', SETUP_CONSENT='2026-10-22T18:00:00+00:00',
+                        SETUP_MODE='advanced')
     s = setup_routes.state()
     assert s['complete'] is True and s['step'] == 'brain' and s['consent'] == '2026-10-22T18:00:00+00:00'
+    assert s['mode'] == 'advanced' and s['modes'] == ['easy', 'advanced']
+    mem_settings['SETUP_MODE'] = 'easy'               # a step of the other kind starts over
+    assert setup_routes.state()['step'] == ''
+    mem_settings['SETUP_MODE'] = 'advanced'
     assert s['packages'] == {'tts': True, 'stt': False, 'wakeword': True}
     assert s['managed'] is False and s['docker'] is False
     mem_settings['SETUP_STEP'] = 'identity'          # the old wizard's step name
@@ -46,13 +61,15 @@ def test_state_reads_the_keys_and_drops_an_unknown_step(mem_settings):
 
 
 def test_apply_validates_and_stamps_consent(mem_settings):
-    for bad in ({'complete': 'yes'}, {'step': 'identity'}, {'step': 3}, {'consent': False}, 'nope'):
+    for bad in ({'complete': 'yes'}, {'step': 'identity'}, {'step': 3}, {'consent': False}, 'nope',
+                {'mode': 'nope'}, {'mode': ''}, {'step': 'voice'}, {'mode': 'easy', 'step': 'voice'}):
         with pytest.raises(HTTPException) as e:
             setup_routes.apply(bad)
         assert e.value.status_code == 400
     assert mem_settings == {}                          # a refused change stores nothing
-    out = setup_routes.apply({'step': 'voice', 'consent': True, 'ignored': 1})
-    assert mem_settings['SETUP_STEP'] == 'voice'
+    out = setup_routes.apply({'mode': 'advanced', 'step': 'voice', 'consent': True, 'ignored': 1})
+    assert mem_settings['SETUP_STEP'] == 'voice' and mem_settings['SETUP_MODE'] == 'advanced'
+    assert out['mode'] == 'advanced' and 'voice' in out['steps']
     assert mem_settings['SETUP_CONSENT'].startswith('20') and '+00:00' in mem_settings['SETUP_CONSENT']
     assert out['step'] == 'voice' and out['consent'] == mem_settings['SETUP_CONSENT']
     setup_routes.apply({'complete': True, 'step': ''})
@@ -66,7 +83,11 @@ def test_state_routes(client, mem_settings):
     r = c.put('/api/setup/state', json={'step': 'nope'}, headers={'X-CSRF-Token': csrf})
     assert r.status_code == 400
     r = c.put('/api/setup/state', json={'step': 'plugins'}, headers={'X-CSRF-Token': csrf})
-    assert r.status_code == 200 and r.json()['step'] == 'plugins'
+    assert r.status_code == 400                        # no kind of setup picked: not one of its steps
+    r = c.put('/api/setup/state', json={'mode': 'advanced', 'step': 'plugins'}, headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200 and r.json()['step'] == 'plugins' and r.json()['mode'] == 'advanced'
+    r = c.put('/api/setup/state', json={'mode': 'easy'}, headers={'X-CSRF-Token': csrf})
+    assert r.json()['steps'] == ['consent', 'mode', 'easy'] and r.json()['step'] == ''
 
 
 def test_featured_follows_the_loader(monkeypatch, tmp_path):
