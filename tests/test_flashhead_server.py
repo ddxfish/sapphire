@@ -217,9 +217,9 @@ def test_her_speaker_keeps_her_voice_when_a_browser_watches_too(server):
     s.viewers[browser] = True
     assert server._voice_of(s) is pi
     s.viewers[call] = True
-    s.call = call
+    s.calls.append(call)
     assert server._voice_of(s) is call                     # a webcam call hears her first
-    s.call = None
+    s.calls.remove(call)
     del s.viewers[call]
     s.viewers.pop(pi)
     s.speakers.discard(pi)
@@ -297,3 +297,66 @@ def test_her_voice_on_every_viewer_when_asked(server):
     s.voice, s.everyone = pi, True
     server._broadcast(s, b"loud", b"quiet")
     assert (desk.get_nowait(), pi.get_nowait(), board.get_nowait()) == (b"loud", b"loud", b"quiet")
+
+
+def test_a_call_stream_left_over_from_a_reconnect_never_takes_her_voice_from_the_call(server):
+    """The webcam opened a second stream as it reconnected; the first, closing late, cleared the call
+    and her voice went to a browser for the rest of it."""
+    s = server._session("local")
+    browser, cam, ghost = queue.Queue(), queue.Queue(), queue.Queue()
+    for q in (browser, cam, ghost):
+        s.viewers[q] = True
+    s.calls += [cam, ghost]                                # the ghost joined last
+    assert server._voice_of(s) is ghost
+    s.calls.remove(ghost)                                  # ... and is gone: what the stream's end does
+    del s.viewers[ghost]
+    assert server._voice_of(s) is cam
+
+
+def _get(server, path):
+    """GET from this computer's Sapphire, through the real handler."""
+    h = server.Handler.__new__(server.Handler)
+    h.server = type("Local", (), {})()
+    h.path = path
+    h.headers = {"Host": "127.0.0.1:5017", "X-FlashHead": "1"}
+    replies = []
+    h._json = lambda obj, code=200: replies.append(obj)
+    h.do_GET()
+    return replies[0]
+
+
+def test_the_count_says_who_is_watching(server):
+    s = server._session("local")
+    for q, who in ((queue.Queue(), "browser"), (queue.Queue(), "browser"), (queue.Queue(), "webcam"), (queue.Queue(), "viewer")):
+        s.viewers[q], s.who[q] = True, who
+    got = _get(server, "/health")
+    assert got["viewers"] == 4 and got["who"] == {"browser": 2, "viewer": 1, "webcam": 1}
+
+
+def test_a_stalled_loop_drops_the_words_of_that_reply_it_took_and_no_other_replys(server, monkeypatch, caplog):
+    """Taken before the stall and never heard: they came out late, over the rest of the reply playing at home."""
+    np = server.np
+    server.P.update(n16=4, n24=6, fps=25)
+    monkeypatch.setattr(server, "_decode", lambda data: (np.ones(4, np.float32), np.ones(6, np.int16)))
+    s = server._session("local")
+    q = queue.Queue()
+    s.viewers[q] = True
+    s.face, s.want = "f@1", "face.png"
+    server._state["status"] = "ready"
+    server._queue_speech(s, b"x", taken=True, sid="this-reply")
+    server._queue_speech(s, b"x", sid="a-boards-reply", device="pendant")   # another lane: a new reply on the same one cuts the last itself
+    server.BEAT[0] = server.time.monotonic() - 60          # the loop is stuck
+    h = server.Handler.__new__(server.Handler)
+    h.server = type("Local", (), {})()
+    h.path = "/speak?take=1&sid=this-reply"
+    h.headers = {"Host": "127.0.0.1:5017", "X-FlashHead": "1", "Content-Length": "0"}
+    h.rfile = __import__("io").BytesIO(b"")
+    replies = []
+    h._json = lambda obj, code=200: replies.append(obj)
+    with caplog.at_level("WARNING"):
+        h.do_POST()
+        h.do_POST()                                        # the next chunk of it: nothing left to drop, said once
+    assert replies == [{"taken": False, "why": "stalled"}] * 2
+    left = [(tag or {}).get("sid") for _, _, tag in server._drain(s)]
+    assert left and set(left) == {"a-boards-reply"}
+    assert sum("stalled" in r.message for r in caplog.records) == 1

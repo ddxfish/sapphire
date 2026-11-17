@@ -1,3 +1,7 @@
+# 2.16.6 - Per Sapphire ID
+- Each sapphire has its own unique id for later memory sync
+- Mind palace records sapphire ID and model used at write
+- Fixed minor avatar hub sync issues
 # 2.16.5 - Easy mode setup wizard and LLM
 - Setup wizard has easy mode, 5 clicks in the setup wizard to talk
 - Takes user from full install to chat in 12 mouse clicks

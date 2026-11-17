@@ -138,6 +138,10 @@ def _visible_chunk_clause(pt, scope, private_key):
     sql = (f"{scope_sql} AND {pk_sql} "
            f"AND json_extract(c.meta, '$.superseded_at') IS NULL")
     params = scope_params + pk_params
+    # Private-model rows never enter a cloud reader's frontier.
+    gate = pt._chunk_gate('c')
+    if gate:
+        sql += f" AND {gate}"
     # Dark plugin layers never enter the frontier — edge-connected or not.
     dark_sql, dark_params = pt._dark_clause('c')
     if dark_sql:
@@ -234,7 +238,8 @@ def traverse(pt, cursor, seed_chunks, seed_entities, budget, scope, private_key)
                 with library.get_connection() as lc:
                     doc_cache[did] = lc.execute(
                         "SELECT scope, importance, private_key FROM documents "
-                        "WHERE id = ? AND status != 'missing'",
+                        "WHERE id = ? AND status != 'missing'"
+                        + (" AND wr_private = 0" if pt._private_sql() else ''),
                         (did,)).fetchone()
             except Exception:
                 doc_cache[did] = None
@@ -396,6 +401,17 @@ def spider_from_chunks(pt, scope, private_key, seed_chunk_ids, depth,
         return ''
 
 
+def _ent_gate():
+    """' AND wr_private = 0' for a reader not given private-model rows (an
+    entity's name and its headline alike), else ''."""
+    try:
+        from plugins.mindpalace.tools import palace_tools as _p
+        gate = _p._private_sql('wr_private')
+        return f" AND {gate}" if gate else ''
+    except Exception:
+        return ' AND wr_private = 0'
+
+
 def _compact_entities(cursor, entities, seed_ids):
     """One-line entity shorthand: 'Connected: Name (kind, via section) —
     headline'. The via is the sheet section whose edge reached the entity —
@@ -404,8 +420,8 @@ def _compact_entities(cursor, entities, seed_ids):
     ph = ','.join('?' * len(seeds))
     bits = []
     for eid, _d in sorted(entities.items(), key=lambda x: x[1])[:MAX_ENTITIES_SHOWN]:
-        row = cursor.execute('SELECT name, kind FROM entities WHERE id = ?',
-                             (eid,)).fetchone()
+        row = cursor.execute('SELECT name, kind FROM entities WHERE id = ?'
+                             + _ent_gate(), (eid,)).fetchone()
         if not row:
             continue
         via = None
@@ -425,8 +441,8 @@ def _compact_entities(cursor, entities, seed_ids):
         # headlines never render at wake (Lane-3 scout, 2026-07-27).
         head = cursor.execute(
             "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
-            "AND private_key IS NULL "
-            "AND json_extract(meta, '$.pruned_at') IS NULL "
+            "AND private_key IS NULL " + _ent_gate() +
+            " AND json_extract(meta, '$.pruned_at') IS NULL "
             "AND json_extract(meta, '$.superseded_at') IS NULL "
             "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
             "created DESC LIMIT 1", (eid,)).fetchone()
@@ -447,14 +463,15 @@ def _format_block(pt, cursor, chunks, entities, depth, docs=None):
 
     ent_order = sorted(entities.items(), key=lambda x: x[1])[:lim['ents']]
     for eid, _d in ent_order:
-        row = cursor.execute('SELECT name, kind FROM entities WHERE id = ?', (eid,)).fetchone()
+        row = cursor.execute('SELECT name, kind FROM entities WHERE id = ?'
+                             + _ent_gate(), (eid,)).fetchone()
         if not row:
             continue
         name, kind = row
         head = cursor.execute(
             "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
-            "AND private_key IS NULL "
-            "AND json_extract(meta, '$.pruned_at') IS NULL "
+            "AND private_key IS NULL " + _ent_gate() +
+            " AND json_extract(meta, '$.pruned_at') IS NULL "
             "AND json_extract(meta, '$.superseded_at') IS NULL "
             "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
             "created DESC LIMIT 1", (eid,)).fetchone()

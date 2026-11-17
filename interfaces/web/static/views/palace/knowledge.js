@@ -11,7 +11,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { showModal, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { API, PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, rememberMindScope, recallMindScope } from './common.js';
+import { API, PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, rememberMindScope, recallMindScope, privToggle, bindPrivToggles, writerText } from './common.js';
 import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 import { wordsOf } from '../../shared/fetch.js';
 
@@ -99,7 +99,7 @@ function imageTile(d) {
     return `
         <div class="plib-tile ${d.status === 'missing' ? 'plib-missing' : ''}" data-id="${d.id}" title="${escAttr(d.title)}${d.image?.place ? ' — ' + escAttr(d.image.place) : ''}${d.status === 'missing' ? ' (missing from folder)' : ''}">
             <img src="${API}/library/documents/${d.id}/thumb?scope=${encodeURIComponent(scope)}" loading="lazy" alt="${escAttr(d.title)}">
-            <span class="plib-tile-title">${escHtml(d.title)}</span>${busy}
+            <span class="plib-tile-title">${d.writer?.private ? '\u{1F3E0} ' : ''}${escHtml(d.title)}</span>${busy}
         </div>`;
 }
 
@@ -133,7 +133,8 @@ function docRow(d) {
             <span class="plib-chip">${IMP_LABEL[d.importance] || escHtml(d.importance)}</span>
             ${d.sections ? `<span class="plib-chip">${d.sections}§</span>` : ''}
             ${status}
-            <span class="plib-doc-age">${escHtml(timeAgo(d.updated))}</span>
+            <span class="plib-doc-age" title="${escAttr(writerText(d.writer))}">${escHtml(timeAgo(d.updated))}</span>
+            ${privToggle(d.id, d.writer, 'doc')}
             <button class="mind-btn-sm plib-doc-edit" title="Edit">✎</button>
             <button class="mind-btn-sm plib-doc-dl" title="Download">⬇</button>
             <button class="mind-btn-sm plib-doc-del" title="Delete">✕</button>
@@ -297,6 +298,7 @@ function bindShelf(el) {
     el.querySelectorAll('.plib-tile').forEach(tile => {
         tile.addEventListener('click', () => openLightbox(parseInt(tile.dataset.id)));
     });
+    bindPrivToggles(el, ui, renderShelf);      // the house switch on each document row
     el.querySelectorAll('.plib-doc').forEach(row => {
         const did = parseInt(row.dataset.id);
         const d = findDoc(did);
@@ -546,10 +548,11 @@ function openLightbox(did) {
         <div class="plib-lb-side">
             <div class="plib-lb-head">
                 <span class="plib-lb-title">${escHtml(d.title)}</span>
+                ${privToggle(did, d.writer, 'doc')}
                 <button class="mind-btn-sm" id="plib-lb-close" title="Close">✕</button>
             </div>
             ${d.description ? `<div class="plib-doc-desc">${escHtml(d.description)}</div>` : ''}
-            <div class="plib-lb-facts">${facts}</div>
+            <div class="plib-lb-facts">${facts}${writerText(d.writer) ? `<span class="plib-chip">${escHtml(writerText(d.writer))}</span>` : ''}</div>
             <label class="plib-lb-label">People — names that match entities join her graph</label>
             <input type="text" id="plib-lb-people" class="palace-search" placeholder="comma-separated" value="${escAttr((m.people || []).join(', '))}">
             <label class="plib-lb-label">Notes — searchable the moment they save</label>
@@ -564,6 +567,7 @@ function openLightbox(did) {
         </div>`;
     box.addEventListener('click', e => { if (e.target === box) closeLightbox(); });
     box.querySelector('#plib-lb-close')?.addEventListener('click', closeLightbox);
+    bindPrivToggles(box, ui, renderShelf);
     box.querySelector('#plib-lb-save')?.addEventListener('click', async () => {
         const people = box.querySelector('#plib-lb-people').value
             .split(',').map(s => s.trim()).filter(Boolean);

@@ -36,6 +36,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +352,7 @@ def get_tools():
 
 
 SIMILARITY_THRESHOLD = 0.40
+HIDDEN_CAP = 50               # most private-model rows one search will count for a cloud reader
 MAX_CHUNK_LENGTH = 512
 
 
@@ -800,6 +802,39 @@ def _ensure_db():
                                         f'ids, links and history intact; the '
                                         f'sheet is the self layer now'))
 
+            # Migration (2026-11-17, idempotent): private-model memory. Who
+            # wrote a row is COLUMNS, not meta: an edit rewrites the bag, and
+            # the read gate needs a WHERE. wr_private = the writer's provider
+            # was ticked private at save time, or the person marked the row.
+            # Rows already here are public, written by this Sapphire; a model
+            # the row itself recorded is carried over, none is guessed
+            # (Krem 2026-11-17). CASE, not WHERE: json_extract in a WHERE
+            # aborts the statement on one malformed meta row.
+            cols = {r[1] for r in cursor.execute('PRAGMA table_info(chunks)').fetchall()}
+            fresh_cols = 'wr_private' not in cols
+            for col, kind in (('wr_model', 'TEXT'), ('wr_provider', 'TEXT'),
+                              ('wr_private', 'INTEGER NOT NULL DEFAULT 0'),
+                              ('origin_name', 'TEXT'), ('origin', 'TEXT')):
+                if col not in cols:
+                    cursor.execute(f'ALTER TABLE chunks ADD COLUMN {col} {kind}')
+            ecols = {r[1] for r in cursor.execute('PRAGMA table_info(entities)').fetchall()}
+            for col, kind in (('wr_model', 'TEXT'), ('wr_provider', 'TEXT'),
+                              ('wr_private', 'INTEGER NOT NULL DEFAULT 0'),
+                              ('origin_name', 'TEXT'), ('origin', 'TEXT')):
+                if col not in ecols:
+                    cursor.execute(f'ALTER TABLE entities ADD COLUMN {col} {kind}')
+            lcols = {r[1] for r in cursor.execute('PRAGMA table_info(ledger)').fetchall()}
+            if 'wr_private' not in lcols:
+                cursor.execute('ALTER TABLE ledger ADD COLUMN wr_private INTEGER NOT NULL DEFAULT 0')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chunks_wr_private ON chunks(wr_private)')
+            cursor.execute('CREATE TABLE IF NOT EXISTS palace_kv (key TEXT PRIMARY KEY, value TEXT)')
+            if fresh_cols:
+                for col in ('model', 'provider'):
+                    cursor.execute(
+                        f"UPDATE chunks SET wr_{col} = CASE WHEN json_valid(meta) "
+                        f"THEN json_extract(meta, '$.{col}') END WHERE wr_{col} IS NULL")
+            _follow_instance_name(cursor)
+
             conn.commit()
             conn.close()
 
@@ -995,6 +1030,256 @@ def _added_by():
         return 'ai' if tool_context.get() else 'user'
     except Exception:
         return 'ai'
+
+
+# ─── Private-model memory (2026-11-17) ───────────────────────────────────────
+# A row records who wrote it: wr_model, wr_provider, wr_private (the writer's
+# provider was ticked "Local / private server" when it saved, or the person
+# marked the row by hand) and origin_name (which Sapphire). A reader whose
+# provider is not private does not get wr_private rows. This is a filter over
+# metadata, NOT a vault: mind.db is plaintext, the app shows every row, and
+# what she SAID about a private memory is ordinary chat history. The self
+# sheet is outside it (its rows are always public). tmp/private-memory-plan.md
+
+_reader = ContextVar('palace_reader', default=None)   # None = work it out; True/False = said
+_name_seen = None      # the instance name origin_name rows were last matched to
+
+
+@contextmanager
+def as_reader(private: bool):
+    """Say who is reading when the turn cannot: text built for a model
+    BEFORE its turn starts (the librarian's system prompt) passes whether
+    that model is private."""
+    tok = _reader.set(bool(private))
+    try:
+        yield
+    finally:
+        _reader.reset(tok)
+
+
+def as_user():
+    """The person reading through the app (console, previews) sees every row.
+    No turn context is otherwise a stranger: an MCP client, a bare thread."""
+    return as_reader(True)
+
+
+def _turn_writer():
+    """(provider_key, model) driving this turn, from core's tool_context;
+    (None, None) outside a turn (the app's routes, importers, the MCP door)."""
+    try:
+        from core.chat.function_manager import tool_context
+        ctx = tool_context.get() or {}
+        return (ctx.get('provider') or None), (ctx.get('model') or None)
+    except Exception:
+        return None, None
+
+
+def _provider_private(key) -> bool:
+    """Is this provider ticked private (core's ONE rule, resolve.is_local)?
+    No key, an unknown key, or a check that raises = no."""
+    if not key:
+        return False
+    try:
+        from core.chat.llm_providers.resolve import is_local
+        return bool(is_local(key))
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] private check failed for '{key}', treating as cloud: {e}")
+        return False
+
+
+def _private_filter_on() -> bool:
+    """private_model_filter (default ON). Off = every model reads every row on
+    THIS Sapphire; rows are still stamped. Unreadable setting = on."""
+    try:
+        from core.plugin_loader import plugin_loader
+        return plugin_loader.get_plugin_settings('mindpalace').get(
+            'private_model_filter', True) is not False
+    except Exception:
+        return True
+
+
+def reader_private() -> bool:
+    """May whoever is reading right now see private-model rows?"""
+    if not _private_filter_on():
+        return True
+    said = _reader.get()
+    if said is not None:
+        return said
+    return _provider_private(_turn_writer()[0])
+
+
+def cloud_turn() -> bool:
+    """A model turn whose provider is not private. For code the app's own
+    routes share with her tools (the contact book, name matching): the app
+    has no turn and must keep seeing every row."""
+    try:
+        if _reader.get() is not None:
+            return not reader_private()
+        from core.chat.function_manager import tool_context
+        return tool_context.get() is not None and not reader_private()
+    except Exception:
+        return False
+
+
+def _private_sql(col='c.wr_private') -> str:
+    """The read gate as a WHERE fragment ('' = this reader sees everything)."""
+    return '' if reader_private() else f'{col} = 0'
+
+
+def _private_chunk(alias='c') -> str:
+    """SQL test: is this memory row a private-model row? Its own mark, or it
+    is filed under a person, place or thing that is marked private (one rule:
+    a private person's description and facts are private with them; release
+    the person and each fact is back to its own mark). alias '' = a bare
+    FROM chunks."""
+    p = f'{alias}.' if alias else 'chunks.'
+    return (f"({p}wr_private = 1 OR EXISTS (SELECT 1 FROM entities pe "
+            f"WHERE pe.id = {p}entity_id AND pe.wr_private = 1))")
+
+
+def _chunk_gate(alias='c') -> str:
+    """The read gate for memory rows as a WHERE fragment ('' = this reader
+    sees everything). Every read of chunks for a model uses this one."""
+    return '' if reader_private() else f'NOT {_private_chunk(alias)}'
+
+
+def _chunk_is_private(cursor, chunk_id) -> bool:
+    """One row, by id: the same test (for refusals and ledger marks)."""
+    r = cursor.execute(f"SELECT {_private_chunk('')} FROM chunks WHERE id = ?",
+                       (chunk_id,)).fetchone()
+    return bool(r and r[0])
+
+
+def _instance_name() -> str:
+    """This Sapphire's name: a label that may change (core/instance.py)."""
+    from core import instance
+    return instance.instance_name()
+
+
+def _instance_id():
+    """This Sapphire's id: minted once, never changes, never travels in a
+    backup (core/instance.py). None when it cannot be had yet: rows then
+    stay without one and are claimed on a later start."""
+    try:
+        from core import instance
+        return instance.instance_id()
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] instance id unavailable: {e}")
+        return None
+
+
+def _follow_instance_name(cursor):
+    """Rows this Sapphire wrote carry her id (`origin`) and her current name
+    (`origin_name`). The id is the identity; the name is a label that follows
+    a rename. Rows from another Sapphire keep both of theirs.
+
+    The database remembers which Sapphire last tended it. One that arrives
+    from another Sapphire (a backup restored on a different machine) is
+    recognised by that id: its rows are not claimed and not renamed."""
+    global _name_seen
+    name, iid = _instance_name(), _instance_id()
+    kv = dict(cursor.execute("SELECT key, value FROM palace_kv WHERE key IN "
+                             "('instance_name', 'instance_id')").fetchall())
+    old, old_id = kv.get('instance_name'), kv.get('instance_id')
+    foreign = bool(iid and old_id and old_id != iid)
+    if foreign:
+        logger.warning(f"[MINDPALACE] this memory was last tended by another Sapphire "
+                       f"('{old}', id {old_id[:8]}): its rows keep their origin")
+    for table in ('chunks', 'entities'):
+        if not foreign:
+            # First run: every unnamed row is hers. Then: rows of hers written
+            # before she had an id (or while it could not be read) take it.
+            cursor.execute(f'UPDATE {table} SET origin_name = ? WHERE origin_name IS NULL', (name,))
+            if iid:
+                cursor.execute(f'UPDATE {table} SET origin = ? WHERE origin IS NULL '
+                               f'AND origin_name IN (?, ?)', (iid, name, old or name))
+        if iid:
+            cursor.execute(f'UPDATE {table} SET origin_name = ? WHERE origin = ? '
+                           f'AND origin_name IS NOT ?', (name, iid, name))
+        elif old and old != name:        # no id to go by: the old name is the only handle
+            cursor.execute(f'UPDATE {table} SET origin_name = ? WHERE origin_name = ?', (name, old))
+    if old != name:
+        cursor.execute("INSERT OR REPLACE INTO palace_kv (key, value) VALUES ('instance_name', ?)", (name,))
+        if old and not foreign:
+            logger.info(f"[MINDPALACE] instance renamed '{old}' -> '{name}': her rows follow")
+    if iid and old_id != iid:
+        cursor.execute("INSERT OR REPLACE INTO palace_kv (key, value) VALUES ('instance_id', ?)", (iid,))
+    _name_seen = name
+
+
+def _stamp_writer(cursor, row_id, table='chunks', private=None, imported=False):
+    """Stamp who wrote the row just inserted. private: None = the writer's
+    provider decides; said outright for rows whose words are not the
+    writer's own (a merge, split or promote is private exactly when a source
+    was) and for the self sheet (never). imported: the words were written
+    elsewhere, by a writer nobody recorded (the model running the import
+    did not write them). One call after every INSERT:
+    tests/test_private_model.py fails on an INSERT INTO chunks without it."""
+    key, model = (None, None) if imported else _turn_writer()
+    if imported:
+        private = False
+    private = int(bool(_provider_private(key) if private is None else private))
+    if _instance_name() != _name_seen:
+        _follow_instance_name(cursor)
+    cursor.execute(
+        f'UPDATE {table} SET wr_model = ?, wr_provider = ?, wr_private = ?, '
+        f'origin_name = ?, origin = ? WHERE id = ?',
+        (model, key, private, _name_seen, _instance_id(), row_id))
+    return private
+
+
+def writer_dict(model, provider, private, origin, origin_id=None) -> dict:
+    """A row's writer columns as the object an export file carries (origin:
+    the Sapphire's name; origin_id: her id, what a sync goes by)."""
+    w = {'model': model, 'provider': provider, 'origin': origin, 'origin_id': origin_id}
+    w = {k: v for k, v in w.items() if v}
+    if private:
+        w['private'] = True
+    return w
+
+
+def _apply_writer(cursor, row_id, writer, table='chunks', public=False):
+    """A row that arrived from a file keeps the writer the file names (who
+    wrote it does not change by travelling). No writer in the file = an old
+    export: it reads as written here, public."""
+    if not isinstance(writer, dict) or not writer:
+        return
+
+    def word(key, cap):     # a file is untrusted: a name is a short string or nothing
+        v = writer.get(key)
+        return (v.strip()[:cap] or None) if isinstance(v, str) else None
+    cursor.execute(
+        f'UPDATE {table} SET wr_model = ?, wr_provider = ?, wr_private = ?, '
+        f'origin_name = COALESCE(?, origin_name) WHERE id = ?',
+        (word('model', 200), word('provider', 200),
+         0 if public else int(bool(writer.get('private'))),
+         word('origin', 40), row_id))
+    # A file that says which Sapphire wrote the row: her id, or none (a file
+    # from before ids). Never this Sapphire's own on another's row.
+    oid = word('origin_id', 32)
+    if oid or word('origin', 40):
+        cursor.execute(f'UPDATE {table} SET origin = ? WHERE id = ?', (oid, row_id))
+
+
+def _writers_text(rows) -> str:
+    """'qwen3 on Sapphire-Purple, 2 more on Sapphire-Blue' from (wr_model,
+    origin_name) pairs: who wrote the rows a cloud reader was not given."""
+    seen = {}
+    for model, origin in rows:
+        model = str(model or '').replace('\\', '/').rstrip('/').rsplit('/', 1)[-1]
+        who = (f"written by {model}" if model else "marked private") + (f" on {origin}" if origin else '')
+        seen[who] = seen.get(who, 0) + 1
+    return '; '.join(w + (f" ({n})" if len(seen) > 1 else '') for w, n in seen.items())
+
+
+def _hidden_note(rows) -> str:
+    """The line a cloud reader gets in place of private-model rows: a count
+    and who wrote them, never content, ids or labels."""
+    if not rows:
+        return ''
+    n = len(rows)
+    return (f"\n\n{n} more matching memor{'y is' if n == 1 else 'ies are'} only available "
+            f"on private models ({_writers_text(rows)}). Nothing to fetch from here.")
 
 
 def _ledger(scope, actor, action, **kw):
@@ -1466,9 +1751,12 @@ def _list_entities(scope: str, kind: str = None, limit: int = 50) -> tuple:
         except (TypeError, ValueError):
             limit = 50
         with _get_connection() as conn:
+            gate = _private_sql('e.wr_private')
             q = ("SELECT e.id, e.name, e.kind, e.meta, e.mentions, "
-                 "(SELECT COUNT(*) FROM chunks c WHERE c.entity_id = e.id) "
-                 "FROM entities e WHERE e.scope IN (?, 'global')")
+                 "(SELECT COUNT(*) FROM chunks c WHERE c.entity_id = e.id"
+                 + (" AND c.wr_private = 0" if gate else '') + ") "
+                 "FROM entities e WHERE e.scope IN (?, 'global')"
+                 + (f" AND {gate}" if gate else ''))
             params = [scope]
             if kind:
                 q += " AND LOWER(COALESCE(e.kind, '')) = ?"
@@ -1476,10 +1764,17 @@ def _list_entities(scope: str, kind: str = None, limit: int = 50) -> tuple:
             q += " ORDER BY e.mentions DESC, e.name COLLATE NOCASE LIMIT ?"
             params.append(limit + 1)
             rows = conn.execute(q, params).fetchall()
+            kept = 0
+            if gate:
+                kq = "SELECT COUNT(*) FROM entities e WHERE e.scope IN (?, 'global') AND e.wr_private = 1"
+                kept = conn.execute(kq + (" AND LOWER(COALESCE(e.kind, '')) = ?" if kind else ''),
+                                    [scope] + ([kind] if kind else [])).fetchone()[0]
+        kept_note = (f"\n{kept} more {'is' if kept == 1 else 'are'} only available on "
+                     f"private models.") if kept else ''
         more = len(rows) > limit
         rows = rows[:limit]
         if not rows:
-            return (f"No {kind + ' ' if kind else ''}entities in this scope yet."), True
+            return (f"No {kind + ' ' if kind else ''}entities in this scope yet." + kept_note), True
         fields = []
         if kind:
             t = tpl.get_templates().get(kind) or {}
@@ -1502,15 +1797,16 @@ def _list_entities(scope: str, kind: str = None, limit: int = 50) -> tuple:
                     lines.append(f"    {label}: {val[:160]}{'…' if len(val) > 160 else ''}")
         if more:
             lines.append(f"…more not shown — raise limit (max 200).")
-        return "\n".join(lines), True
+        return "\n".join(lines) + kept_note, True
     except Exception as e:
         logger.error(f"[MINDPALACE] list_entities failed: {e}")
         return f"Failed to list entities: {e}", False
 
 
-def upsert_entity(cursor, name: str, scope: str, kind: str = None) -> int:
+def upsert_entity(cursor, name: str, scope: str, kind: str = None, imported: bool = False) -> int:
     """Find-or-create an entity by (name NOCASE, scope) on an open cursor.
-    Returns entity id. Shared with import_tools."""
+    Returns entity id. Shared with import_tools (imported: a new entity is
+    stamped as arriving from elsewhere, public, not as the turn's own)."""
     cursor.execute(
         'SELECT id FROM entities WHERE name = ? COLLATE NOCASE AND scope = ?',
         (name, scope)
@@ -1526,7 +1822,9 @@ def upsert_entity(cursor, name: str, scope: str, kind: str = None) -> int:
         'INSERT INTO entities (name, scope, kind, created, updated) VALUES (?, ?, ?, ?, ?)',
         (name.strip(), scope, kind, now, now)
     )
-    return cursor.lastrowid
+    eid = cursor.lastrowid
+    _stamp_writer(cursor, eid, table='entities', imported=imported)
+    return eid
 
 
 # ─── Formatting ──────────────────────────────────────────────────────────────
@@ -1654,10 +1952,12 @@ def _sanitize_fts_query(query: str, use_or=False, use_prefix=False) -> str:
     return ' '.join(terms)
 
 
-def _read_filters(scope, labels, private_key, layer):
+def _read_filters(scope, labels, private_key, layer, hidden=False):
     """Shared WHERE fragments for the AI read paths (search cascade, recents,
     the wake pulls): scope overlay + private gate + optional layer + optional
-    labels. Returns (sql, params) to AND together. Archived self-sheet
+    labels. Returns (sql, params) to AND together. The private-model gate
+    rides here (reader_private); hidden=True flips it to select exactly the
+    rows this reader is NOT given, for the count in _hidden_note. Archived self-sheet
     versions (meta.superseded_at) are excluded HERE — the becoming-history
     lives in the section 📜 trail, not in reads (Krem's ruling 2026-07-16);
     current sheet sections remain searchable."""
@@ -1670,6 +1970,10 @@ def _read_filters(scope, labels, private_key, layer):
            # nothing deleted, v1 unaffected (it never reads mind.db).
            "json_extract(c.meta, '$.library_migrated') IS NULL"]
     params = scope_params + pk_params
+    if hidden:
+        sql.append(_private_chunk('c'))
+    elif not reader_private():
+        sql.append('NOT ' + _private_chunk('c'))
     if layer:
         sql.append('c.layer = ?')
         params.append(layer)
@@ -1686,6 +1990,9 @@ def _read_filters(scope, labels, private_key, layer):
         params.extend(labels)
     return ' AND '.join(sql), params
 
+
+PRIVATE_MODEL_ROW = ("Memory [{}] is kept for private models and was not {}: "
+                     "this model is not marked private.")
 
 SELECT_CHUNK = ('SELECT c.id, c.content, c.created, c.label, c.layer, e.name '
                 'FROM chunks c LEFT JOIN entities e ON c.entity_id = e.id ')
@@ -1870,6 +2177,7 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
                  embedding_blob, embedding_provider, embedding_dim, chunk_index, source)
             )
             chunk_id = cursor.lastrowid
+            _stamp_writer(cursor, chunk_id)
             if mention_ids:
                 try:
                     md.seed_edges(cursor, chunk_id, mention_ids, now)
@@ -1921,8 +2229,9 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         return f"Failed to save memory: {e}", False
 
 
-def _fts_search(cursor, fts_query, scope, labels, limit, private_key=None, layer=None):
-    where, params = _read_filters(scope, labels, private_key, layer)
+def _fts_search(cursor, fts_query, scope, labels, limit, private_key=None, layer=None,
+                hidden=False):
+    where, params = _read_filters(scope, labels, private_key, layer, hidden=hidden)
     cursor.execute(f'''
         SELECT c.id, c.content, c.created, c.label, c.layer, e.name,
                bm25(chunks_fts) as rank
@@ -1997,7 +2306,7 @@ def _mem_matrix(scope, provider, dim):
 
 
 def _vector_search(query: str, scope: str, labels: list, limit: int,
-                   private_key: str = None, layer: str = None) -> list:
+                   private_key: str = None, layer: str = None, hidden: bool = False) -> list:
     """Cosine via the cached int8 matrix (one matmul, whole scope), then the
     exact same SQL filters as before applied as an id mask — filter semantics
     unchanged, no candidate window."""
@@ -2017,7 +2326,7 @@ def _vector_search(query: str, scope: str, labels: list, limit: int,
         return []
     scores = (matrix.astype(np.float32) @ query_vec) * (scales / 127.0)
 
-    where, params = _read_filters(scope, labels, private_key, layer)
+    where, params = _read_filters(scope, labels, private_key, layer, hidden=hidden)
     with _get_connection() as conn:
         cursor = conn.cursor()
         eligible = {r[0] for r in cursor.execute(
@@ -2116,7 +2425,48 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
         # empty the result page; _finish trims back to `limit`.
         fetch_n = limit if layer else max(limit * 3, limit + 20)
 
-        def _finish(rows):
+        gated = not reader_private()
+
+        def _hidden(how, fts_query=None):
+            """(wr_model, origin_name) of the private-model rows the SAME
+            strategy matched for a reader who is not given them. The cascade
+            is first-non-empty-wins, so the count comes from the strategy
+            that answered, never from FTS-exact by default."""
+            if not gated:
+                return []
+            try:
+                if how == 'vector':
+                    ids = [r[0] for r in _vector_search(
+                        query, scope, labels, HIDDEN_CAP, private_key=private_key,
+                        layer=layer, hidden=True)]
+                else:
+                    with _get_connection() as hconn:
+                        hcur = hconn.cursor()
+                        if how == 'fts':
+                            ids = [r[0] for r in _fts_search(
+                                hcur, fts_query, scope, labels, HIDDEN_CAP,
+                                private_key=private_key, layer=layer, hidden=True)]
+                        else:
+                            hwhere, hparams = _read_filters(scope, labels, private_key,
+                                                            layer, hidden=True)
+                            hterms = query.lower().split()[:5]
+                            ids = [r[0] for r in hcur.execute(
+                                f"SELECT c.id FROM chunks c WHERE {hwhere} AND ("
+                                + ' OR '.join(['c.content LIKE ?'] * len(hterms))
+                                + ') LIMIT ?',
+                                hparams + [f'%{t}%' for t in hterms] + [HIDDEN_CAP]).fetchall()]
+                if not ids:
+                    return []
+                with _get_connection() as hconn:
+                    return hconn.execute(
+                        'SELECT CASE WHEN wr_private = 1 THEN wr_model END, origin_name '
+                        'FROM chunks WHERE id IN (%s)'
+                        % ','.join('?' * len(ids)), ids).fetchall()
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] hidden-row count skipped: {e}")
+                return []
+
+        def _finish(rows, hidden=()):
             if layer is None:
                 rows = _cap_knowledge_rows(rows, _knowledge_search_cap())
             rows = rows[:limit]
@@ -2161,7 +2511,7 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                     out += "\n\n" + block
             if card_txt:
                 out = card_txt + "\n\n" + out
-            return out, True
+            return out + _hidden_note(hidden), True
 
         # Direct look at a person/place/thing by name → their card rides
         # along (headline + template fields, the one AI-facing field seam).
@@ -2181,21 +2531,21 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                     rows = _fts_search(cursor, fts_exact, scope, labels, fetch_n,
                                        private_key=private_key, layer=layer)
                     if rows:
-                        return _finish(rows)
+                        return _finish(rows, _hidden('fts', fts_exact))
 
                     fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
                     if fts_broad != fts_exact:
                         rows = _fts_search(cursor, fts_broad, scope, labels, fetch_n,
                                            private_key=private_key, layer=layer)
                         if rows:
-                            return _finish(rows)
+                            return _finish(rows, _hidden('fts', fts_broad))
                 except sqlite3.OperationalError as e:
                     logger.warning(f"[MINDPALACE] FTS5 query failed: {e}")
 
         vec_results = _vector_search(query, scope, labels, fetch_n,
                                      private_key=private_key, layer=layer)
         if vec_results:
-            return _finish(vec_results)
+            return _finish(vec_results, _hidden('vector'))
 
         # LIKE fallback
         terms = query.lower().split()[:5]
@@ -2211,7 +2561,21 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                     params + like_params + [fetch_n])
                 rows = cursor.fetchall()
             if rows:
-                return _finish(rows)
+                return _finish(rows, _hidden('like'))
+
+        # Nothing this reader is given matched. Did private-model rows? The
+        # same cascade, first strategy that finds any.
+        hidden_note = ''
+        if gated:
+            found = []
+            try:
+                for q in dict.fromkeys(x for x in (
+                        fts_exact, _sanitize_fts_query(query, use_or=True, use_prefix=True)) if x):
+                    found = found or _hidden('fts', q)
+            except sqlite3.OperationalError:
+                pass
+            found = found or _hidden('vector') or (_hidden('like') if terms else [])
+            hidden_note = _hidden_note(found)
 
         # Zero direct hits — G4 rung 1/2 can still find an entity epicenter
         # (e.g. the query names someone whose facts use different words).
@@ -2220,15 +2584,15 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
             block = _spider_block(query, scope, private_key, [], depth)
             if block:
                 return (f"No direct matches for '{query}'{layer_note}{label_note}.\n\n"
-                        + card_lead + block), True
+                        + card_lead + block + hidden_note), True
 
         if layer is None:
             lib_block = _library_mixed(query, scope, private_key)
             if lib_block:
                 return (f"No memories found for '{query}'{label_note}, but the "
-                        f"library has matches:\n\n" + card_lead + lib_block), True
+                        f"library has matches:\n\n" + card_lead + lib_block + hidden_note), True
         return (f"No memories found for '{query}'{layer_note}{label_note}."
-                + ("\n\n" + card_txt if card_txt else '')), True
+                + ("\n\n" + card_txt if card_txt else '') + hidden_note), True
 
     except Exception as e:
         logger.error(f"[MINDPALACE] Error searching memory: {e}")
@@ -2297,9 +2661,27 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                     break
             rows = keep
         rows = [r[:6] for r in rows]
+        hidden_note = ''
+        if not wake and not reader_private():
+            # The private-model rows among the newest `count`: what the feed
+            # would have held for a private reader. The wake feed stays quiet.
+            try:
+                hwhere, hparams = _read_filters(scope, labels, private_key, layer, hidden=True)
+                floor = rows[-1][2] if len(rows) >= count else ''
+                with _get_connection() as conn:
+                    hidden_note = _hidden_note(conn.execute(
+                        f'SELECT CASE WHEN c.wr_private = 1 THEN c.wr_model END, c.origin_name '
+                        f'FROM chunks c WHERE {hwhere} '
+                        f"AND json_extract(c.meta, '$.section') IS NULL AND c.created >= ? "
+                        + ('' if layer else "AND COALESCE(json_extract(c.meta, '$.added_by'), '') "
+                                            "NOT LIKE 'plugin:%' ")
+                        + 'ORDER BY c.created DESC LIMIT ?',
+                        hparams + [floor, count]).fetchall())
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] hidden-row count skipped: {e}")
         if not rows:
             notes = (f" in layer '{layer}'" if layer else "") + (f" with labels '{label}'" if labels else "")
-            return f"No memories stored{notes}.", True
+            return f"No memories stored{notes}." + hidden_note, True
         if trim:
             def cut(text):
                 text = ' '.join(str(text).split())
@@ -2308,7 +2690,7 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                 return (text[:trim].rsplit(' ', 1)[0] or text[:trim]) + '…'
             rows = [(r[0], cut(r[1]), *r[2:]) for r in rows]
         results = [_format_chunk(*r) for r in rows]
-        return f"Recent {len(rows)} memories:\n" + "\n".join(results), True
+        return f"Recent {len(rows)} memories:\n" + "\n".join(results) + hidden_note, True
     except Exception as e:
         logger.error(f"[MINDPALACE] Error getting recent memories: {e}")
         return f"Failed to retrieve memories: {e}", False
@@ -2339,9 +2721,9 @@ def _doc_id_hint(memory_id, scope):
         from plugins.mindpalace.tools import library
         with library.get_connection() as conn:
             row = conn.execute(
-                'SELECT title FROM documents WHERE id = ? AND scope = ?',
+                'SELECT title, wr_private FROM documents WHERE id = ? AND scope = ?',
                 (memory_id, scope)).fetchone()
-        if row:
+        if row and not library._withheld(row[1]):
             return (f" (The library DOES have document [doc {memory_id}] "
                     f"\"{row[0]}\" — documents aren't editable with this "
                     f"tool; read_document views them.)")
@@ -2383,13 +2765,15 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
         with _get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'SELECT id, content, private_key, layer, meta FROM chunks WHERE id = ? AND scope = ?',
+                'SELECT id, content, private_key, layer, meta, wr_private FROM chunks WHERE id = ? AND scope = ?',
                 (memory_id, scope),
             )
             row = cursor.fetchone()
             if not row:
                 return (f"Memory [{memory_id}] not found in current memory "
                         f"slot.{_doc_id_hint(memory_id, scope)}"), False
+            if not reader_private() and _chunk_is_private(cursor, memory_id):
+                return PRIVATE_MODEL_ROW.format(memory_id, 'deleted'), False
             row_pk = row[2]
             if row_pk is not None and row_pk != private_key:
                 return f"Memory [{memory_id}] is private — pass the matching private_key to delete.", False
@@ -2404,7 +2788,7 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
                 (memory_id, memory_id))
             _tombstone_row(cursor, row[4], scope)
             _ledger(scope, _added_by(), 'deleted', layer=row[3],
-                    target=memory_id, cursor=cursor,
+                    target=memory_id, cursor=cursor, private=row[5],
                     summary=f"deleted [{memory_id}] from {row[3]}: {_ledger_preview(row[1], row[2])}")
             conn.commit()
         _publish_mind(row[3], scope, 'delete')
@@ -2582,11 +2966,13 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
         with _get_connection() as conn:
             cursor = conn.cursor()
             row = cursor.execute(
-                'SELECT id, content, private_key, layer, meta, created FROM chunks '
+                'SELECT id, content, private_key, layer, meta, created, wr_private FROM chunks '
                 'WHERE id = ? AND scope = ?', (memory_id, scope)).fetchone()
             if not row:
                 return (f"Memory [{memory_id}] not found in current memory "
                         f"slot.{_doc_id_hint(memory_id, scope)}"), False
+            if not reader_private() and _chunk_is_private(cursor, memory_id):
+                return PRIVATE_MODEL_ROW.format(memory_id, 'updated'), False
             if row[2] is not None and row[2] != private_key:
                 return (f"Memory [{memory_id}] is private — pass the matching "
                         f"private_key to update."), False
@@ -2622,6 +3008,14 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                     pass
                 _m, embed_failed = _rewrite_content(cursor, memory_id, new_content,
                                                     row[5], old_meta, scope, now)
+                # One-way: words a private model wrote make the row private.
+                # Only the person's switch in the app sets it back. The sheet
+                # is outside the filter.
+                if (not row[6] and layer != 'self'
+                        and _provider_private(_turn_writer()[0])):
+                    _key, _model = _turn_writer()
+                    cursor.execute('UPDATE chunks SET wr_private = 1, wr_model = ?, wr_provider = ? '
+                                   'WHERE id = ?', (_model, _key, memory_id))
             if when_clear or when_iso:
                 raw = cursor.execute('SELECT meta FROM chunks WHERE id = ?',
                                      (memory_id,)).fetchone()[0]
@@ -2791,6 +3185,10 @@ def _entity_card(cursor, eid, wake=False) -> list:
         cap = min(_people_card_chars(), WAKE_CARD_CHARS) if wake else _people_card_chars()
         fields = _WAKE_CARD_FIELDS if wake else _CARD_FIELDS
         lines = []
+        gate = _private_sql('wr_private')
+        if gate and cursor.execute('SELECT wr_private FROM entities WHERE id = ?',
+                                   (eid,)).fetchone()[0]:
+            return []   # a private-model entity: no card for this reader
         # Curated description first (meta.headline — the human-edited slot),
         # else the newest promoted fact. Without the preference, every
         # librarian tier-1 promotion displaced what she wrote (Krem's jank
@@ -2798,6 +3196,7 @@ def _entity_card(cursor, eid, wake=False) -> list:
         row = cursor.execute(
             "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
             "AND private_key IS NULL "
+            + (f"AND {gate} " if gate else '') +
             "AND json_extract(meta, '$.pruned_at') IS NULL "
             "AND json_extract(meta, '$.superseded_at') IS NULL "
             "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
@@ -2863,7 +3262,10 @@ def _get_people_provider(scope='default'):
         cur = conn.cursor()
         rows = cur.execute(
             f"SELECT id, name, meta, created, updated FROM entities "
-            f"WHERE kind = 'person' AND {cond} ORDER BY name COLLATE NOCASE",
+            f"WHERE kind = 'person' AND {cond} "
+            # her email/phone tools on a cloud model do not get private-model people
+            + ("AND wr_private = 0 " if cloud_turn() else '') +
+            f"ORDER BY name COLLATE NOCASE",
             params).fetchall()
     out = []
     for eid, name, meta_raw, created, updated in rows:

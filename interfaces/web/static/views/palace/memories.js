@@ -25,8 +25,9 @@ let _offset = 0;
 let _searchTimer = null;
 let _keyed = false;        // 🔒 only memories carrying a private key
 let _retired = false;      // 🗑 the librarian's archive — restorable, not hers to read
+let _privOnly = false;     // only memories kept for private models
 
-function resetFilters() { _search = ''; _offset = 0; _keyed = false; _retired = false; }
+function resetFilters() { _search = ''; _offset = 0; _keyed = false; _retired = false; _privOnly = false; }
 
 export default {
     init(el) { container = el; },
@@ -106,6 +107,7 @@ async function renderList() {
     if (_search) params.set('q', _search);
     if (_keyed) params.set('keyed', 1);
     if (_retired) params.set('retired', 1);
+    if (_privOnly) params.set('private_model', 1);
     let data;
     try {
         data = await palaceGet(`chunks?${params}`);
@@ -123,10 +125,11 @@ async function renderList() {
         <div class="ui-rows">
             <div class="ui-row">
                 <input type="search" id="pal-mem-search" class="palace-search" placeholder="Search memories…" value="${escAttr(_search)}">
-                <span class="palace-count" title="memories = rows she can read or unlock (keyed included) · retired = the librarian's archive, here and restorable, not hers to read">${counts.memories} memories · ${counts.keyed} keyed · ${counts.retired} retired</span>
+                <span class="palace-count" title="memories = rows she can read or unlock (keyed included) · retired = the librarian's archive, here and restorable, not hers to read">${counts.memories} memories · ${counts.keyed} keyed · ${counts.private_model ?? 0} private-model · ${counts.retired} retired</span>
             </div>
             <div class="ui-row">
                 <button class="ui-pill ${_keyed ? 'ui-pill-on' : ''}" id="pal-mem-keyed" title="Only memories saved with a private key">🔒 Keyed</button>
+                <button class="ui-pill ${_privOnly ? 'ui-pill-on' : ''}" id="pal-mem-priv" title="Only memories kept for private models: written by a model marked private, or marked by you. A cloud model is not shown these.">\u{1F3E0} Private-model</button>
                 <button class="ui-pill ${_retired ? 'ui-pill-on' : ''}" id="pal-mem-retired" title="The librarian's archive: retired memories, hidden from her recall, restorable here">🗑 Retired</button>
             </div>
             <div class="ui-row">
@@ -136,7 +139,7 @@ async function renderList() {
         </div>
         ${chunks.length
             ? `<div class="palace-chunk-list">${chunks.map(c => chunkCard(c)).join('')}</div>`
-            : `<div class="ui-empty">${_search ? 'No matches' : (_retired ? 'Nothing retired' : 'No memories yet<div id="pal-mem-waiting"></div>')}</div>`}
+            : `<div class="ui-empty">${_search ? 'No matches' : (_retired ? 'Nothing retired' : (_privOnly ? 'No private-model memories' : 'No memories yet<div id="pal-mem-waiting"></div>'))}</div>`}
         ${(!_search && _offset + PAGE < data.total)
             ? `<div class="palace-more-wrap"><button class="mind-btn" id="pal-mem-more">Load more (${data.total - _offset - PAGE} older)</button></div>`
             : ''}
@@ -144,6 +147,11 @@ async function renderList() {
 
     el.querySelector('#pal-mem-keyed')?.addEventListener('click', () => {
         _keyed = !_keyed;
+        _offset = 0;
+        renderList();
+    });
+    el.querySelector('#pal-mem-priv')?.addEventListener('click', () => {
+        _privOnly = !_privOnly;
         _offset = 0;
         renderList();
     });

@@ -56,8 +56,9 @@ def _state():
 
 
 def _mode():
-    """off | talking | always, as core says: off unless Settings > Devices > Settings chose this avatar
-    as her face, else the strongest mode her screens ask for (each screen's own, Devices page)."""
+    """off | rest | talking | always, as core says: off unless Settings > Devices > Settings chose this
+    avatar as her face, rest while it is and no board answers (the seat is kept), else the strongest
+    mode her screens ask for (each screen's own, Devices page)."""
     try:
         if _state().get("enabled", True) is False:
             return "off"
@@ -114,7 +115,7 @@ def changed():
 
 def wake():
     """A reply starts: have the boards open and the renderer read before its first words."""
-    if not _ours:
+    if not _ours or _mode() == "rest":           # rest: no board to open, her reply waits for none
         return
     _wake.set()
     _feed().wake(NAME, wait=0.3)
@@ -222,6 +223,10 @@ def _run():
             if not _register():
                 _stop.wait(10)                   # another avatar is her face: ask again when it may have let go
                 continue
+        if mode == "rest":                       # her face, and no board answers now: the seat is kept, the renderer rests
+            _wake.wait(5)
+            _wake.clear()
+            continue
         if mode != "always":
             _wake.wait(5)
             if not _wake.is_set() or _stop.is_set() or _again.is_set():

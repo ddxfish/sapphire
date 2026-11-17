@@ -188,6 +188,9 @@ def _insert_chunk(cursor, *, layer, scope, content, created, updated,
          source, label, private_key, meta, importance, created, updated,
          embedding, embedding_provider, embedding_dim)
     )
+    # The classic stores recorded no writer: public, no model, this Sapphire.
+    from plugins.mindpalace.tools import palace_tools
+    palace_tools._stamp_writer(cursor, cursor.lastrowid, imported=True)
 
 
 # ─── Per-store importers ──────────────────────────────────────────────────────
@@ -334,7 +337,7 @@ def _import_people(config, dest_cursor, existing_keys, scopes_seen, skip_keys=fr
 
             try:
                 entity_id = palace_tools.upsert_entity(
-                    dest_cursor, name, scope, kind='person')
+                    dest_cursor, name, scope, kind='person', imported=True)
                 # Structured contact fields → entity meta.fields (template
                 # system / contacts provider). Existing palace fields win —
                 # the palace is the live system, the old store is history.

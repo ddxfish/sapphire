@@ -27,7 +27,7 @@ def get_sheet(query=None, **_):
     if not pt._ensure_db():
         return {'error': 'mind database unavailable'}, 500
     scope = (query or {}).get('scope') or 'default'
-    with pt._get_connection() as conn:
+    with pt._get_connection() as conn, pt.as_user():   # the app is the person: every row
         cursor = conn.cursor()
         current = st._current_sections(cursor, scope)
         history = st._history_counts(cursor, scope)
@@ -235,7 +235,7 @@ def patch_ledger_reason(lid=None, body=None, **_):
     with pt._get_connection() as conn:
         cur = conn.cursor()
         row = cur.execute(
-            'SELECT actor, layer FROM ledger WHERE id = ? AND scope = ?',
+            'SELECT actor, layer, wr_private FROM ledger WHERE id = ? AND scope = ?',
             (lid, scope)).fetchone()
         if not row:
             return {'error': 'not found'}, 404
@@ -244,7 +244,8 @@ def patch_ledger_reason(lid=None, body=None, **_):
         lg.record(scope, 'user', 'noted', layer=row[1], target=lid,
                   parent_id=lid,
                   summary=(f'reason: {reason}' if reason else 'reason cleared'),
-                  detail={'reason': reason} if reason else None, cursor=cur)
+                  detail={'reason': reason} if reason else None, cursor=cur,
+                  private=bool(row[2]))     # a note on a row carries that row's mark
         conn.commit()
     return {'success': True, 'reason': reason or None}
 

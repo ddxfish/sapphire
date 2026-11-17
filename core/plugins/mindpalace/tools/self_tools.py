@@ -337,7 +337,9 @@ def dashboard_data(cursor, scope, depth=2):
         f"SELECT e.name, COUNT(*) n FROM edges d JOIN entities e ON d.dst_type='entity' "
         f"AND e.id=d.dst_id JOIN chunks c ON d.src_type='chunk' AND c.id=d.src_id "
         f"WHERE e.scope=? AND {_LIVE.replace('json_extract(meta', 'json_extract(c.meta')} "
-        f"GROUP BY e.id ORDER BY n DESC LIMIT 5",
+        + ''.join(f"AND {g} " for g in (_pt()._private_sql('e.wr_private'),
+                                        _pt()._chunk_gate('c')) if g)
+        + "GROUP BY e.id ORDER BY n DESC LIMIT 5",
         (scope,)).fetchall()
     # A per-day rate on a one-day-old mind is noise: only after 30 days.
     old_enough = bool(since) and since[:10] <= _cutoff(30)[:10]
@@ -368,7 +370,9 @@ def _event_rows(cursor, scope):
     candidate set is small and json_each on an absent key is fussier than
     it's worth. private_key IS NULL: the dashboard renders on EVERY wake
     read for every persona — keyed-private rows must never preview here
-    (scout find, 2026-07-19; the same gate class as _private_key_clause)."""
+    (scout find, 2026-07-19; the same gate class as _private_key_clause).
+    Private-model rows stay out for a reader not given them."""
+    gate = _pt()._chunk_gate('')
     return cursor.execute(
         "SELECT id, content, json_extract(meta, '$.when'), "
         "json_extract(meta, '$.recurring_dates'), created FROM chunks "
@@ -376,6 +380,7 @@ def _event_rows(cursor, scope):
         "AND (json_extract(meta, '$.when') IS NOT NULL "
         "OR json_extract(meta, '$.recurring_dates') IS NOT NULL) "
         "AND private_key IS NULL "
+        + (f"AND {gate} " if gate else '') +
         "AND json_extract(meta, '$.pruned_at') IS NULL "
         "AND json_extract(meta, '$.superseded_at') IS NULL", (scope,)).fetchall()
 
@@ -1554,6 +1559,7 @@ def write_section(scope, section, content, fields_spec=None):
                  json.dumps(meta, ensure_ascii=False), now, now,
                  embedding_blob, provider, dim))
             chunk_id = cursor.lastrowid
+            pt._stamp_writer(cursor, chunk_id, private=False)   # the sheet is outside the private-model filter
             if mention_ids:
                 try:
                     md.seed_edges(cursor, chunk_id, mention_ids, now)

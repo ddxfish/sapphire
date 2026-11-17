@@ -100,9 +100,10 @@ def _wanted():
 
 
 def mode_for(name):
-    """What an avatar's screens loop does now: "off" when it is not the one chosen as her face, else
-    the strongest mode its screens ask for (off | talking | always). Each screen keeps its own: the
-    hub sends her idle only to a screen set Always."""
+    """What an avatar's screens loop does now: "off" when it is not the one chosen as her face (it
+    lets the seat go), "rest" when it is and no board answers now (it keeps the seat and draws
+    nothing), else the strongest mode its screens ask for (talking | always). Each screen keeps
+    its own: the hub sends her idle only to a screen set Always."""
     _offered[name] = time.monotonic()
     seat = _seat()
     if seat == "off" or (seat and seat != name):
@@ -111,7 +112,16 @@ def mode_for(name):
     if not seat and h and h.name != name:
         return "off"                             # never chosen: the first that asked has her
     if h and h.name == name and h.looked is not None:
-        return h.mode()                          # the boards that answered: an offline Always board never keeps the renderer drawing idle (scout)
+        if h.boards:
+            return h.mode()                      # the boards that answered: an offline Always board never keeps the renderer drawing idle (scout)
+        if _wanted() == "off":
+            return "off"                         # no screen is set to show her
+        # Her face, and no board answers now. "off" here made its loop let go, and the rows (a
+        # screen set Always, asleep) had it take the seat again: a new hub and a look at every
+        # board each 20 s, for ever, two avatars trading her between them (2026-11-17).
+        if h.stale(time.monotonic()):
+            h.put(("tick",))                     # nothing else moves the hub while she rests: it looks for her boards again
+        return "rest"
     return _wanted()
 
 

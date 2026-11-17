@@ -120,14 +120,17 @@ def _session_snapshot(chat, scope):
     pass before the sheet pass can edit the sheet, and the sheet pass gets
     the LIVE sheet in its message body. Zero-fingerprint read (no recall
     boosts, no ledger stamp, no wake tools)."""
-    key = (chat, scope)
+    reader = _resident_private(scope)
+    key = (chat, scope, reader)     # a resident switched to cloud gets its own
     snap = _snapshots.get(key)
     if snap is not None:
         return snap
     try:
         from plugins.mindpalace.tools import self_tools
-        text, ok = self_tools._read_self(scope, depth=1, extra_tools=False,
-                                         stamp=False)
+        # A system prompt, built before the turn: say who will read it.
+        with _pt().as_reader(reader):
+            text, ok = self_tools._read_self(scope, depth=1, extra_tools=False,
+                                             stamp=False)
         snap = ("— Self snapshot, taken at session start. This is who is "
                 "doing tonight's tending. —\n" + text) if ok and text else ''
     except Exception as e:
@@ -308,6 +311,33 @@ def _optin_layers():
 
 # ─── Batch selectors (one per pass kind) ─────────────────────────────────────
 
+def _resident_private(scope) -> bool:
+    """Is the model that tends this scope a private one? Batches and the
+    session snapshot are built BEFORE the turn, so the scope's pinned
+    resident provider answers. Auto reads as cloud: nobody knows yet which
+    provider it will pick."""
+    try:
+        pt = _pt()
+        return pt._provider_private((pt.scope_resident(scope) or {}).get('provider'))
+    except Exception:
+        return False
+
+
+def _wr_gate(scope, chunks=False) -> str:
+    """The read gate for a bare FROM entities (default) or FROM chunks
+    (chunks=True, which also keeps out what is filed under a private
+    person). Empty when this scope's librarian is a private model:
+    private-model memories wait for a librarian that may read them."""
+    try:
+        if not _pt()._private_filter_on():
+            return ''
+    except Exception:
+        pass
+    if _resident_private(scope):
+        return ''
+    return (' AND NOT ' + _pt()._private_chunk('')) if chunks else ' AND wr_private = 0'
+
+
 def build_batch(cursor, scope, what, limit):
     """SORT. Oldest unprocessed first: the events layer plus any librarian-
     opted-in plugin layers. (Free self-layer notes retired into events
@@ -318,7 +348,7 @@ def build_batch(cursor, scope, what, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
-        AND private_key IS NULL
+        AND private_key IS NULL {_wr_gate(scope, True)}
         AND (meta IS NULL OR (
             json_extract(meta, '$.librarian_at') IS NULL
             AND json_extract(meta, '$.pruned_at') IS NULL
@@ -338,7 +368,7 @@ def build_temporal_batch(cursor, scope, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
-        AND private_key IS NULL
+        AND private_key IS NULL {_wr_gate(scope, True)}
         AND json_extract(meta, '$.refers_to_time') IS NOT NULL
         AND json_extract(meta, '$.temporal_at') IS NULL
         AND json_extract(meta, '$.pruned_at') IS NULL
@@ -361,7 +391,7 @@ def build_link_batch(cursor, scope, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
-        AND private_key IS NULL
+        AND private_key IS NULL {_wr_gate(scope, True)}
         AND json_extract(meta, '$.noun_candidates') IS NOT NULL
         AND json_extract(meta, '$.link_at') IS NULL
         AND json_extract(meta, '$.pruned_at') IS NULL
@@ -381,7 +411,7 @@ def build_dedup_batch(cursor, scope, limit):
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
         WHERE scope = ? AND layer IN ({ph})
-        AND private_key IS NULL
+        AND private_key IS NULL {_wr_gate(scope, True)}
         AND embedding IS NOT NULL
         AND json_extract(meta, '$.dedup_at') IS NULL
         AND json_extract(meta, '$.pruned_at') IS NULL
@@ -393,8 +423,8 @@ def build_dedup_batch(cursor, scope, limit):
 
 def _dirty_entities(cursor, scope):
     return cursor.execute(
-        'SELECT name, mentions FROM entities WHERE scope = ? AND mentions > 0 '
-        'ORDER BY mentions DESC LIMIT 10', (scope,)).fetchall()
+        'SELECT name, mentions FROM entities WHERE scope = ? AND mentions > 0'
+        f'{_wr_gate(scope)} ORDER BY mentions DESC LIMIT 10', (scope,)).fetchall()
 
 
 MAX_DUPS_PER_ITEM = 6
@@ -421,7 +451,7 @@ def find_duplicates(cursor, scope, batch, threshold):
         cand = cursor.execute(f'''
             SELECT id, content, embedding, embedding_provider, embedding_dim
             FROM chunks WHERE scope = ? AND layer IN ({lph})
-            AND private_key IS NULL
+            AND private_key IS NULL {_wr_gate(scope, True)}
             AND embedding IS NOT NULL
             AND favorite = 0
             AND (importance IS NULL OR importance < ?)
@@ -832,7 +862,7 @@ def _self_shelf_rows(scope, ids=None):
     # was a scope-wide json_extract scan — slow, and one bad meta row
     # anywhere silently emptied the FEAST. Migrated notes are all events.
     q = ("SELECT id, created, content FROM chunks WHERE scope = ? "
-         "AND private_key IS NULL "
+         "AND private_key IS NULL " + _wr_gate(scope, True) + " "
          "AND layer = 'events' "
          "AND json_extract(meta,'$.was_self_layer') IS NOT NULL "
          "AND json_extract(meta,'$.pruned_at') IS NULL "
@@ -909,8 +939,9 @@ def _present_self(stage, scope, part, total):
     'verify' re-renders the sheet AFTER her edits for one final look,
     change still allowed. Both render fingerprint-free."""
     from plugins.mindpalace.tools import self_tools
-    sheet, ok = self_tools._read_self(scope, depth=0, extra_tools=False,
-                                      stamp=False)
+    with _pt().as_reader(_resident_private(scope)):
+        sheet, ok = self_tools._read_self(scope, depth=0, extra_tools=False,
+                                          stamp=False)
     if not ok:
         # Never tend blind: a pass shown "(sheet unavailable)" rewrote
         # sections from nothing (scout audit 2026-10-30). The worker ends
@@ -1501,7 +1532,7 @@ def run_end(scope, left=None, token=None):
     if left:
         summary += f" ({left} still queued)"
     lg.record(scope, 'librarian', 'report', parent_id=ctx['id'],
-              target=ctx['id'], summary=summary,
+              target=ctx['id'], summary=summary, private=False,   # counts; the target is a ledger id
               detail={'batches': ctx['batches'], 'presented': ctx['presented'],
                       'handled': ctx['handled'], 'verbs': ctx['verbs'],
                       **ctx['extra']})
@@ -1845,8 +1876,8 @@ def _worker_link(scope):
                 return
             batch = build_link_batch(cur, scope, cfg['batch'])
             roster = [r[0] for r in cur.execute(
-                "SELECT name FROM entities WHERE scope IN (?, 'global') "
-                "ORDER BY name", (scope,)).fetchall()]
+                "SELECT name FROM entities WHERE scope IN (?, 'global')"
+                f"{_wr_gate(scope)} ORDER BY name", (scope,)).fetchall()]
             conn.commit()
         if not batch:
             _finish(f"No unlinked name-candidates in '{scope}' — "
@@ -2106,8 +2137,8 @@ def preview_message(scope, kind, stage=None, limit=3):
             elif kind == 'link':
                 batch = build_link_batch(cur, scope, limit)
                 roster = [r[0] for r in cur.execute(
-                    "SELECT name FROM entities WHERE scope IN (?, 'global') "
-                    "ORDER BY name", (scope,)).fetchall()]
+                    "SELECT name FROM entities WHERE scope IN (?, 'global')"
+                    f"{_wr_gate(scope)} ORDER BY name", (scope,)).fetchall()]
                 if batch:
                     return {'text': _present_link(batch, scope, roster, 1, 1),
                             'live': True}

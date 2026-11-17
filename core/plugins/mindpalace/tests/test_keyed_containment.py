@@ -13,14 +13,17 @@ from pathlib import Path
 
 import pytest
 
-from plugins.mindpalace.tools import librarian
+from plugins.mindpalace.tools import librarian, palace_tools
 
 
 SCHEMA = """CREATE TABLE chunks (
     id INTEGER PRIMARY KEY, scope TEXT, layer TEXT, content TEXT,
     label TEXT, favorite INTEGER DEFAULT 0, created TEXT, updated TEXT,
     meta TEXT, private_key TEXT, embedding BLOB, embedding_provider TEXT,
-    embedding_dim INTEGER, importance REAL, source TEXT, chunk_index INTEGER)"""
+    embedding_dim INTEGER, importance REAL, source TEXT, chunk_index INTEGER,
+    wr_private INTEGER NOT NULL DEFAULT 0, entity_id INTEGER)"""
+# the read gate also asks whether a row is filed under a private person
+ENTITIES = "CREATE TABLE entities (id INTEGER PRIMARY KEY, wr_private INTEGER NOT NULL DEFAULT 0)"
 
 
 @pytest.fixture
@@ -28,6 +31,7 @@ def cur(monkeypatch):
     monkeypatch.setattr(librarian, '_optin_layers', lambda: ())
     conn = sqlite3.connect(':memory:')
     conn.execute(SCHEMA)
+    conn.execute(ENTITIES)
     yield conn.cursor()
     conn.close()
 
@@ -77,6 +81,8 @@ def test_self_shelf_excludes_keyed(cur, monkeypatch):
          private_key='word')
 
     class _FakePT:
+        _private_chunk = staticmethod(palace_tools._private_chunk)   # the read gate's SQL
+
         def _get_connection(self):
             class _Ctx:
                 def __enter__(_s):

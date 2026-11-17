@@ -837,7 +837,8 @@ class StreamingChat:
             from core.chat.function_manager import set_tool_context
             set_tool_context(_scopes, chat=chat_name,
                              persona=chat_settings.get('prompt'),
-                             model=effective_model)
+                             model=effective_model,
+                             provider=provider_key)   # the key resolve() picked: is_local needs it (Mind Palace private-model rows)
 
             gen_params = get_generation_params(
                 provider_key,

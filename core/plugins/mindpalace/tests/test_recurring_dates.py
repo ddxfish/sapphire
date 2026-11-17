@@ -112,9 +112,10 @@ def _mind(rows, layer='events', created=None):
     conn = sqlite3.connect(':memory:')
     conn.execute('CREATE TABLE chunks (id INTEGER PRIMARY KEY, scope TEXT, '
                  'layer TEXT, content TEXT, meta TEXT, private_key TEXT, '
-                 'created TEXT)')
+                 'created TEXT, wr_private INTEGER NOT NULL DEFAULT 0, entity_id INTEGER)')
+    conn.execute('CREATE TABLE entities (id INTEGER PRIMARY KEY, wr_private INTEGER NOT NULL DEFAULT 0)')
     for cid, content, meta in rows:
-        conn.execute('INSERT INTO chunks VALUES (?,?,?,?,?,NULL,?)',
+        conn.execute('INSERT INTO chunks VALUES (?,?,?,?,?,NULL,?,0,NULL)',
                      (cid, 's', layer, content, json.dumps(meta),
                       created or _yesterday()))
     return conn.cursor()
@@ -162,7 +163,7 @@ def test_dashboard_excludes_private_keyed_rows():
     d = _iso_in(5)
     cur = _mind([(1, 'public dinner', {'when': d})])
     cur.connection.execute(
-        "INSERT INTO chunks VALUES (2,'s','events','secret dinner',?,?,?)",
+        "INSERT INTO chunks VALUES (2,'s','events','secret dinner',?,?,?,0,NULL)",
         (json.dumps({'when': d}), 'gateword', _yesterday()))
     hits = _upcoming(cur, 's')
     assert [h['id'] for h in hits] == [1]
@@ -226,6 +227,6 @@ def test_upcoming_is_events_only():
     for cid, layer in ((2, 'entities'), (3, 'goals'), (4, 'knowledge'),
                        (5, 'events')):
         cur.connection.execute(
-            "INSERT INTO chunks VALUES (?,'s',?,'dated',?,NULL,?)",
+            "INSERT INTO chunks VALUES (?,'s',?,'dated',?,NULL,?,0,NULL)",
             (cid, layer, json.dumps({'when': d}), _yesterday()))
     assert [h['id'] for h in _upcoming(cur, 's')] == [5]

@@ -475,7 +475,8 @@ def _stamp(cursor, pt, memory_id, meta, **updates):
 
 
 def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
-                    entity_id=None, tier=None, importance=None, anchor=None):
+                    entity_id=None, tier=None, importance=None, anchor=None,
+                    sources=None):
     """Insert a derived chunk: inherits created/label/private_key from the
     source, carries meta.derived_from + a chunk→chunk 'derived_from' edge,
     gets mechanical meta + mention edges. Embedding rides the backfill latch.
@@ -511,6 +512,15 @@ def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
         (layer, scope, content, entity_id, tier, label, importance, private_key,
          json.dumps(meta, ensure_ascii=False), created, now))
     new_id = cursor.lastrowid
+    # A row made from private-model words is private, and one made from
+    # public words stays public, whoever tends it: a private librarian must
+    # not hide what it only rearranged.
+    # sources: every row it was made from (a merge), default the one source.
+    src_ids = [int(i) for i in (sources or [src_id])]
+    taint = cursor.execute(
+        'SELECT 1 FROM chunks WHERE %s AND id IN (%s) LIMIT 1'
+        % (pt._private_chunk(''), ','.join('?' * len(src_ids))), src_ids).fetchone() is not None
+    pt._stamp_writer(cursor, new_id, private=taint)
     md.seed_edges(cursor, new_id, mention_ids, now)
     cursor.execute(
         "INSERT INTO edges (src_type, src_id, dst_type, dst_id, kind, weight, created) "
@@ -896,6 +906,7 @@ def revert_run(scope, run_id):
             else:
                 counts['skipped'] += 1
         lg.record(scope, 'user', 'reverted', target=run_id, cursor=cur,
+                  private=False,          # counts; the target is a ledger id
                   summary=(f"reverted run [{run_id}]: {counts['restored']} restored, "
                            f"{counts['retired']} retired, {counts['ratings']} ratings, "
                            f"{counts['dates']} dates, {counts['links']} links put back"
@@ -1086,7 +1097,7 @@ def _merge(memory_ids, content=None, keep=None):
         new_id = _insert_derived(cursor, pt, md, tuple(src), content or base[3],
                                  base[1], base[2], entity_id=base[4], tier=base[5],
                                  importance=max(rated) if rated else None,
-                                 anchor=base[11])
+                                 anchor=base[11], sources=ids)
         raw = cursor.execute('SELECT meta FROM chunks WHERE id = ?', (new_id,)).fetchone()[0]
         nmeta = json.loads(raw) if raw else {}
         nmeta['derived_from'] = ids   # provenance widens to the whole cluster
@@ -1312,10 +1323,14 @@ def _set_links(entries):
             names = [str(n).strip() for n in (e.get('entities') or [])
                      if str(n).strip()][:6]
             hits = []
+            # A private person's name is not the cloud librarian's to link to
+            # (or to learn exists): it reads as no such entity.
+            from plugins.mindpalace.tools import librarian as _lbr
+            ent_gate = _lbr._wr_gate(scope)
             for name in names:
                 erow = cursor.execute(
                     "SELECT id, name FROM entities WHERE name = ? COLLATE NOCASE "
-                    "AND scope IN (?, 'global') "
+                    f"AND scope IN (?, 'global'){ent_gate} "
                     "ORDER BY CASE WHEN scope = ? THEN 0 ELSE 1 END, id",
                     (name, scope, scope)).fetchone()
                 if erow:

@@ -201,6 +201,7 @@ def _insert_goal_chunk(cursor, pt, scope, title, meta, created=None,
         (scope, title, importance, private_key,
          json.dumps(base, ensure_ascii=False), created, now))
     cid = cursor.lastrowid
+    pt._stamp_writer(cursor, cid)
     if mention_ids:
         try:
             md.seed_edges(cursor, cid, mention_ids, now)
@@ -215,10 +216,20 @@ def _link(cursor, src_id, dst_id, kind, now):
         "VALUES ('chunk', ?, 'chunk', ?, ?, 1.0, ?)", (src_id, dst_id, kind, now))
 
 
+def _gate():
+    """' AND wr_private = 0' in a cloud model's turn: goals, subtasks and
+    notes a private model wrote are not hers to read there. The app's own
+    routes share these readers and see every row."""
+    try:
+        return ' AND wr_private = 0' if _pt().cloud_turn() else ''
+    except Exception:
+        return ''
+
+
 def _get_goal(cursor, gid, scope):
     row = cursor.execute(
         "SELECT id, content, meta, created, updated FROM chunks "
-        "WHERE id = ? AND layer = 'goals' AND scope IN (?, 'global')",
+        "WHERE id = ? AND layer = 'goals' AND scope IN (?, 'global')" + _gate(),
         (int(gid), scope)).fetchone()
     if not row:
         return None
@@ -242,15 +253,15 @@ def _subtasks_of(cursor, gid, scope):
         [{'id': r[0], 'title': r[1], 'meta': _meta_of(r[2]), 'created': r[3]}
          for r in cursor.execute(
              "SELECT id, content, meta, created FROM chunks "
-             "WHERE layer = 'goals' AND scope IN (?, 'global') "
-             "AND json_extract(meta, '$.parent_goal') = ? ORDER BY created",
+             "WHERE layer = 'goals' AND scope IN (?, 'global') " + _gate() +
+             " AND json_extract(meta, '$.parent_goal') = ? ORDER BY created",
              (scope, gid)).fetchall()])
 
 
 def _notes_of(cursor, gid, scope, limit=None):
     sql = ("SELECT id, content, created FROM chunks "
-           "WHERE layer = 'goals' AND scope IN (?, 'global') "
-           "AND json_extract(meta, '$.progress_of') = ? ORDER BY created DESC")
+           "WHERE layer = 'goals' AND scope IN (?, 'global') " + _gate() +
+           " AND json_extract(meta, '$.progress_of') = ? ORDER BY created DESC")
     params = [scope, gid]
     if limit:
         sql += " LIMIT ?"
@@ -262,8 +273,8 @@ def _notes_of(cursor, gid, scope, limit=None):
 def _top_level(cursor, scope, status=None):
     rows = cursor.execute(
         "SELECT id, content, meta, created, updated FROM chunks "
-        "WHERE layer = 'goals' AND scope IN (?, 'global') "
-        "ORDER BY updated DESC", (scope,)).fetchall()
+        "WHERE layer = 'goals' AND scope IN (?, 'global') " + _gate() +
+        " ORDER BY updated DESC", (scope,)).fetchall()
     out = []
     for r in rows:
         meta = _meta_of(r[2])
@@ -563,6 +574,13 @@ def _update(scope, goal_id, title=None, description=None, priority=None,
             return ("Nothing to update — pass title, description, instructions, "
                     "priority, status, due, or progress_note.", False)
         _write_meta(cursor, pt, g['id'], meta, importance)
+        # One-way: a goal whose WORDS a private model wrote is private (a
+        # status or priority change is not words).
+        if (any(v is not None for v in (title, description, instructions))
+                and pt._provider_private(pt._turn_writer()[0])):
+            _key, _model = pt._turn_writer()
+            cursor.execute('UPDATE chunks SET wr_private = 1, wr_model = ?, wr_provider = ? '
+                           'WHERE id = ?', (_model, _key, g['id']))
         conn.commit()
     if note_id or title is not None:
         pt.reset_backfill_latch()
@@ -581,6 +599,14 @@ def _delete(scope, goal_id):
             return f"Goal [{goal_id}] not found.", False
         if g['meta'].get('permanent'):
             return f"Goal [{goal_id}] is permanent and cannot be deleted.", False
+        if pt.cloud_turn() and cursor.execute(
+                "SELECT 1 FROM chunks WHERE layer = 'goals' AND wr_private = 1 AND ("
+                "json_extract(meta, '$.parent_goal') = ? OR "
+                "json_extract(meta, '$.progress_of') = ?) LIMIT 1",
+                (g['id'], g['id'])).fetchone():
+            return (f"Goal [{goal_id}] holds subtasks or notes only available on private "
+                    f"models, so it cannot be deleted from here. "
+                    f"update_goal(status='abandoned') closes it and keeps them."), False
         n = delete_goal_cascade(cursor, g['id'])
         conn.commit()
     pt._publish_mind('goals', scope, 'delete')

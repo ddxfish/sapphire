@@ -119,6 +119,7 @@ def bulk_save(items, layer, scope='default'):
                      json.dumps(meta, ensure_ascii=False), now, now,
                      item.get('source')))
                 cid = cursor.lastrowid
+                pt._stamp_writer(cursor, cid)
                 ids.append(cid)
                 if md:
                     try:

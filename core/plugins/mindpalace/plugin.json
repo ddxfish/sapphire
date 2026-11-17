@@ -288,6 +288,14 @@
         "tab": "Memories"
       },
       {
+        "key": "private_model_filter",
+        "type": "boolean",
+        "label": "Keep private-model memories from cloud models",
+        "default": true,
+        "help": "Every memory records which model wrote it, whether that model was a private one (the 'Local / private server' box on the model in Settings > LLM) and which Sapphire wrote it. On: a memory written under a private model, or one you marked on the Memories page, is not shown to a model that is not private; she is told how many matched and who wrote them, nothing more. Off: every model reads every memory on this Sapphire (the marks are still recorded). A filter, not a vault: memories are not encrypted, what she said aloud about one stays in the chat, and the self sheet is always shown.",
+        "tab": "Memories"
+      },
+      {
         "key": "knowledge_search_chunks",
         "type": "number",
         "label": "Knowledge: chunks per document in mixed search",
@@ -382,6 +390,16 @@
         "method": "POST",
         "path": "chunks/{cid}/favorite",
         "handler": "routes/browse.py:toggle_favorite"
+      },
+      {
+        "method": "POST",
+        "path": "chunks/{cid}/private",
+        "handler": "routes/browse.py:set_private"
+      },
+      {
+        "method": "POST",
+        "path": "entities/{eid}/private",
+        "handler": "routes/browse.py:set_entity_private"
       },
       {
         "method": "POST",
@@ -672,6 +690,11 @@
         "method": "PUT",
         "path": "library/documents/{did}/image-meta",
         "handler": "routes/library_routes.py:image_meta"
+      },
+      {
+        "method": "POST",
+        "path": "library/documents/{did}/private",
+        "handler": "routes/library_routes.py:set_document_private"
       },
       {
         "method": "GET",

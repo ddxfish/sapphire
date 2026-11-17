@@ -236,6 +236,55 @@ word back. Dates outside the window (a birth date, a plan ahead) are
 content and stay; a stamp an anniversary depends on stays when it is the
 save day itself; private rows are left alone.
 
+## Private-model memories
+
+Every memory, person and library document records who wrote it: the model,
+the provider, whether that provider was a private one, and which Sapphire
+(`wr_model`, `wr_provider`, `wr_private`, `origin_name`, `origin`: columns,
+not meta). "Private" is the box on the model in Settings > LLM, "Local /
+private server".
+
+Which Sapphire is two things (`core/instance.py`). `origin` is her id: minted
+once, kept in the config dir outside `user/`, so a backup restored on
+another machine does not carry it. `origin_name` is her name, a label:
+`INSTANCE_NAME` (Settings > MCP Server), else the dashboard's display name
+when it was changed, else the hostname. Rows she wrote follow a rename by
+id. A memory restored from another Sapphire keeps that Sapphire's id and
+name on its rows.
+
+A model that is not private is not shown `wr_private` rows. Search and
+recents say how many matched and who wrote them, nothing else:
+
+    2 more matching memories are only available on private models
+    (written by qwen3 on Sapphire-Purple). Nothing to fetch from here.
+
+- A private model's edit makes a row private. Only the house switch sets it
+  back: on a memory, a person, a person's fact, a library document or a
+  picture.
+- A private person's description and facts are private with them, whatever
+  their own marks say. Release the person and each fact is back on its own.
+- A merge, split or promotion is private exactly when one of its sources
+  was, whichever model tends it. Merging two people in the app keeps the
+  result private when either was.
+- Marking a row also marks the ledger lines that quoted it while it was
+  public. Releasing leaves old ledger lines as they are.
+- A cloud model cannot delete a goal that holds private subtasks or notes;
+  it can abandon it.
+- A cloud librarian never receives private rows; they wait for a scope
+  whose Resident model is private. `auto` reads as cloud.
+- Rows that existed before 2026-11-17 are public. Classic imports are public.
+- An export file (memories, people, and the library zip) carries the
+  writer, so a private row stays private on the Sapphire that imports it.
+  Private fields arriving on a person who is already here and public make
+  that person private.
+- `private_model_filter` (Settings > Memories, default on) turns the read
+  gate off for this Sapphire. The marks are still recorded.
+
+It is a filter over metadata, not a vault. mind.db is not encrypted, the app
+shows every row, what she said aloud about a private memory stays in the
+chat history, an MCP client reads as a cloud model, and the self sheet is
+always shown to every model.
+
 ## Import / Export (per tab, per scope)
 
 Every tab's toolbar has ⬇ Export / ⬆ Import: **one layer × one scope per

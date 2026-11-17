@@ -576,3 +576,23 @@ def test_mode_for_follows_the_boards_that_answered(glass):
     assert settle(lambda: feed._hub.looked is not None)
     assert feed.mode_for("one") == "talking"                             # not the rows' strongest (an offline Always board)
 
+
+
+def test_her_face_keeps_the_seat_while_no_board_answers(glass, monkeypatch):
+    """A screen set Always, asleep: the avatar let go at "off", took the seat again from the rows,
+    and so on every 20 s, for ever, two avatars trading her between them (2026-11-17)."""
+    monkeypatch.setattr(feed, "_wanted", lambda: "always")
+    monkeypatch.setattr(feed, "NO_BOARDS_S", 0)
+    glass.boards = []
+    feed.register("one")
+    assert settle(lambda: feed._hub.looked is not None)
+    hub = feed._hub
+    assert feed.mode_for("one") == "rest" and feed.mode_for("two") == "off"
+    glass.boards, glass.modes = [("kitchen", 240)], {"kitchen": "always"}     # the board wakes
+    assert settle(lambda: feed.mode_for("one") == "always")                   # found by the same hub: nobody let go
+    assert feed._hub is hub
+    glass.boards = []
+    monkeypatch.setattr(feed, "_wanted", lambda: "off")                       # no screen is set to show her
+    feed.nudge()
+    assert settle(lambda: feed._hub.looked is not None)
+    assert feed.mode_for("one") == "off"

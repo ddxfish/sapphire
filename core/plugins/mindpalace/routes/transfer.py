@@ -54,7 +54,8 @@ def export_data(query=None, **_):
         rows = cur.execute(
             'SELECT c.id, c.content, c.tier, c.label, c.favorite, c.importance, '
             'c.private_key, c.meta, c.created, c.updated, c.source, c.chunk_index, '
-            'e.name FROM chunks c LEFT JOIN entities e ON e.id = c.entity_id '
+            'e.name, c.wr_model, c.wr_provider, c.wr_private, c.origin_name, c.origin '
+            'FROM chunks c LEFT JOIN entities e ON e.id = c.entity_id '
             'WHERE c.scope = ? AND c.layer = ? ORDER BY c.created, c.id',
             (scope, layer)).fetchall()
         ids = [r[0] for r in rows]
@@ -78,16 +79,22 @@ def export_data(query=None, **_):
         if layer == 'entities':
             entities = [
                 {'name': r[0], 'kind': r[1], 'meta': _parse_meta(r[2]),
-                 'created': r[3], 'updated': r[4]}
+                 'created': r[3], 'updated': r[4],
+                 'writer': pt.writer_dict(r[5], r[6], r[7], r[8], r[9])}
                 for r in cur.execute(
-                    'SELECT name, kind, meta, created, updated FROM entities '
+                    'SELECT name, kind, meta, created, updated, wr_model, wr_provider, '
+                    'wr_private, origin_name, origin FROM entities '
                     'WHERE scope = ? ORDER BY name COLLATE NOCASE', (scope,)).fetchall()]
 
     chunks = []
     for r in rows:
         (cid, content, tier, label, favorite, importance,
-         private_key, meta, created, updated, source, chunk_index, ename) = r
+         private_key, meta, created, updated, source, chunk_index, ename,
+         wr_model, wr_provider, wr_private, origin_name, origin) = r
         c = {'content': content, 'created': created, 'updated': updated}
+        # Who wrote it travels with the row: a private-model memory stays
+        # one on the Sapphire that imports it.
+        c['writer'] = pt.writer_dict(wr_model, wr_provider, wr_private, origin_name, origin)
         if tier is not None:
             c['tier'] = tier
         if label:
@@ -156,9 +163,18 @@ def import_data(body=None, **_):
             name = (e.get('name') or '').strip()
             if not name:
                 continue
+            known = cur.execute('SELECT 1 FROM entities WHERE name = ? COLLATE NOCASE '
+                                'AND scope = ?', (name, scope)).fetchone()
             eid = pt.upsert_entity(cur, name, scope, kind=e.get('kind'))
+            if not known:
+                pt._apply_writer(cur, eid, e.get('writer'), table='entities')
             fields = ((e.get('meta') or {}).get('fields') or {})
             if fields:
+                if known and isinstance(e.get('writer'), dict) and e['writer'].get('private'):
+                    # The same person, already here and public: the fields
+                    # arriving are a private model's, so the card they land
+                    # on becomes private (only the person's switch releases).
+                    cur.execute('UPDATE entities SET wr_private = 1 WHERE id = ?', (eid,))
                 row = cur.execute('SELECT meta FROM entities WHERE id = ?',
                                   (eid,)).fetchone()
                 meta = _parse_meta(row[0]) or {}
@@ -260,6 +276,8 @@ def import_data(body=None, **_):
                  created, c.get('updated') or created,
                  c.get('source'), c.get('chunk_index')))
             new_id = cur.lastrowid
+            pt._stamp_writer(cur, new_id, imported=True)
+            pt._apply_writer(cur, new_id, c.get('writer'), public=(row_layer == 'self'))
             id_by_index[i] = new_id
             imported += 1
             names = [n for n in (c.get('mentions') or []) if isinstance(n, str)]

@@ -186,34 +186,39 @@ def peek(body=None, **_):
 
     try:
         from plugins.mindpalace.tools import palace_tools as pt
-        if tool == 'search_memory':
-            text, ok = pt._search_memory(
-                a.get('query') or '', scope, limit=_i('limit', 10),
-                layer=(a.get('layer') or '').strip() or None,
-                depth=_i('depth', 0), doc=_i('document_id'), boost=False)
-        elif tool == 'get_recent_memories':
-            text, ok = pt._get_recent_memories(scope, count=_i('count', 10))
-        elif tool == 'read_self':
-            from plugins.mindpalace.tools import self_tools
-            text, ok = self_tools._read_self(scope, depth=_i('depth', 1),
-                                             extra_tools=False, stamp=False)
-        elif tool == 'library':
-            text, ok = _lib().catalog_text(scope)
-        elif tool == 'read_document':
-            text, ok = _lib().read_document_text(
-                scope, _i('document_id'), page=_i('page'),
-                around=_i('around'))
-        elif tool == 'list_goals':
-            from plugins.mindpalace.tools import goal_tools
-            text, ok = goal_tools._list(scope, goal_id=_i('goal_id'),
-                                        status=a.get('status') or 'active')
-        else:
-            return {'error': f"'{tool}' isn't peekable — read-only tools "
-                             f"only."}, 400
-        return {'ok': bool(ok), 'output': text}
+        with pt.as_user():   # the person peeking: every row, private-model ones too
+            return _peek(pt, tool, scope, a, _i)
     except Exception as e:
         logger.error(f"[LIBRARY] peek {tool} failed: {e}", exc_info=True)
         return {'error': str(e)}, 500
+
+
+def _peek(pt, tool, scope, a, _i):
+    if tool == 'search_memory':
+        text, ok = pt._search_memory(
+            a.get('query') or '', scope, limit=_i('limit', 10),
+            layer=(a.get('layer') or '').strip() or None,
+            depth=_i('depth', 0), doc=_i('document_id'), boost=False)
+    elif tool == 'get_recent_memories':
+        text, ok = pt._get_recent_memories(scope, count=_i('count', 10))
+    elif tool == 'read_self':
+        from plugins.mindpalace.tools import self_tools
+        text, ok = self_tools._read_self(scope, depth=_i('depth', 1),
+                                         extra_tools=False, stamp=False)
+    elif tool == 'library':
+        text, ok = _lib().catalog_text(scope)
+    elif tool == 'read_document':
+        text, ok = _lib().read_document_text(
+            scope, _i('document_id'), page=_i('page'),
+            around=_i('around'))
+    elif tool == 'list_goals':
+        from plugins.mindpalace.tools import goal_tools
+        text, ok = goal_tools._list(scope, goal_id=_i('goal_id'),
+                                    status=a.get('status') or 'active')
+    else:
+        return {'error': f"'{tool}' isn't peekable — read-only tools "
+                         f"only."}, 400
+    return {'ok': bool(ok), 'output': text}
 
 
 def migrate(body=None, **_):
@@ -247,6 +252,18 @@ def update_document(did=None, body=None, **_):
         return {'error': 'scope required'}, 400
     ok, err = _lib().update_document(scope, did, **b)
     return ({'success': True} if ok else ({'error': err}, 400))
+
+
+def set_document_private(did=None, body=None, **_):
+    """POST library/documents/{did}/private {private: bool}. The house
+    switch for a document or picture: the same mark memories carry."""
+    private = (body or {}).get('private')
+    if not isinstance(private, bool):
+        return {'error': 'private must be true or false'}, 400
+    ok, err = _lib().set_document_private(did, private)
+    if not ok:
+        return {'error': err}, (404 if err == 'Not found' else 400)
+    return {'success': True, 'private': private}
 
 
 def delete_document(did=None, query=None, **_):

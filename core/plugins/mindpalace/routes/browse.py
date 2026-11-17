@@ -59,19 +59,23 @@ def _parse_meta(raw):
 
 def _chunk_row(row):
     (cid, layer, content, entity_id, entity_name, tier, label,
-     favorite, private_key, meta, created, source, chunk_index) = row
+     favorite, private_key, meta, created, source, chunk_index,
+     wr_model, wr_provider, wr_private, origin_name) = row
     return {
         'id': cid, 'layer': layer, 'content': content,
         'entity_id': entity_id, 'entity_name': entity_name, 'tier': tier,
         'label': label, 'favorite': bool(favorite), 'private_key': private_key,
         'meta': _parse_meta(meta), 'created': created,
         'source': source, 'chunk_index': chunk_index,
+        # who wrote it (private-model memory): model, provider, origin, private
+        'writer': _pt().writer_dict(wr_model, wr_provider, wr_private, origin_name),
     }
 
 
 _CHUNK_COLS = ('c.id, c.layer, c.content, c.entity_id, e.name, c.tier, '
                'c.label, c.favorite, c.private_key, c.meta, c.created, '
-               'c.source, c.chunk_index')
+               'c.source, c.chunk_index, c.wr_model, c.wr_provider, '
+               'c.wr_private, c.origin_name')
 
 
 def status(query=None, **_):
@@ -171,6 +175,9 @@ def list_chunks(query=None, **_):
     # 🔒 Keyed filter (Krem 2026-07-19): only memories carrying a private key.
     if str(q.get('keyed') or '') in ('1', 'true'):
         where.append('c.private_key IS NOT NULL')
+    # Private-model filter: only the rows a cloud model is not given.
+    if str(q.get('private_model') or '') in ('1', 'true'):
+        where.append('c.wr_private = 1')
 
     with pt._get_connection() as conn:
         cur = conn.cursor()
@@ -197,6 +204,9 @@ def list_chunks(query=None, **_):
             'retired': cur.execute(
                 f"SELECT COUNT(*) FROM chunks c WHERE {bw} "
                 f"AND json_extract(c.meta, '$.pruned_at') IS NOT NULL", base_params).fetchone()[0],
+            'private_model': cur.execute(
+                f"SELECT COUNT(*) FROM chunks c WHERE {bw} AND c.wr_private = 1 "
+                f"AND json_extract(c.meta, '$.pruned_at') IS NULL", base_params).fetchone()[0],
         }
     return {'chunks': [_chunk_row(r) for r in rows], 'total': total,
             'counts': counts, 'limit': limit, 'offset': offset}
@@ -296,8 +306,8 @@ def delete_chunk(cid=None, query=None, **_):
         return {'error': 'Invalid chunk id'}, 400
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute('SELECT layer, scope, content, meta, private_key FROM chunks '
-                          'WHERE id = ?', (cid,)).fetchone()
+        row = cur.execute('SELECT layer, scope, content, meta, private_key, wr_private '
+                          'FROM chunks WHERE id = ?', (cid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
         cur.execute("DELETE FROM edges WHERE (src_type = 'chunk' AND src_id = ?) "
@@ -305,6 +315,7 @@ def delete_chunk(cid=None, query=None, **_):
         cur.execute('DELETE FROM chunks WHERE id = ?', (cid,))
         pt._tombstone_row(cur, row[3], row[1])
         pt._ledger(row[1], 'user', 'deleted', layer=row[0], target=cid, cursor=cur,
+                   private=row[5],
                    summary=f"deleted [{cid}] from {row[0]}: {pt._ledger_preview(row[2], row[4])}")
         conn.commit()
     _publish(row[0], row[1], 'delete')
@@ -341,6 +352,93 @@ def toggle_favorite(cid=None, body=None, **_):
     return {'success': True, 'favorite': fav}
 
 
+def set_private(cid=None, body=None, **_):
+    """POST chunks/{cid}/private {private: bool}. The person's switch: mark a
+    memory (or a person fact) for private models only, or release one. The
+    only way a private-model row becomes public again. Sheet rows stay out
+    of the filter."""
+    pt = _pt()
+    if not pt._ensure_db():
+        return {'error': 'mind database unavailable'}, 500
+    try:
+        cid = int(cid)
+    except (TypeError, ValueError):
+        return {'error': 'Invalid chunk id'}, 400
+    private = (body or {}).get('private')
+    if not isinstance(private, bool):
+        return {'error': 'private must be true or false'}, 400
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute('SELECT layer, scope, content, private_key FROM chunks '
+                          'WHERE id = ?', (cid,)).fetchone()
+        if not row:
+            return {'error': 'Not found'}, 404
+        if row[0] == 'self':
+            return {'error': 'The self sheet is outside the private-model filter'}, 400
+        cur.execute('UPDATE chunks SET wr_private = ?, updated = ? WHERE id = ?',
+                    (int(private), pt._now(), cid))
+        if private:
+            # Ledger lines written while it was public quote its words
+            # (previews, before/after): they take the mark too. Releasing
+            # leaves old lines alone.
+            cur.execute("UPDATE ledger SET wr_private = 1 WHERE scope = ? AND target = ? "
+                        "AND COALESCE(layer, '') != 'scopes' "
+                        "AND action NOT IN ('report', 'noted', 'reverted')",
+                        (row[1], str(cid)))
+        # The row about a memory just released is public too; one about a
+        # memory just marked is not.
+        pt._ledger(row[1], 'user', 'private-model' if private else 'released',
+                   layer=row[0], target=cid, cursor=cur, private=private,
+                   summary=((f"marked [{cid}] for private models only: " if private
+                             else f"released [{cid}] to every model: ")
+                            + pt._ledger_preview(row[2], row[3])))
+        conn.commit()
+    _publish(row[0], row[1], 'update')
+    return {'success': True, 'private': private}
+
+
+def set_entity_private(eid=None, body=None, **_):
+    """POST entities/{eid}/private {private: bool}. The same switch for a
+    person, place or thing: its name, card and fields, and with them its
+    description and facts (the read gate looks at the person's mark, so
+    releasing the person puts each fact back on its own)."""
+    pt = _pt()
+    if not pt._ensure_db():
+        return {'error': 'mind database unavailable'}, 500
+    try:
+        eid = int(eid)
+    except (TypeError, ValueError):
+        return {'error': 'Invalid entity id'}, 400
+    private = (body or {}).get('private')
+    if not isinstance(private, bool):
+        return {'error': 'private must be true or false'}, 400
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute('SELECT name, scope FROM entities WHERE id = ?', (eid,)).fetchone()
+        if not row:
+            return {'error': 'Not found'}, 404
+        cur.execute('UPDATE entities SET wr_private = ?, updated = ? WHERE id = ?',
+                    (int(private), pt._now(), eid))
+        if private:
+            # Earlier ledger lines about this entity name it and its fields.
+            cur.execute("UPDATE ledger SET wr_private = 1 WHERE scope = ? "
+                        "AND layer = 'entities' AND target IN (?, ?)",
+                        (row[1], row[0], str(eid)))
+            # Their description and facts are private with them (the read
+            # gate looks at the person's mark): so are the lines quoting those.
+            cur.execute("UPDATE ledger SET wr_private = 1 WHERE scope = ? "
+                        "AND action NOT IN ('report', 'noted', 'reverted') "
+                        "AND target IN (SELECT CAST(id AS TEXT) FROM chunks WHERE entity_id = ?)",
+                        (row[1], eid))
+        pt._ledger(row[1], 'user', 'private-model' if private else 'released',
+                   layer='entities', target=row[0], cursor=cur, private=private,
+                   summary=(f'marked entity "{row[0]}" for private models only' if private
+                            else f'released entity "{row[0]}" to every model'))
+        conn.commit()
+    _publish('entities', row[1], 'update')
+    return {'success': True, 'private': private}
+
+
 def list_entities(query=None, **_):
     """L2 spine for the Entities view: per-entity chunk + edge counts."""
     pt = _pt()
@@ -355,13 +453,15 @@ def list_entities(query=None, **_):
             "  (SELECT COUNT(*) FROM edges d WHERE d.dst_type = 'entity' AND d.dst_id = e.id) AS edge_count, "
             '  (SELECT content FROM chunks c WHERE c.entity_id = e.id AND c.tier = 1 '
             "   ORDER BY COALESCE(json_extract(c.meta, '$.headline'), 0) DESC, "
-            '   c.created DESC LIMIT 1) AS headline '
+            '   c.created DESC LIMIT 1) AS headline, '
+            '  e.wr_model, e.wr_provider, e.wr_private, e.origin_name '
             'FROM entities e WHERE e.scope = ? '
             'ORDER BY edge_count DESC, e.name COLLATE NOCASE', (scope,)).fetchall()
     return {'entities': [
         {'id': r[0], 'name': r[1], 'kind': r[2], 'mentions': r[3],
          'meta': _parse_meta(r[4]), 'created': r[5], 'updated': r[6],
-         'chunk_count': r[7], 'edge_count': r[8], 'headline': r[9]} for r in rows]}
+         'chunk_count': r[7], 'edge_count': r[8], 'headline': r[9],
+         'writer': pt.writer_dict(r[10], r[11], r[12], r[13])} for r in rows]}
 
 
 def entity_detail(eid=None, **_):
@@ -375,12 +475,14 @@ def entity_detail(eid=None, **_):
         return {'error': 'Invalid entity id'}, 400
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        e = cur.execute('SELECT id, name, scope, kind, mentions, meta, created, updated '
+        e = cur.execute('SELECT id, name, scope, kind, mentions, meta, created, updated, '
+                        'wr_model, wr_provider, wr_private, origin_name '
                         'FROM entities WHERE id = ?', (eid,)).fetchone()
         if not e:
             return {'error': 'Not found'}, 404
         chunks = cur.execute(
-            'SELECT id, content, tier, label, favorite, private_key, meta, created '
+            'SELECT id, content, tier, label, favorite, private_key, meta, created, '
+            'wr_model, wr_provider, wr_private, origin_name '
             'FROM chunks WHERE entity_id = ? '
             'ORDER BY COALESCE(tier, 9), created DESC', (eid,)).fetchall()
         # Dark plugin layers stay out of 'mentioned in' too.
@@ -395,10 +497,12 @@ def entity_detail(eid=None, **_):
     return {
         'entity': {'id': e[0], 'name': e[1], 'scope': e[2], 'kind': e[3],
                    'mentions': e[4], 'meta': _parse_meta(e[5]),
-                   'created': e[6], 'updated': e[7]},
+                   'created': e[6], 'updated': e[7],
+                   'writer': pt.writer_dict(e[8], e[9], e[10], e[11])},
         'chunks': [{'id': c[0], 'content': c[1], 'tier': c[2], 'label': c[3],
                     'favorite': bool(c[4]), 'private_key': c[5],
-                    'meta': _parse_meta(c[6]), 'created': c[7]} for c in chunks],
+                    'meta': _parse_meta(c[6]), 'created': c[7],
+                    'writer': pt.writer_dict(c[8], c[9], c[10], c[11])} for c in chunks],
         'mentioned_in': [{'id': m[0], 'layer': m[1], 'content': m[2],
                           'created': m[3], 'weight': m[4]} for m in mentions],
     }
@@ -503,6 +607,7 @@ def update_entity(eid=None, body=None, **_):
                         "INSERT INTO chunks (layer, scope, content, entity_id, tier, "
                         "meta, created, updated) VALUES ('entities', ?, ?, ?, 1, ?, ?, ?)",
                         (row[0], text, eid, json.dumps(hm), now, now))
+                    pt._stamp_writer(cur, cur.lastrowid)
                 headline_changed = True
                 changed.append('description')
             elif head:
@@ -511,14 +616,17 @@ def update_entity(eid=None, body=None, **_):
                 changed.append('description cleared')
         cur.execute('UPDATE entities SET kind = ?, meta = ?, updated = ? WHERE id = ?',
                     (new_kind, json.dumps(meta) if meta else None, now, eid))
+        # target is an entity id here, not a chunk id: say the mark outright
+        ent_private = bool(cur.execute('SELECT wr_private FROM entities WHERE id = ?',
+                                       (eid,)).fetchone()[0])
         if new_name:
             cur.execute('UPDATE entities SET name = ? WHERE id = ?', (new_name, eid))
             pt._ledger(row[0], 'user', 'update', layer='entities', target=eid,
-                       cursor=cur,
+                       cursor=cur, private=ent_private,
                        summary=f'renamed entity "{row[3]}" → "{new_name}"')
         if changed:
             pt._ledger(row[0], 'user', 'update', layer='entities', target=eid,
-                       cursor=cur,
+                       cursor=cur, private=ent_private,
                        detail={'fields': field_diff} if field_diff else None,
                        summary=(f'updated entity "{new_name or row[3]}" — '
                                 + '; '.join(changed)))
@@ -543,7 +651,7 @@ def delete_entity(eid=None, **_):
         return {'error': 'Invalid entity id'}, 400
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute('SELECT name, scope FROM entities WHERE id = ?',
+        row = cur.execute('SELECT name, scope, wr_private FROM entities WHERE id = ?',
                           (eid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
@@ -562,7 +670,7 @@ def delete_entity(eid=None, **_):
                     "OR (dst_type = 'entity' AND dst_id = ?)", (eid, eid))
         cur.execute('DELETE FROM entities WHERE id = ?', (eid,))
         pt._ledger(row[1], 'user', 'deleted', layer='entities', target=row[0],
-                   cursor=cur,
+                   cursor=cur, private=row[2],
                    summary=(f"deleted entity '{row[0]}'"
                             + (f" and its {len(chunk_ids)} chunks" if chunk_ids else '')))
         conn.commit()
@@ -1036,7 +1144,7 @@ def merge_entities(body=None, **_):
     with pt._get_connection() as conn:
         cur = conn.cursor()
         rows = {r[0]: r for r in cur.execute(
-            'SELECT id, name, scope, kind, mentions, meta FROM entities '
+            'SELECT id, name, scope, kind, mentions, meta, wr_private FROM entities '
             'WHERE id IN (?, ?)', (keeper, loser)).fetchall()}
         if len(rows) != 2:
             return {'error': 'Not found'}, 404
@@ -1093,13 +1201,16 @@ def merge_entities(body=None, **_):
         if nicks:
             kf['nicknames'] = ', '.join(nicks)
         km['fields'] = kf
+        # The keeper now carries the loser's name and fields: it is private
+        # when either was (a merge never releases; the switch does).
+        taint = bool(k[6] or l[6])
         cur.execute(
             'UPDATE entities SET mentions = COALESCE(mentions, 0) + ?, '
-            'meta = ?, kind = COALESCE(kind, ?), updated = ? WHERE id = ?',
-            (l[4] or 0, json.dumps(km), l[3], pt._now(), keeper))
+            'meta = ?, kind = COALESCE(kind, ?), updated = ?, wr_private = ? WHERE id = ?',
+            (l[4] or 0, json.dumps(km), l[3], pt._now(), int(taint), keeper))
         cur.execute('DELETE FROM entities WHERE id = ?', (loser,))
         pt._ledger(k[2], 'user', 'update', layer='entities', target=keeper,
-                   cursor=cur,
+                   cursor=cur, private=taint,     # an entity id, not a chunk id
                    detail={'absorbed_fields': absorbed} if absorbed else None,
                    summary=(f'merged duplicate entity "{l[1]}" into "{k[1]}" '
                             f'— {moved_edges} links + {moved_chunks} facts '

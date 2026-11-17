@@ -9,7 +9,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, privToggle, bindPrivToggles, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
 import { snapFocus, snapScroll } from '../../shared/dom-guard.js';
 
 const SCOPE_KEY = 'memory_scope';
@@ -262,6 +262,7 @@ async function showEntityModal(eid) {
             <div class="pr-modal-header">
                 <h3 id="pal-ent-title">${escHtml(ent.name)}</h3>
                 <button class="mind-btn-sm" id="pal-ent-rename" title="Rename — commits with Save below">✏️</button>
+                ${privToggle(ent.id, ent.writer, 'entity')}
                 <select id="pal-ent-kind" class="palace-select" title="What kind of entity is this?">
                     <option value="" ${!ent.kind ? 'selected' : ''}>unsorted</option>
                     ${TPL_LIST.map(t => `<option value="${t.kind}" ${ent.kind === t.kind ? 'selected' : ''}>${t.icon} ${escHtml(t.label)}</option>`).join('')}
@@ -269,6 +270,7 @@ async function showEntityModal(eid) {
                 <button class="mind-btn-sm mind-modal-close">✕</button>
             </div>
             <div class="pr-modal-body view-scroll">
+                <div class="palace-ent-privnote">\u{1F3E0} Private models only: the description and every fact here are private with them.</div>
                 <div class="palace-headline-row">
                     <textarea id="pal-ent-headline" rows="3" maxlength="512"
                               placeholder="Description — a few lines on who/what this is *">${escHtml(headline?.content || '')}</textarea>
@@ -283,9 +285,10 @@ async function showEntityModal(eid) {
                                     ${labelChip(c.label)}${keyPill(c.private_key)}
                                     <span class="mind-mem-time">${escHtml(timeAgo(c.created))}</span>
                                     <span class="mind-mem-id">[${c.id}]</span>
+                                    ${privToggle(c.id, c.writer)}
                                 </div>
                                 <div class="mind-mem-content">${escHtml(c.content)}</div>
-                                ${metaPanel(c.meta)}
+                                ${metaPanel(c.meta, c.writer)}
                                 <div class="mind-mem-actions">
                                     <button class="mind-btn-sm palace-del-chunk" data-id="${c.id}" title="Delete">✕</button>
                                 </div>
@@ -321,6 +324,12 @@ async function showEntityModal(eid) {
     document.body.appendChild(overlay);
     overlay.querySelector('.mind-modal-close').addEventListener('click', () => overlay.remove());
     overlay.querySelector('#pal-ent-cancel').addEventListener('click', () => overlay.remove());
+    // A private person covers their description and facts: the fact
+    // switches show covered and wait until the person is released.
+    const syncPriv = () => overlay.querySelector('.palace-ent-modal')?.classList.toggle(
+        'is-private-ent', !!overlay.querySelector('.pr-modal-header .palace-priv.is-priv'));
+    syncPriv();
+    bindPrivToggles(overlay, ui, syncPriv);
     setupModalClose(overlay, () => overlay.remove());
 
     overlay.querySelector('#pal-ent-delete').addEventListener('click', async () => {

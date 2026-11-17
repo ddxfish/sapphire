@@ -1397,7 +1397,7 @@ def test_one_vocabulary_for_memory_counts(palace):
     st.write_section('default', 'identity', 'I am Sapphire.')      # a self-layer row: not a memory
     q = {'scope': 'default', 'layer': 'events', 'exclude_sheet': 1}
     out = browse.list_chunks(query=q)
-    assert out['counts'] == {'memories': 3, 'keyed': 1, 'retired': 2}
+    assert out['counts'] == {'memories': 3, 'keyed': 1, 'retired': 2, 'private_model': 0}
     assert out['total'] == 3 and {c['id'] for c in out['chunks']} == {live[2], live[3], keyed}
     arch = browse.list_chunks(query={**q, 'retired': 1})
     assert arch['total'] == 2 and {c['id'] for c in arch['chunks']} == set(live[:2])

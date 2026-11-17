@@ -57,10 +57,29 @@ def preview(text, n=60):
     return text[:n] + ('…' if len(text) > n else '')
 
 
+def _row_private(cur, pt, layer, target, private):
+    """Does this ledger row hold private-model words? A row copies memory
+    text (previews, before/after), so it carries the same mark: the caller
+    says so, or a private model wrote it, or its target chunk is private.
+    The sheet is outside the filter. Unknown = public."""
+    if private is not None:
+        return int(bool(private))
+    try:
+        if layer == 'self':
+            return 0
+        if pt._provider_private(pt._turn_writer()[0]):
+            return 1
+        if target is not None and str(target).isdigit() and layer != 'scopes':
+            return int(pt._chunk_is_private(cur, int(target)))
+    except Exception:
+        pass
+    return 0
+
+
 def record(scope, actor, action, layer=None, target=None, summary='',
-           detail=None, parent_id=None, cursor=None):
+           detail=None, parent_id=None, cursor=None, private=None):
     """Append one ledger row. Returns the row id, or None on failure —
-    logged, never raised."""
+    logged, never raised. private: see _row_private (None = work it out)."""
     try:
         pt = _pt()
         row = (_now(), scope, actor, action, layer,
@@ -69,18 +88,28 @@ def record(scope, actor, action, layer=None, target=None, summary='',
                json.dumps(detail, ensure_ascii=False) if detail else None,
                parent_id)
         sql = ('INSERT INTO ledger (ts, scope, actor, action, layer, target, '
-               'summary, detail, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+               'summary, detail, parent_id, wr_private) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         if cursor is not None:
-            cursor.execute(sql, row)
+            cursor.execute(sql, row + (_row_private(cursor, pt, layer, target, private),))
             return cursor.lastrowid
         with pt._get_connection() as conn:
             cur = conn.cursor()
-            cur.execute(sql, row)
+            cur.execute(sql, row + (_row_private(cur, pt, layer, target, private),))
             conn.commit()
             return cur.lastrowid
     except Exception as e:
         logger.warning(f"[MINDPALACE] Ledger write skipped ({actor}/{action}): {e}")
         return None
+
+
+def _gate(col='wr_private'):
+    """' AND <col> = 0' for a reader not given private-model rows. A ledger
+    row copies memory text, so her reads of it (the tail in read_self,
+    read_ledger) carry the same gate as the memories. The app reads all."""
+    try:
+        return '' if _pt().reader_private() else f' AND {col} = 0'
+    except Exception:
+        return f' AND {col} = 0'
 
 
 def mark_read(cursor, scope):
@@ -138,7 +167,7 @@ def tail_block(cursor, scope, depth=2):
         # plain 'saved' rows stay out of the tail there; quiet librarian
         # nights ("nothing to do") fold into one line instead of pushing
         # the human's own edits off the end (2026-10-31).
-        where = SHEET_WHERE + (" AND l.action != 'saved'" if depth else '')
+        where = SHEET_WHERE + (" AND l.action != 'saved'" if depth else '') + _gate('l.wr_private')
         rows = cursor.execute(
             f"SELECT l.ts, l.actor, l.summary, "
             f"  (SELECT r.summary FROM ledger r WHERE r.parent_id = l.id "
@@ -190,7 +219,7 @@ def read_block(cursor, scope, count=20, since_ts=None):
     checking her own trail) with uncapped summaries; librarian pass children
     still collapse into their parent pass line. Every line leads with its row
     [id] — the handle read_ledger(id=…) dives on. Returns (text, shown)."""
-    where = 'l.scope = ? AND l.parent_id IS NULL'
+    where = 'l.scope = ? AND l.parent_id IS NULL' + _gate('l.wr_private')
     params = [scope]
     if since_ts:
         where += ' AND l.ts > ?'
@@ -242,7 +271,7 @@ def detail_block(cursor, scope, ids):
     for rid in ids:
         row = cursor.execute(
             'SELECT id, ts, actor, action, layer, target, summary, detail '
-            'FROM ledger WHERE id = ? AND scope = ?', (rid, scope)).fetchone()
+            'FROM ledger WHERE id = ? AND scope = ?' + _gate(), (rid, scope)).fetchone()
         if not row:
             out.append(f"[{rid}] — no such entry in this scope")
             out.append('')
@@ -293,7 +322,7 @@ def detail_block(cursor, scope, ids):
         if kid_total:
             kids = cursor.execute(
                 'SELECT id, action, summary FROM ledger '
-                'WHERE parent_id = ? AND scope = ? ORDER BY id LIMIT ?',
+                'WHERE parent_id = ? AND scope = ?' + _gate() + ' ORDER BY id LIMIT ?',
                 (rid, scope, DETAIL_CHILD_LINES)).fetchall()
             out.append(f"  children ({kid_total}):")
             for kid, kaction, ksummary in kids:

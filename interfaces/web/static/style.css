@@ -9111,6 +9111,17 @@ input.palace-select { cursor: text; padding-right: 8px; min-width: 16ch; }
 .palace-fav.is-fav { color: #f5c542; }
 .palace-fav:hover { color: #f5c542; }
 
+/* Private-model switch: lit = kept for private models only */
+.palace-priv {
+    background: none; border: none; cursor: pointer; font-size: 0.875rem;
+    padding: 0 4px; line-height: 1; opacity: 0.28; filter: grayscale(1);
+}
+.palace-priv.is-priv { opacity: 1; filter: none; }
+@media (hover: hover) { .palace-priv:not(.is-priv):hover { opacity: 0.6; } }
+.palace-ent-privnote { display: none; font-size: 0.75rem; opacity: 0.8; margin-bottom: 8px; }
+.palace-ent-modal.is-private-ent .palace-ent-privnote { display: block; }
+.palace-ent-modal.is-private-ent .palace-chunk .palace-priv { opacity: 1; filter: none; pointer-events: none; }
+
 /* Meta expander — the metadata window */
 .palace-meta { margin-top: 8px; font-size: 0.75rem; }
 .palace-meta summary {

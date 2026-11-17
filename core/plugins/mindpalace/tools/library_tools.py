@@ -212,9 +212,10 @@ def _memory_view_image(arguments):
     rows = []       # (doc row, hit) best-first, behind the private + missing walls
     with lib.get_connection() as conn:
         for doc_id, _score, hit in ranked:
-            r = conn.execute("SELECT id, title, meta, description, private_key, status FROM documents "
-                             "WHERE id = ? AND scope = ? AND kind = 'image'", (doc_id, scope)).fetchone()
-            if not r or r[5] == 'missing' or (r[4] and r[4] != pk):
+            r = conn.execute("SELECT id, title, meta, description, private_key, status, wr_private "
+                             "FROM documents WHERE id = ? AND scope = ? AND kind = 'image'",
+                             (doc_id, scope)).fetchone()
+            if not r or r[5] == 'missing' or (r[4] and r[4] != pk) or lib._withheld(r[6]):
                 continue
             rows.append((r, hit))
             if len(rows) >= count:

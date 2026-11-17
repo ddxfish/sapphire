@@ -177,9 +177,16 @@ def entity_aliases(cursor, scope):
     # claim of a name, so a local person and a global one sharing a name
     # resolve the same way in the linker, the resolver and the spider
     # (the split-identity find, 2026-10-31).
+    # A cloud model's turn neither links to nor is told about a private-model
+    # entity (the save receipt and "did you mean" name what matched).
+    try:
+        from plugins.mindpalace.tools import palace_tools as _pt
+        gate = " AND wr_private = 0" if _pt.cloud_turn() else ''
+    except Exception:
+        gate = ''
     rows = cursor.execute(
-        "SELECT id, name, meta FROM entities WHERE scope IN (?, 'global') "
-        "ORDER BY CASE WHEN scope = ? THEN 0 ELSE 1 END, id",
+        "SELECT id, name, meta FROM entities WHERE scope IN (?, 'global')" + gate +
+        " ORDER BY CASE WHEN scope = ? THEN 0 ELSE 1 END, id",
         (scope, scope)).fetchall()
     out = []
     for eid, name, meta_raw in rows:
@@ -314,6 +321,9 @@ def seed_edges(cursor, chunk_id: int, entity_ids, now: str) -> int:
 DERIVED_KEYS = ('md_v', 'stats', 'refers_to_time', 'event_dates',
                 'event_date_src', 'recurring_dates', 'noun_candidates',
                 'when', 'when_src')
+# What save_meta() takes from the turn (_context_fields) plus the boot window.
+PROVENANCE_KEYS = ('model', 'chat', 'persona', 'provider', 'channel',
+                   'toolset', 'session_id')
 
 
 def merge_derived(old, fresh: dict, anchor=None) -> dict:
@@ -331,6 +341,15 @@ def merge_derived(old, fresh: dict, anchor=None) -> dict:
             if old.get('when_src') in ('ai', 'librarian') else {})
     for k in DERIVED_KEYS:
         old.pop(k, None)
+    # Who WROTE a row is set once. A restamp used to carry the editing turn's
+    # model, chat and persona over the writer's (and left continuity's
+    # provider beside a chat's model). The editor is named on its own key.
+    fresh = dict(fresh)
+    editor = fresh.get('model')
+    for k in PROVENANCE_KEYS:
+        fresh.pop(k, None)
+    if editor:
+        old['edited_by'] = editor
     old.update(fresh)
     if verdict:
         old.pop('event_dates', None)

@@ -216,11 +216,61 @@ export function favStar(id, favorite) {
     return `<button class="palace-fav ${favorite ? 'is-fav' : ''}" data-id="${id}" title="${favorite ? 'Favorite — never fades. Click to unfavorite.' : 'Mark favorite (never fades)'}">${favorite ? '★' : '☆'}</button>`;
 }
 
+// Private-model switch (2026-11-17). Lit = kept for private models only: a
+// model not ticked "Local / private server" is not shown the row. Rows a
+// private model wrote arrive lit; this is the person's hand on it either way.
+// kind: 'chunk' (a memory, a person fact) or 'entity' (the person/place/thing).
+export function privToggle(id, writer, kind = 'chunk') {
+    const on = !!writer?.private;
+    return `<button class="palace-priv ${on ? 'is-priv' : ''}" data-id="${id}" data-kind="${kind}" aria-pressed="${on}" title="${privTitle(on)}">\u{1F3E0}</button>`;
+}
+
+// "written by qwen3 on Sapphire-Purple" for a row's writer ('' when unknown).
+export function writerText(writer) {
+    if (!writer) return '';
+    return [writer.model ? `written by ${writer.model}` : '', writer.origin ? `on ${writer.origin}` : '']
+        .filter(Boolean).join(' ');
+}
+
+function privTitle(on) {
+    return on ? 'Private models only: not shown to a cloud model. Click to release it to every model.'
+              : 'Shown to every model. Click to keep it for private models only.';
+}
+
+// Binds every switch under `el`. Flips in place (no rebuild needed inside a
+// modal); onChange, when given, repaints lists whose counts or filters moved.
+export function bindPrivToggles(el, ui, onChange) {
+    el.querySelectorAll('.palace-priv').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const on = !btn.classList.contains('is-priv');
+            const path = { entity: 'entities', doc: 'library/documents' }[btn.dataset.kind] || 'chunks';
+            try {
+                await palaceSend(`${path}/${btn.dataset.id}/private`, 'POST', { private: on });
+                btn.classList.toggle('is-priv', on);
+                btn.setAttribute('aria-pressed', on);
+                btn.title = privTitle(on);
+                ui.showToast(on ? 'Kept for private models only' : 'Released to every model', 'success');
+            } catch (e) { ui.showToast(`Could not change it: ${e.message}`, 'error'); return; }
+            if (onChange) await onChange();
+        });
+    });
+}
+
 // The metadata window — every chunk carries its meta JSON; this renders it
-// as a compact expandable panel instead of raw JSON.
-export function metaPanel(meta) {
-    if (!meta) return '';
+// as a compact expandable panel instead of raw JSON. writer: who wrote the
+// row (model, provider, origin = which Sapphire, private).
+export function metaPanel(meta, writer) {
+    if (!meta && !writer) return '';
+    meta = meta || {};
     const rows = [];
+    if (writer && (writer.model || writer.origin || writer.private)) {
+        const w = [];
+        if (writer.model) w.push(`<span class="palace-meta-kv"><b>written by</b> ${escHtml(String(writer.model))}</span>`);
+        if (writer.origin) w.push(`<span class="palace-meta-kv"><b>on</b> ${escHtml(String(writer.origin))}</span>`);
+        if (writer.private) w.push(`<span class="palace-pill">private models only</span>`);
+        rows.push(`<div class="palace-meta-row">${w.join('')}</div>`);
+    }
     const prov = ['persona', 'model', 'chat', 'channel', 'session_id']
         .filter(k => meta[k]).map(k => `<span class="palace-meta-kv"><b>${k.replace('_id', '')}</b> ${escHtml(String(meta[k]))}</span>`);
     if (prov.length) rows.push(`<div class="palace-meta-row">${prov.join('')}</div>`);
@@ -268,16 +318,18 @@ export function chunkCard(c, { showLayer = true } = {}) {
                 ${labelChip(c.label)}${prunedPill}${historyPill}
                 ${keyPill(c.private_key)}
                 <span class="ui-meta-text" style="margin-left:auto">${escHtml(timeAgo(c.created))} · [${c.id}]</span>
+                ${c.layer === 'self' ? '' : privToggle(c.id, c.writer)}
                 ${favStar(c.id, c.favorite)}
             </div>
             <div class="ui-card-body">${escHtml(c.content)}</div>
-            ${metaPanel(c.meta)}
+            ${metaPanel(c.meta, c.writer)}
             ${pruned ? `<div class="ui-card-actions"><button class="mind-btn-sm palace-unprune" data-id="${c.id}" title="Restore to her recall">↩ restore</button></div>` : ''}
         </div>`;
 }
 
 // Shared binder for chunk-card actions inside a container. onChange re-renders.
 export function bindChunkCards(el, onChange, ui) {
+    bindPrivToggles(el, ui, onChange);
     el.querySelectorAll('.palace-fav').forEach(btn => {
         btn.addEventListener('click', async () => {
             const fav = !btn.classList.contains('is-fav');

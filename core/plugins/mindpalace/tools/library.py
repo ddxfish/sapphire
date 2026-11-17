@@ -184,6 +184,16 @@ def get_connection():
         conn.execute('PRAGMA journal_mode=WAL')
         if not _db_initialized:
             conn.executescript(_SCHEMA)
+            # Private-model memory (2026-11-17): a document carries its
+            # writer like a memory row does (palace_tools, same columns).
+            # Documents already here are public.
+            have = {r[1] for r in conn.execute('PRAGMA table_info(documents)').fetchall()}
+            for col, kind in (('wr_model', 'TEXT'), ('wr_provider', 'TEXT'),
+                              ('wr_private', 'INTEGER NOT NULL DEFAULT 0'),
+                              ('origin_name', 'TEXT'), ('origin', 'TEXT')):
+                if col not in have:
+                    conn.execute(f'ALTER TABLE documents ADD COLUMN {col} {kind}')
+            _claim_documents(conn, first='origin' not in have)
             conn.commit()
             _db_initialized = True
         yield conn
@@ -1218,7 +1228,53 @@ def _insert_document(cur, scope, title, kind, importance_key, collection_id,
         (collection_id, scope, title, author, description, kind, imp,
          source_path, working_path, status, added_by,
          json.dumps(meta, ensure_ascii=False) if meta else None, now, now))
-    return cur.lastrowid
+    doc_id = cur.lastrowid
+    # Who wrote it: a note a private model saved is a private-model document.
+    # Files, watch folders and the migration run outside a turn: public.
+    try:
+        pt = _pt()
+        key, model = pt._turn_writer()
+        cur.execute('UPDATE documents SET wr_model = ?, wr_provider = ?, wr_private = ?, '
+                    'origin_name = ?, origin = ? WHERE id = ?',
+                    (model, key, int(pt._provider_private(key)), pt._instance_name(),
+                     pt._instance_id(), doc_id))
+    except Exception as e:
+        logger.warning(f"[LIBRARY] writer stamp skipped for doc {doc_id}: {e}")
+    return doc_id
+
+
+def _claim_documents(conn, first=False):
+    """Documents this Sapphire wrote carry her id and her current name, as
+    memory rows do (palace_tools._follow_instance_name). first: the column
+    is new, so the documents here are hers (unnamed ones, and ones carrying
+    her name). Afterwards only a rename is followed, by id: a document from
+    another Sapphire keeps its own."""
+    try:
+        pt = _pt()
+        name, iid = pt._instance_name(), pt._instance_id()
+        if first:
+            conn.execute('UPDATE documents SET origin_name = ? WHERE origin_name IS NULL', (name,))
+            if iid:
+                conn.execute('UPDATE documents SET origin = ? WHERE origin IS NULL '
+                             'AND origin_name = ?', (iid, name))
+        if iid:
+            conn.execute('UPDATE documents SET origin_name = ? WHERE origin = ? '
+                         'AND origin_name IS NOT ?', (name, iid, name))
+    except Exception as e:
+        logger.warning(f"[LIBRARY] origin stamp skipped: {e}")
+
+
+def _withheld(wr_private, lenient=False) -> bool:
+    """Is a private-model document kept from whoever is reading? lenient:
+    a reader the app shares with her tools (the image door) — only a cloud
+    model's turn is refused there, the app itself sees every document."""
+    if not wr_private:
+        return False
+    try:
+        pt = _pt()
+        return pt.cloud_turn() if lenient else not pt.reader_private()
+    except Exception:
+        return True
 
 
 def _write_chunks(cur, doc_id, chunks):
@@ -1705,7 +1761,7 @@ def _migrate_v2_chunks(keys, report):
         rows = conn.cursor().execute(
             "SELECT id, scope, content, label, source, chunk_index, meta "
             "FROM chunks WHERE layer = 'knowledge' "
-            "AND private_key IS NULL "
+            "AND private_key IS NULL AND wr_private = 0 "
             "AND json_extract(meta, '$.library_migrated') IS NULL "
             "ORDER BY scope, COALESCE(chunk_index, 0), created").fetchall()
     groups = {}
@@ -1896,12 +1952,14 @@ def catalog_data(scope):
                     f'SELECT d.id, d.title, d.author, d.kind, d.description, '
                     f'd.importance, d.status, d.created, d.updated, '
                     f'(SELECT COUNT(*) FROM doc_chunks c WHERE c.doc_id = d.id), '
-                    f'd.source_path, d.meta FROM documents d WHERE {where} '
+                    f'd.source_path, d.meta, d.wr_model, d.wr_provider, d.wr_private, '
+                    f'd.origin_name FROM documents d WHERE {where} '
                     f'ORDER BY d.updated DESC', params).fetchall():
                 d = {'id': r[0], 'title': r[1], 'author': r[2], 'kind': r[3],
                      'description': r[4], 'importance': _imp_word(r[5]),
                      'status': r[6], 'created': r[7], 'updated': r[8],
-                     'sections': r[9], 'has_source': bool(r[10])}
+                     'sections': r[9], 'has_source': bool(r[10]),
+                     'writer': _pt().writer_dict(r[12], r[13], r[14], r[15])}
                 if r[3] == 'image':   # lightbox facts ride the catalog
                     try:
                         m = json.loads(r[11] or '{}')
@@ -1952,6 +2010,28 @@ def document_text(scope, doc_id):
         if wp:
             return title, wp.read_text(encoding='utf-8')
         return title, _whole_note(cur, int(doc_id))
+
+
+def set_document_private(doc_id, private: bool):
+    """The person's switch on one document or picture: kept for private
+    models, or released to every model (the only way a private-model
+    document is released). Returns (ok, error)."""
+    try:
+        doc_id = int(doc_id)
+    except (TypeError, ValueError):
+        return False, 'Invalid document id'
+    with get_connection() as conn:
+        row = conn.execute('SELECT scope FROM documents WHERE id = ?', (doc_id,)).fetchone()
+        if not row:
+            return False, 'Not found'
+        conn.execute('UPDATE documents SET wr_private = ? WHERE id = ?',
+                     (int(bool(private)), doc_id))
+        conn.commit()
+    try:
+        _pt()._publish_mind('knowledge', row[0], 'update')
+    except Exception:
+        pass
+    return True, None
 
 
 def update_document(scope, doc_id, **fields):
@@ -2076,6 +2156,9 @@ def export_scope_zip(scope, out_path):
             'importance, status, source_path, private_key, meta, created, '
             'updated, added_by FROM documents WHERE scope = ?',
             (scope,)).fetchall()
+        writers = {r[0]: _pt().writer_dict(*r[1:]) for r in cur.execute(
+            'SELECT id, wr_model, wr_provider, wr_private, origin_name, origin '
+            'FROM documents WHERE scope = ?', (scope,)).fetchall()}
         folders = cur.execute(
             'SELECT id, path, collection_id FROM watch_folders WHERE scope = ?',
             (scope,)).fetchall()
@@ -2103,6 +2186,8 @@ def export_scope_zip(scope, out_path):
                        'importance': imp, 'author': author,
                        'private_key': pkey, 'created': created,
                        'added_by': added_by, 'collection': col_path(cid)}
+                if writers.get(did):
+                    rec['writer'] = writers[did]
                 if meta.get('watch') in watch_fids:
                     # Watch docs ride their folder's annotation map instead.
                     continue
@@ -2267,6 +2352,9 @@ def import_scope_zip(scope, zip_path):
                     (json.dumps(m, ensure_ascii=False),
                      rec.get('importance') or IMPORTANCE[imp_word],
                      rec.get('created'), rec.get('private_key'), doc_id))
+                # Who wrote it does not change by travelling: a private-model
+                # document stays one on the Sapphire that imports it.
+                _pt()._apply_writer(cur, doc_id, rec.get('writer'), table='documents')
                 conn.commit()
             existing.add(key)
             report['imported'] += 1
@@ -2661,12 +2749,12 @@ def _fuse(vec_hits, fts_hits):
 def _doc_row(cur, doc_id):
     r = cur.execute(
         'SELECT id, title, author, description, kind, importance, private_key, '
-        'collection_id, status FROM documents WHERE id = ?', (doc_id,)).fetchone()
+        'collection_id, status, wr_private FROM documents WHERE id = ?', (doc_id,)).fetchone()
     if not r:
         return None
     return {'id': r[0], 'title': r[1], 'author': r[2], 'description': r[3],
             'kind': r[4], 'importance': r[5], 'private_key': r[6],
-            'collection_id': r[7], 'status': r[8]}
+            'collection_id': r[7], 'status': r[8], 'wr_private': r[9]}
 
 
 def _breadcrumb(cur, doc):
@@ -2757,7 +2845,8 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
             if doc_id not in docs:
                 d = _doc_row(cur, doc_id)
                 if (not d or d['status'] == 'missing'
-                        or (d['private_key'] and d['private_key'] != pk)):
+                        or (d['private_key'] and d['private_key'] != pk)
+                        or _withheld(d['wr_private'])):
                     docs[doc_id] = None
                     continue
                 if d['kind'] == 'image':
@@ -2786,7 +2875,8 @@ def search_library(scope, query, limit=8, doc=None, private_key=None,
                 continue
             d = _doc_row(cur, did)
             if (not d or d['kind'] != 'image' or d['status'] == 'missing'
-                    or (d['private_key'] and d['private_key'] != pk)):
+                    or (d['private_key'] and d['private_key'] != pk)
+                    or _withheld(d['wr_private'])):
                 continue
             photos[did] = photos.get(did, 0.0) + 1.0 / (RRF_K + rank + 1)
             how.setdefault(did, set()).add('pixels')
@@ -2898,6 +2988,9 @@ def read_document_text(scope, doc_id, page=None, around=None, start=None,
             return f"No document [{doc_id}] in this scope.", False
         if d['private_key'] and d['private_key'] != (private_key or '').strip():
             return f"No document [{doc_id}] in the library.", False
+        if _withheld(d['wr_private']):
+            return (f"Document [{doc_id}] is kept for private models: this model "
+                    f"is not marked private."), False
         if d['status'] == 'missing':
             return (f"[doc {doc_id}] {d['title']} is currently missing from "
                     f"its watched folder (drive unplugged?).", False)
@@ -2945,10 +3038,12 @@ def image_source(scope, doc_id, private_key=None):
     without the word / file gone); the caller shows it verbatim."""
     with get_connection() as conn:
         row = conn.execute('SELECT scope, title, kind, source_path, private_key, '
-                           'meta, description FROM documents WHERE id = ?',
+                           'meta, description, wr_private FROM documents WHERE id = ?',
                            (int(doc_id),)).fetchone()
     if not row or row[0] != scope or row[2] != 'image':
         raise LookupError(f"No image [doc {doc_id}] in the library.")
+    if _withheld(row[7], lenient=True):
+        raise LookupError(f"Image [doc {doc_id}] is kept for private models.")
     if row[4] and row[4] != (private_key or '').strip():
         raise LookupError(f"No image [doc {doc_id}] in the library.")
     src = _local_path(doc_id, row[3])
@@ -2986,11 +3081,13 @@ def save_image(scope, source, topic, caption=None, private_key=None):
     key = f"img:{hashlib.sha256(r.data).hexdigest()}"
     with get_connection() as conn:
         dup = conn.execute(
-            "SELECT id, title FROM documents WHERE scope = ? AND kind = 'image' "
+            "SELECT id, title, wr_private FROM documents WHERE scope = ? AND kind = 'image' "
             "AND meta LIKE ?", (scope, f'%"import_key": "{key}"%')).fetchone()
         col = conn.execute(
             'SELECT id, name FROM collections WHERE scope = ? AND lower(name) = lower(?) '
             'ORDER BY parent_id IS NOT NULL, id LIMIT 1', (scope, topic)).fetchone()
+    if dup and _withheld(dup[2]):
+        return "Already in the library, saved by a private model: nothing to add.", True
     if dup:
         return f'Already in the library as [doc {dup[0]}] "{dup[1]}".', True
     if col:
@@ -3025,10 +3122,13 @@ def catalog_text(scope):
         cats = cur.execute('SELECT id, name, description FROM collections '
                            'WHERE scope = ? AND parent_id IS NULL '
                            'ORDER BY name', (scope,)).fetchall()
+        # A reader not given private-model rows does not get their titles
+        # and descriptions either.
+        gate = ' AND wr_private = 0' if _withheld(1) else ''
         loose = cur.execute('SELECT id, title, kind, description, importance '
                             'FROM documents WHERE scope = ? AND collection_id '
-                            'IS NULL ORDER BY updated DESC', (scope,)).fetchall()
-        n_docs = cur.execute('SELECT COUNT(*) FROM documents WHERE scope = ?',
+                            'IS NULL' + gate + ' ORDER BY updated DESC', (scope,)).fetchall()
+        n_docs = cur.execute('SELECT COUNT(*) FROM documents WHERE scope = ?' + gate,
                              (scope,)).fetchone()[0]
         if not n_docs and not cats:
             return "The library is empty in this scope.", True
@@ -3050,12 +3150,12 @@ def catalog_text(scope):
                 lines.append(f"  ▹ {tname}{td}")
                 for r in cur.execute(
                         'SELECT id, title, kind, description, importance FROM '
-                        'documents WHERE collection_id = ? ORDER BY title',
+                        'documents WHERE collection_id = ?' + gate + ' ORDER BY title',
                         (tid,)).fetchall():
                     lines.append(_doc_line(r, '    '))
             for r in cur.execute(
                     'SELECT id, title, kind, description, importance FROM '
-                    'documents WHERE collection_id = ? ORDER BY title',
+                    'documents WHERE collection_id = ?' + gate + ' ORDER BY title',
                     (cid,)).fetchall():
                 lines.append(_doc_line(r, '  '))
         if loose:
