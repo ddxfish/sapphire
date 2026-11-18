@@ -203,8 +203,123 @@ def test_the_webcam_holds_more_than_the_server_sends_early(camera):
 
 def test_a_quick_off_and_on_ends_the_camera_thread_from_before(camera, monkeypatch):
     started = []
-    monkeypatch.setattr(camera.threading, "Thread", lambda **kw: types.SimpleNamespace(start=lambda: started.append(kw["args"][0])))
+    monkeypatch.setattr(camera.threading, "Thread", lambda **kw: types.SimpleNamespace(
+        start=lambda: started.append(kw["args"][0]), is_alive=lambda: False))
     camera.start(None, {})
     camera.start(None, {})                           # no stop() between, or one the old thread never saw
     old, new = started
     assert old.is_set() and not new.is_set() and camera._stop is new
+
+
+def test_a_webcam_that_drops_her_words_says_so_when_she_is_quiet(camera, monkeypatch, caplog):
+    """Words past the bank were dropped in silence: the log and the panel never knew."""
+    monkeypatch.setattr(camera, "BANK_S", 3.0)
+    idle = _packet({"kind": "idle", "audio": 0, "frames": [3] * 24}, b"III" * 24)
+    feed, _ = _feed(camera, monkeypatch, [_speech(camera) * 4])
+    with pytest.raises(EOFError):
+        feed._watch()
+    assert feed.lost == 21 and camera.sync() is None       # 96 ticks into room for 75: said once she is quiet
+    feed2, _ = _feed(camera, monkeypatch, [_speech(camera) * 4 + idle])
+    with caplog.at_level("WARNING"), pytest.raises(EOFError):
+        feed2._watch()
+    said = camera.sync()
+    assert "dropped 0.8 s of her words" in said["text"] and said["ago"] == 0 and feed2.lost == 0
+    assert any("fell behind" in r.message for r in caplog.records)
+
+
+
+def test_a_camera_behind_by_more_than_her_idle_is_sent_ahead_skips_it(camera, monkeypatch):
+    """Each idle packet says how far ahead it is sent: on a fast GPU half a second, and 2 s of it queued is a camera behind."""
+    idle = lambda lead: _packet({"kind": "idle", "audio": 0, "frames": [3] * 24, "lead": lead}, b"III" * 24)
+    feed, _ = _feed(camera, monkeypatch, [idle(0.5) * 4])
+    with pytest.raises(EOFError):
+        feed._watch()
+    assert len(feed.units) == 48                     # 0.5 + 0.75 s: the third and fourth second are skipped
+    feed, _ = _feed(camera, monkeypatch, [idle(9.0) * 4])
+    with pytest.raises(EOFError):
+        feed._watch()
+    assert len(feed.units) == 72                     # never past MAX_S: the bank's sum counts on it
+
+
+@pytest.fixture
+def speaker(camera, monkeypatch):
+    """camera._Speaker on a stand-in sound device: `pull(frames)` is the device taking a block, as its callback does."""
+    class Stream:
+        latency, device = 0.05, 3
+        def __init__(self, **kw): self.callback = kw["callback"]
+        def start(self): pass
+        def close(self): pass
+
+    sd = types.SimpleNamespace(OutputStream=Stream, query_devices=lambda dev=None: {"name": "stand-in"})
+    monkeypatch.setitem(sys.modules, "sounddevice", sd)
+    sp = camera._Speaker(None)
+
+    def pull(frames=camera.TICK):
+        out = np.full((frames, 1), -1, np.int16)
+        sp.stream.callback(out, frames, None, None)
+        return out[:, 0]
+
+    sp.pull = pull
+    return sp
+
+
+def _word(camera, n):
+    return np.full(camera.TICK, n, np.int16)
+
+
+def test_her_voice_waits_for_its_level_then_a_late_tick_is_covered(camera, speaker):
+    """With nothing in hand every late tick of the camera was a hole in her voice, and left her voice later than her face."""
+    T = camera.TICK
+    for n in range(1, 4):
+        speaker.write(_word(camera, n))
+        assert not speaker.pull().any()              # under the level (a block and CUSHION ticks): quiet, nothing of her lost
+    speaker.write(_word(camera, 4))
+    assert (speaker.pull() == 1).all() and speaker.going
+    for n in range(5, 9):                            # steady: a tick in, a tick out
+        speaker.write(_word(camera, n))
+        assert (speaker.pull() == n - 3).all()
+    assert (speaker.pull() == 6).all() and (speaker.pull() == 7).all()      # two ticks came late: covered, no hole
+    assert speaker.going and speaker.ticks == 4      # her picture waits as long as her voice does here
+    assert abs(speaker.latency - (0.05 + 0.12)) < 1e-6           # the device's own, and her wait here
+
+
+def test_the_level_is_put_right_in_the_quiet_and_never_in_her_words(camera, speaker):
+    T, hush = camera.TICK, np.zeros(camera.TICK, np.int16)
+    for _ in range(4):
+        speaker.write(hush)
+    speaker.pull()
+    assert speaker.have == 3 * T
+    for n in range(1, 4):                            # the camera's tick runs fast against the device: three ticks more than it took
+        speaker.write(_word(camera, n))
+        speaker.write(_word(camera, n))
+        speaker.pull()
+    assert speaker.have == 6 * T                     # her words: all kept, her voice 120 ms later than it should be
+    for _ in range(12):                              # the quiet after them: silent ticks are left out until she is within a tick of the level
+        speaker.write(hush)
+        speaker.pull()
+    assert speaker.have == 4 * T
+    for _ in range(3):                               # the device runs fast instead: it took three ticks more
+        speaker.pull()
+    assert speaker.have == T
+    for _ in range(12):
+        speaker.write(hush)                          # the quiet: a silent tick is given twice until she is within a tick of it again
+        speaker.pull()
+    assert speaker.have == 2 * T and speaker.lost == 0 and speaker.going
+
+
+def test_run_dry_her_voice_waits_for_the_level_again_and_past_the_cap_her_oldest_words_go(camera, speaker):
+    T = camera.TICK
+    for n in range(1, 5):
+        speaker.write(_word(camera, n))
+    assert (speaker.pull() == 1).all()
+    for n in (2, 3, 4):
+        assert (speaker.pull() == n).all()
+    assert not speaker.pull().any() and not speaker.going       # dry
+    speaker.write(_word(camera, 5))
+    assert not speaker.pull().any()                  # one tick is not the level: quiet, not a hole a tick
+    for n in (6, 7, 8):
+        speaker.write(_word(camera, n))
+    assert (speaker.pull() == 5).all()               # then all of her, in order
+    for n in range(20):
+        speaker.write(_word(camera, 9))
+    assert speaker.lost > 0 and speaker.have <= speaker.need + 10 * T

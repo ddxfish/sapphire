@@ -71,3 +71,48 @@ def test_a_reply_that_never_reached_the_face_says_nothing_and_posts_nothing(voic
     with caplog.at_level("INFO"):
         voice.tts_stream_end(types.SimpleNamespace(metadata={"stream_id": "reply-2"}))
     assert not voice.posts and not any("reply:" in r.message for r in caplog.records) and not voice._tally
+
+
+def test_the_servers_verdict_on_her_last_reply_reaches_sapphires_own_log(voice):
+    """The face server's log is not the one people send: its verdict rides the look the hook takes at it anyway."""
+    said = []
+    health = {"status": "ready", "sync": {"at": 7.5, "text": "her face came late 2x", "ago": 3}}
+    voice.faces.http = lambda: types.SimpleNamespace(get=lambda url, timeout: types.SimpleNamespace(json=lambda: health))
+    voice.faces.sync_said = said.append
+    assert voice._server_ready() and said == [health["sync"]]
+
+
+
+def test_a_reply_that_began_here_stays_here(voice):
+    """A panel opened in the middle of a reply took the next chunk for the face while this computer still
+    played the last ones: two voices, the later words first."""
+    voice.answers += [{"taken": False, "why": "no viewer"}, {"taken": False, "why": "a device plays it"}]
+    taken = []
+    for _ in range(2):
+        e = _chunk()
+        voice.tts_chunk_audio(e)
+        taken.append(e.skip_tts)
+    assert taken == [False, False]
+    assert "take=1" in voice.posts[0] and "take=0" in voice.posts[1]      # the face is asked to mouth the rest, never to take it
+    assert voice._tally["reply-1"]["here"] == {"no viewer": 1, voice.BEGAN: 1}
+
+
+def test_a_slow_speak_is_left_to_the_face_only_where_the_face_plays_her(voice):
+    """With no viewer that plays sound the server mouths it in silence: taken as heard, it was heard nowhere."""
+    import requests
+    slow = requests.exceptions.ReadTimeout("slow")
+    voice._ready["voice"] = None                     # her webcam without her voice, her screens
+    voice.answers.append(slow)
+    e = _chunk("silent")
+    voice.tts_chunk_audio(e)
+    assert not e.skip_tts
+    voice._ready["voice"] = "browser"
+    voice.answers.append(slow)
+    e = _chunk("heard")
+    voice.tts_chunk_audio(e)
+    assert e.skip_tts
+    voice.answers += [{"taken": False, "why": "no listener"}, slow]       # this reply's own answer counts for more
+    for want in (False, False):
+        e = _chunk("refused")
+        voice.tts_chunk_audio(e)
+        assert e.skip_tts is want
