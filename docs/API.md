@@ -674,13 +674,26 @@ What a plugin declares in its manifest. See [plugin-author/routes.md](plugin-aut
 | POST | `/api/bitcoin/wallets/{scope}/check` | Check wallet balance |
 | GET | `/api/bitcoin/wallets/{scope}/export` | Export wallet details |
 
-### Google Calendar Plugin
+### Calendar Plugin
+
+The Google account of a calendar is kept by core (one per calendar name); everything else is the plugin's own.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/gcal/accounts` | List Google Calendar accounts (multi-scope) |
-| PUT | `/api/gcal/accounts/{scope}` | Set GCal account for scope |
-| DELETE | `/api/gcal/accounts/{scope}` | Remove GCal account for scope |
+| GET | `/api/gcal/accounts` | List Google accounts, one per calendar name |
+| PUT | `/api/gcal/accounts/{scope}` | Set a calendar's Google account (own client ID, or blank for Easy Connect) |
+| DELETE | `/api/gcal/accounts/{scope}` | Remove a calendar's Google account |
+| GET | `/api/plugin/calendar/calendars` | List calendars (also the chat sidebar's calendar dropdown) |
+| PUT / DELETE | `/api/plugin/calendar/calendars/{name}` | Add / delete a calendar |
+| GET | `/api/plugin/calendar/events?start=&end=&calendar=` | Events in a range, repeats expanded, with links and refresh state |
+| POST | `/api/plugin/calendar/events` | Add an event (`to`: `local` or a link id) |
+| PUT / DELETE | `/api/plugin/calendar/events/{id}` | Change / delete an event (`day`: one occurrence) |
+| GET / POST | `/api/plugin/calendar/links` | List a calendar's links / link an ICS address or a Google calendar |
+| PUT / DELETE | `/api/plugin/calendar/links/{id}` | Rename or recolour / unlink |
+| POST | `/api/plugin/calendar/target` | Where a calendar's new events go |
+| POST | `/api/plugin/calendar/sync` | Refresh linked calendars now |
+| GET | `/api/plugin/calendar/auth` `callback` `status` | Google sign-in |
+| POST | `/api/plugin/calendar/disconnect` | Forget a calendar's Google tokens |
 
 ### SSH Plugin
 

@@ -20,7 +20,7 @@ def _src(rel):
 # ── H1: cloud tools must not declare themselves local ──────────────────────
 
 _CLOUD_TOOLS = {
-    "core/plugins/email/tools/email_tool.py": ["get_inbox", "read_email", "archive_emails", "delete_emails",
+    "core/plugins/email/tools/email_tool.py": ["get_inbox", "read_email", "move_emails", "mark_emails",
                                           "search_emails", "forward_email", "get_recipients", "send_email"],
     "core/plugins/twilio-voice/tools/phone_tool.py": ["phone_call"],
     # claude-code: code_session died with agents v2 (2026-10-06). Claude Code is an agent KIND now,

@@ -1,22 +1,27 @@
-# Email tool — plugin tool
+# Email tool - plugin tool
 """
-Email tool — AI can read inbox and send email to whitelisted contacts.
-Privacy-first: AI never sees email addresses in get_inbox/get_recipients.
-Uses IMAP for reading, SMTP for sending.
-Supports password auth and OAuth2 (XOAUTH2) for O365/Exchange.
-"""
+Email for the AI: read any folder, search, reply, reply-all, forward, send to
+several people with cc/bcc and pictures, save drafts, move mail between
+folders (archive, trash, spam, back to the inbox) and mark it read/starred.
 
-import base64
-import imaplib
-import smtplib
-import email
+Privacy-first: the AI sees names, never addresses, and can only write to
+whitelisted contacts unless allow-all is on. A reply goes to the people
+already on the thread.
+
+Mail is addressed by a stable id (inbox:4821~k7p) that the mail server keeps, not
+by a position in the last listing. The server work lives in mailbox.py, the
+message building in message.py, the logins in accounts.py.
+"""
 import email.utils
-import re
-import time
+import json
 import logging
-from email.mime.text import MIMEText
-from email.header import decode_header
-from datetime import datetime
+import math
+import mimetypes
+import re
+import smtplib
+
+from plugins.email import accounts, mailbox, message
+from plugins.email.mailbox import Mailbox, MailError
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +32,22 @@ AVAILABLE_FUNCTIONS = [
     'get_inbox',
     'read_email',
     'search_emails',
-    'archive_emails',
-    'delete_emails',
+    'move_emails',
+    'mark_emails',
+    'send_email',
     'forward_email',
     'get_recipients',
-    'send_email',
 ]
 
-def _allow_all_enabled():
-    """Check if allow_all_recipients setting is on."""
-    try:
-        from core.plugin_loader import plugin_loader
-        settings = plugin_loader.get_plugin_settings("email")
-        return bool(settings.get("allow_all_recipients", False))
-    except Exception:
-        return False
+PAGE = 4000                      # characters of body per read
+MAX_SEEN_IMAGES = 4              # pictures shown to her per read
+MAX_ATTACH = 20 * 1024 * 1024    # bytes per outgoing mail
+_TEXT_TYPES = ('text/', 'application/json', 'application/xml', 'application/csv')
+
+_FOLDER_HELP = "inbox (default), sent, drafts, archive, spam, trash, or a folder name from the Folders line"
+_PEOPLE_HELP = "Contact ids from get_recipients (or addresses, if allow-all is on)"
+_IDS = {"type": "array", "items": {"type": "string"}, "description": "Email ids, whole, e.g. [\"inbox:4821~k7p\"]"}
+_PEOPLE = {"type": "array", "items": {"type": "string"}}
 
 TOOLS = [
     {
@@ -49,19 +55,13 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_inbox",
-            "description": "Latest emails from a folder: names, subjects, dates. read_email(index) for the content.",
+            "description": "Latest emails in a folder: id, date, name, subject. read_email(id) for the content.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "count": {
-                        "type": "integer",
-                        "description": "Default 20, max 50"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "enum": ["inbox", "sent", "archive"],
-                        "description": "Default inbox"
-                    }
+                    "folder": {"type": "string", "description": _FOLDER_HELP},
+                    "count": {"type": "integer", "description": "Default 20, max 50"},
+                    "unread_only": {"type": "boolean", "description": "Only unread mail"},
                 },
                 "required": []
             }
@@ -72,56 +72,15 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "read_email",
-            "description": "Read an email in full by its index from the last get_inbox.",
+            "description": "Read an email in full by id: text, who it went to, attachments. You see attached pictures.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "index": {
-                        "type": "integer",
-                        "description": "1-based"
-                    }
+                    "id": {"type": "string", "description": "Email id, whole, e.g. inbox:4821~k7p"},
+                    "page": {"type": "integer", "description": "For long emails: 2, 3, ..."},
+                    "attachment": {"type": "integer", "description": "Open attachment N instead (pictures and text files)"},
                 },
-                "required": ["index"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "writes": True,
-        "is_local": False,
-        "function": {
-            "name": "archive_emails",
-            "description": "Archive emails by index from the last get_inbox. Recoverable.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "indices": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                        "description": "1-based"
-                    }
-                },
-                "required": ["indices"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "writes": True,
-        "is_local": False,
-        "function": {
-            "name": "delete_emails",
-            "description": "Move emails to Trash by index from the last get_inbox. Recoverable.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "indices": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                        "description": "1-based"
-                    }
-                },
-                "required": ["indices"]
+                "required": ["id"]
             }
         }
     },
@@ -130,34 +89,86 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "search_emails",
-            "description": "Search a folder by at least one of sender / content / date. Results load like get_inbox, so "
-                           "read_email(index), reply, archive and delete work on them.",
+            "description": "Search mail. Give query (all folders unless folder is set), or the older sender / content / "
+                           "date fields. Results list like get_inbox, newest first.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "sender": {
-                        "type": "string",
-                        "description": "Name or address, partial ok"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Text in the subject or body"
-                    },
-                    "date": {
-                        "type": "string",
-                        "description": "YYYY-MM-DD; returns ~10 emails on each side of that day"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "enum": ["inbox", "sent", "archive"],
-                        "description": "Default inbox"
-                    },
-                    "count": {
-                        "type": "integer",
-                        "description": "Max results for non-date searches (default 20, max 50)"
-                    }
+                    "query": {"type": "string",
+                              "description": "Search words, all must match: plain words, \"exact phrase\", from:ann, "
+                                             "to:krem, cc:, subject:, body:, is:unread, is:starred, is:answered, "
+                                             "has:attachment, after:YYYY-MM-DD, before:, on:, newer_than:7d, "
+                                             "-word to leave out. Example: to:krem subject:invoice after:2026-11-01"},
+                    "folder": {"type": "string",
+                               "description": "With query: one folder to search instead of all. " + _FOLDER_HELP},
+                    "count": {"type": "integer", "description": "Default 20, max 50"},
+                    "sender": {"type": "string", "description": "Without query: name or address, partial ok (the recipient, in sent)"},
+                    "content": {"type": "string", "description": "Without query: text in the subject or body"},
+                    "date": {"type": "string", "description": "Without query: YYYY-MM-DD; ~10 emails on each side of that day"},
                 },
                 "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": False,
+        "function": {
+            "name": "move_emails",
+            "description": "Move emails to a folder. to='archive' archives, 'trash' deletes (recoverable), "
+                           "'spam' marks as spam, 'inbox' restores (and means not-spam for mail in spam).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ids": _IDS,
+                    "to": {"type": "string", "description": "archive, trash, spam, inbox, or a folder name"},
+                },
+                "required": ["ids", "to"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": False,
+        "function": {
+            "name": "mark_emails",
+            "description": "Mark emails read, unread, starred or unstarred.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ids": _IDS,
+                    "mark": {"type": "string", "enum": ["read", "unread", "starred", "unstarred"]},
+                },
+                "required": ["ids", "mark"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": False,
+        "function": {
+            "name": "send_email",
+            "description": "Send an email. Give EITHER to (a new email, needs subject) OR reply_to (a reply: "
+                           "recipient, subject, thread and quote are set for you).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "body": {"type": "string", "description": "Your text only; the quoted original is added on a reply"},
+                    "to": dict(_PEOPLE, description=_PEOPLE_HELP),
+                    "reply_to": {"type": "string", "description": "Email id to reply to"},
+                    "reply_all": {"type": "boolean", "description": "With reply_to: also everyone else on the email"},
+                    "subject": {"type": "string", "description": "Required for a new email"},
+                    "cc": dict(_PEOPLE, description=_PEOPLE_HELP),
+                    "bcc": dict(_PEOPLE, description=_PEOPLE_HELP),
+                    "attach": {"type": "array", "items": {"type": "string"},
+                               "description": "Pictures from this chat: img:<id>. A library photo (doc:<N>) "
+                                              "only on a new email to contacts, never on a reply."},
+                    "draft": {"type": "boolean", "description": "Save to Drafts instead of sending"},
+                },
+                "required": ["body"]
             }
         }
     },
@@ -167,28 +178,16 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "forward_email",
-            "description": "Forward an inbox email to a contact. Body text only, no attachments.",
+            "description": "Forward an email, attachments included.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "index": {
-                        "type": "integer",
-                        "description": "From get_inbox, 1-based"
-                    },
-                    "recipient_id": {
-                        "type": "integer",
-                        "description": "From get_recipients"
-                    },
-                    "address": {
-                        "type": "string",
-                        "description": "A direct address instead of recipient_id; needs the allow-all-recipients setting"
-                    },
-                    "note": {
-                        "type": "string",
-                        "description": "Message added above the forwarded text"
-                    }
+                    "id": {"type": "string", "description": "Email id"},
+                    "to": dict(_PEOPLE, description=_PEOPLE_HELP),
+                    "cc": dict(_PEOPLE, description=_PEOPLE_HELP),
+                    "note": {"type": "string", "description": "Your message above the forwarded email"},
                 },
-                "required": ["index"]
+                "required": ["id", "to"]
             }
         }
     },
@@ -197,240 +196,14 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_recipients",
-            "description": "Whitelisted email contacts (ids + names). Use an id with send_email.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
+            "description": "Whitelisted email contacts (ids + names) for send_email / forward_email.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
 ]
 
-# Build send_email schema — always include address param, runtime check gates it
-_send_props = {
-    "recipient_id": {
-        "type": "integer",
-        "description": "Contact id from get_recipients()"
-    },
-    "reply_to_index": {
-        "type": "integer",
-        "description": "Inbox index from get_inbox() — auto-sets recipient / subject / thread headers"
-    },
-    "subject": {
-        "type": "string",
-        "description": "Subject (auto-'Re: ...' on reply)"
-    },
-    "body": {
-        "type": "string",
-        "description": "Body text"
-    },
-    "address": {
-        "type": "string",
-        "description": "Direct email address. Requires allow-all-recipients setting. Not with recipient_id."
-    },
-    "cc": {
-        "type": "array",
-        "items": {"type": "integer"},
-        "description": "Optional CC — list of contact ids from get_recipients()"
-    },
-}
-_send_desc = "Send an email. One of recipient_id / reply_to_index / address is required.\n  recipient_id=N — to a contact (from get_recipients)\n  reply_to_index=N — reply to inbox entry (from get_inbox)\n  address='x@y' — direct (requires allow-all)\n  cc=[ids] — optional CC to contacts"
 
-TOOLS.append({
-    "type": "function",
-    "writes": True,
-    "is_local": False,
-    "function": {
-        "name": "send_email",
-        "description": _send_desc,
-        "parameters": {
-            "type": "object",
-            "properties": _send_props,
-            "required": ["body"]
-        }
-    }
-})
-
-# ─── Inbox Cache (per-scope) ──────────────────────────────────────────────────
-
-_inbox_cache = {}  # scope -> {folder, messages, raw, msg_ids, timestamp}
-
-CACHE_TTL = 60  # seconds
-
-def _empty_cache():
-    return {"folder": "inbox", "messages": [], "raw": [], "msg_ids": [], "timestamp": 0}
-
-def _get_cache():
-    scope = _get_current_email_scope()
-    if scope is None:
-        # NEVER launder None into the shared 'default' bucket — that served
-        # another scope's inbox to email-disabled chats (N1, 2026-08-31).
-        # Throwaway empty cache: always a miss, never stored, never shared.
-        return _empty_cache()
-    if scope not in _inbox_cache:
-        _inbox_cache[scope] = _empty_cache()
-    return _inbox_cache[scope]
-
-def _reset_cache():
-    scope = _get_current_email_scope()
-    if scope is None:
-        return
-    _inbox_cache[scope] = _empty_cache()
-
-# IMAP folder name candidates (tried in order, first success wins)
-_FOLDER_CANDIDATES = {
-    "inbox": ["INBOX"],
-    "sent": ["[Gmail]/Sent Mail", "Sent", "Sent Items"],
-    "archive": ["Archive", "[Gmail]/All Mail"],
-    "trash": ["Trash", "[Gmail]/Trash", "Deleted Items", "Deleted"],
-}
-_resolved_folders = {}  # (scope, folder_key) -> resolved IMAP folder name
-
-
-def _imap_quote(name):
-    """Workaround for Python imaplib bug #90378 — select() breaks on spaces."""
-    if ' ' in name and not name.startswith('"'):
-        return f'"{name}"'
-    return name
-
-
-def _resolve_folder(imap, folder_key):
-    """Resolve logical folder name to IMAP folder. LIST discovery first, then candidates."""
-    scope = _get_current_email_scope() or 'default'
-    cache_key = (scope, folder_key)
-
-    if cache_key in _resolved_folders:
-        name = _resolved_folders[cache_key]
-        try:
-            imap.select(_imap_quote(name), readonly=True)
-            return name
-        except imaplib.IMAP4.error:
-            del _resolved_folders[cache_key]
-
-    if folder_key == "inbox":
-        imap.select("INBOX", readonly=True)
-        _resolved_folders[cache_key] = "INBOX"
-        return "INBOX"
-
-    # Discover via LIST first (no select = no BAD errors to corrupt state)
-    name = _discover_folder(imap, folder_key)
-    if name:
-        try:
-            status, _ = imap.select(_imap_quote(name), readonly=True)
-            if status == 'OK':
-                _resolved_folders[cache_key] = name
-                return name
-        except imaplib.IMAP4.error:
-            pass
-
-    # Fallback: try hardcoded candidates
-    for name in _FOLDER_CANDIDATES.get(folder_key, []):
-        try:
-            status, _ = imap.select(_imap_quote(name), readonly=True)
-            if status == 'OK':
-                _resolved_folders[cache_key] = name
-                return name
-        except imaplib.IMAP4.error:
-            continue
-
-    return None
-
-
-def _discover_folder(imap, folder_key):
-    """Find IMAP folder by special-use flag (RFC 6154), then by name pattern.
-
-    Flags are tried in priority order. Archive prefers a real \\Archive folder
-    (non-Gmail) and falls back to \\All (Gmail's All Mail) — moving a message
-    there + expunging INBOX is Gmail's actual archive behavior."""
-    _FLAGS = {"sent": [b"\\Sent"], "archive": [b"\\Archive", b"\\All"], "trash": [b"\\Trash"]}
-    _HINTS = {"sent": [b"sent"], "archive": [b"archive", b"all mail"], "trash": [b"trash", b"deleted"]}
-
-    flags = _FLAGS.get(folder_key, [])
-    hints = _HINTS.get(folder_key, [])
-
-    try:
-        _, folders = imap.list()
-        if not folders:
-            return None
-
-        # Pass 1: match by special-use flag (priority order)
-        for flag in flags:
-            for entry in folders:
-                if not isinstance(entry, bytes):
-                    continue
-                if flag in entry:
-                    match = re.search(rb'"([^"]+)"\s*$', entry)
-                    if match:
-                        return match.group(1).decode()
-
-        # Pass 2: match by folder name pattern
-        for entry in folders:
-            if not isinstance(entry, bytes):
-                continue
-            lower = entry.lower()
-            for hint in hints:
-                if hint in lower:
-                    match = re.search(rb'"([^"]+)"\s*$', entry)
-                    if match:
-                        return match.group(1).decode()
-    except Exception:
-        pass
-    return None
-
-
-def _decode_header_value(value):
-    """Decode RFC 2047 encoded header."""
-    if not value:
-        return ''
-    decoded_parts = decode_header(value)
-    result = []
-    for part, charset in decoded_parts:
-        if isinstance(part, bytes):
-            result.append(part.decode(charset or 'utf-8', errors='replace'))
-        else:
-            result.append(part)
-    return ''.join(result)
-
-
-def _extract_sender_name(from_header):
-    """Extract display name from 'Name <email>' format. Never expose address."""
-    if not from_header:
-        return 'Unknown'
-    name, addr = email.utils.parseaddr(from_header)
-    if name:
-        return _decode_header_value(name)
-    # No display name — show local part only
-    if '@' in addr:
-        return addr.split('@')[0]
-    return addr or 'Unknown'
-
-
-def _extract_body(msg):
-    """Extract plain text body from email message."""
-    if msg.is_multipart():
-        for part in msg.walk():
-            ct = part.get_content_type()
-            if ct == 'text/plain' and part.get('Content-Disposition') != 'attachment':
-                payload = part.get_payload(decode=True)
-                if payload:
-                    charset = part.get_content_charset() or 'utf-8'
-                    return payload.decode(charset, errors='replace')
-        # Fallback: try text/html
-        for part in msg.walk():
-            ct = part.get_content_type()
-            if ct == 'text/html' and part.get('Content-Disposition') != 'attachment':
-                payload = part.get_payload(decode=True)
-                if payload:
-                    charset = part.get_content_charset() or 'utf-8'
-                    return f"[HTML content]\n{payload.decode(charset, errors='replace')[:2000]}"
-    else:
-        payload = msg.get_payload(decode=True)
-        if payload:
-            charset = msg.get_content_charset() or 'utf-8'
-            return payload.decode(charset, errors='replace')
-    return '(no text content)'
-
+# --- Scope + settings ---------------------------------------------------------
 
 def _get_current_email_scope():
     try:
@@ -439,891 +212,10 @@ def _get_current_email_scope():
     except Exception:
         return None
 
-def _get_email_creds_detailed():
-    """Like _get_email_creds but returns (creds, error_detail).
-
-    error_detail is None when creds were found, or a human-facing string
-    explaining what's wrong. Used by send_email to distinguish "never set
-    up" from "OAuth refresh just failed" — because user-facing retry of
-    OAuth setup on a transient refresh failure would OVERWRITE a valid
-    refresh_token with a fresh consent cycle. Day-ruiner H8 2026-04-22.
-    """
-    from core.credentials_manager import credentials
-    scope = _get_current_email_scope()
-    if scope is None:
-        return None, "Email is disabled for this chat."
-    creds = credentials.get_email_account(scope)
-    if not creds.get('address'):
-        return None, "Email not configured. Set up credentials in Settings → Plugins → Email."
-    if creds.get('auth_type') == 'oauth2':
-        if not creds.get('oauth_refresh_token'):
-            return None, "OAuth refresh token missing. Re-authorize in Settings → Plugins → Email."
-        if creds.get('oauth_expires_at', 0) < time.time() + 300:
-            refreshed = _refresh_oauth_token(scope, creds)
-            if not refreshed:
-                return None, (
-                    "OAuth token refresh FAILED. Your existing credentials MAY still be valid — "
-                    "do NOT re-run OAuth setup yet (would overwrite the existing refresh token with "
-                    "a fresh consent cycle). Check network connectivity or the provider's status and "
-                    "try again in a moment. Check server logs for the provider's error response if "
-                    "this repeats."
-                )
-            creds = refreshed
-        return creds, None
-    # Password auth
-    if not creds.get('app_password'):
-        return None, "App password not set. Configure it in Settings → Plugins → Email."
-    return creds, None
-
-
-def _get_email_creds():
-    """Get email credentials for current scope. Refreshes OAuth tokens if needed."""
-    from core.credentials_manager import credentials
-    scope = _get_current_email_scope()
-    if scope is None:
-        return None
-    creds = credentials.get_email_account(scope)
-    if not creds['address']:
-        return None
-    if creds.get('auth_type') == 'oauth2':
-        if not creds.get('oauth_refresh_token'):
-            return None
-        # Refresh token if expired or expiring within 5 minutes
-        if creds.get('oauth_expires_at', 0) < time.time() + 300:
-            creds = _refresh_oauth_token(scope, creds)
-            if not creds:
-                return None
-        return creds
-    # Password auth
-    if not creds.get('app_password'):
-        return None
-    return creds
-
-
-# Per-scope refresh lock — serializes concurrent refresh attempts for the
-# same email account. Pre-fix, daemon poll thread could refresh while a
-# user-initiated send_email tool call simultaneously refreshed the same
-# scope. Both POST to Microsoft for the same scope; Microsoft v2 rotates
-# refresh_token under conditional-access accounts; last-writer-wins on
-# disk and the other rotated refresh_token is gone forever → next refresh
-# = invalid_grant → permadeath of the email OAuth setup. Gcal had this
-# pattern (calendar.py:18-31); email didn't. Day-ruiner scout 2026-05-07
-# #D. Daemon imports `_lock_for` from this module so the daemon thread
-# and the tool-call thread share the same per-scope lock.
-import threading as _threading
-_refresh_locks_guard = _threading.Lock()
-_refresh_locks: dict = {}
-
-
-def _lock_for(scope: str) -> _threading.Lock:
-    """Per-scope refresh serialization. Mirrors gcal's pattern."""
-    with _refresh_locks_guard:
-        lock = _refresh_locks.get(scope)
-        if lock is None:
-            lock = _threading.Lock()
-            _refresh_locks[scope] = lock
-        return lock
-
-
-def _refresh_oauth_token(scope, creds):
-    """Refresh an OAuth2 access token inline. Returns updated creds or None."""
-    import requests as http_requests
-    from core import net
-    from core.credentials_manager import credentials
-
-    tenant = creds.get('oauth_tenant_id', 'common')
-    token_url = f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token'
-
-    with _lock_for(scope):
-        # Re-read creds INSIDE the lock so a refresh that completed while
-        # we were waiting on the lock isn't redone with stale tokens.
-        try:
-            fresh = credentials.get_email_account(scope)
-            if fresh and fresh.get('oauth_expires_at', 0) > time.time() + 60:
-                # Another thread already refreshed; use the rotated tokens.
-                creds = fresh
-                logger.debug(f"[EMAIL] Refresh skipped — another thread rotated for scope '{scope}'")
-                return creds
-        except Exception:
-            pass  # Fall through to do the refresh ourselves.
-
-        try:
-            resp = net.post(token_url, data={
-                'client_id': creds['oauth_client_id'],
-                'client_secret': creds['oauth_client_secret'],
-                'refresh_token': creds['oauth_refresh_token'],
-                'grant_type': 'refresh_token',
-                'scope': 'https://outlook.office365.com/IMAP.AccessAsUser.All https://outlook.office365.com/SMTP.Send offline_access',
-            }, timeout=15)
-
-            if resp.status_code != 200:
-                logger.error(f"[EMAIL] OAuth token refresh failed: {resp.status_code} {resp.text[:200]}")
-                return None
-
-            tokens = resp.json()
-            access_token = tokens['access_token']
-            expires_at = time.time() + tokens.get('expires_in', 3600)
-            new_refresh = tokens.get('refresh_token', '')
-
-            credentials.update_email_oauth_tokens(scope, access_token, expires_at, new_refresh)
-
-            creds['oauth_access_token'] = access_token
-            creds['oauth_expires_at'] = expires_at
-            if new_refresh:
-                creds['oauth_refresh_token'] = new_refresh
-            logger.info(f"[EMAIL] OAuth token refreshed for scope '{scope}'")
-            return creds
-        except Exception as e:
-            logger.error(f"[EMAIL] OAuth token refresh error: {e}")
-            return None
-
-
-def _build_xoauth2(user, access_token):
-    """Build XOAUTH2 authentication string."""
-    return f"user={user}\x01auth=Bearer {access_token}\x01\x01"
-
-
-def _imap_connect(creds):
-    """Connect and authenticate to IMAP. Handles both password and OAuth2."""
-    imap = imaplib.IMAP4_SSL(creds['imap_server'], int(creds.get('imap_port', 993)))
-    if creds.get('auth_type') == 'oauth2':
-        auth_string = _build_xoauth2(creds['address'], creds['oauth_access_token'])
-        imap.authenticate('XOAUTH2', lambda x: auth_string.encode())
-    else:
-        imap.login(creds['address'], creds['app_password'])
-    return imap
-
-
-def _smtp_connect(creds):
-    """Connect and authenticate to SMTP. Handles both password and OAuth2."""
-    smtp_port = int(creds.get('smtp_port', 465))
-    if smtp_port == 465:
-        smtp = smtplib.SMTP_SSL(creds['smtp_server'], smtp_port)
-    else:
-        smtp = smtplib.SMTP(creds['smtp_server'], smtp_port)
-        smtp.ehlo()
-        smtp.starttls()
-        smtp.ehlo()
-
-    if creds.get('auth_type') == 'oauth2':
-        auth_string = _build_xoauth2(creds['address'], creds['oauth_access_token'])
-        encoded = base64.b64encode(auth_string.encode()).decode()
-        code, msg = smtp.docmd('AUTH', f'XOAUTH2 {encoded}')
-        if code not in (235, 250):
-            raise smtplib.SMTPAuthenticationError(code, msg)
-    else:
-        smtp.login(creds['address'], creds['app_password'])
-    return smtp
-
-
-# ─── Tool Implementations ────────────────────────────────────────────────────
-
-def _fetch_and_cache(imap, uids_newest_first, folder, unseen_uids, cache):
-    """Fetch the given UIDs (already ordered newest-first), build the message
-    list, write the per-scope cache (so read_email/reply/archive/delete operate
-    on them by index) and return the messages. Shared by get_inbox + search."""
-    messages = []
-    raw_messages = []
-    kept_uids = []
-    for uid in uids_newest_first:
-        typ, msg_data = imap.uid('fetch', uid, '(RFC822)')
-        # A UID can vanish between SEARCH and FETCH (expunged by another client,
-        # or inside our own cache window). Skip it rather than crash the whole
-        # batch — kept_uids keeps messages/raw/msg_ids index-aligned for the
-        # downstream read/reply/archive/delete-by-index callers.
-        if typ != 'OK' or not msg_data or not isinstance(msg_data[0], tuple):
-            continue
-        raw_email = msg_data[0][1]
-        if not raw_email:
-            continue
-        msg = email.message_from_bytes(raw_email)
-        raw_messages.append(msg)
-        kept_uids.append(uid)
-        i = len(kept_uids)
-
-        date_str = msg.get('Date', '')
-        try:
-            parsed_date = email.utils.parsedate_to_datetime(date_str)
-            date_display = parsed_date.strftime('%b %d, %H:%M')
-        except Exception:
-            date_display = date_str[:20] if date_str else '?'
-
-        # Show recipient for sent, sender for inbox/archive
-        if folder == "sent":
-            display_name = _extract_sender_name(msg.get('To', ''))
-        else:
-            display_name = _extract_sender_name(msg.get('From', ''))
-
-        messages.append({
-            "index": i,
-            "name": display_name,
-            "subject": _decode_header_value(msg.get('Subject', '(no subject)')),
-            "date": date_display,
-            "unread": uid in unseen_uids,
-        })
-
-    cache.update({
-        "folder": folder,
-        "messages": messages,
-        "raw": raw_messages,
-        "msg_ids": kept_uids,
-        "timestamp": time.time(),
-    })
-    return messages
-
-
-def _imap_search_str(s):
-    """Quote a SEARCH term. Returns bytes for non-ASCII (paired with CHARSET
-    UTF-8), str otherwise — imaplib encodes str args as ASCII and crashes on
-    non-ASCII, but passes bytes through verbatim."""
-    quoted = '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
-    return quoted.encode('utf-8') if not s.isascii() else quoted
-
-
-def _uid_search(imap, charset, criteria):
-    """Run a UID SEARCH. `criteria` is a list of IMAP keys/terms; empty = ALL.
-    Returns a list of UID bytes (ascending), [] on no match / error."""
-    args = list(criteria) if criteria else ['ALL']
-    if charset:
-        typ, data = imap.uid('search', 'CHARSET', charset, *args)
-    else:
-        typ, data = imap.uid('search', None, *args)
-    if typ != 'OK' or not data or not data[0]:
-        return []
-    return data[0].split()
-
-
-def _search_date_bracket(imap, criteria, charset, date, per_side):
-    """~per_side emails on each side of `date` (YYYY-MM-DD), criteria ANDed in.
-    Returns a UID list (ascending) or None if the date can't be parsed. UIDs are
-    ascending (older→newer), so the closest mails are the tail of BEFORE and the
-    head of SINCE."""
-    try:
-        d = datetime.strptime(date.strip(), '%Y-%m-%d')
-    except Exception:
-        return None
-    imap_date = d.strftime('%d-%b-%Y')
-    older = _uid_search(imap, charset, list(criteria) + ['BEFORE', imap_date])
-    newer = _uid_search(imap, charset, list(criteria) + ['SINCE', imap_date])
-    return older[-per_side:] + newer[:per_side]
-
-
-def _get_inbox(count=20, folder="inbox"):
-    count = min(max(1, count), 50)
-    folder = folder if folder in _FOLDER_CANDIDATES else "inbox"
-
-    cache = _get_cache()
-
-    # Cache hit — same folder and fresh
-    if (cache["folder"] == folder and cache["messages"]
-            and (time.time() - cache["timestamp"]) < CACHE_TTL):
-        cached = cache["messages"][:count]
-        logger.info(f"Email {folder}: returning {len(cached)} cached messages")
-        return _format_inbox(cached, folder), True
-
-    creds = _get_email_creds()
-    if not creds:
-        scope = _get_current_email_scope()
-        if scope is None:
-            return "Email is disabled for this chat.", False
-        return "Email not configured. Set up email credentials in Settings → Plugins → Email.", False
-
-    try:
-        imap = _imap_connect(creds)
-
-        # Resolve IMAP folder name (also selects it)
-        imap_folder = _resolve_folder(imap, folder)
-        if not imap_folder:
-            imap.logout()
-            return f"Could not find {folder} folder on mail server.", False
-
-        # Use UIDs — stable across sessions (unlike sequence numbers).
-        # _uid_search guards a non-OK / empty response instead of crashing on
-        # data[0].split() when the server returns [None] / 'NO'.
-        uids = _uid_search(imap, None, [])
-        if not uids:
-            imap.logout()
-            cache.update({"folder": folder, "messages": [], "raw": [], "msg_ids": [], "timestamp": time.time()})
-            return f"{folder.title()} is empty.", True
-
-        # Get unseen UIDs (only meaningful for inbox)
-        unseen_uids = set()
-        if folder == "inbox":
-            unseen_uids = set(_uid_search(imap, None, ['UNSEEN']))
-
-        # Fetch latest N (newest first)
-        latest = uids[-count:]
-        latest.reverse()
-
-        messages = _fetch_and_cache(imap, latest, folder, unseen_uids, cache)
-        imap.logout()
-
-        logger.info(f"Email {folder}: fetched {len(messages)} messages")
-        return _format_inbox(messages, folder), True
-
-    except imaplib.IMAP4.error as e:
-        logger.error(f"IMAP error: {e}")
-        try: imap.logout()
-        except Exception: pass
-        return f"Email login failed — check credentials. Error: {e}", False
-    except Exception as e:
-        logger.error(f"Email {folder} error: {e}", exc_info=True)
-        try: imap.logout()
-        except Exception: pass
-        return f"Failed to fetch {folder}: {e}", False
-
-
-def _format_inbox(messages, folder="inbox"):
-    if not messages:
-        return f"{folder.title()} is empty."
-    creds = _get_email_creds()
-    account = creds['address'] if creds else 'unknown'
-    label = "To" if folder == "sent" else "From"
-    total = len(messages)
-    if folder == "inbox":
-        unread = sum(1 for m in messages if m.get('unread'))
-        read = total - unread
-        header = f"Account: {account}\n{folder.title()} — {unread} unread, {read} read ({total} total)"
-    else:
-        header = f"Account: {account}\n{folder.title()} ({total} messages)"
-    lines = [header]
-    for m in messages:
-        tag = " *NEW*" if folder == "inbox" and m.get('unread') else ""
-        lines.append(f"  [{m['index']}] {m['date']} — {m['name']}: {m['subject']}{tag}")
-    lines.append("\nUse read_email(index) to read full content.")
-    return '\n'.join(lines)
-
-
-def _search_emails(sender=None, content=None, date=None, folder="inbox", count=20):
-    """Search a folder via IMAP SEARCH. Loads results into the same per-scope
-    cache as get_inbox, so read_email/reply/archive/delete operate on them by
-    index. With `date`, returns a ~count/2-per-side bracket around that day,
-    ANDing in any sender/content terms."""
-    if not any([sender, content, date]):
-        return "Give at least one of: sender, content, date.", False
-
-    folder = folder if folder in _FOLDER_CANDIDATES else "inbox"
-    count = min(max(1, count), 50)
-
-    creds = _get_email_creds()
-    if not creds:
-        scope = _get_current_email_scope()
-        if scope is None:
-            return "Email is disabled for this chat.", False
-        return "Email not configured. Set up email credentials in Settings → Plugins → Email.", False
-
-    # Build sender + content criteria. IMAP ANDs criteria; OR is prefix and binds
-    # the next two keys, so FROM + (OR SUBJECT BODY) = FROM AND (SUBJECT OR BODY).
-    criteria = []
-    needs_utf8 = False
-    if sender:
-        criteria += ['FROM', _imap_search_str(sender)]
-        needs_utf8 = needs_utf8 or not sender.isascii()
-    if content:
-        term = _imap_search_str(content)
-        criteria += ['OR', 'SUBJECT', term, 'BODY', term]
-        needs_utf8 = needs_utf8 or not content.isascii()
-    charset = 'UTF-8' if needs_utf8 else None
-
-    imap = None
-    try:
-        imap = _imap_connect(creds)
-        imap_folder = _resolve_folder(imap, folder)  # read-only select
-        if not imap_folder:
-            imap.logout()
-            return f"Could not find {folder} folder on mail server.", False
-
-        if date:
-            uids = _search_date_bracket(imap, criteria, charset, date, max(1, count // 2))
-            if uids is None:
-                imap.logout()
-                return f"Invalid date {date!r}. Use YYYY-MM-DD.", False
-        else:
-            uids = _uid_search(imap, charset, criteria)[-count:]
-        uids.reverse()  # newest first
-
-        if not uids:
-            imap.logout()
-            return "No matching emails found.", True
-
-        unseen_uids = set()
-        if folder == "inbox":
-            unseen_uids = set(_uid_search(imap, None, ['UNSEEN']))
-
-        cache = _get_cache()
-        messages = _fetch_and_cache(imap, uids, folder, unseen_uids, cache)
-        # Search results are a filtered subset — don't let a later get_inbox()
-        # serve them from cache as if they were the whole inbox. read_email /
-        # archive / delete don't check TTL, so they still work by index.
-        cache["timestamp"] = 0
-        imap.logout()
-
-        logger.info(f"Email search ({folder}): {len(messages)} result(s)")
-        return _format_inbox(messages, folder), True
-
-    except imaplib.IMAP4.error as e:
-        logger.error(f"IMAP search error: {e}")
-        try: imap.logout()
-        except Exception: pass
-        return f"Email search failed — check credentials. Error: {e}", False
-    except Exception as e:
-        logger.error(f"Email search error: {e}", exc_info=True)
-        try: imap.logout()
-        except Exception: pass
-        return f"Failed to search: {e}", False
-
-
-def _read_email(index):
-    cache = _get_cache()
-    if not cache["raw"]:
-        return "No inbox loaded. Call get_inbox() first.", False
-
-    if index < 1 or index > len(cache["raw"]):
-        return f"Invalid index {index}. Range: 1-{len(cache['raw'])}.", False
-
-    msg = cache["raw"][index - 1]
-    sender = _extract_sender_name(msg.get('From', 'Unknown'))
-    subject = _decode_header_value(msg.get('Subject', '(no subject)'))
-    date_str = msg.get('Date', '?')
-    body = _extract_body(msg)
-
-    # Truncate very long bodies
-    if len(body) > 4000:
-        body = body[:4000] + '\n\n... (truncated)'
-
-    # Mark as read in IMAP
-    _mark_as_read(index)
-
-    return f"From: {sender}\nSubject: {subject}\nDate: {date_str}\n\n{body}", True
-
-
-def _mark_as_read(index):
-    """Mark a message as read (\\Seen) in IMAP using UID."""
-    cache = _get_cache()
-    if cache["folder"] != "inbox":
-        return  # Only mark read in inbox
-    if not cache["msg_ids"] or index < 1 or index > len(cache["msg_ids"]):
-        return
-    creds = _get_email_creds()
-    if not creds:
-        return
-    try:
-        imap = _imap_connect(creds)
-        imap.select('INBOX')  # read-write
-        imap.uid('store', cache["msg_ids"][index - 1], '+FLAGS', '\\Seen')
-        imap.logout()
-        # Update cache
-        if index <= len(cache["messages"]):
-            cache["messages"][index - 1]["unread"] = False
-        logger.info(f"Email [{index}] marked as read")
-    except Exception as e:
-        logger.warning(f"Failed to mark email as read: {e}")
-        try: imap.logout()
-        except Exception: pass
-
-
-def _resolve_dest_folder(imap, folder_key, fallback=None, create=False):
-    """Resolve a real destination folder for a move (archive/trash).
-
-    Discovery first (special-use flag → name hint, via _discover_folder). When
-    nothing is found: create + return `fallback` if create=True (archive's
-    legacy 'Archive' behavior), else return None. Delete passes create=False so
-    a server with no discoverable Trash REFUSES rather than risk a permanent
-    \\Deleted+expunge with no recoverable copy."""
-    name = _discover_folder(imap, folder_key)
-    if not name and create and fallback:
-        try:
-            imap.create(_imap_quote(fallback))
-        except Exception:
-            pass
-        name = fallback
-    return name
-
-
-def _move_to_folder(imap, indices, cache, dest_folder):
-    """COPY each indexed message to dest_folder, flag \\Deleted, EXPUNGE INBOX.
-
-    Returns (moved, skipped): moved = ['[i] subject', ...],
-    skipped = [(i, subject, reason), ...]. Shared by archive + delete.
-
-    Checks IMAP response codes per message — a server COPY of NO is reported as
-    skipped, never silently claimed as success (day-ruiner H10: a false 'moved'
-    that the user acts on can lose mail). Caller must have INBOX selected r/w."""
-    moved, skipped = [], []
-    for idx in sorted(set(indices)):
-        uid = cache["msg_ids"][idx - 1]
-        subject = cache["messages"][idx - 1]["subject"] if idx <= len(cache["messages"]) else "?"
-        try:
-            copy_status, _ = imap.uid('copy', uid, _imap_quote(dest_folder))
-            if copy_status != 'OK':
-                skipped.append((idx, subject, f"copy returned {copy_status!r} (message may already be moved externally)"))
-                continue
-            store_status, _ = imap.uid('store', uid, '+FLAGS', '\\Deleted')
-            if store_status != 'OK':
-                skipped.append((idx, subject, f"flag-delete returned {store_status!r}"))
-                continue
-            moved.append(f"[{idx}] {subject}")
-        except Exception as e:
-            skipped.append((idx, subject, f"exception: {type(e).__name__}: {e}"))
-    imap.expunge()
-    return moved, skipped
-
-
-def _format_move_report(moved, skipped, verb, skip_hint):
-    """Render a move result. (text, ok) — ok=True if anything moved (partial
-    success is still ok, with the skipped class named); full failure = False."""
-    lines = []
-    if moved:
-        lines.append(f"{verb} {len(moved)} email{'s' if len(moved) != 1 else ''}:")
-        lines.extend(f"  {m}" for m in moved)
-    if skipped:
-        if moved:
-            lines.append("")
-        lines.append(f"Skipped {len(skipped)} email{'s' if len(skipped) != 1 else ''} ({skip_hint}):")
-        lines.extend(f"  [{idx}] {subj} — {reason}" for idx, subj, reason in skipped)
-    return '\n'.join(lines), bool(moved)
-
-
-def _move_indices(indices, folder_key, verb, skip_hint, fallback=None, create=False):
-    """Shared archive/delete flow: validate inbox cache, connect, resolve the
-    real destination folder, move + expunge, report. `create`/`fallback` gate
-    whether a missing destination is created (archive) or refused (delete)."""
-    cache = _get_cache()
-    if cache["folder"] != "inbox":
-        return f"Can only {verb.lower().rstrip('d')} from inbox view. Use get_inbox() first.", False
-    if not cache["msg_ids"]:
-        return "No inbox loaded. Call get_inbox() first.", False
-    max_idx = len(cache["msg_ids"])
-    bad = [i for i in indices if i < 1 or i > max_idx]
-    if bad:
-        return f"Invalid indices: {bad}. Range: 1-{max_idx}.", False
-    creds = _get_email_creds()
-    if not creds:
-        return "Email not configured.", False
-
-    imap = None
-    try:
-        imap = _imap_connect(creds)
-        dest = _resolve_dest_folder(imap, folder_key, fallback=fallback, create=create)
-        if not dest:
-            return (
-                f"Could not find a {folder_key.title()} folder on this mail server, "
-                f"so nothing was {verb.lower()} (refusing to permanently delete "
-                f"without a recoverable copy). Check the account's folders.",
-                False,
-            )
-        imap.select('INBOX')  # read-write
-        moved, skipped = _move_to_folder(imap, indices, cache, dest)
-        imap.logout()
-        _reset_cache()  # next get_inbox() is fresh
-
-        if not moved and not skipped:
-            return f"No emails to {verb.lower().rstrip('d')}.", False
-        if moved:
-            logger.info(f"{verb} {len(moved)} emails to {dest!r}")
-        if skipped:
-            logger.warning(f"{verb}: {len(skipped)} skipped: {[s[0] for s in skipped]}")
-        return _format_move_report(moved, skipped, verb, skip_hint)
-    except Exception as e:
-        logger.error(f"{verb} error: {e}", exc_info=True)
-        try: imap.logout()
-        except Exception: pass
-        return f"Failed to {verb.lower().rstrip('d')}: {e}", False
-
-
-def _archive_emails(indices):
-    """Archive emails — move to the real Archive folder (Gmail = All Mail),
-    falling back to creating a literal 'Archive' folder when none is found."""
-    return _move_indices(
-        indices, 'archive', 'Archived', 'likely already archived elsewhere',
-        fallback='Archive', create=True,
-    )
-
-
-def _delete_emails(indices):
-    """Delete emails — move to the server's real Trash (recoverable there).
-    Refuses if no Trash folder can be found, rather than permanently expunge."""
-    return _move_indices(
-        indices, 'trash', 'Deleted', 'may already be gone',
-        fallback=None, create=False,
-    )
-
-
-def _get_recipients():
-    from core.contacts import get_people
-
-    allow_all = _allow_all_enabled()
-
-    people_scope = _get_current_people_scope()
-    if people_scope is None and not allow_all:
-        return "People contacts are disabled for this chat.", False
-
-    lines = []
-
-    if people_scope is not None:
-        people = get_people(people_scope)
-        if allow_all:
-            contacts = [p for p in people if p.get('email')]
-        else:
-            contacts = [p for p in people if p.get('email_whitelisted') and p.get('email')]
-
-        if contacts:
-            lines.append("Available contacts:")
-            for p in contacts:
-                lines.append(f"  [{p['id']}] {p['name']}")
-
-    if allow_all:
-        lines.append("\nDirect addresses enabled — you can also use the 'address' parameter with any email address.")
-
-    if not lines:
-        return "No contacts are whitelisted for email. Add contacts in Mind → People and enable 'Allow email'.", False
-
-    return '\n'.join(lines), True
-
-
-def _resolve_recipient(recipient_id=None, address=None):
-    """Resolve one recipient to (to_addr, to_name, error_text).
-
-    address mode requires allow-all; recipient_id mode requires the contact be
-    whitelisted. Shared by send_email, forward_email and CC resolution so the
-    whitelist gate lives in exactly ONE place — no privacy backdoors. Day-ruiner
-    H4 lineage: the gate must never be bypassable by a secondary path."""
-    if address is not None:
-        if not _allow_all_enabled():
-            return None, None, "Direct email addresses are not allowed. Use recipient_id from get_recipients() instead."
-        addr = address.strip()
-        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', addr):
-            return None, None, f"Invalid email address: {addr}"
-        return addr, addr, None
-    if recipient_id is not None:
-        from core.contacts import get_people
-        people_scope = _get_current_people_scope()
-        if people_scope is None:
-            return None, None, "People contacts are disabled for this chat."
-        people = get_people(people_scope)
-        person = next((p for p in people if p['id'] == recipient_id), None)
-        if not person:
-            return None, None, f"Contact ID {recipient_id} not found."
-        if not person.get('email_whitelisted'):
-            return None, None, f"{person['name']} is not whitelisted for email."
-        if not person.get('email'):
-            return None, None, f"{person['name']} has no email address."
-        return person['email'], person['name'], None
-    return None, None, "No recipient specified."
-
-
-def _resolve_cc(cc):
-    """Resolve a CC list of contact ids → ([(addr, name), ...], error|None).
-    Fails loud on the first bad id so a CC never silently drops or leaks."""
-    out = []
-    if not cc:
-        return out, None
-    for cid in cc:
-        addr, name, err = _resolve_recipient(recipient_id=cid)
-        if err:
-            return None, f"CC {cid}: {err}"
-        out.append((addr, name))
-    return out, None
-
-
-def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None, address=None, cc=None):
-    # Target-mode mutex. Pre-2026-04-22 the precedence was
-    # `address > reply_to_index > recipient_id`, which meant if the AI
-    # passed both `recipient_id` and `reply_to_index` (confused or trying
-    # to combine intents), reply_to_index silently won and the email went
-    # to whoever sent that inbox entry — NOT to the contact the caller
-    # named. Day-ruiner H4 — wrong-recipient silent failure with
-    # potentially sensitive body content quoted. Fix: require exactly one
-    # target mode and refuse ambiguous calls loudly. (cc is additive — not
-    # a target mode, so it does not count toward the mutex.)
-    target_modes = sum([
-        bool(address),
-        reply_to_index is not None,
-        recipient_id is not None,
-    ])
-    if target_modes > 1:
-        return (
-            "Multiple recipient modes passed. Use EXACTLY ONE of "
-            "address, recipient_id, or reply_to_index.",
-            False,
-        )
-    if target_modes == 0:
-        return (
-            "No recipient specified. Pass one of recipient_id (from "
-            "get_recipients), reply_to_index (from get_inbox), or "
-            "address (requires allow-all-recipients).",
-            False,
-        )
-
-    creds, creds_error = _get_email_creds_detailed()
-    if not creds:
-        return creds_error or "Email not configured.", False
-
-    cache = _get_cache()
-    reply_headers = {}
-    to_addr = None
-    to_name = None
-
-    # Direct address mode (allow-all only)
-    if address is not None:
-        to_addr, to_name, err = _resolve_recipient(address=address)
-        if err:
-            return err, False
-        if not subject:
-            return "subject is required for new emails.", False
-
-    # Reply mode — resolve recipient + headers from cached message
-    elif reply_to_index is not None:
-        if not cache["raw"]:
-            return "No inbox loaded. Call get_inbox() first.", False
-        if reply_to_index < 1 or reply_to_index > len(cache["raw"]):
-            return f"Invalid index {reply_to_index}. Range: 1-{len(cache['raw'])}.", False
-
-        original = cache["raw"][reply_to_index - 1]
-        # Reply-to address: use Reply-To header if set, otherwise From
-        reply_addr = original.get('Reply-To') or original.get('From', '')
-        _, to_addr = email.utils.parseaddr(reply_addr)
-        to_name = _extract_sender_name(original.get('From', ''))
-
-        if not to_addr:
-            return "Could not determine reply address from original message.", False
-
-        # Threading headers
-        orig_msg_id = original.get('Message-ID', '')
-        orig_refs = original.get('References', '')
-        if orig_msg_id:
-            reply_headers['In-Reply-To'] = orig_msg_id
-            reply_headers['References'] = f"{orig_refs} {orig_msg_id}".strip()
-
-        # Auto-subject
-        if not subject:
-            orig_subject = _decode_header_value(original.get('Subject', ''))
-            subject = orig_subject if orig_subject.lower().startswith('re:') else f"Re: {orig_subject}"
-
-        # Quote original body
-        orig_body = _extract_body(original)
-        if len(orig_body) > 2000:
-            orig_body = orig_body[:2000] + '\n...'
-        orig_date = original.get('Date', '')
-        body = f"{body}\n\nOn {orig_date}, {to_name} wrote:\n> " + '\n> '.join(orig_body.splitlines())
-
-    # New email mode — resolve from whitelisted contacts
-    elif recipient_id is not None:
-        to_addr, to_name, err = _resolve_recipient(recipient_id=recipient_id)
-        if err:
-            return err, False
-        if not subject:
-            return "subject is required for new emails.", False
-
-    # Resolve CC (whitelisted contacts only — same gate as the primary recipient)
-    cc_pairs, cc_err = _resolve_cc(cc)
-    if cc_err:
-        return cc_err, False
-
-    try:
-        msg = MIMEText(body)
-        msg['Subject'] = subject
-        msg['From'] = creds['address']
-        msg['To'] = to_addr
-        if cc_pairs:
-            msg['Cc'] = ', '.join(a for a, _ in cc_pairs)
-        msg['Date'] = email.utils.formatdate(localtime=True)
-        msg['Message-ID'] = email.utils.make_msgid(domain=creds['smtp_server'])
-        for k, v in reply_headers.items():
-            msg[k] = v
-
-        smtp = _smtp_connect(creds)
-        with smtp:
-            smtp.send_message(msg)  # delivers To + Cc from the headers
-
-        cc_note = f" (cc {len(cc_pairs)})" if cc_pairs else ""
-        logger.info(f"Email sent to {to_name}{cc_note}: {subject}")
-        return f"Email sent to {to_name}{cc_note}: \"{subject}\"", True
-
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"SMTP auth error: {e}")
-        return "Email send failed — authentication error. Check app password.", False
-    except Exception as e:
-        logger.error(f"Email send error: {e}", exc_info=True)
-        return f"Failed to send email: {e}", False
-
-
-def _forward_email(index, recipient_id=None, address=None, note=''):
-    """Forward an inbox email (by index from get_inbox) to a contact.
-
-    Text-only — attachments are NOT carried (no MIME attachment handling). The
-    recipient goes through _resolve_recipient, so it inherits the same whitelist
-    gate as send_email. The original sender's NAME is shown in the forwarded
-    header, never the address (privacy-first, like the rest of the plugin)."""
-    cache = _get_cache()
-    if not cache["raw"]:
-        return "No inbox loaded. Call get_inbox() first.", False
-    if index < 1 or index > len(cache["raw"]):
-        return f"Invalid index {index}. Range: 1-{len(cache['raw'])}.", False
-
-    to_addr, to_name, err = _resolve_recipient(recipient_id=recipient_id, address=address)
-    if err:
-        return err, False
-
-    creds, creds_error = _get_email_creds_detailed()
-    if not creds:
-        return creds_error or "Email not configured.", False
-
-    original = cache["raw"][index - 1]
-    orig_from = _extract_sender_name(original.get('From', ''))
-    orig_subject = _decode_header_value(original.get('Subject', '(no subject)'))
-    orig_date = original.get('Date', '')
-    orig_body = _extract_body(original)
-    if len(orig_body) > 4000:
-        orig_body = orig_body[:4000] + '\n\n... (truncated)'
-
-    fwd_subject = orig_subject if orig_subject.lower().startswith('fwd:') else f"Fwd: {orig_subject}"
-    parts = []
-    if note:
-        parts.extend([note, ""])
-    parts.extend([
-        "---------- Forwarded message ----------",
-        f"From: {orig_from}",
-        f"Date: {orig_date}",
-        f"Subject: {orig_subject}",
-        "",
-        orig_body,
-    ])
-    fwd_body = '\n'.join(parts)
-
-    try:
-        msg = MIMEText(fwd_body)
-        msg['Subject'] = fwd_subject
-        msg['From'] = creds['address']
-        msg['To'] = to_addr
-        msg['Date'] = email.utils.formatdate(localtime=True)
-        msg['Message-ID'] = email.utils.make_msgid(domain=creds['smtp_server'])
-
-        smtp = _smtp_connect(creds)
-        with smtp:
-            smtp.send_message(msg)
-
-        logger.info(f"Email forwarded to {to_name}: {fwd_subject}")
-        return f"Forwarded to {to_name}: \"{fwd_subject}\"", True
-
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"SMTP auth error (forward): {e}")
-        return "Forward failed — authentication error. Check app password.", False
-    except Exception as e:
-        logger.error(f"Email forward error: {e}", exc_info=True)
-        return f"Failed to forward: {e}", False
-
-
-# ─── Scope Access ────────────────────────────────────────────────────────────
 
 def _get_current_people_scope():
-    """Resolve the active people scope. Returns None when unset/disabled.
-
-    Previously returned 'default' on exception — silent-default class regression
-    (same pattern as the github fix shipped 2026-05-14). Caller (`_get_recipients`)
-    must handle None and refuse rather than silently routing to the default
-    scope's contacts. 2026-05-14.
-    """
+    """The active people scope, None when unset/disabled. Never 'default' on
+    an error: that would hand out another scope's contacts."""
     try:
         from core.chat.function_manager import scope_people
         return scope_people.get()
@@ -1332,68 +224,627 @@ def _get_current_people_scope():
         return None
 
 
-# ─── Executor ────────────────────────────────────────────────────────────────
+def _setting(key, default=False):
+    try:
+        from core.plugin_loader import plugin_loader
+        return bool(plugin_loader.get_plugin_settings("email").get(key, default))
+    except Exception:
+        return default
+
+
+def _open():
+    """(scope, creds) for this chat's account, or MailError with the reason."""
+    scope = _get_current_email_scope()
+    creds, why = accounts.get_creds(scope)
+    if not creds:
+        raise MailError(why or "Email not configured.")
+    return scope, creds
+
+
+def _as_list(value) -> list:
+    """A list argument as a list. Models often send one string for it:
+    "inbox:1, inbox:2", "[inbox:1]", or a JSON array inside a string."""
+    if value is None or value == '':
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith('[') and text.endswith(']'):
+            try:
+                got = json.loads(text)
+                if isinstance(got, list):
+                    return got
+            except ValueError:
+                pass
+            text = text[1:-1]
+        # commas and semicolons only: a folder name ("Sent Items:5") may hold a space
+        return [p.strip().strip('"\'') for p in re.split(r'[,;]', text) if p.strip().strip('"\'')]
+    return [value]
+
+
+def _whole(value, default, what):
+    """A whole number argument (page, attachment), or a refusal in words."""
+    if value is None or value == '':
+        return default
+    try:
+        number = float(str(value).strip())
+        if number != number or number in (float('inf'), float('-inf')) or number != int(number):
+            raise ValueError
+        return int(number)
+    except (TypeError, ValueError, OverflowError):
+        raise MailError(f"{what} must be a whole number (got {value!r}).")
+
+
+# --- Recipients -----------------------------------------------------------------
+
+def _resolve_recipient(entry):
+    """One to/cc/bcc entry -> ((name, addr), None) or (None, why).
+
+    The whitelist gate lives HERE and nowhere else: send, forward, cc and bcc
+    all come through it. An address needs allow-all; a contact id needs the
+    contact to be whitelisted for email."""
+    text = str(entry).strip()
+    if '@' in text:
+        if not _setting('allow_all_recipients'):
+            return None, "Direct email addresses are not allowed. Use a contact id from get_recipients()."
+        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', text):
+            return None, f"Invalid email address: {text}"
+        return (text, text), None
+    from core.contacts import get_people
+    people_scope = _get_current_people_scope()
+    if people_scope is None:
+        return None, "People contacts are disabled for this chat."
+    person = next((p for p in get_people(people_scope) if str(p.get('id')) == text), None)
+    if not person:
+        return None, f"Contact id {text} not found. Use get_recipients()."
+    if not person.get('email_whitelisted'):
+        return None, f"{person['name']} is not whitelisted for email."
+    if not person.get('email'):
+        return None, f"{person['name']} has no email address."
+    return (person['name'], person['email']), None
+
+
+def _recipients(entries, label='to'):
+    """A list of entries -> ([(name, addr)], None) or (None, why). Fails loud
+    on the first bad one, so nobody is silently dropped."""
+    out = []
+    for entry in _as_list(entries):
+        pair, why = _resolve_recipient(entry)
+        if why:
+            return None, f"{label} {entry}: {why}"
+        out.append(pair)
+    return out, None
+
+
+def _unique(pairs, skip=()):
+    """Drop repeated addresses (and any in `skip`), keeping order."""
+    seen = {a.lower() for _, a in skip}
+    out = []
+    for n, a in pairs:
+        if a.lower() not in seen:
+            seen.add(a.lower())
+            out.append((n, a))
+    return out
+
+
+def _get_recipients():
+    from core.contacts import get_people
+    allow_all = _setting('allow_all_recipients')
+    people_scope = _get_current_people_scope()
+    if people_scope is None and not allow_all:
+        return "People contacts are disabled for this chat.", False
+    lines = []
+    if people_scope is not None:
+        people = [p for p in get_people(people_scope)
+                  if p.get('email') and (allow_all or p.get('email_whitelisted'))]
+        if people:
+            lines.append("Available contacts:")
+            lines += [f"  [{p['id']}] {p['name']}" for p in people]
+    if allow_all:
+        lines.append("\nDirect addresses are enabled: to/cc/bcc also take any email address.")
+    if not lines:
+        return "No contacts are whitelisted for email. Add contacts in Mind > People and enable 'Allow email'.", False
+    return '\n'.join(lines), True
+
+
+# --- Listing --------------------------------------------------------------------
+
+def _format_list(creds, mb, key, rows, title=None):
+    title = title or key.title()
+    if not rows:
+        return f"Account: {creds['address']}\n{title}: no emails.\nFolders: {', '.join(mb.folder_keys())}"
+    unread = sum(1 for r in rows if r['unread'])
+    lines = [f"Account: {creds['address']}",
+             f"{title}: {len(rows)} shown, {unread} unread"]
+    for r in rows:
+        tags = (" *NEW*" if r['unread'] else "") + (" (starred)" if r['starred'] else "") \
+               + (" (attachment)" if r['attach'] else "")
+        # A Gmail everywhere-search finds mail in All Mail; `where` is the folder it shows in.
+        here = r['id'].rpartition(':')[0]
+        place = r.get('where') or here
+        sent = place == 'sent'                               # sent mail lists who it went to
+        who = f"to {r.get('to_name') or r['name']}" if sent and here != 'sent' else (f"to {r['name']}" if sent else r['name'])
+        if place != here:
+            tags += f" (in {place})"
+        lines.append(f"  [{r['id']}] {r['date']} - {who}: {r['subject']}{tags}")
+    lines.append(f"Folders: {', '.join(mb.folder_keys())}")
+    lines.append("read_email(id) for the content.")
+    return '\n'.join(lines)
+
+
+def _count(value, default=20):
+    try:
+        return min(max(1, int(value)), 50)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_inbox(folder='inbox', count=20, unread_only=False):
+    scope, creds = _open()
+    with Mailbox(scope, creds) as mb:
+        key, rows = mb.latest(folder or 'inbox', _count(count), bool(unread_only))
+        return _format_list(creds, mb, key, rows), True
+
+
+def _search_query(query, folder, count):
+    """search_emails(query=...): the search words of search.py, everywhere unless a folder is named."""
+    from plugins.email import search
+    try:
+        terms, place = search.where(search.parse(query))
+    except ValueError as e:
+        return str(e), False
+    if not terms and not place and not folder:
+        return f"The query is empty. {search.HELP}", False
+    spot = str(folder or place or 'all').strip()
+    everywhere = spot.lower() in ('all', 'anywhere', 'everywhere')
+    scope, creds = _open()
+    with Mailbox(scope, creds) as mb:
+        rows, total = mb.find(terms, None if everywhere else spot, everywhere, _count(count))
+        place_words = 'all folders' if everywhere else mb.key_for(mb.resolve(spot))
+        title = f"Search \"{query.strip()}\" in {place_words}"
+        if not rows:
+            return (f"Account: {creds['address']}\n{title}: nothing matched.\n"
+                    f"Folders: {', '.join(mb.folder_keys())}"), True
+        text = _format_list(creds, mb, None, rows, title=title)
+        if any(r.get('where') and r['where'] != r['id'].rpartition(':')[0] for r in rows):
+            text += ("\nThese ids are from Gmail's All Mail (archive), which holds every mail; \"(in inbox)\" is "
+                     "where the mail shows. The id works as it is for read, move and mark.")
+        if total > len(rows):
+            text += f"\n({total} matched; these are the newest {len(rows)}. Add words to narrow it.)"
+        return text, True
+
+
+def _search_emails(sender=None, content=None, date=None, folder=None, count=20, query=None):
+    if query and str(query).strip():
+        if sender or content or date:
+            return "Give query, or the sender / content / date fields, not both. query can say it all: from:ann after:2026-11-01", False
+        return _search_query(str(query), folder, count)
+    folder = folder or 'inbox'
+    if not any([sender, content, date]):
+        return "Give query (e.g. to:krem subject:invoice), or at least one of: sender, content, date.", False
+    day = None
+    if date:
+        day = mailbox.parse_day(date)
+        if day is None:
+            return f"Invalid date {date!r}. Use YYYY-MM-DD.", False
+    scope, creds = _open()
+    with Mailbox(scope, creds) as mb:
+        key, rows = mb.search(folder or 'inbox', sender=sender, content=content, date=day, count=_count(count))
+        if not rows:
+            return "No matching emails found.", True
+        return _format_list(creds, mb, key, rows, title=f"Search in {key}"), True
+
+
+# --- Reading --------------------------------------------------------------------
+
+def _size(n):
+    return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{max(1, n // 1024)} KB"
+
+
+def _paged(text, page):
+    pages = max(1, math.ceil(len(text) / PAGE))
+    page = min(max(1, int(page or 1)), pages)
+    return text[(page - 1) * PAGE: page * PAGE], page, pages
+
+
+def _pictures(files):
+    """Raw bytes of the first few pictures, shaped for the chat."""
+    out = []
+    try:
+        from core import images as ci
+    except Exception:
+        return out
+    for f in files:
+        if len(out) >= MAX_SEEN_IMAGES:
+            break
+        if f['type'].startswith('image/'):
+            try:
+                out.append(ci.for_chat(f['data']))
+            except Exception:
+                pass   # not a picture PIL can open (svg, a broken file)
+    return out
+
+
+def _with_pictures(text, pics):
+    if not pics:
+        return text
+    from core import images as ci
+    return ci.result(text, pics)
+
+
+def _read_attachment(handle, files, n, page):
+    if not files:
+        return f"Email {handle} has no attachments.", False
+    if n < 1 or n > len(files):
+        return f"No attachment {n}. This email has {len(files)}.", False
+    f = files[n - 1]
+    title = f"Attachment {n} of {handle}: {f['name']} ({f['type']}, {_size(len(f['data']))})"
+    if f['type'].startswith('image/'):
+        pics = _pictures([f])
+        if pics:
+            return _with_pictures(title, pics), True
+    if f['type'] == 'message/rfc822':             # an email attached to the email
+        inner = message.parse(f['data'])
+        head = [f"From: {message.names(message.addresses(inner, 'From')) or 'Unknown'}{_stranger_tag(inner)}"]
+        to = message.names(message.addresses(inner, 'To'))
+        if to:
+            head.append(f"To: {to}")
+        head += [f"Subject: {message.header(inner, 'Subject', '(no subject)')}", f"Date: {message.header(inner, 'Date', '?')}"]
+        more_files = message.attachments(inner)
+        if more_files:
+            head.append("Its own attachments (not openable from here): " + ', '.join(x['name'] for x in more_files))
+        text, page, pages = _paged(message.body_text(inner) or '(no text content)', page)
+        more = f"\n\n(page {page} of {pages}; read_email(id, attachment={n}, page={page + 1}) for more)" if page < pages else ""
+        return f"{title}\nThis attachment is an email:\n" + '\n'.join(head) + f"\n\n{text}{more}", True
+    if f['type'].startswith(_TEXT_TYPES):
+        text, page, pages = _paged(f['data'].decode('utf-8', errors='replace'), page)
+        more = f"\n\n(page {page} of {pages}; read_email(id, attachment={n}, page={page + 1}) for more)" if page < pages else ""
+        return f"{title}\n\n{text}{more}", True
+    return f"{title}\nThis kind of file can't be opened here.", False
+
+
+def _stranger_tag(msg):
+    """' (not in your contacts)' when the sender's address is no People
+    contact's. She sees names, never addresses, and anyone can write any
+    name: this is the one sign that "Mom" is not Mom."""
+    scope = _get_current_people_scope()
+    if scope is None:
+        return ''
+    frm = message.addresses(msg, 'From')
+    if not frm:
+        return ''
+    try:
+        from core.contacts import get_people
+        known = {(p.get('email') or '').strip().lower() for p in get_people(scope)}
+    except Exception as e:
+        logger.debug(f"[EMAIL] contacts not read for the sender check: {e}")
+        return ''
+    return '' if frm[0][1].lower() in known else ' (not in your contacts)'
+
+
+def _reply_warning(msg, own):
+    """A line when a reply would not go back to the sender (a Reply-To that
+    names someone else): the oldest trick for getting an answer sent elsewhere."""
+    frm = {a.lower() for _, a in message.addresses(msg, 'From')}
+    back, _cc = message.reply_targets(msg, own)
+    other = [p for p in back if p[1].lower() not in frm]
+    if not frm or not other:
+        return []
+    return [f"Replies go to: {message.names(other)} (NOT the sender; this email asks for replies elsewhere)"]
+
+
+def _read_email(handle, page=1, attachment=None):
+    page = _whole(page, 1, 'page')
+    scope, creds = _open()
+    with Mailbox(scope, creds) as mb:
+        msg, flags = mb.message(handle, mark_read=True)
+    files = message.attachments(msg)
+    if attachment is not None:
+        return _read_attachment(handle, files, _whole(attachment, 1, 'attachment'), page)
+
+    text, page, pages = _paged(message.body_text(msg) or '(no text content)', page)
+    lines = [f"From: {message.names(message.addresses(msg, 'From')) or 'Unknown'}{_stranger_tag(msg)}"]
+    lines += _reply_warning(msg, creds['address'])
+    for label in ('To', 'Cc'):
+        who = message.names(message.addresses(msg, label))
+        if who:
+            lines.append(f"{label}: {who}")
+    lines.append(f"Subject: {message.header(msg, 'Subject', '(no subject)')}")
+    lines.append(f"Date: {message.header(msg, 'Date', '?')}")
+    if b'\\flagged' in flags:
+        lines.append("Starred")
+    if files:
+        lines.append("Attachments:")
+        lines += [f"  [{i}] {f['name']} ({f['type']}, {_size(len(f['data']))})" for i, f in enumerate(files, 1)]
+    lines += ["", text]
+    if page < pages:
+        lines.append(f"\n(page {page} of {pages}; read_email(id, page={page + 1}) for more)")
+    return _with_pictures('\n'.join(lines), _pictures(files) if page == 1 else []), True
+
+
+# --- Moving + marking -------------------------------------------------------------
+
+_MOVED = {'archive': "Archived", 'trash': "Moved to Trash (recoverable there)",
+          'spam': "Marked as spam", 'inbox': "Moved to Inbox"}
+_MARKS = {'read': (b'\\Seen', True), 'unread': (b'\\Seen', False),
+          'starred': (b'\\Flagged', True), 'unstarred': (b'\\Flagged', False)}
+
+
+def _skipped_lines(skipped):
+    if not skipped:
+        return []
+    return [f"Skipped {len(skipped)}:"] + [f"  [{h}] {why}" for h, why in skipped]
+
+
+def _move_emails(ids, to):
+    ids, dest = _as_list(ids), str(to or '').strip()
+    if not ids or not dest:
+        return "ids and to are both required.", False
+    scope, creds = _open()
+    with Mailbox(scope, creds) as mb:
+        # Archive is the one folder made when missing; a server with no Trash
+        # or Spam is refused, so a delete can never become a permanent one.
+        moved, skipped = mb.move(ids, dest, create='Archive' if dest.lower() == 'archive' else None)
+    lines = []
+    if moved:
+        lines.append(f"{_MOVED.get(dest.lower(), f'Moved to {dest}')}: {len(moved)} email{'s' if len(moved) != 1 else ''}")
+        lines += [f"  [{h}] {s}" for h, s in moved]
+        lines.append("They have new ids in that folder; list it to see them.")
+        logger.info(f"[EMAIL] moved {len(moved)} to {dest}")
+    lines += _skipped_lines(skipped)
+    return '\n'.join(lines) or "Nothing to move.", bool(moved)
+
+
+def _mark_emails(ids, mark):
+    ids = _as_list(ids)
+    if not ids:
+        return "ids is required.", False
+    if mark not in _MARKS:
+        return f"mark must be one of: {', '.join(_MARKS)}.", False
+    flag, on = _MARKS[mark]
+    scope, creds = _open()
+    with Mailbox(scope, creds) as mb:
+        changed, skipped = mb.flag(ids, flag, on)
+    lines = [f"Marked {changed} email{'s' if changed != 1 else ''} {mark}."] if changed else []
+    lines += _skipped_lines(skipped)
+    return '\n'.join(lines) or "Nothing to mark.", bool(changed)
+
+
+# --- Sending --------------------------------------------------------------------
+
+def _in_task_run():
+    """True when this turn was started by an event (a new email, a webhook),
+    not by a person typing. Mail sent from such a run is automatic mail: it
+    says so in its headers, so the other side's responder does not answer it."""
+    try:
+        from core.continuity.executor import current_event_data
+        return bool(current_event_data.get())
+    except Exception:
+        return False
+
+
+def _attachments(sources, reply=False):
+    """attach=[...] -> ([{'name','type','data'}], None) or (None, why).
+
+    Pictures she already holds, by handle, and nothing else. A reply goes to
+    whoever wrote in, and an incoming mail can ask for anything, so:
+      - img:<id>, a picture in this chat: always.
+      - doc:<N>, a library photo: only on a new email, whose recipients all
+        passed the whitelist gate. Library photos are numbered 1, 2, 3...,
+        so "reply with doc:1 to doc:20" would walk the whole library.
+      - a file path or a web address: never. core.images would read any
+        picture on this machine, or fetch any address this machine can reach
+        (a camera on the home network), and mail it out."""
+    out, total = [], 0
+    for i, src in enumerate(_as_list(sources), 1):
+        from core import images as ci
+        handle = str(src).strip()
+        if handle.startswith('doc:'):
+            if reply:
+                return None, (f"attach {handle}: a library photo can only go on a new email to contacts you are "
+                              "allowed to write (send_email with to), not on a reply.")
+        elif not handle.startswith('img:'):
+            return None, (f"attach {handle}: only pictures you already have can be attached, as img:<id> "
+                          "(a picture in this chat) or doc:<N> (a library photo). File paths and web "
+                          "addresses are not attachable.")
+        try:
+            got = ci.resolve(handle)
+        except ci.ImageError as e:
+            return None, f"attach {src}: {e}"
+        name = re.sub(r'[^\w.\- ]', '_', str(got.label or ''))[-80:] or f"image-{i}"
+        if not re.search(r'\.\w{2,5}$', name):
+            name += mimetypes.guess_extension(got.media_type) or '.jpg'
+        total += len(got.data)
+        if total > MAX_ATTACH:
+            return None, f"Attachments are over {MAX_ATTACH // 1048576} MB in total."
+        out.append({'name': name, 'type': got.media_type, 'data': got.data})
+    return out, None
+
+
+def _deliver(scope, creds, msg, pairs, what):
+    """SMTP out + the Sent copy. (text, ok)."""
+    try:
+        return mailbox.send(scope, creds, msg, [a for _, a in pairs]), True
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"[EMAIL] SMTP auth error ({what}): {e}")
+        return f"{what} failed: the mail server refused the login. Check the password.", False
+    except Exception as e:
+        logger.error(f"[EMAIL] {what} error: {e}", exc_info=True)
+        return f"{what} failed: {e}", False
+
+
+def _send_email(body='', to=None, reply_to=None, reply_all=False, subject=None,
+                cc=None, bcc=None, attach=None, draft=False):
+    # Exactly one target mode. A call naming both people AND a mail to reply
+    # to is ambiguous, and guessing once sent a mail to the wrong person.
+    has_to = bool(_as_list(to))
+    if has_to and reply_to:
+        return ("Pass EITHER to (a new email) OR reply_to (a reply), not both. "
+                "To add people to a reply, use cc.", False)
+    if not has_to and not reply_to:
+        return ("No recipient. Pass to (contact ids from get_recipients) for a new email, "
+                "or reply_to (an email id) for a reply.", False)
+
+    scope, creds = _open()
+    automatic = _in_task_run()
+    cc_pairs, why = _recipients(cc, 'cc')
+    if why:
+        return why, False
+    bcc_pairs, why = _recipients(bcc, 'bcc')
+    if why:
+        return why, False
+    files, why = _attachments(attach, reply=bool(reply_to))
+    if why:
+        return why, False
+    if not isinstance(body, str):
+        return "body must be the email's text.", False
+
+    original, mode = None, None
+    if reply_to:
+        if reply_all and not _setting('allow_reply_all', True):
+            return "Reply-all is turned off in Settings > Plugins > Email. Send a plain reply, or ask for it to be turned on.", False
+        with Mailbox(scope, creds) as mb:
+            original, _ = mb.message(reply_to)
+        if automatic:
+            # Nobody is in the loop in a task run: the same rule as the auto-reply
+            # handler. Automated mail is never answered automatically.
+            why = message.is_automated(original)
+            if why:
+                return (f"Not sent: that email is automated ({why}), and a task must not answer automated "
+                        "mail (two machines would mail each other forever). Leave it unanswered."), False
+        to_pairs, thread_cc = message.reply_targets(original, creds['address'], reply_all)
+        if not to_pairs:
+            return "Could not determine a reply address from that email.", False
+        cc_pairs = thread_cc + cc_pairs
+        subject = subject or message.prefixed(message.header(original, 'Subject'), 'Re')
+        mode = 'reply'
+    else:
+        to_pairs, why = _recipients(to, 'to')
+        if why:
+            return why, False
+        if not subject:
+            return "subject is required for new emails.", False
+
+    to_pairs = _unique(to_pairs)
+    cc_pairs = _unique(cc_pairs, skip=to_pairs)
+    bcc_pairs = _unique(bcc_pairs, skip=to_pairs + cc_pairs)
+    msg = message.build(creds['address'], to_pairs, cc_pairs, subject, body, original, mode, files,
+                        auto=automatic)
+
+    extras = (f" (cc {message.names(cc_pairs)})" if cc_pairs else "") \
+        + (f" (bcc {message.names(bcc_pairs)})" if bcc_pairs else "") \
+        + (f" ({len(files)} attached)" if files else "")
+    if draft:
+        if bcc_pairs:        # a draft is a file, not a delivery: its Bcc line is how the mail program knows
+            msg['Bcc'] = ', '.join(email.utils.formataddr(p) for p in bcc_pairs)
+        with Mailbox(scope, creds) as mb:
+            mb.append('drafts', msg, flags=(b'\\Draft', b'\\Seen'))
+        return f"Draft saved for {message.names(to_pairs)}{extras}: \"{subject}\" (not sent)", True
+
+    note, ok = _deliver(scope, creds, msg, to_pairs + cc_pairs + bcc_pairs, "Send")
+    if not ok:
+        return note, False
+    if reply_to:
+        try:
+            with Mailbox(scope, creds) as mb:
+                mb.flag([reply_to], b'\\Answered')
+        except Exception as e:
+            logger.debug(f"[EMAIL] could not flag {reply_to} answered: {e}")
+    logger.info(f"[EMAIL] sent ({'reply' if reply_to else 'new'}) to {len(to_pairs + cc_pairs + bcc_pairs)} "
+                f"recipient(s){', ' + str(len(files)) + ' attached' if files else ''}")
+    return f"Email sent to {message.names(to_pairs)}{extras}: \"{subject}\"{note}", True
+
+
+def _forward_email(handle, to, cc=None, note=''):
+    to_pairs, why = _recipients(to, 'to')
+    if why:
+        return why, False
+    if not to_pairs:
+        return "to is required: contact ids from get_recipients().", False
+    cc_pairs, why = _recipients(cc, 'cc')
+    if why:
+        return why, False
+    scope, creds = _open()
+    with Mailbox(scope, creds) as mb:
+        original, _ = mb.message(handle)
+
+    files, left_out = message.attachments(original), ""
+    if sum(len(f['data']) for f in files) > MAX_ATTACH:
+        files, left_out = [], f" (attachments over {MAX_ATTACH // 1048576} MB were left out)"
+    subject = message.prefixed(message.header(original, 'Subject', '(no subject)'), 'Fwd')
+    to_pairs = _unique(to_pairs)
+    cc_pairs = _unique(cc_pairs, skip=to_pairs)
+    msg = message.build(creds['address'], to_pairs, cc_pairs, subject, note or '', original, 'forward', files)
+
+    sent_note, ok = _deliver(scope, creds, msg, to_pairs + cc_pairs, "Forward")
+    if not ok:
+        return sent_note, False
+    extras = (f" (cc {message.names(cc_pairs)})" if cc_pairs else "") \
+        + (f" ({len(files)} attached)" if files else "") + left_out
+    logger.info(f"[EMAIL] forwarded to {len(to_pairs + cc_pairs)} recipient(s)")
+    return f"Forwarded to {message.names(to_pairs)}{extras}: \"{subject}\"{sent_note}", True
+
+
+# --- Executor -------------------------------------------------------------------
+
+_OLD_ARGS = ('index', 'indices', 'reply_to_index')
+
 
 def execute(function_name, arguments, config):
-    # Scope gate at the ONE door. The resolver correctly returns None for
-    # disabled/unresolved — but _get_cache used to launder None into the
-    # shared 'default' bucket, serving another scope's cached mail (full
-    # bodies, no TTL) to chats with email OFF (negspace N1 CRIT, 2026-08-31).
-    # Refuse here, before any cache or creds path runs.
+    # Scope gate at the ONE door: a chat with email off gets a refusal before
+    # any credential or server path runs.
     if _get_current_email_scope() is None:
         return "Email is disabled for this chat.", False
+    arguments = arguments or {}
+    if any(k in arguments for k in _OLD_ARGS):
+        return ("Emails are addressed by id now (like inbox:4821~k7p), not by a number in the list. "
+                "Call get_inbox or search_emails to see the ids.", False)
     try:
         if function_name == "get_inbox":
-            return _get_inbox(count=arguments.get('count', 20), folder=arguments.get('folder', 'inbox'))
-        elif function_name == "read_email":
-            index = arguments.get('index')
-            if index is None:
-                return "index is required.", False
-            return _read_email(index)
-        elif function_name == "search_emails":
-            return _search_emails(
-                sender=arguments.get('sender'),
-                content=arguments.get('content'),
-                date=arguments.get('date'),
-                folder=arguments.get('folder', 'inbox'),
-                count=arguments.get('count', 20),
-            )
-        elif function_name == "archive_emails":
-            indices = arguments.get('indices')
-            if not indices:
-                return "indices list is required.", False
-            return _archive_emails(indices)
-        elif function_name == "delete_emails":
-            indices = arguments.get('indices')
-            if not indices:
-                return "indices list is required.", False
-            return _delete_emails(indices)
-        elif function_name == "forward_email":
-            index = arguments.get('index')
-            if index is None:
-                return "index is required.", False
-            return _forward_email(
-                index,
-                recipient_id=arguments.get('recipient_id'),
-                address=arguments.get('address'),
-                note=arguments.get('note', ''),
-            )
-        elif function_name == "get_recipients":
-            return _get_recipients()
-        elif function_name == "send_email":
-            body = arguments.get('body', '')
-            if not body:
+            return _get_inbox(arguments.get('folder', 'inbox'), arguments.get('count', 20),
+                              arguments.get('unread_only', False))
+        if function_name == "read_email":
+            if not arguments.get('id'):
+                return "id is required.", False
+            return _read_email(arguments['id'], arguments.get('page', 1), arguments.get('attachment'))
+        if function_name == "search_emails":
+            return _search_emails(arguments.get('sender'), arguments.get('content'), arguments.get('date'),
+                                  arguments.get('folder'), arguments.get('count', 20), arguments.get('query'))
+        if function_name == "move_emails":
+            return _move_emails(arguments.get('ids'), arguments.get('to'))
+        if function_name == "mark_emails":
+            return _mark_emails(arguments.get('ids'), arguments.get('mark'))
+        if function_name == "send_email":
+            if not arguments.get('body'):
                 return "body is required.", False
             return _send_email(
-                recipient_id=arguments.get('recipient_id'),
-                subject=arguments.get('subject'),
-                body=body,
-                reply_to_index=arguments.get('reply_to_index'),
-                address=arguments.get('address'),
-                cc=arguments.get('cc'),
-            )
-        else:
-            return f"Unknown email function '{function_name}'.", False
+                body=arguments['body'], to=arguments.get('to'), reply_to=arguments.get('reply_to'),
+                reply_all=bool(arguments.get('reply_all')), subject=arguments.get('subject'),
+                cc=arguments.get('cc'), bcc=arguments.get('bcc'), attach=arguments.get('attach'),
+                draft=bool(arguments.get('draft')))
+        if function_name == "forward_email":
+            if not arguments.get('id'):
+                return "id is required.", False
+            return _forward_email(arguments['id'], arguments.get('to'), arguments.get('cc'),
+                                  arguments.get('note', ''))
+        if function_name == "get_recipients":
+            return _get_recipients()
+        return f"Unknown email function '{function_name}'.", False
+    except MailError as e:
+        return str(e), False
     except Exception as e:
         logger.error(f"Email tool error in {function_name}: {e}", exc_info=True)
+        if type(e).__name__ == 'LoginError':
+            return f"Email login failed - check the account's password. ({e})", False
         return f"Email error: {e}", False
+
+
+def shutdown():
+    """Plugin disabled, reloaded or Sapphire stopping: log out the Email page's kept logins."""
+    try:
+        from plugins.email import index, mailbox
+        mailbox.close_kept()
+        index.shutdown()
+    except Exception as e:
+        logger.warning(f"[EMAIL] shutdown: {e}")

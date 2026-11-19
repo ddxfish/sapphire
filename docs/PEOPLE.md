@@ -38,7 +38,7 @@ The email and phone plugins never see addresses or numbers. They see only the pe
 
 1. On a person card, tick **Allow email** (or **Allow phone calls**).
 2. She calls `get_recipients()` and gets back `{id, name}` pairs, with no addresses.
-3. She sends with `send_email(recipient_id=…)` or calls with `phone_call`; Sapphire looks up the real address or number itself.
+3. She sends with `send_email(to=[id])` or calls with `phone_call`; Sapphire looks up the real address or number itself.
 
 So a confused model or a prompt injection can't email or call an arbitrary address. If the memory engine can't answer, the contact list comes back empty rather than guessing.
 
@@ -64,5 +64,5 @@ TOOLS:
 
 CONTACTS (core/contacts.py, provider = the active memory engine; fails closed on error):
 - Person fields allow_email / allow_call gate the tools.
-- get_recipients() [email] → [{id, name}] of allowed contacts, no addresses; send_email(recipient_id, subject, body); phone_call [twilio-voice] resolves the number server-side the same way.
+- get_recipients() [email] → [{id, name}] of allowed contacts, no addresses; send_email(to=[ids], subject, body); phone_call [twilio-voice] resolves the number server-side the same way.
 - Which cards: the chat's `people` scope (sidebar "contacts"), separate from memory_scope.

@@ -128,3 +128,35 @@ class TestGcalScopeIsolation:
 
         assert creds_manager.get_gcal_account('a')['client_id'] == ''  # gone
         assert creds_manager.get_gcal_account('b')['client_id'] == 'id_b'  # still here
+
+
+# -- Easy Connect (relay) accounts: no local client id or secret ----------------
+# Moved here from the Google Calendar plugin's tests when the Calendar plugin
+# took that plugin over (2026-11-18); they test this file's subject.
+
+def test_relay_account_counts_as_connected(creds_manager):
+    import time
+    creds_manager.set_gcal_account('easy', '', '', 'primary', '', 'easy',
+                                   auth_mode='relay', relay_url='https://relay.example')
+    assert creds_manager.has_gcal_account('easy') is False  # no refresh token yet
+    creds_manager.update_gcal_tokens('easy', 'rt-1', 'at-1', time.time() + 3600)
+    assert creds_manager.has_gcal_account('easy') is True   # despite the empty client_id
+
+    acct = creds_manager.get_gcal_account('easy')
+    assert acct['auth_mode'] == 'relay'
+    assert acct['relay_url'] == 'https://relay.example'
+    assert acct['client_id'] == ''
+
+
+def test_legacy_account_defaults_to_byo(creds_manager):
+    creds_manager.set_gcal_account('old', 'cid', 'csec', refresh_token='rt')
+    acct = creds_manager.get_gcal_account('old')
+    assert acct['auth_mode'] == 'byo'
+    assert creds_manager.has_gcal_account('old') is True
+
+
+def test_byo_without_client_id_still_not_connected(creds_manager):
+    """[REGRESSION_GUARD] A relay account needs no client id; a byo account
+    with none must not read as connected."""
+    creds_manager.set_gcal_account('shell', '', '', refresh_token='rt')
+    assert creds_manager.has_gcal_account('shell') is False

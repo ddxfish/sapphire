@@ -48,7 +48,7 @@ Scopes isolate data per-chat via ContextVars. Only `rag` and `private` are hardc
 | `scope_github` | GitHub account | No | github plugin |
 | `scope_email` | Email account | No | email plugin |
 | `scope_bitcoin` | Wallet | No | bitcoin plugin |
-| `scope_gcal` | Calendar account | No | google-calendar plugin |
+| `scope_gcal` | Calendar (local, with its Google / ICS links) | No | calendar plugin |
 | `scope_telegram` | Telegram account | No | telegram plugin |
 | `scope_discord` | Discord account | No | discord plugin |
 | `scope_social`, `scope_twilio`, `scope_wordpress` | Social profile, phone number, WordPress site | No | social, twilio-voice, wordpress plugins |

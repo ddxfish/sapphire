@@ -1,0 +1,73 @@
+{
+  "name": "calendar",
+  "short_display_name": "Calendar",
+  "version": "2.0.0",
+  "description": "A calendar that lives on this machine, with a Calendar page (year, month, week, day). Link a Google calendar (two-way) or any ICS address (read-only), and she can list, add, change and delete events",
+  "author": "sapphire",
+  "url": "https://sapphireblue.dev",
+  "icon": "📆",
+  "priority": 50,
+  "default_enabled": false,
+  "replaces": ["google-calendar"],
+  "capabilities": {
+    "app": {
+      "label": "Calendar",
+      "icon": "📆",
+      "description": "Your calendar by year, month, week or day, with your linked calendars. Events she adds show up here.",
+      "nav": "apps"
+    },
+    "tools": ["tools/calendar_tools.py"],
+    "cleanup_paths": ["plugin_state/gcal-csrf.json"],
+    "scopes": [
+      {
+        "key": "gcal",
+        "label": "calendar",
+        "endpoint": "/api/plugin/calendar/calendars",
+        "data_key": "calendars",
+        "value_field": "name",
+        "name_field": "name",
+        "label_template": "{label}",
+        "implicit_default": true
+      }
+    ],
+    "routes": [
+      {"method": "GET", "path": "calendars", "handler": "routes/events.py:list_calendars"},
+      {"method": "PUT", "path": "calendars/{name}", "handler": "routes/events.py:put_calendar"},
+      {"method": "DELETE", "path": "calendars/{name}", "handler": "routes/events.py:delete_calendar"},
+      {"method": "GET", "path": "events", "handler": "routes/events.py:list_events"},
+      {"method": "POST", "path": "events", "handler": "routes/events.py:create_event"},
+      {"method": "PUT", "path": "events/{event_id}", "handler": "routes/events.py:update_event"},
+      {"method": "DELETE", "path": "events/{event_id}", "handler": "routes/events.py:delete_event"},
+      {"method": "GET", "path": "links", "handler": "routes/links.py:get_links"},
+      {"method": "POST", "path": "links", "handler": "routes/links.py:add_link"},
+      {"method": "PUT", "path": "links/{link_id}", "handler": "routes/links.py:update_link"},
+      {"method": "DELETE", "path": "links/{link_id}", "handler": "routes/links.py:delete_link"},
+      {"method": "POST", "path": "target", "handler": "routes/links.py:set_target"},
+      {"method": "POST", "path": "sync", "handler": "routes/links.py:sync_now"},
+      {"method": "GET", "path": "auth", "handler": "routes/oauth.py:start_auth"},
+      {"method": "GET", "path": "callback", "handler": "routes/oauth.py:handle_callback"},
+      {"method": "GET", "path": "status", "handler": "routes/oauth.py:get_status"},
+      {"method": "POST", "path": "disconnect", "handler": "routes/oauth.py:disconnect"}
+    ],
+    "settings": [
+      {
+        "key": "week_start",
+        "type": "string",
+        "label": "Week starts on",
+        "default": "sunday",
+        "options": [
+          {"value": "sunday", "label": "Sunday"},
+          {"value": "monday", "label": "Monday"}
+        ],
+        "help": "The first column of the Calendar page's month and week views."
+      },
+      {
+        "key": "GCAL_RELAY_URL",
+        "type": "string",
+        "label": "Easy Connect relay",
+        "default": "https://oauth.sapphireblue.dev",
+        "help": "The relay used to connect a Google account with one click. Change only if you run your own relay."
+      }
+    ]
+  }
+}

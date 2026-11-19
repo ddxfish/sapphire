@@ -51,7 +51,7 @@ class _BrokenContextVar:
         ("plugins.memory.tools.knowledge_tools", "_get_current_scope", "scope_knowledge"),
         ("plugins.memory.tools.knowledge_tools", "_get_current_people_scope", "scope_people"),
         ("plugins.memory.tools.goals_tools", "_get_current_scope", "scope_goal"),
-        ("gcal", "_get_gcal_scope", "scope_gcal"),
+        ("plugins.calendar.tools.calendar_tools", "_scope", "scope_gcal"),
     ],
 )
 def test_get_current_scope_returns_none_on_exception(module_path, fn_name, scope_attr):
@@ -61,25 +61,7 @@ def test_get_current_scope_returns_none_on_exception(module_path, fn_name, scope
     import importlib.util
     from pathlib import Path
 
-    if module_path == "gcal":
-        # google-calendar uses a hyphen in the folder, so we can't import via
-        # standard package path. Load calendar.py directly by filesystem path.
-        # The module executes its top-level imports (fastapi, etc.) — all of
-        # which are available in the test env.
-        spec = importlib.util.spec_from_file_location(
-            "gcal_tools_under_test",
-            Path(__file__).parent.parent / "core" / "plugins" / "google-calendar" / "tools" / "calendar.py",
-        )
-        mod = importlib.util.module_from_spec(spec)
-        # Register in sys.modules BEFORE exec so any self-references resolve.
-        import sys
-        sys.modules["gcal_tools_under_test"] = mod
-        try:
-            spec.loader.exec_module(mod)
-        except Exception as e:
-            pytest.skip(f"gcal module import failed in test env: {e}")
-    else:
-        mod = importlib.import_module(module_path)
+    mod = importlib.import_module(module_path)
 
     fn = getattr(mod, fn_name, None)
     assert fn is not None, f"{module_path} has no {fn_name}"
@@ -106,13 +88,13 @@ def test_no_scope_resolver_hardcodes_default_fallback():
         project_root / "core/plugins/memory/tools/memory_tools.py",
         project_root / "core/plugins/memory/tools/knowledge_tools.py",
         project_root / "core/plugins/memory/tools/goals_tools.py",
-        project_root / "core/plugins/google-calendar/tools/calendar.py",
+        project_root / "core/plugins/calendar/tools/calendar_tools.py",
     ]
     # Match `def _get_current_scope` (or similar) body and look for
     # `return 'default'` or `return "default"` within the next ~400 chars.
     for path in targets:
         src = path.read_text(encoding="utf-8")
-        for match in re.finditer(r"def _get_current[a-z_]*\s*\(", src):
+        for match in re.finditer(r"def (?:_get_current[a-z_]*|_scope)\s*\(", src):
             body = src[match.start():match.start() + 400]
             assert not re.search(r"return\s+['\"]default['\"]", body), (
                 f"{path.name} still returns 'default' as scope fallback — "

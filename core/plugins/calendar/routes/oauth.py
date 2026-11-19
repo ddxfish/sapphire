@@ -1,6 +1,14 @@
-# Google Calendar OAuth2 routes
-# Handles the authorization flow and token management.
-# Scope-aware: uses credentials_manager for multi-account support.
+# core/plugins/calendar/routes/oauth.py - connecting a Google account
+#
+# The authorization flow and token storage, moved here unchanged in behaviour
+# from the Google Calendar plugin this one replaced. One Google account per
+# calendar name, kept by the credentials manager (`gcal_accounts`), so an
+# account connected before the move is still connected.
+#
+# The callback address is /api/plugin/calendar/callback. It used to be
+# /api/plugin/google-calendar/callback: the Easy Connect relay has to allow
+# the new one, and a person who uses their own Google client has to add it to
+# that client's redirect URIs before connecting again.
 
 import base64
 import hashlib
@@ -23,7 +31,7 @@ logger = logging.getLogger(__name__)
 GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 SCOPES = 'https://www.googleapis.com/auth/calendar'
-CALLBACK_PATH = '/api/plugin/google-calendar/callback'
+CALLBACK_PATH = '/api/plugin/calendar/callback'
 # Easy-connect relay: holds the shared Google client so users skip the
 # Console entirely. Overridable in settings for self-hosted relays.
 DEFAULT_RELAY_URL = 'https://oauth.sapphireblue.dev'
@@ -67,6 +75,16 @@ def _save_csrf(data):
             except Exception: pass
 
 
+PAGE = '/#app-calendar'
+
+
+def _fail(message):
+    """Back to the Calendar page, which shows the words. The router reads the
+    hash up to its first '/', so the message rides behind it, fully quoted."""
+    logger.warning(f"[GCAL] connect did not finish: {message}")
+    return RedirectResponse(url=f"{PAGE}/connect-error/{urllib.parse.quote(str(message)[:300], safe='')}", status_code=302)
+
+
 def _get_redirect_uri(request):
     """Build absolute callback URL from the current request's origin."""
     base = str(request.base_url).rstrip('/')
@@ -74,7 +92,7 @@ def _get_redirect_uri(request):
 
 
 def start_auth(request=None, query=None, settings=None, **_):
-    """GET /api/plugin/google-calendar/auth — redirect to Google consent screen.
+    """GET /api/plugin/calendar/auth — redirect to Google consent screen.
     Accepts ?scope=xxx query param to specify which account scope to connect.
     Syncs plugin settings to credentials_manager for the target scope."""
     from core.credentials_manager import credentials
@@ -141,24 +159,27 @@ def _start_easy_auth(request, scope, settings):
         resp = net.post(f"{relay}/start", json={
             'return_url': return_url, 'code_challenge': challenge}, timeout=15)
     except requests.RequestException as e:
-        return {"error": (f"Couldn't reach the connect relay ({type(e).__name__}). "
-                          "Try again in a moment, or use your own client ID (Advanced).")}
+        return _fail(f"Couldn't reach the connect relay ({type(e).__name__}). "
+                          "Try again in a moment, or use your own client ID (Advanced).")
     if resp.status_code != 200:
         try:
             detail = resp.json().get('error', '')
         except ValueError:
             detail = ''
         logger.error(f"[GCAL] Relay /start failed: HTTP {resp.status_code} {detail}")
-        return {"error": f"Connect relay refused (HTTP {resp.status_code}{', ' + detail if detail else ''})"}
+        if resp.status_code == 400 and 'return_url' in detail:
+            return _fail("The connect relay does not know this version's return address yet "
+                              f"({CALLBACK_PATH}). Update the relay, or use your own client ID (Advanced).")
+        return _fail(f"Connect relay refused (HTTP {resp.status_code}{', ' + detail if detail else ''})")
     try:
         auth_url = resp.json()['auth_url']
     except (ValueError, KeyError):
-        return {"error": "Malformed response from connect relay"}
+        return _fail("Malformed response from connect relay")
     return RedirectResponse(url=auth_url, status_code=302)
 
 
 def handle_callback(request=None, query=None, settings=None, **_):
-    """GET /api/plugin/google-calendar/callback — exchange code for tokens."""
+    """GET /api/plugin/calendar/callback — exchange code for tokens."""
     from core.credentials_manager import credentials
 
     q = query or {}
@@ -168,10 +189,10 @@ def handle_callback(request=None, query=None, settings=None, **_):
     error = q.get('error', '') or q.get('relay_error', '')
 
     if error:
-        return RedirectResponse(url=f"/#settings?gcal_error={error}", status_code=302)
+        return _fail(f"Google sign-in was not finished ({str(error)[:120]}).")
 
     if not code and not ticket:
-        return {"error": "No authorization code received"}
+        return _fail("No authorization code received")
 
     # Verify CSRF state and extract scope
     # Lock protects callback-time RMW against a concurrent auth-start writing
@@ -182,7 +203,7 @@ def handle_callback(request=None, query=None, settings=None, **_):
         _save_csrf(csrf)
 
     if not csrf_entry:
-        return {"error": "State mismatch — possible CSRF attack"}
+        return _fail("This sign-in was not started from this page, or it took too long. Try connecting again.")
 
     scope = csrf_entry.get('scope', 'default')
 
@@ -194,7 +215,7 @@ def handle_callback(request=None, query=None, settings=None, **_):
     client_secret = acct.get('client_secret', '')
 
     if not client_id or not client_secret:
-        return {"error": "Missing client ID or secret in account settings"}
+        return _fail("Missing client ID or secret in account settings")
 
     # Exchange code for tokens
     resp = net.post(GOOGLE_TOKEN_URL, data={
@@ -207,14 +228,14 @@ def handle_callback(request=None, query=None, settings=None, **_):
 
     if resp.status_code != 200:
         logger.error(f"[GCAL] Token exchange failed: {resp.text}")
-        return {"error": f"Token exchange failed: {resp.status_code}"}
+        return _fail(f"Token exchange failed: {resp.status_code}")
 
     try:
         tokens = resp.json()
         access_token = tokens['access_token']
     except (ValueError, KeyError) as e:
         logger.error(f"[GCAL] Invalid token response: {e}")
-        return {"error": f"Invalid token response from Google: {e}"}
+        return _fail(f"Invalid token response from Google: {e}")
     refresh_token = tokens.get('refresh_token', acct.get('refresh_token', ''))
     expires_at = time.time() + tokens.get('expires_in', 3600)
 
@@ -228,7 +249,7 @@ def _finish_easy_auth(scope, ticket, csrf_entry):
 
     relay = csrf_entry.get('relay') or DEFAULT_RELAY_URL
     if not ticket:
-        return {"error": "No ticket received from connect relay"}
+        return _fail("No ticket received from connect relay")
 
     try:
         resp = net.post(f"{relay}/claim", json={
@@ -236,18 +257,18 @@ def _finish_easy_auth(scope, ticket, csrf_entry):
             'code_verifier': csrf_entry.get('verifier', ''),
         }, timeout=15)
     except requests.RequestException as e:
-        return {"error": f"Couldn't reach the connect relay ({type(e).__name__}). Try connecting again."}
+        return _fail(f"Couldn't reach the connect relay ({type(e).__name__}). Try connecting again.")
 
     if resp.status_code != 200:
         logger.error(f"[GCAL] Relay claim failed: HTTP {resp.status_code} {resp.text[:200]}")
-        return {"error": f"Token claim failed (HTTP {resp.status_code}). Try connecting again."}
+        return _fail(f"Token claim failed (HTTP {resp.status_code}). Try connecting again.")
 
     try:
         tokens = resp.json()
         access_token = tokens['access_token']
     except (ValueError, KeyError) as e:
         logger.error(f"[GCAL] Invalid relay token response: {e}")
-        return {"error": f"Invalid token response from relay: {e}"}
+        return _fail(f"Invalid token response from relay: {e}")
 
     acct = credentials.get_gcal_account(scope)
     refresh_token = tokens.get('refresh_token', acct.get('refresh_token', ''))
@@ -273,11 +294,16 @@ def _connected_redirect(scope):
         pass
 
     logger.info(f"[GCAL] OAuth2 authorization successful for scope '{scope}'")
-    return RedirectResponse(url="/#settings", status_code=302)
+    try:
+        from plugins.calendar import api
+        api.google_connected(scope)        # link the account's calendar into the calendar of that name
+    except Exception as e:
+        logger.warning(f"[GCAL] connected, but the calendar was not linked yet: {e}")
+    return RedirectResponse(url=f"{PAGE}/connected", status_code=302)
 
 
 def get_status(query=None, settings=None, **_):
-    """GET /api/plugin/google-calendar/status — check if connected.
+    """GET /api/plugin/calendar/status — check if connected.
     Accepts ?scope=xxx to check a specific account."""
     from core.credentials_manager import credentials
 
@@ -287,7 +313,7 @@ def get_status(query=None, settings=None, **_):
 
 
 def disconnect(query=None, body=None, settings=None, **_):
-    """POST /api/plugin/google-calendar/disconnect — remove stored tokens for a scope."""
+    """POST /api/plugin/calendar/disconnect — remove stored tokens for a scope."""
     from core.credentials_manager import credentials
 
     # Scope can come from body or query

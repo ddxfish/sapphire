@@ -1,15 +1,66 @@
 {
   "name": "email",
   "short_display_name": "Email",
-  "version": "1.2.0",
-  "description": "Email — read, search, send, reply, forward, archive & delete via IMAP/SMTP, whitelisted contacts",
+  "version": "2.6.0",
+  "description": "Email: read any folder, search, send, reply, reply-all, forward, drafts, spam, archive & trash via IMAP/SMTP, whitelisted contacts, and an Email page of your own",
   "author": "sapphire",
   "icon": "📧",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "default_enabled": true,
+  "pip_dependencies": [
+    "imapclient>=3.0"
+  ],
   "capabilities": {
-    "tools": ["tools/email_tool.py"],
+    "app": {
+      "label": "Email",
+      "icon": "📧",
+      "description": "Your mail: inbox, sent, drafts, archive, spam and trash. Read, reply, move and send.",
+      "nav": "apps"
+    },
+    "tools": [
+      "tools/email_tool.py"
+    ],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "folder",
+        "handler": "routes/mail.py:folder_view",
+        "live": true
+      },
+      {
+        "method": "GET",
+        "path": "counts",
+        "handler": "routes/mail.py:folder_counts",
+        "live": true
+      },
+      {
+        "method": "GET",
+        "path": "message",
+        "handler": "routes/mail.py:get_message",
+        "live": true
+      },
+      {
+        "method": "GET",
+        "path": "attachment",
+        "handler": "routes/mail.py:get_attachment"
+      },
+      {
+        "method": "POST",
+        "path": "move",
+        "handler": "routes/mail.py:move"
+      },
+      {
+        "method": "POST",
+        "path": "mark",
+        "handler": "routes/mail.py:mark"
+      },
+      {
+        "method": "POST",
+        "path": "send",
+        "handler": "routes/mail.py:send"
+      }
+    ],
     "scopes": [
       {
         "key": "email",
@@ -23,36 +74,60 @@
     ],
     "daemon": {
       "entry": "daemon.py",
-      "event_sources": [{
-        "name": "email_message",
-        "label": "New Email",
-        "description": "New unread email received on an account",
-        "filter_fields": [
-          {"key": "from_address", "label": "sender email"},
-          {"key": "from_name", "label": "sender name"},
-          {"key": "to_address", "label": "recipient email"},
-          {"key": "subject_contains", "label": "keyword in subject"},
-          {"key": "snippet_contains", "label": "keyword in body"},
-          {"key": "account", "label": "account scope"}
-        ],
-        "task_fields": [
-          {
-            "key": "account",
-            "type": "select",
-            "label": "Email Account",
-            "required": true,
-            "dynamic": "/api/email/accounts",
-            "help": "Which email account this daemon monitors. Only this account will be polled."
-          },
-          {
-            "key": "auto_reply",
-            "type": "boolean",
-            "label": "Auto-reply to sender",
-            "default": true,
-            "help": "ON (default): AI's response is sent as an email reply to the sender — the common case. OFF: the daemon still triggers the AI on incoming mail, but no reply email goes out (useful for filing, memory-only monitoring, or letting the AI decide per-message via explicit tool calls)."
-          }
-        ]
-      }]
+      "event_sources": [
+        {
+          "name": "email_message",
+          "label": "New Email",
+          "description": "New unread email received on an account",
+          "filter_fields": [
+            {
+              "key": "from_address",
+              "label": "sender email"
+            },
+            {
+              "key": "from_name",
+              "label": "sender name"
+            },
+            {
+              "key": "to_address",
+              "label": "recipient email"
+            },
+            {
+              "key": "subject_contains",
+              "label": "keyword in subject"
+            },
+            {
+              "key": "snippet_contains",
+              "label": "keyword in body"
+            },
+            {
+              "key": "account",
+              "label": "account scope"
+            },
+            {
+              "key": "bulk",
+              "label": "automated/bulk mail (true or false)"
+            }
+          ],
+          "task_fields": [
+            {
+              "key": "account",
+              "type": "select",
+              "label": "Email Account",
+              "required": true,
+              "dynamic": "/api/email/accounts",
+              "help": "Which email account this daemon monitors. Only this account will be polled."
+            },
+            {
+              "key": "auto_reply",
+              "type": "boolean",
+              "label": "Auto-reply to sender",
+              "default": true,
+              "help": "ON (default): the AI's answer is emailed back to the sender, when the sender is in People (Settings > Plugins > Email can open that to anyone). The AI can answer <<PASS>> to send nothing for a mail; say so in the task's prompt. OFF: the task still runs on incoming mail, but nothing is sent unless the AI uses its email tools."
+            }
+          ]
+        }
+      ]
     },
     "settings": [
       {
@@ -69,7 +144,9 @@
         "default": false,
         "help": "WARNING: When enabled, the AI can email anyone — not just whitelisted contacts. It can use recipient IDs from People OR type an email address directly. Use with caution.",
         "confirm": {
-          "values": ["true"],
+          "values": [
+            "true"
+          ],
           "title": "Allow Unrestricted Email",
           "warnings": [
             "The AI will be able to email ANY address — not just whitelisted contacts",
@@ -77,7 +154,31 @@
           ],
           "buttonLabel": "I understand, enable it"
         }
+      },
+      {
+        "key": "allow_reply_all",
+        "type": "boolean",
+        "label": "Allow reply-all",
+        "default": true,
+        "help": "ON (default): a reply can go to everyone on the email. Those people are already on the thread, so this does not use the contact whitelist. OFF: replies go to the sender only."
+      },
+      {
+        "key": "keep_mail_index",
+        "type": "boolean",
+        "label": "Remember mail lists on this machine",
+        "default": true,
+        "help": "Lets the Email page open at once. Keeps who each mail is from, its subject, date and flags in a file on this machine, never the mail itself. Off deletes what was kept."
+      },
+      {
+        "key": "auto_reply_anyone",
+        "type": "boolean",
+        "label": "Auto-reply to anyone",
+        "default": false,
+        "help": "Off (default): a new-email task's automatic reply only goes to people in People. On: it answers anyone who writes in. Either way it never answers automated mail, never the same mail twice, and at most 10 times a day per sender."
       }
+    ],
+    "cleanup_paths": [
+      "plugin_state/email_index.db"
     ]
   }
 }

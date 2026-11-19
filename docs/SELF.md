@@ -177,7 +177,9 @@ Wakeword maker
 Email IMAP/SMTP
 Discord bot
 Telegram bot/client
-Google Calendar
+Email page
+Calendar page
+Google/ICS calendar links
 Social media profiles
 Bluesky social provider
 ### Build

@@ -90,7 +90,7 @@ def test_delete_gcal_account_publishes_scope_changed(client, event_bus_capture, 
 
 # ── static guard for the signed-plugin routes (not loaded in TestClient) ──
 @pytest.mark.parametrize("rel_path", [
-    "core/plugins/google-calendar/routes/oauth.py",
+    "core/plugins/calendar/routes/oauth.py",
     "core/plugins/telegram/routes/auth.py",
     "core/plugins/discord/api/accounts.py",
 ])

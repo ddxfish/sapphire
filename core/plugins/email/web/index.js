@@ -202,6 +202,36 @@ function renderWithDaemonSettings(container) {
                     <div style="font-size:11px;color:var(--text-muted)">When off, AI can only email whitelisted contacts. When on, AI can email anyone directly. Requires plugin reload.</div>
                 </div>
             </div>
+            <div style="display:flex;align-items:center;gap:12px">
+                <label class="pm-toggle" style="flex-shrink:0">
+                    <input type="checkbox" id="email-reply-all" checked>
+                    <span class="pm-slider"></span>
+                </label>
+                <div>
+                    <span style="font-size:13px;font-weight:600;color:var(--text)">Allow reply-all</span>
+                    <div style="font-size:11px;color:var(--text-muted)">When on, a reply can go to everyone on the email (they are already on the thread). When off, replies go to the sender only.</div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+                <label class="pm-toggle" style="flex-shrink:0">
+                    <input type="checkbox" id="email-reply-anyone">
+                    <span class="pm-slider"></span>
+                </label>
+                <div>
+                    <span style="font-size:13px;font-weight:600;color:var(--text)">Auto-reply to anyone</span>
+                    <div style="font-size:11px;color:var(--text-muted)">Off: a new-email task's automatic reply only goes to people in People. On: it answers anyone who writes in. It never answers automated mail, never the same mail twice, and at most 10 times a day per sender.</div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+                <label class="pm-toggle" style="flex-shrink:0">
+                    <input type="checkbox" id="email-keep-index" checked>
+                    <span class="pm-slider"></span>
+                </label>
+                <div>
+                    <span style="font-size:13px;font-weight:600;color:var(--text)">Remember mail lists on this machine</span>
+                    <div style="font-size:11px;color:var(--text-muted)">Lets the Email page open at once: it keeps who each mail is from, its subject and date in a file here, never the mail itself. Turning this off deletes what was kept.</div>
+                </div>
+            </div>
         </div>
     `;
     container.appendChild(wrapper);
@@ -222,6 +252,24 @@ function renderWithDaemonSettings(container) {
 
         if (pollInput && s.poll_interval != null) pollInput.value = s.poll_interval;
         if (allowToggle) allowToggle.checked = !!s.allow_all_recipients;
+
+        const replyAllToggle = container.querySelector('#email-reply-all');
+        if (replyAllToggle) replyAllToggle.checked = s.allow_reply_all !== false;
+        replyAllToggle?.addEventListener('change', () => {
+            _saveSettings({ allow_reply_all: replyAllToggle.checked });
+        });
+
+        const anyoneToggle = container.querySelector('#email-reply-anyone');
+        if (anyoneToggle) anyoneToggle.checked = s.auto_reply_anyone === true;
+        anyoneToggle?.addEventListener('change', () => {
+            _saveSettings({ auto_reply_anyone: anyoneToggle.checked });
+        });
+
+        const keepIndexToggle = container.querySelector('#email-keep-index');
+        if (keepIndexToggle) keepIndexToggle.checked = s.keep_mail_index !== false;
+        keepIndexToggle?.addEventListener('change', () => {
+            _saveSettings({ keep_mail_index: keepIndexToggle.checked });
+        });
 
         pollInput?.addEventListener('change', () => {
             const val = Math.max(30, parseInt(pollInput.value) || 120);

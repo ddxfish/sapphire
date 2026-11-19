@@ -202,23 +202,24 @@ Satellites, IP cameras, KDE Connect phones and other device plugins act through 
 | `ha_notify` | homeassistant.py | Send phone notification |
 | `ha_house_status` | homeassistant.py | Home status snapshot |
 | `ha_get_camera_image` | homeassistant.py | Grab a camera snapshot |
-| `get_inbox` | email_tool.py | Fetch recent emails |
-| `read_email` | email_tool.py | Read email by index |
+| `get_inbox` | email_tool.py | List a folder (inbox, sent, drafts, archive, spam, trash) |
+| `read_email` | email_tool.py | Read email by id, with attachments |
 | `search_emails` | email_tool.py | Search the mailbox |
-| `archive_emails` | email_tool.py | Archive emails |
-| `delete_emails` | email_tool.py | Delete emails |
-| `forward_email` | email_tool.py | Forward an email to a whitelisted contact |
+| `move_emails` | email_tool.py | Archive, trash, mark spam / not spam, move to a folder |
+| `mark_emails` | email_tool.py | Mark read, unread, starred, unstarred |
+| `forward_email` | email_tool.py | Forward an email, attachments included |
 | `get_recipients` | email_tool.py | List whitelisted contacts (IDs only) |
-| `send_email` | email_tool.py | Send to whitelisted contact |
+| `send_email` | email_tool.py | Send, reply, reply-all, cc/bcc, pictures, drafts |
 | `get_wallet` | bitcoin_tool.py | Check wallet balance |
 | `send_bitcoin` | bitcoin_tool.py | Send BTC |
 | `get_transactions` | bitcoin_tool.py | Recent transactions |
 | `ssh_get_servers` | ssh_tool.py | List SSH servers |
 | `ssh_run_command` | ssh_tool.py | Execute remote command |
-| `calendar_today` | calendar.py | Today's Google Calendar schedule |
-| `calendar_range` | calendar.py | Events for a date range |
-| `calendar_add` | calendar.py | Add a calendar event; `attendees` invites email-whitelisted People contacts (Google emails them) |
-| `calendar_delete` | calendar.py | Delete a calendar event |
+| `calendar_today` | calendar_tools.py | Today's events, what is on now, guests, hours scheduled |
+| `calendar_range` | calendar_tools.py | Events for a date range, with ids; optional text filter |
+| `calendar_add` | calendar_tools.py | Add an event (one-time or repeating), local or to a linked Google calendar; `attendees` invites email-whitelisted People contacts (Google emails them) |
+| `calendar_update` | calendar_tools.py | Change an event by id; with `date`, one occurrence of a repeating event |
+| `calendar_delete` | calendar_tools.py | Delete an event by id; with `date`, one occurrence of a repeating event |
 
 Plugin integrations, one line each (default in brackets):
 
@@ -339,10 +340,10 @@ TOOL MODULES:
 - clock plugin: get_time, set_timer, set_stopwatch, set_alarm
 - agents.py (core): agent_list, agent_peek, agent_spawn, agent_action — kinds come from plugins (`llm` from the agents plugin, `claude_code` from the claude-code plugin)
 - schedule_tool.py: schedule_task
-- email_tool.py: get_inbox, read_email, search_emails, archive_emails, delete_emails, forward_email, get_recipients, send_email
+- email_tool.py: get_inbox, read_email, search_emails, move_emails, mark_emails, forward_email, get_recipients, send_email
 - bitcoin_tool.py: get_wallet, send_bitcoin, get_transactions
 - ssh_tool.py: ssh_get_servers, ssh_run_command
-- calendar.py (core/plugins/google-calendar): calendar_today, calendar_range, calendar_add, calendar_delete
+- calendar_tools.py (core/plugins/calendar): calendar_today, calendar_range, calendar_add, calendar_update, calendar_delete
 - discord: discord_get_servers, discord_list_channels, discord_read_messages, discord_send_message, discord_send_image, discord_send_gif, discord_add_reaction, discord_join_voice, discord_leave_voice, discord_remind
 - telegram: telegram_get_chats, telegram_read_messages, telegram_send, telegram_send_image, telegram_send_voice, telegram_add_contact
 - twilio-voice: phone_call, elevate_toolset. social: social_list, social_post, social_reply, social_delete, social_inbox, social_stats, social_meme
