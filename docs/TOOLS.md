@@ -211,6 +211,7 @@ Satellites, IP cameras, KDE Connect phones and other device plugins act through 
 | `get_recipients` | email_tool.py | List whitelisted contacts (IDs only) |
 | `send_email` | email_tool.py | Send, reply, reply-all, cc/bcc, pictures, drafts |
 | `get_wallet` | bitcoin_tool.py | Check wallet balance |
+| `bitcoin_receive` | bitcoin_tool.py | Show a pay QR code |
 | `send_bitcoin` | bitcoin_tool.py | Send BTC |
 | `get_transactions` | bitcoin_tool.py | Recent transactions |
 | `ssh_get_servers` | ssh_tool.py | List SSH servers |
@@ -341,7 +342,7 @@ TOOL MODULES:
 - agents.py (core): agent_list, agent_peek, agent_spawn, agent_action — kinds come from plugins (`llm` from the agents plugin, `claude_code` from the claude-code plugin)
 - schedule_tool.py: schedule_task
 - email_tool.py: get_inbox, read_email, search_emails, move_emails, mark_emails, forward_email, get_recipients, send_email
-- bitcoin_tool.py: get_wallet, send_bitcoin, get_transactions
+- bitcoin_tool.py: get_wallet, bitcoin_receive, send_bitcoin, get_transactions
 - ssh_tool.py: ssh_get_servers, ssh_run_command
 - calendar_tools.py (core/plugins/calendar): calendar_today, calendar_range, calendar_add, calendar_update, calendar_delete
 - discord: discord_get_servers, discord_list_channels, discord_read_messages, discord_send_message, discord_send_image, discord_send_gif, discord_add_reaction, discord_join_voice, discord_leave_voice, discord_remind

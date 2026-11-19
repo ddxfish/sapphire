@@ -1,19 +1,38 @@
 {
   "name": "bitcoin",
   "short_display_name": "Bitcoin",
-  "version": "1.0.0",
-  "description": "Bitcoin — check balance, send BTC, view transactions",
+  "version": "1.2.0",
+  "description": "Bitcoin — check balance, show a pay QR code, send BTC within your limits, view transactions",
   "author": "sapphire",
   "icon": "₿",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "pip_dependencies": ["bit"],
+  "extra": {
+    "label": "QR codes for Bitcoin",
+    "pip": ["segno>=1.6"],
+    "note": "segno, one small pure-Python package that draws the pay QR code. The rest of the Bitcoin plugin works without it."
+  },
   "capabilities": {
     "tools": ["tools/bitcoin_tool.py"],
+    "routes": [
+      {"method": "GET", "path": "qr/{scope}", "handler": "routes/qr.py:wallet_qr"},
+      {"method": "PUT", "path": "wallet/{scope}", "handler": "routes/wallets.py:save"},
+      {"method": "DELETE", "path": "wallet/{scope}", "handler": "routes/wallets.py:delete"},
+      {"method": "POST", "path": "check/{scope}", "handler": "routes/wallets.py:check"},
+      {"method": "GET", "path": "sends/{scope}", "handler": "routes/wallets.py:sends"}
+    ],
+    "settings": [
+      {"key": "max_send_btc", "type": "string", "label": "Most she may send at once (BTC)", "default": "0.005", "hidden": true},
+      {"key": "max_day_btc", "type": "string", "label": "Most a wallet may send in 24 hours (BTC)", "default": "0.02", "hidden": true},
+      {"key": "max_fee_rate", "type": "number", "label": "Highest network fee (sat/byte)", "default": 100, "hidden": true},
+      {"key": "machine_sends", "type": "boolean", "label": "Send on turns no person started", "default": false, "hidden": true}
+    ],
     "scopes": [
       {
         "key": "bitcoin",
         "label": "bitcoin",
+        "default": null,
         "endpoint": "/api/bitcoin/wallets",
         "data_key": "wallets",
         "value_field": "scope",
