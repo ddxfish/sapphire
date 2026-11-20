@@ -438,6 +438,23 @@
 
 /* -- linked calendars -------------------------------------------------------- */
 
+.cal-hintbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm, 8px);
+    flex-wrap: wrap;
+    margin: 0 0 var(--space-sm, 8px);
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md, 8px);
+    background: var(--bg-secondary);
+    color: var(--text-secondary, var(--text));
+    font-size: var(--font-md, 0.875rem);
+}
+.cal-hintbar[hidden] { display: none; }
+.cal-hintbar span { flex: 1; min-width: 200px; }
+.cal-hintbar .btn { padding: 2px 10px; }
+.cal-small { font-size: var(--font-sm, 0.8rem); color: var(--text-muted); }
 .cal-links.warn { border-color: var(--warning); color: var(--warning); }
 .cal-links.busy { opacity: 0.75; }
 .cal-linkbox.busy { opacity: 0.6; pointer-events: none; }
@@ -480,4 +497,8 @@
     font-size: var(--font-sm, 0.8rem);
 }
 .cal-guest em { color: var(--text-muted); font-style: normal; }
+.cal-guest-x { border: 0; background: none; color: var(--text-muted); cursor: pointer; padding: 0 2px; font-size: 14px; line-height: 1; }
+.cal-guest-x:hover { color: var(--danger, #e57373); }
+.cal-guest-gone { text-decoration: line-through; opacity: .55; }
+.cal-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 .cal-open { display: inline-block; margin-top: 4px; font-size: var(--font-sm, 0.8rem); color: var(--cal-accent); }

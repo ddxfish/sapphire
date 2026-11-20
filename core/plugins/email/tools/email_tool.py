@@ -20,7 +20,7 @@ import mimetypes
 import re
 import smtplib
 
-from plugins.email import accounts, mailbox, message
+from plugins.email import accounts, mailbox, message, unattended
 from plugins.email.mailbox import Mailbox, MailError
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,8 @@ AVAILABLE_FUNCTIONS = [
     'read_email',
     'search_emails',
     'move_emails',
+    'archive_emails',
+    'delete_emails',
     'mark_emails',
     'send_email',
     'forward_email',
@@ -41,6 +43,7 @@ AVAILABLE_FUNCTIONS = [
 
 PAGE = 4000                      # characters of body per read
 MAX_SEEN_IMAGES = 4              # pictures shown to her per read
+MAX_IDS = 200                    # emails moved or marked in one call
 MAX_ATTACH = 20 * 1024 * 1024    # bytes per outgoing mail
 _TEXT_TYPES = ('text/', 'application/json', 'application/xml', 'application/csv')
 
@@ -126,6 +129,29 @@ TOOLS = [
                 },
                 "required": ["ids", "to"]
             }
+        }
+    },
+    # The two names the plugin had before move_emails. Kept as tools of their
+    # own: a saved toolset lists tools by name, so one made before 2.0 would
+    # otherwise lose archive and delete without a word.
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": False,
+        "function": {
+            "name": "archive_emails",
+            "description": "Archive emails: out of the inbox, kept. Same as move_emails to='archive'.",
+            "parameters": {"type": "object", "properties": {"ids": _IDS}, "required": ["ids"]}
+        }
+    },
+    {
+        "type": "function",
+        "writes": True,
+        "is_local": False,
+        "function": {
+            "name": "delete_emails",
+            "description": "Delete emails: they go to Trash and can be restored from there. Same as move_emails to='trash'.",
+            "parameters": {"type": "object", "properties": {"ids": _IDS}, "required": ["ids"]}
         }
     },
     {
@@ -298,11 +324,16 @@ def _resolve_recipient(entry):
     person = next((p for p in get_people(people_scope) if str(p.get('id')) == text), None)
     if not person:
         return None, f"Contact id {text} not found. Use get_recipients()."
-    if not person.get('email_whitelisted'):
+    # Allow-all already lets her write to any address: a contact without the tick
+    # is then offered by get_recipients, and has to work by id as well.
+    if not person.get('email_whitelisted') and not _setting('allow_all_recipients'):
         return None, f"{person['name']} is not whitelisted for email."
-    if not person.get('email'):
+    address = str(person.get('email') or '').strip()
+    if not address:
         return None, f"{person['name']} has no email address."
-    return (person['name'], person['email']), None
+    if not re.match(r'^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$', address):
+        return None, f"The email address stored for {person['name']} is not a valid one. The person can fix it in Mind, People."
+    return (person['name'], address), None
 
 
 def _recipients(entries, label='to'):
@@ -577,10 +608,13 @@ def _skipped_lines(skipped):
     return [f"Skipped {len(skipped)}:"] + [f"  [{h}] {why}" for h, why in skipped]
 
 
-def _move_emails(ids, to):
+def _move_emails(ids, to, fixed=False):
+    """`fixed`: called as archive_emails / delete_emails, where `to` is not hers to give."""
     ids, dest = _as_list(ids), str(to or '').strip()
     if not ids or not dest:
-        return "ids and to are both required.", False
+        return ("ids is required." if fixed else "ids and to are both required."), False
+    if len(ids) > MAX_IDS:
+        return f"At most {MAX_IDS} emails at a time.", False
     scope, creds = _open()
     with Mailbox(scope, creds) as mb:
         # Archive is the one folder made when missing; a server with no Trash
@@ -667,9 +701,23 @@ def _deliver(scope, creds, msg, pairs, what):
     try:
         return mailbox.send(scope, creds, msg, [a for _, a in pairs]), True
     except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"[EMAIL] SMTP auth error ({what}): {e}")
-        return f"{what} failed: the mail server refused the login. Check the password.", False
+        logger.error(f"[EMAIL] SMTP login refused ({what}): {e.smtp_code}")
+        return f"{what} failed: {getattr(e, 'words', '') or 'the mail server refused the login. Check the password.'}", False
+    except smtplib.SMTPRecipientsRefused as e:
+        # The server's own text names the addresses: she gets the people, the log gets the count.
+        who = message.names([p for p in pairs if p[1] in e.recipients]) or f"{len(e.recipients)} recipient(s)"
+        logger.error(f"[EMAIL] {what}: the server refused {len(e.recipients)} recipient(s)")
+        return f"{what} failed: the mail server refused the address of {who}. Nothing was sent.", False
+    except smtplib.SMTPResponseException as e:
+        logger.error(f"[EMAIL] {what}: {type(e).__name__} {e.smtp_code}")
+        if isinstance(e, smtplib.SMTPSenderRefused):
+            return f"{what} failed: the mail server does not let this account send (code {e.smtp_code}).", False
+        return f"{what} failed: the mail server answered with an error (code {e.smtp_code}).", False
     except Exception as e:
+        words = getattr(e, 'words', '')
+        if words:
+            logger.error(f"[EMAIL] {what}: {type(e).__name__}")
+            return f"{what} failed: {words}", False
         logger.error(f"[EMAIL] {what} error: {e}", exc_info=True)
         return f"{what} failed: {e}", False
 
@@ -687,7 +735,7 @@ def _send_email(body='', to=None, reply_to=None, reply_all=False, subject=None,
                 "or reply_to (an email id) for a reply.", False)
 
     scope, creds = _open()
-    automatic = _in_task_run()
+    automatic, claimed = _in_task_run(), False
     cc_pairs, why = _recipients(cc, 'cc')
     if why:
         return why, False
@@ -705,17 +753,28 @@ def _send_email(body='', to=None, reply_to=None, reply_all=False, subject=None,
         if reply_all and not _setting('allow_reply_all', True):
             return "Reply-all is turned off in Settings > Plugins > Email. Send a plain reply, or ask for it to be turned on.", False
         with Mailbox(scope, creds) as mb:
-            original, _ = mb.message(reply_to)
-        if automatic:
-            # Nobody is in the loop in a task run: the same rule as the auto-reply
-            # handler. Automated mail is never answered automatically.
-            why = message.is_automated(original)
-            if why:
-                return (f"Not sent: that email is automated ({why}), and a task must not answer automated "
-                        "mail (two machines would mail each other forever). Leave it unanswered."), False
+            original, flags = mb.message(reply_to)
         to_pairs, thread_cc = message.reply_targets(original, creds['address'], reply_all)
         if not to_pairs:
             return "Could not determine a reply address from that email.", False
+        if automatic and not draft:
+            # Nobody is in the loop in a run an incoming mail started, and that mail
+            # may itself say what to do. So this door has the auto-reply handler's
+            # rules (unattended.py), whatever the task's prompt or the mail asks for.
+            if reply_all:
+                return ("Not sent: in a run started by an incoming email, a reply goes to its sender only, "
+                        "never to everyone on it. Send a plain reply."), False
+            to_pairs, thread_cc = to_pairs[:1], []
+            no = unattended.refusal(scope, original, flags, to_pairs[0][1], _get_current_people_scope(),
+                                    _setting('auto_reply_anyone'))
+            if no:
+                return f"Not sent: {no[1]}. Leave it unanswered.", False
+            if not unattended.claim(creds['address'], reply_to):
+                return "Not sent: that email is being answered, or has been, by another run.", False
+            if not unattended.under_cap(scope, to_pairs[0][1]):
+                unattended.release(creds['address'], reply_to)
+                return f"Not sent: {unattended.CAP_WORDS}. Leave it unanswered.", False
+            claimed = True
         cc_pairs = thread_cc + cc_pairs
         subject = subject or message.prefixed(message.header(original, 'Subject'), 'Re')
         mode = 'reply'
@@ -744,6 +803,8 @@ def _send_email(body='', to=None, reply_to=None, reply_all=False, subject=None,
 
     note, ok = _deliver(scope, creds, msg, to_pairs + cc_pairs + bcc_pairs, "Send")
     if not ok:
+        if claimed:
+            unattended.release(creds['address'], reply_to)       # nothing went out: it may be answered later
         return note, False
     if reply_to:
         try:
@@ -813,6 +874,10 @@ def execute(function_name, arguments, config):
                                   arguments.get('folder'), arguments.get('count', 20), arguments.get('query'))
         if function_name == "move_emails":
             return _move_emails(arguments.get('ids'), arguments.get('to'))
+        if function_name == "archive_emails":
+            return _move_emails(arguments.get('ids'), 'archive', fixed=True)
+        if function_name == "delete_emails":
+            return _move_emails(arguments.get('ids'), 'trash', fixed=True)
         if function_name == "mark_emails":
             return _mark_emails(arguments.get('ids'), arguments.get('mark'))
         if function_name == "send_email":
@@ -834,6 +899,12 @@ def execute(function_name, arguments, config):
     except MailError as e:
         return str(e), False
     except Exception as e:
+        # accounts.py says why a connection failed (wrong name, port or password, a
+        # certificate nobody trusted). Only a person can fix those: the words say so.
+        words = getattr(e, 'words', '')
+        if words:
+            logger.error(f"Email tool {function_name}: {type(e).__name__}: {e}")
+            return words, False
         logger.error(f"Email tool error in {function_name}: {e}", exc_info=True)
         if type(e).__name__ == 'LoginError':
             return f"Email login failed - check the account's password. ({e})", False

@@ -12,21 +12,26 @@ When a pull happens:
   - right after a change made here to a Google event.
 There is no background timer: nothing is fetched while nobody is looking.
 
-A Google link copies a window of days (repeats arrive already expanded), and
-the window grows when someone looks further out. An ICS link is the whole file.
+A read and a write of the same link can overlap: a read that asked the source
+BEFORE a change was made there, and stores its answer AFTER, would undo the
+change in the copy (drop the new event, bring a deleted one back). So every
+write to a link is counted (wrote), and a read that finds the count moved
+since it asked throws its answer away and leaves the link due for another.
+
+A Google or CalDAV link copies a window of days, and the window grows when
+someone looks further out. An ICS link is the whole file. What each kind of
+link does to read is its own module's (sources.py).
 """
 import logging
 import threading
 import time
 from datetime import date, timedelta
 
-from . import google, ics, store
+from . import google, sources, store
 from .errors import CalError
 
 logger = logging.getLogger(__name__)
 
-EVERY = {'google': 60, 'ics': 900}        # seconds a copy counts as fresh
-RETRY = {'google': 60, 'ics': 300}        # seconds before a failed pull is tried again
 PAST_DAYS, AHEAD_DAYS = 62, 400
 MAX_REACH_DAYS = 3660
 
@@ -34,6 +39,9 @@ _guard = threading.Lock()
 _locks: dict = {}
 _tried: dict = {}
 _running: set = set()
+_writes: dict = {}            # link id -> how many changes were made through it
+_store_locks: dict = {}       # link id -> held while the copy is made to match an answer
+_linking = threading.Lock()   # one caller at a time links a Google account that just appeared
 
 
 def _api():
@@ -46,6 +54,19 @@ def _lock_for(link_id):
         return _locks.setdefault(link_id, threading.Lock())
 
 
+def storing(link_id):
+    """The lock a link's copy is changed under: a read storing its answer, or
+    a write storing what it just sent. Short; never held across the network."""
+    with _guard:
+        return _store_locks.setdefault(link_id, threading.Lock())
+
+
+def wrote(link_id):
+    """A change is being made (or was just made) through this link."""
+    with _guard:
+        _writes[link_id] = _writes.get(link_id, 0) + 1
+
+
 def running(link_id=None):
     with _guard:
         return bool(_running) if link_id is None else link_id in _running
@@ -56,15 +77,16 @@ def ensure_google():
     calendar, and becomes where its new events go unless the person chose.
     Not when the person removed the link by hand (the mark is 'off')."""
     s = store.get()
-    for acct in google.accounts():
-        name = acct['scope']
-        if s.meta(f"gauto:{name}") == 'off' or any(l['kind'] == 'google' for l in s.links(name)):
-            continue
-        link = s.add_link({'calendar': name, 'kind': 'google', 'name': 'Google', 'ref': acct['calendar_id'],
-                           'color': 2, 'writable': True})
-        if not s.meta(f"target:{name}"):
-            s.set_meta(f"target:{name}", link['id'])
-        logger.info(f"[calendar] linked the Google account of calendar '{name}'")
+    with _linking:
+        for acct in google.accounts():
+            name = acct['scope']
+            if s.meta(f"gauto:{name}") == 'off' or any(l['kind'] == 'google' for l in s.links(name)):
+                continue
+            link = s.add_link({'calendar': name, 'kind': 'google', 'name': 'Google', 'ref': acct['calendar_id'],
+                               'color': 2, 'writable': True})
+            if not s.meta(f"target:{name}"):
+                s.set_meta(f"target:{name}", link['id'])
+            logger.info(f"[calendar] linked the Google account of calendar '{name}'")
 
 
 def _window(link, need, today):
@@ -88,19 +110,24 @@ def _stale(link, need, force, today):
     if force:
         return True
     now = time.time()
-    if link['error'] and now - _tried.get(link['id'], 0) < RETRY.get(link['kind'], 300):
+    src = sources.BY_KIND.get(link['kind'])
+    if link['error'] and now - _tried.get(link['id'], 0) < (src.RETRY if src else 300):
         return False
-    if now - link['synced_at'] > EVERY.get(link['kind'], 900):
+    if now - link['synced_at'] > (src.EVERY if src else 900):
         return True
-    if need and link['kind'] == 'google':
+    if need and src is not None and src.WINDOWED:
         lo, hi = _window(link, None, today)
-        return need[0] < lo or need[1] > hi
+        # days past the furthest reach can never be copied: asking for them must not read forever
+        reach = timedelta(days=MAX_REACH_DAYS)
+        first, last = max(need[0], today - reach), min(need[1], today + reach)
+        return first <= last and (first < lo or last > hi)
     return False
 
 
-def pull(link, need=None):
+def pull(link, need=None, force=False):
     """Copy one link's events now and return the link as it is after.
-    Raises CalError, which is also left on the link for the page to show."""
+    Raises CalError, which is also left on the link for the page to show.
+    `force`: read it all again even when the source says nothing changed."""
     api = _api()
     s = store.get()
     with _lock_for(link['id']):
@@ -111,20 +138,22 @@ def pull(link, need=None):
             _running.add(link['id'])
         try:
             lo, hi = _window(link, need, api.today())
-            note = ''
-            if link['kind'] == 'google':
-                items = google.instances(link['calendar'], link['ref'], api.rfc3339(lo),
-                                         api.rfc3339(hi + timedelta(days=1)), api.zone_name())
-                rows = [r for r in (google.to_row(i, api.to_local) for i in items) if r]
-            elif link['kind'] == 'ics':
-                _name, rows, notes = ics.parse(ics.fetch(link['ref']), api.convert, api.zone_name())
-                note = ' '.join(notes)
-            else:
-                raise CalError(f"This link is of a kind ({link['kind']}) this version cannot read.")
-            added, changed, removed = s.sync_rows(link, rows)
-            if added or changed or removed:
-                logger.info(f"[calendar] link '{link['name']}' ({link['kind']}): +{added} ~{changed} -{removed}")
-            s.set_meta(f"note:{link['id']}", note)
+            with _guard:
+                seen = _writes.get(link['id'], 0)
+            got = sources.of(link).pull(link, lo, hi, force)
+            if got is not None:                       # None: the source says nothing changed
+                rows, note, done = got
+                with storing(link['id']):
+                    with _guard:
+                        moved = _writes.get(link['id'], 0) != seen
+                    if moved:                         # a change was made meanwhile: this answer may predate it
+                        return s.get_link(link['id'])
+                    added, changed, removed = s.sync_rows(link, rows)
+                    if done:
+                        done()
+                if added or changed or removed:
+                    logger.info(f"[calendar] link '{link['name']}' ({link['kind']}): +{added} ~{changed} -{removed}")
+                s.set_meta(f"note:{link['id']}", note)
             return s.update_link(link['id'], {'synced_at': time.time(), 'win_from': lo.isoformat(),
                                               'win_to': hi.isoformat(), 'error': ''})
         except CalError as e:
@@ -141,11 +170,11 @@ def pull(link, need=None):
                 _running.discard(link['id'])
 
 
-def _pull_all(todo, need):
+def _pull_all(todo, need, force=False):
     failed = []
     for link in todo:
         try:
-            pull(link, need)
+            pull(link, need, force)
         except CalError as e:
             failed.append((link, str(e)))
     return failed
@@ -164,10 +193,10 @@ def refresh(calendar=None, need=None, force=False, wait=True):
     if not todo:
         return []
     if wait:
-        return _pull_all(todo, need)
+        return _pull_all(todo, need, force)
     todo = [l for l in todo if not running(l['id'])]
     if todo:
         with _guard:
             _running.update(l['id'] for l in todo)       # the page sees "refreshing" from this answer on
-        threading.Thread(target=_pull_all, args=(todo, need), name='calendar-sync', daemon=True).start()
+        threading.Thread(target=_pull_all, args=(todo, need, force), name='calendar-sync', daemon=True).start()
     return []

@@ -455,15 +455,32 @@ def tool(world, monkeypatch):
 
 
 def test_send_tool_passes_the_users_limits(tool):
-    out, ok = bitcoin_tool.execute('send_bitcoin', {'address': tool.dest, 'amount': '0.001'}, None, {'max_send_btc': '0.0005'})
+    out, ok = bitcoin_tool.execute('bitcoin_send', {'address': tool.dest, 'amount': '0.001'}, None, {'max_send_btc': '0.0005'})
     assert not ok and 'limit of 0.00050000 BTC per send' in out
-    out, ok = bitcoin_tool.execute('send_bitcoin', {'address': tool.dest, 'amount': '0.001'}, None, {})
+    out, ok = bitcoin_tool.execute('bitcoin_send', {'address': tool.dest, 'amount': '0.001'}, None, {})
     assert ok and 'Transaction:' in out
 
 
 def test_send_tool_keeps_its_receipt_and_is_a_write():
-    [tool_def] = [t for t in bitcoin_tool.TOOLS if t['function']['name'] == 'send_bitcoin']
+    [tool_def] = [t for t in bitcoin_tool.TOOLS if t['function']['name'] == 'bitcoin_send']
     assert tool_def['expires'] == 'never' and tool_def['writes'] is True and tool_def['is_local'] is False
+
+
+def test_the_old_tool_names_still_work_and_stay_out_of_sight(tool):
+    """get_wallet, send_bitcoin and get_transactions were renamed in 1.2.0. A
+    saved toolset or a hook may still name them: they are the same tools,
+    hidden from the pickers. A core test (test_broadsword_core) reads these
+    declarations from the source, so they are written out, not generated."""
+    by_name = {t['function']['name']: t for t in bitcoin_tool.TOOLS}
+    for old, new in bitcoin_tool.OLD_NAMES.items():
+        a, b = by_name[old], by_name[new]
+        assert a['hidden'] is True and not b.get('hidden')
+        assert {k: v for k, v in a.items() if k not in ('hidden', 'function')} == {k: v for k, v in b.items() if k != 'function'}
+        assert {**a['function'], 'name': new} == b['function']
+    out, ok = bitcoin_tool.execute('send_bitcoin', {'address': tool.dest, 'amount': '0.001'}, None, {})
+    assert ok and 'Transaction:' in out
+    assert bitcoin_tool.execute('get_wallet', {}, None, {})[1]
+    assert bitcoin_tool.execute('made_up', {}, None) == ("Unknown function: made_up", False)
 
 
 def test_get_wallet_reads_once_and_says_the_limits(tool):
@@ -471,7 +488,7 @@ def test_get_wallet_reads_once_and_says_the_limits(tool):
     coins = tool.key.get_unspents()
     tool.key.get_unspents = lambda: reads.append(1) or coins
     tool.key.get_balance = lambda *a: pytest.fail("a second network read")
-    out, ok = bitcoin_tool.execute('get_wallet', {}, None, {'max_send_btc': '0.01', 'max_day_btc': '0'})
+    out, ok = bitcoin_tool.execute('bitcoin_wallet', {}, None, {'max_send_btc': '0.01', 'max_day_btc': '0'})
     assert ok and reads == [1]
     assert 'Balance: 0.02120000 BTC (2120000 sat)' in out and 'Coins (UTXOs): 3' in out
     assert '0.01000000 BTC per send, none per day' in out
@@ -481,7 +498,7 @@ def test_get_wallet_reads_once_and_says_the_limits(tool):
 def test_get_transactions_takes_any_count(tool, count):
     tool.key.get_transactions = lambda: [f"{i:064x}" for i in range(60)]
     tool.send('0.001')
-    out, ok = bitcoin_tool.execute('get_transactions', {'count': count}, None)
+    out, ok = bitcoin_tool.execute('bitcoin_transactions', {'count': count}, None)
     assert ok and 'Sent from here' in out and tool.dest in out
     assert 'in the order it gives them' in out
 
@@ -490,7 +507,7 @@ def test_explorer_down_is_said_plainly(tool):
     def down():
         raise ConnectionError("All APIs are unreachable.")
     tool.key.get_unspents = tool.key.get_transactions = down
-    for name in ('get_wallet', 'get_transactions'):
+    for name in ('bitcoin_wallet', 'bitcoin_transactions', 'get_wallet', 'get_transactions'):
         out, ok = bitcoin_tool.execute(name, {}, None)
         assert not ok and 'block explorers did not answer' in out
 
@@ -499,7 +516,7 @@ def test_a_crash_in_a_tool_never_repeats_its_message(tool, monkeypatch, caplog):
     secret = 'KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn'
     monkeypatch.setattr(bitcoin_tool, '_get_wallet', lambda **k: (_ for _ in ()).throw(ValueError(f"bad key {secret}")))
     with caplog.at_level('DEBUG'):
-        out, ok = bitcoin_tool.execute('get_wallet', {}, None)
+        out, ok = bitcoin_tool.execute('bitcoin_wallet', {}, None)
     assert not ok and secret not in out and secret not in caplog.text and 'ValueError' in out
 
 

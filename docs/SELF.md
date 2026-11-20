@@ -179,7 +179,8 @@ Discord bot
 Telegram bot/client
 Email page
 Calendar page
-Google/ICS calendar links
+Google/CalDAV/ICS calendar links
+Calendar accounts panel
 Social media profiles
 Bluesky social provider
 ### Build

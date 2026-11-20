@@ -1,7 +1,7 @@
 {
   "name": "email",
   "short_display_name": "Email",
-  "version": "2.6.0",
+  "version": "2.8.0",
   "description": "Email: read any folder, search, send, reply, reply-all, forward, drafts, spam, archive & trash via IMAP/SMTP, whitelisted contacts, and an Email page of your own",
   "author": "sapphire",
   "icon": "📧",
@@ -59,6 +59,26 @@
         "method": "POST",
         "path": "send",
         "handler": "routes/mail.py:send"
+      },
+      {
+        "method": "POST",
+        "path": "test",
+        "handler": "routes/mail.py:check_account"
+      },
+      {
+        "method": "GET",
+        "path": "certs",
+        "handler": "routes/mail.py:certs"
+      },
+      {
+        "method": "POST",
+        "path": "trust",
+        "handler": "routes/mail.py:trust_cert"
+      },
+      {
+        "method": "POST",
+        "path": "untrust",
+        "handler": "routes/mail.py:untrust_cert"
       }
     ],
     "scopes": [
@@ -123,7 +143,7 @@
               "type": "boolean",
               "label": "Auto-reply to sender",
               "default": true,
-              "help": "ON (default): the AI's answer is emailed back to the sender, when the sender is in People (Settings > Plugins > Email can open that to anyone). The AI can answer <<PASS>> to send nothing for a mail; say so in the task's prompt. OFF: the task still runs on incoming mail, but nothing is sent unless the AI uses its email tools."
+              "help": "ON (default): the AI's answer is emailed back to the sender, when the sender is in People with 'Allow email' ticked (Settings > Plugins > Email can open that to anyone). The AI can answer <<PASS>> to send nothing for a mail; say so in the task's prompt. OFF: the task still runs on incoming mail and nothing is sent by itself. A reply she sends with her email tools in that run follows the same rules: the sender only, and only people with that tick."
             }
           ]
         }
@@ -167,14 +187,14 @@
         "type": "boolean",
         "label": "Remember mail lists on this machine",
         "default": true,
-        "help": "Lets the Email page open at once. Keeps who each mail is from, its subject, date and flags in a file on this machine, never the mail itself. Off deletes what was kept."
+        "help": "Lets the Email page open at once. Keeps who each mail is from, its subject, date and flags in a file on this machine, never the mail itself. Turning it off deletes what was kept, at once."
       },
       {
         "key": "auto_reply_anyone",
         "type": "boolean",
         "label": "Auto-reply to anyone",
         "default": false,
-        "help": "Off (default): a new-email task's automatic reply only goes to people in People. On: it answers anyone who writes in. Either way it never answers automated mail, never the same mail twice, and at most 10 times a day per sender."
+        "help": "Off (default): a reply sent while nobody is watching (a new-email task's automatic reply, or her own send_email in that task's run) only goes to people in People with 'Allow email' ticked. On: it answers anyone who writes in. Either way never automated mail, never the same mail twice, at most 10 a day per sender and 30 an hour per account."
       }
     ],
     "cleanup_paths": [

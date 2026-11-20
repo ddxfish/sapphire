@@ -14,26 +14,61 @@ logger = logging.getLogger(__name__)
 ENABLED = True
 EMOJI = '₿'
 TOOL_CATEGORY = 'bitcoin'
+# The tools were get_wallet, send_bitcoin and get_transactions until 1.2.0. The
+# old names stay as hidden tools: out of the pickers, 'all' and the category,
+# still there for a saved toolset (or a hook) that names one.
+OLD_NAMES = {
+    'get_wallet': 'bitcoin_wallet',
+    'send_bitcoin': 'bitcoin_send',
+    'get_transactions': 'bitcoin_transactions',
+}
 AVAILABLE_FUNCTIONS = [
-    'get_wallet',
+    'bitcoin_wallet',
     'bitcoin_receive',
-    'send_bitcoin',
-    'get_transactions',
-]
+    'bitcoin_send',
+    'bitcoin_transactions',
+] + list(OLD_NAMES)
+
+_WALLET = {
+    "description": "Your Bitcoin wallet's receive address, balance and send limits.",
+    "parameters": {"type": "object", "properties": {}, "required": []},
+}
+_SEND = {
+    "description": "Send Bitcoin from your wallet. It cannot be undone. Returns the transaction id and the fee paid. The user sets limits; a refusal says which one.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "address": {
+                "type": "string",
+                "description": "The address to pay, exactly as given to you."
+            },
+            "amount": {
+                "type": "string",
+                "description": "In BTC, e.g. '0.001'"
+            }
+        },
+        "required": ["address", "amount"]
+    },
+}
+_TRANSACTIONS = {
+    "description": "Transaction ids for your wallet, and what you sent lately.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": "integer",
+                "description": "Default 10, max 50"
+            }
+        },
+        "required": []
+    },
+}
 
 TOOLS = [
     {
         "type": "function",
         "is_local": False,
-        "function": {
-            "name": "get_wallet",
-            "description": "Your Bitcoin wallet's receive address, balance and send limits.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
+        "function": {"name": "bitcoin_wallet", **_WALLET}
     },
     {
         "type": "function",
@@ -58,42 +93,33 @@ TOOLS = [
         "writes": True,
         "is_local": False,
         "expires": "never",        # the transaction id is the only receipt: it never leaves her view
-        "function": {
-            "name": "send_bitcoin",
-            "description": "Send Bitcoin from your wallet. It cannot be undone. Returns the transaction id and the fee paid. The user sets limits; a refusal says which one.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "address": {
-                        "type": "string",
-                        "description": "The address to pay, exactly as given to you."
-                    },
-                    "amount": {
-                        "type": "string",
-                        "description": "In BTC, e.g. '0.001'"
-                    }
-                },
-                "required": ["address", "amount"]
-            }
-        }
+        "function": {"name": "bitcoin_send", **_SEND}
     },
     {
         "type": "function",
         "is_local": False,
-        "function": {
-            "name": "get_transactions",
-            "description": "Transaction ids for your wallet, and what you sent lately.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "count": {
-                        "type": "integer",
-                        "description": "Default 10, max 50"
-                    }
-                },
-                "required": []
-            }
-        }
+        "function": {"name": "bitcoin_transactions", **_TRANSACTIONS}
+    },
+    # the old names (see OLD_NAMES): same tools, same flags, hidden
+    {
+        "type": "function",
+        "hidden": True,
+        "is_local": False,
+        "function": {"name": "get_wallet", **_WALLET}
+    },
+    {
+        "type": "function",
+        "hidden": True,
+        "writes": True,
+        "is_local": False,
+        "expires": "never",
+        "function": {"name": "send_bitcoin", **_SEND}
+    },
+    {
+        "type": "function",
+        "hidden": True,
+        "is_local": False,
+        "function": {"name": "get_transactions", **_TRANSACTIONS}
     },
 ]
 
@@ -249,18 +275,19 @@ def _get_transactions(count=10):
 
 def execute(function_name, arguments, config, plugin_settings=None):
     arguments = arguments if isinstance(arguments, dict) else {}
+    function_name = OLD_NAMES.get(function_name, function_name)
     try:
-        if function_name == "get_wallet":
+        if function_name == "bitcoin_wallet":
             return _get_wallet(settings=plugin_settings)
         elif function_name == "bitcoin_receive":
             return _bitcoin_receive(amount=arguments.get('amount'))
-        elif function_name == "send_bitcoin":
+        elif function_name == "bitcoin_send":
             return _send_bitcoin(
                 address=arguments.get('address', ''),
                 amount=arguments.get('amount', ''),
                 settings=plugin_settings,
             )
-        elif function_name == "get_transactions":
+        elif function_name == "bitcoin_transactions":
             return _get_transactions(count=arguments.get('count', 10))
         else:
             return f"Unknown function: {function_name}", False

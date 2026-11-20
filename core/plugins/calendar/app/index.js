@@ -3,15 +3,17 @@
 // next refresh: the page refetches when it regains focus and every 30 seconds
 // while it is on screen.
 //
-// A calendar can have links (routes/links.py): a Google calendar (two-way) or
-// an ICS address (read-only). Their events are copies kept by the server; the
-// "Calendars" dialog is where links are made and removed.
+// A calendar can have accounts (Google, or a login at a CalDAV provider) whose
+// calendars are linked in, and read-only calendar addresses. Their events are
+// copies kept by the server. The Accounts button opens the same panel that
+// Settings > Plugins > Calendar shows (web/index.js): one place, drawn twice.
 //
 // App contract: docs/plugin-author/APPS.md. All state lives inside render(),
 // which returns its own teardown.
 import { fetchWithTimeout } from '/static/shared/fetch.js';
 import { setupModalClose, escapeHtml, showConfirm, showPrompt } from '/static/shared/modal.js';
 import { showToast } from '/static/shared/notify.js';
+import { mountAccounts } from '/plugin-web/calendar/index.js';
 
 const API = '/api/plugin/calendar';
 const VIEWS = ['year', 'month', 'week', 'day'];
@@ -133,9 +135,14 @@ export function render(root) {
                     </div>
                     <select class="cal-filter" title="Which calendar to show" aria-label="Calendar"></select>
                     <button class="btn cal-drop hover-danger" title="Delete this calendar" hidden>Delete calendar</button>
-                    <button class="btn cal-links" title="Linked calendars: Google, or a calendar address">Calendars</button>
+                    <button class="btn cal-links" title="Accounts: Google, iCloud, other calendars, or a calendar address">Accounts</button>
                     <button class="btn btn-primary cal-add">+ Event</button>
                 </div>
+            </div>
+            <div class="cal-hintbar" hidden>
+                <span>Events here live on this machine. Have a Google, iCloud or other calendar? Add its account to see and change it here.</span>
+                <button class="btn btn-primary cal-hint-add">Add account</button>
+                <button class="btn cal-hint-x" title="Don't show this again" aria-label="Don't show this again">&times;</button>
             </div>
             <div class="cal-body"><div class="cal-empty">Loading the calendar...</div></div>
         </div>`;
@@ -184,7 +191,8 @@ export function render(root) {
         st.refreshing = !!data.refreshing;
         // The server is reading a linked calendar: ask again soon, so its events appear when they land.
         clearTimeout(st.quick);
-        if (st.refreshing) st.quick = setTimeout(() => { if (onScreen()) load(true); }, SYNC_POLL_MS);
+        // (not while the Accounts dialog is open: its own panel is asking, and one asker is enough)
+        if (st.refreshing && !st.panelOpen) st.quick = setTimeout(() => { if (onScreen() && !st.panelOpen) load(true); }, SYNC_POLL_MS);
         paintLinksButton();
         if (weekStart !== st.weekStart) {                 // the grid's first column moved: ask again for its range
             st.weekStart = weekStart;
@@ -229,7 +237,9 @@ export function render(root) {
         btn.classList.toggle('warn', bad.length > 0);
         btn.classList.toggle('busy', st.refreshing);
         btn.title = bad.length ? `${bad[0].name}: ${bad[0].error}`
-            : (st.refreshing ? 'Refreshing linked calendars...' : 'Linked calendars: Google, or a calendar address');
+            : (st.refreshing ? 'Refreshing linked calendars...' : 'Accounts: Google, iCloud, other calendars, or a calendar address');
+        // Nothing linked yet: say once where accounts are added (until it is dismissed).
+        $('.cal-hintbar').hidden = !(st.loaded && !shown.length && !remember('nohint'));
     }
 
     // -- toolbar ---------------------------------------------------------------
@@ -463,17 +473,24 @@ export function render(root) {
         const edit = !!ev;
         const rule = (edit && ev.rule) || null;
         const custom = rule?.repeat === 'custom';
-        const start = edit ? ev.series_start : preset.start;
-        const end = edit ? ev.series_end : preset.end;
+        const linked = edit && ev.source !== 'local';                // a copy of an event kept somewhere else
+        // A local repeat is edited as a whole, from its first day. A linked one opens on the
+        // occurrence that was clicked: saving asks whether that day or every one changes.
+        const start = edit ? (linked ? ev.start : ev.series_start) : preset.start;
+        const end = edit ? (linked ? ev.end : ev.series_end) : preset.end;
         const allDay = edit ? ev.all_day : !!preset.all_day;
         const calNames = st.calendars.map(c => c.name);
         const cal = edit ? ev.calendar : (st.filter || 'default');
-        const linked = edit && ev.source !== 'local';                // a copy of an event kept somewhere else
         const locked = edit && !ev.editable;                        // ...that cannot be changed from here
-        const series = linked && ev.repeats;                        // a Google repeat: its rule is Google's
+        const series = linked && ev.repeats;                        // a linked repeat: its rule is kept where it lives
         const guests = (edit && ev.guests) || [];
+        // Guests live at Google: a field for them only where the event is (or can be saved) there.
+        const canInvite = !locked && (edit ? ev.source === 'google' : true);
+        const myAnswer = edit ? (ev.my_rsvp || '') : '';
+        const gone = new Set();                                      // guests struck off in this dialog
         const openUrl = edit ? safeLink(ev.url) : '';
-        const targets = name => st.links.filter(l => l.calendar === name && l.kind === 'google' && l.writable);
+        const targets = name => st.links.filter(l => l.calendar === name && l.writable);
+        const atGoogle = id => st.links.some(l => l.id === id && l.kind === 'google');
         const toOptions = name => {
             const list = targets(name);
             if (!list.length) return '';
@@ -537,7 +554,14 @@ export function render(root) {
                 <div class="modal-field"><label for="cal-f-notes">Notes</label>
                     <textarea id="cal-f-notes" rows="3" maxlength="4000">${escapeHtml(edit ? ev.notes : '')}</textarea></div>
                 ${guests.length ? `<div class="modal-field"><label>Guests</label>
-                    <div class="cal-guests">${guests.map(g => `<span class="cal-guest">${escapeHtml(g.name || g.email || '?')} <em>${escapeHtml(g.rsvp || 'pending')}</em></span>`).join('')}</div></div>` : ''}
+                    <div class="cal-guests">${guests.map((g, i) => `<span class="cal-guest" data-i="${i}">${escapeHtml(g.name || g.email || '?')} <em>${escapeHtml(g.rsvp || 'pending')}</em>${canInvite && g.email
+                        ? ` <button type="button" class="cal-guest-x" data-i="${i}" title="Take off the guest list" aria-label="Take ${escapeHtml(g.name || g.email)} off the guest list">&times;</button>` : ''}</span>`).join('')}</div></div>` : ''}
+                ${canInvite ? `<div class="modal-field cal-invite-field"${!edit && !toOptions(cal) ? ' hidden' : ''}><label for="cal-f-guests">${guests.length ? 'Invite more' : 'Invite'}</label>
+                    <input type="text" id="cal-f-guests" placeholder="Email addresses, separated by commas" autocomplete="off">
+                    <div class="cal-hint">Google emails each guest an invitation, and tells them when the event changes.</div></div>` : ''}
+                ${myAnswer && guests.length ? `<div class="modal-field"><label for="cal-f-rsvp">Your answer</label>
+                    <select id="cal-f-rsvp">${[['pending', 'Not answered'], ['yes', 'Yes'], ['maybe', 'Maybe'], ['no', 'No']].map(([v, t]) =>
+                        `<option value="${v}"${v === myAnswer ? ' selected' : ''}${v === 'pending' && myAnswer !== 'pending' ? ' disabled' : ''}>${t}</option>`).join('')}</select></div>` : ''}
                 ${calNames.length > 1 && !linked ? `<div class="modal-field"><label for="cal-f-cal">Calendar</label>
                     <select id="cal-f-cal">${calNames.map(n => `<option value="${escapeHtml(n)}"${n === cal ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')}</select></div>` : ''}
                 ${!edit ? `<div class="modal-field cal-to-field"${toOptions(cal) ? '' : ' hidden'}><label for="cal-f-to">Save to</label>
@@ -562,13 +586,27 @@ export function render(root) {
         };
         const noRule = custom || series;                // no repeat controls in the form
         if (locked) overlay.querySelectorAll('.cal-form input, .cal-form select, .cal-form textarea').forEach(el => { el.disabled = true; });
+        // The invite field shows only while the event is headed for a Google calendar.
+        const syncInvite = () => {
+            const field = overlay.querySelector('.cal-invite-field');
+            if (field && !edit) field.hidden = !atGoogle(q('to')?.value);
+        };
         q('cal')?.addEventListener('change', () => {         // another calendar has its own "save to" choices
             const field = overlay.querySelector('.cal-to-field');
             if (!field) return;
             const html = toOptions(q('cal').value);
             q('to').innerHTML = html;
             field.hidden = !html;
+            syncInvite();
         });
+        q('to')?.addEventListener('change', syncInvite);
+        syncInvite();
+        overlay.querySelectorAll('.cal-guest-x').forEach(btn => btn.addEventListener('click', () => {
+            const g = guests[+btn.dataset.i];
+            const chip = btn.closest('.cal-guest');
+            if (gone.has(g.email)) gone.delete(g.email); else gone.add(g.email);
+            chip.classList.toggle('cal-guest-gone', gone.has(g.email));       // click again to keep them
+        }));
         const syncRepeat = () => {
             if (noRule) return;
             const mode = q('repeat').value;
@@ -620,12 +658,17 @@ export function render(root) {
         syncRepeat();
         setTimeout(() => q('title').focus(), 50);
 
+        // What the form held when it opened. A save of an event that exists sends only what was
+        // changed: an untouched field must not be written back (a one-line box cannot even hold
+        // another app's two-line address, and would flatten it).
+        const opened = { title: q('title').value, where: q('where').value, notes: q('notes').value,
+                         when: [q('allday').checked, q('sd').value, q('st').value, q('ed').value, q('et').value].join('|') };
         const busy = on => {
             if (on) overlay.dataset.busy = '1'; else delete overlay.dataset.busy;
             overlay.querySelectorAll('.modal-footer button').forEach(b => { b.disabled = on; });
         };
 
-        // A Google repeat: one day or all of them? Everything else saves straight away.
+        // A linked repeat: one day or all of them? Everything else saves straight away.
         function saveAsked() {
             if (!series) return save(null);
             const dayWords = fmt(fromYmd(ev.day), { weekday: 'short', month: 'short', day: 'numeric' });
@@ -646,18 +689,26 @@ export function render(root) {
             const all = q('allday').checked;
             if (!q('title').value.trim()) return fail('Give the event a title.');
             if (!q('sd').value || !q('ed').value) return fail('Pick a start and an end date.');
-            const fields = {
-                title: q('title').value.trim(),
-                all_day: all,
-                start: all ? q('sd').value : `${q('sd').value}T${q('st').value || '00:00'}`,
-                end: all ? q('ed').value : `${q('ed').value}T${q('et').value || '00:00'}`,
-                location: q('where').value.trim(),
-                notes: q('notes').value,
-            };
+            const fields = {};
+            const when = [all, q('sd').value, q('st').value, q('ed').value, q('et').value].join('|');
+            if (!edit || q('title').value !== opened.title) fields.title = q('title').value.trim();
+            if (!edit || q('where').value !== opened.where) fields.location = q('where').value.trim();
+            if (!edit || q('notes').value !== opened.notes) fields.notes = q('notes').value;
+            if (!edit || when !== opened.when) {
+                fields.all_day = all;
+                fields.start = all ? q('sd').value : `${q('sd').value}T${q('st').value || '00:00'}`;
+                fields.end = all ? q('ed').value : `${q('ed').value}T${q('et').value || '00:00'}`;
+            }
             if (q('cal')) fields.calendar = q('cal').value;
             else if (!edit) fields.calendar = cal;
             if (!edit && q('to')?.value) fields.to = q('to').value;
             if (oneDay) fields.day = oneDay;
+            else if (series) fields.shown = ev.day;          // the whole series, as seen from this occurrence
+            const invite = overlay.querySelector('.cal-invite-field');
+            const typed = invite && !invite.hidden ? q('guests').value.trim() : '';
+            if (typed) fields[edit ? 'add_guests' : 'guests'] = typed;
+            if (gone.size) fields.remove_guests = [...gone];
+            if (q('rsvp') && q('rsvp').value !== myAnswer) fields.rsvp = q('rsvp').value;
             if (!noRule) {
                 fields.repeat = q('repeat').value;
                 if (fields.repeat !== 'none') {
@@ -728,134 +779,37 @@ export function render(root) {
     // -- linked calendars --------------------------------------------------------
 
     function openLinks() {
-        let calendar = st.filter || 'default';
-        let state = null;
         const { overlay, close } = openModal(`
             <div class="modal-header">
-                <h3>Calendars</h3>
+                <h3>Calendar accounts</h3>
                 <button class="close-btn cal-x" aria-label="Close">&times;</button>
             </div>
-            <div class="modal-body cal-linkbox"><div class="cal-empty">Loading...</div></div>
+            <div class="modal-body cal-accounts-host"></div>
             <div class="modal-footer">
-                <button class="btn cal-sync">Refresh now</button><span class="cal-spacer"></span>
+                <span class="cal-ask cal-small">Also in Settings, under Plugins, Calendar.</span><span class="cal-spacer"></span>
                 <button class="btn cal-x">Close</button>
             </div>`);
-        const box = overlay.querySelector('.cal-linkbox');
-        const say = (msg, kind = 'error') => showToast(msg, kind);
-        const send = (path, method, body) => fetchWithTimeout(`${API}/${path}`, {
-            method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
-        }, 45000);
-
-        function paintLinks() {
-            const g = state.google || { connected: false, calendars: [] };
-            const many = st.calendars.length > 1;
-            const writable = state.links.filter(l => l.kind === 'google' && l.writable);
-            const rows = state.links.map(l => `
-                <div class="cal-link" data-link="${escapeHtml(l.id)}">
-                    <span class="cal-dot cal-c${l.color % 6}"></span>
-                    <div class="cal-link-main">
-                        <div class="cal-link-name">${escapeHtml(l.name)}</div>
-                        <div class="cal-link-sub">${l.kind === 'google' ? (l.writable ? 'Google, two-way' : 'Google, read-only') : `Calendar address, read-only${l.where ? ' - ' + escapeHtml(l.where) : ''}`} - ${escapeHtml(l.refreshing ? 'refreshing...' : agoWords(l.synced_at))}</div>
-                        ${l.error ? `<div class="cal-link-error">${escapeHtml(l.error)}</div>` : ''}
-                        ${l.note ? `<div class="cal-link-sub">${escapeHtml(l.note)}</div>` : ''}
-                    </div>
-                    <button class="btn hover-danger cal-unlink">Unlink</button>
-                </div>`).join('');
-            const offers = g.calendars.filter(c => !c.linked);
-            box.innerHTML = `
-                ${many ? `<div class="modal-field"><label for="cal-l-cal">Calendar</label>
-                    <select id="cal-l-cal">${st.calendars.map(c => `<option value="${escapeHtml(c.name)}"${c.name === calendar ? ' selected' : ''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>` : ''}
-                <p class="cal-ask">Events always live on this machine. A link adds another calendar's events beside them: Google works both ways, a calendar address is read-only.</p>
-                <h4 class="cal-h">Linked</h4>
-                ${rows || `<div class="cal-link-sub">Nothing is linked to "${escapeHtml(calendar)}" yet.</div>`}
-                ${writable.length ? `<div class="modal-field cal-gap"><label for="cal-l-target">New events go to</label>
-                    <select id="cal-l-target"><option value="local"${state.target ? '' : ' selected'}>This machine only</option>
-                        ${writable.map(l => `<option value="${escapeHtml(l.id)}"${l.id === state.target ? ' selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}</select>
-                    <div class="cal-link-sub">Also where your AI's new events go in chats that use this calendar.</div></div>` : ''}
-                <h4 class="cal-h">Google</h4>
-                ${g.connected ? `
-                    <div class="cal-link-sub">A Google account is connected for "${escapeHtml(calendar)}".</div>
-                    ${g.error ? `<div class="cal-link-error">${escapeHtml(g.error)}</div>` : ''}
-                    ${offers.length ? `<div class="cal-inline cal-gap"><select id="cal-l-gpick">${offers.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}${c.writable ? '' : ' (read-only)'}</option>`).join('')}</select>
-                        <button class="btn cal-glink">Link this one too</button></div>` : ''}
-                    <div class="cal-inline cal-gap"><button class="btn cal-gconnect">Reconnect</button><button class="btn hover-danger cal-gdisconnect">Disconnect Google</button></div>`
-                : `<div class="cal-link-sub">Connect a Google account to see and change its calendar here.</div>
-                    <div class="cal-inline cal-gap"><button class="btn btn-primary cal-gconnect">Connect Google</button></div>`}
-                <details class="cal-adv"><summary>Use your own Google client (advanced)</summary>
-                    <div class="cal-link-sub">Leave this alone for Easy Connect. With your own OAuth client, add this redirect URI to it: <code>${escapeHtml(location.origin)}/api/plugin/calendar/callback</code></div>
-                    <div class="modal-field"><label for="cal-l-cid">Client ID</label><input type="text" id="cal-l-cid" autocomplete="off" value="${escapeHtml(state.account?.client_id || '')}"></div>
-                    <div class="modal-field"><label for="cal-l-secret">Client secret</label><input type="password" id="cal-l-secret" autocomplete="new-password" placeholder="Leave blank to keep the saved one"></div>
-                    <button class="btn cal-gsave">Save client</button>
-                </details>
-                <h4 class="cal-h">Add a calendar address</h4>
-                <div class="cal-link-sub">An .ics or webcal address: holidays, a team calendar, another app's "secret address in iCal format".</div>
-                <div class="modal-field cal-gap"><label for="cal-l-url">Address</label><input type="text" inputmode="url" id="cal-l-url" placeholder="https://..." autocomplete="off" spellcheck="false"></div>
-                <div class="modal-field"><label for="cal-l-name">Name (optional)</label><input type="text" id="cal-l-name" maxlength="40"></div>
-                <button class="btn cal-addics">Add</button>`;
-        }
-
-        async function run(work, done) {
-            overlay.dataset.busy = '1';
-            box.classList.add('busy');
-            try {
-                const res = await work();
-                if (res?.links) state = res.google ? res : { ...state, links: res.links };
-                if (done) done(res);
-                paintLinks();
-                st.key = '';
-                load(true);
-            } catch (e) {
-                say(e.message || "That didn't work.");
-            } finally {
-                delete overlay.dataset.busy;
-                box.classList.remove('busy');
-            }
-        }
-
-        const open = () => run(() => send(`links?calendar=${encodeURIComponent(calendar)}`, 'GET'));
-
-        box.addEventListener('change', e => {
-            if (e.target.id === 'cal-l-cal') { calendar = e.target.value; open(); }
-            if (e.target.id === 'cal-l-target') run(() => send('target', 'POST', { calendar, to: e.target.value }));
+        // The same panel Settings shows. It tells us when what the page shows may have changed.
+        st.panelOpen = true;
+        const panel = mountAccounts(overlay.querySelector('.cal-accounts-host'), {
+            calendar: st.filter || 'default',
+            focus: true,
+            onChange: () => { st.key = ''; load(true); },
         });
-        box.addEventListener('click', e => {
-            const row = e.target.closest('.cal-link');
-            if (e.target.closest('.cal-unlink') && row) {
-                const link = state.links.find(l => l.id === row.dataset.link);
-                showConfirm(`Unlink "${link?.name || 'this calendar'}"? Its events leave this page. Nothing is deleted where that calendar is kept.`,
-                    () => run(() => send(`links/${encodeURIComponent(row.dataset.link)}`, 'DELETE')), { title: 'Unlink calendar', saveLabel: 'Unlink' });
-            } else if (e.target.closest('.cal-addics')) {
-                const url = box.querySelector('#cal-l-url').value.trim();
-                if (!url) return say('Paste the calendar address first.');
-                run(() => send('links', 'POST', { calendar, kind: 'ics', url, name: box.querySelector('#cal-l-name').value.trim() }),
-                    () => say('Calendar linked.', 'success'));
-            } else if (e.target.closest('.cal-glink')) {
-                run(() => send('links', 'POST', { calendar, kind: 'google', google_id: box.querySelector('#cal-l-gpick').value }));
-            } else if (e.target.closest('.cal-gconnect')) {
-                // Google's consent page takes over this tab and returns here.
-                window.location.href = `${API}/auth?scope=${encodeURIComponent(calendar)}`;
-            } else if (e.target.closest('.cal-gdisconnect')) {
-                showConfirm(`Disconnect Google from "${calendar}"? Its Google links stay listed but stop refreshing until you connect again.`,
-                    () => run(async () => { await send('disconnect', 'POST', { scope: calendar }); return send(`links?calendar=${encodeURIComponent(calendar)}`, 'GET'); }),
-                    { title: 'Disconnect Google', saveLabel: 'Disconnect' });
-            } else if (e.target.closest('.cal-gsave')) {
-                const client_id = box.querySelector('#cal-l-cid').value.trim();
-                const client_secret = box.querySelector('#cal-l-secret').value.trim();
-                run(async () => {
-                    await fetchWithTimeout(`/api/gcal/accounts/${encodeURIComponent(calendar)}`, {
-                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ client_id, client_secret, calendar_id: state.account?.calendar_id || 'primary', label: calendar }),
-                    }, 20000);
-                    return send(`links?calendar=${encodeURIComponent(calendar)}`, 'GET');
-                }, () => say(client_id ? 'Client saved. Now connect Google.' : 'Back to Easy Connect.', 'success'));
+        const watch = new MutationObserver(() => {
+            if (!overlay.isConnected) {
+                panel.destroy();
+                watch.disconnect();
+                st.panelOpen = false;
+                if (!st.dead) { st.key = ''; load(true); }      // whatever was changed in there, also a change still on its way
+                return;
             }
+            // A confirm opened on top (Remove account?): one Escape closes that, not this dialog under it.
+            const above = [...document.querySelectorAll('.modal-overlay')]
+                .some(o => o !== overlay && (overlay.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING));
+            if (above) overlay.dataset.busy = '1'; else delete overlay.dataset.busy;
         });
-        overlay.querySelector('.cal-sync').addEventListener('click', () => run(async () => {
-            const res = await send('sync', 'POST', { calendar });
-            if (res.failed?.length) say(`${res.failed[0].name}: ${res.failed[0].detail}`);
-            return res;
-        }));
-        open();
+        watch.observe(document.body, { childList: true });
         return close;
     }
 
@@ -965,6 +919,8 @@ export function render(root) {
     $('.cal-filter').addEventListener('change', onFilter);
     $('.cal-drop').addEventListener('click', onDropCalendar);
     $('.cal-links').addEventListener('click', openLinks);
+    $('.cal-hint-add').addEventListener('click', openLinks);
+    $('.cal-hint-x').addEventListener('click', () => { remember('nohint', '1'); $('.cal-hintbar').hidden = true; });
     root.querySelectorAll('.cal-view-btn').forEach(b => b.addEventListener('click', () => go(b.dataset.view)));
 
     const onScreen = () => !st.dead && root.isConnected && document.visibilityState === 'visible' && root.offsetParent !== null;

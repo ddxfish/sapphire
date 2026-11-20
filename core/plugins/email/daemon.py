@@ -22,18 +22,19 @@ import hashlib
 import imaplib
 import json
 import logging
+import smtplib
 import threading
 import time
 
-from plugins.email import accounts, mailbox, message
+from plugins.email import accounts, mailbox, message, unattended
 from plugins.email.mailbox import Mailbox
 
 logger = logging.getLogger(__name__)
 
 MAX_PER_POLL = 20   # after a long outage, only the newest N fire
-MAX_AUTO_PER_SENDER = 10    # auto-replies to one sender in 24 hours, per account
+MAX_AUTO_PER_SENDER = unattended.MAX_PER_SENDER    # the rules themselves live in unattended.py
 MAX_BACKOFF = 3600          # seconds: the longest an unreachable account waits between tries
-_fails: dict = {}           # account -> (failures in a row, do not try before)
+_fails: dict = {}           # account -> (failures in a row, do not try before, what kind of failure)
 
 _thread: threading.Thread = None
 _stop_event = threading.Event()
@@ -65,11 +66,36 @@ def start(plugin_loader, settings):
     logger.info(f"[EMAIL] Daemon started (poll every {_poll_interval}s)")
 
 
+def retry_now(scope=None):
+    """Something was just fixed (a certificate trusted, a test passed): try
+    the watched accounts at the next poll, not after their back-off."""
+    if scope is None:
+        _fails.clear()
+    else:
+        _fails.pop(scope, None)
+
+
+def _index_off(settings):
+    return (settings or {}).get('keep_mail_index', True) in (False, 0, 'false', 'False', '0', 'off')
+
+
 def on_settings_saved(settings):
-    """Called by core when the plugin's settings are saved: the poll interval applies at once."""
+    """Called by core when the plugin's settings are saved: the poll interval
+    applies at once, and "remember mail lists" turned off deletes what was
+    kept NOW (the Email page may never be opened again to do it)."""
     global _poll_interval
     _settings.clear()
     _settings.update(settings or {})
+    if _index_off(settings):
+        try:
+            from plugins.email import index
+            idx = index.get()
+            idx.enabled = False
+            if not idx.empty():
+                idx.forget()
+                logger.info("[EMAIL] the mail index was turned off; what it held was deleted")
+        except Exception as e:
+            logger.warning(f"[EMAIL] mail index not emptied: {e}")
     try:
         _poll_interval = max(30, int((settings or {}).get("poll_interval", _poll_interval)))
     except (TypeError, ValueError):
@@ -101,13 +127,15 @@ def _poll_loop():
             # Only accounts with an active daemon task are polled.
             active = _plugin_loader.active_daemon_accounts("email_message")
             _marks_keep(active)
-            for acct in (credentials.list_email_accounts() if active else []):
+            listed = credentials.list_email_accounts()
+            _tidy({a["scope"] for a in listed})
+            for acct in (listed if active else []):
                 if _stop_event.is_set():
                     return
                 scope = acct["scope"]
                 if scope not in active:
                     continue
-                fails, wait_until = _fails.get(scope, (0, 0))
+                fails, wait_until, before = (tuple(_fails.get(scope, (0, 0, ''))) + ('',))[:3]
                 if time.time() < wait_until:
                     continue
                 try:
@@ -122,9 +150,15 @@ def _poll_loop():
                     # Tried less and less often, and said once: a server that is down for a
                     # day must not be hammered, nor fill the log with one line per poll.
                     wait = min(MAX_BACKOFF, _poll_interval * 2 ** min(fails, 10))
-                    _fails[scope] = (fails + 1, time.time() + wait)
-                    if not fails:
-                        logger.warning(f"[EMAIL] Poll failed for '{scope}': {e}. Trying again less often until it works.")
+                    kind = type(e).__name__
+                    _fails[scope] = (fails + 1, time.time() + wait, kind)
+                    if not fails or kind != before:
+                        # Said when a run of failures starts AND when its cause changes: a
+                        # network blip at boot must not hide the certificate problem behind it.
+                        why = getattr(e, 'words', '') or (e if isinstance(e, RuntimeError) else kind)
+                        logger.warning(f"[EMAIL] Poll failed for '{scope}': {str(why).rstrip('.')}. Trying again less often until it works.")
+                        if isinstance(e, accounts.CertUntrusted):
+                            _say_cert(scope, e)
         except Exception as e:
             logger.error(f"[EMAIL] Poll loop error: {e}", exc_info=True)
 
@@ -139,9 +173,32 @@ def _mark_get(scope):
 
 
 def _mark_set(scope, validity, last_uid, address=''):
-    mailbox._state().update_with_lock(
-        'daemon', lambda cur: {**(cur or {}), scope: {'validity': validity, 'last_uid': last_uid,
-                                                     'address': str(address or '').lower()}}, {})
+    """Move the mark. Only forward, while it is the same inbox: a poll thread
+    that was still finishing when the plugin reloaded must not pull the mark
+    back under the new thread and fire the same mail again."""
+    address = str(address or '').lower()
+
+    def step(cur):
+        table = dict(cur or {})
+        old = table.get(scope) or {}
+        uid = last_uid
+        if old.get('validity') == validity and (old.get('address') or '') == address:
+            uid = max(int(old.get('last_uid') or 0), int(last_uid or 0))
+        table[scope] = {'validity': validity, 'last_uid': uid, 'address': address}
+        return table
+    mailbox._state().update_with_lock('daemon', step, {})
+
+
+def _tidy(scopes):
+    """Housekeeping once a poll: counts and claims that aged out, and the
+    mail index of an account that was removed in Settings."""
+    try:
+        unattended.tidy()
+        from plugins.email import index
+        if index.DB_PATH.exists():
+            index.get().prune(scopes)
+    except Exception as e:
+        logger.debug(f"[EMAIL] tidy: {e}")
 
 
 def _marks_keep(active):
@@ -163,6 +220,7 @@ def _check_account(scope: str, creds: dict):
     """Emit an event for each unread inbox mail newer than the high-water mark."""
     with Mailbox(scope, creds, loose=True) as mb:
         mb.select('inbox')
+        validity = mb.validity
         if mb.uidnext is None:                    # a server that does not say: ask for the newest uid
             top = max(mb.c.search(['ALL']) or [0])
         else:
@@ -193,6 +251,11 @@ def _check_account(scope: str, creds: dict):
             try:
                 handle = mb.id_for('inbox', uid)
                 msg, _ = mb.message(handle)
+                if mb.validity != validity:
+                    # The server rebuilt the inbox under us: the numbers left in this batch
+                    # now mean other mails. Stop; the next poll starts from the new inbox.
+                    logger.warning(f"[EMAIL] '{scope}': the inbox was rebuilt on the server mid-poll; starting over next time")
+                    return
                 frm = (message.addresses(msg, 'From') or [('', '')])[0]
                 if frm[1] and frm[1].lower() == own:
                     continue   # our own outbound mail (a copy landed in the inbox)
@@ -216,10 +279,20 @@ def _check_account(scope: str, creds: dict):
             # After EACH mail, also one that could not be read (retrying it
             # forever would block everything behind it): a stop, a reload or
             # a crash from here on repeats nothing.
-            _mark_set(scope, mb.validity, uid, own)
-        _mark_set(scope, mb.validity, top, own)
+            _mark_set(scope, validity, uid, own)
+        _mark_set(scope, validity, top, own)
         if new:
             logger.info(f"[EMAIL] '{scope}': {len(new)} new message(s)")
+
+
+def _say_cert(scope, error):
+    """A watched account that stopped over its server's certificate is said to the person, not only the log."""
+    try:
+        from core import notify
+        notify.notify(f"Email is not checking '{scope}'", level='warning', source='email',
+                      body=str(error), key=f"email-cert-{scope}")
+    except Exception as e:
+        logger.debug(f"[EMAIL] certificate notice not shown: {e}")
 
 
 def _say_skipped(scope, count):
@@ -234,58 +307,17 @@ def _say_skipped(scope, count):
         logger.debug(f"[EMAIL] flood notice not shown: {e}")
 
 
-def _pass_mark():
-    try:
-        from core.rooms import PASS_MARK
-        return PASS_MARK
-    except Exception:
-        return '<<PASS>>'
-
-
-def _is_contact(task, address):
-    """True when the address belongs to someone in the task's People."""
-    scope = (task or {}).get('people_scope') or 'default'
-    if str(scope).lower() == 'none':
-        return False
-    try:
-        from core.contacts import get_people
-        return address.strip().lower() in {(p.get('email') or '').strip().lower() for p in get_people(scope)}
-    except Exception as e:
-        logger.warning(f"[EMAIL] People not read for the auto-reply check, so no reply is sent: {e}")
-        return False
-
-
 def _say_not_a_contact(scope):
     """Once, so a person whose task used to answer everyone learns why it stopped."""
     try:
         from core import notify
         notify.notify("An email was not auto-answered", level='info', source='email',
-                      body=("The sender is not in People, and automatic replies only go to your contacts. "
-                            "To answer anyone, turn on 'Auto-reply to anyone' in Settings > Plugins > Email."),
-                      key="email-autoreply-contacts", go={'view': 'settings', 'tab': 'plugins'})
+                      body=("Automatic replies only go to people in People with 'Allow email' ticked, and the "
+                            "sender is not one. Tick it on their card, or to answer anyone turn on "
+                            "'Auto-reply to anyone' in Settings > Plugins > Email."),
+                      key="email-autoreply-contacts", go={'view': 'settings', 'tab': 'email'})
     except Exception as e:
         logger.debug(f"[EMAIL] notice not shown: {e}")
-
-
-def _may_auto_reply(scope, address):
-    """True while this sender has had fewer than MAX_AUTO_PER_SENDER auto-replies
-    from this account in the last 24 hours, and counts this one. The backstop
-    against a responder that never says it is automatic. Senders are kept as a
-    hash, never as an address."""
-    who = hashlib.sha256(f"{scope}\n{address.strip().lower()}".encode()).hexdigest()[:20]
-    now, day = time.time(), 86400
-    allowed = []
-
-    def step(cur):
-        table = {k: [t for t in v if now - t < day] for k, v in (cur or {}).items()}
-        table = {k: v for k, v in table.items() if v}
-        sent = table.get(who, [])
-        allowed.append(len(sent) < MAX_AUTO_PER_SENDER)
-        if allowed[-1]:
-            table[who] = sent + [now]
-        return table
-    mailbox._state().update_with_lock('auto_replies', step, {})
-    return allowed[-1]
 
 
 def _reply_handler(task, event_data: dict, response_text: str):
@@ -307,9 +339,9 @@ def _reply_handler(task, event_data: dict, response_text: str):
     if not clean:
         logger.warning(f"[EMAIL] Empty reply after think-tag strip - raw response was {len(response_text)} chars")
         return
-    if _pass_mark() in clean:
+    if unattended.passed(clean):
         # Her choice: this mail gets no answer. The same mark she uses to pass a turn in a chat room.
-        logger.info(f"[EMAIL] No auto-reply to {handle}: she passed ({_pass_mark()})")
+        logger.info(f"[EMAIL] No auto-reply to {handle}: she passed ({unattended.pass_mark()})")
         return
 
     try:
@@ -322,15 +354,6 @@ def _reply_handler(task, event_data: dict, response_text: str):
         with Mailbox(account, creds, loose=True) as mb:
             original, flags = mb.message(handle)
 
-        why = message.is_automated(original)
-        if why:
-            logger.info(f"[EMAIL] No auto-reply to {handle} ({why}): automated mail is never answered automatically")
-            return
-        if b'\\answered' in flags:
-            # Answered already: by her own send_email in this same run, by another task
-            # on this account, or by this handler before a restart. Never twice.
-            logger.info(f"[EMAIL] No auto-reply to {handle}: it has been answered already")
-            return
         to, _ = message.reply_targets(original, creds['address'])
         if not to:
             logger.warning(f"[EMAIL] Reply handler: no reply address on {handle}")
@@ -338,25 +361,38 @@ def _reply_handler(task, event_data: dict, response_text: str):
         # ONE address. A mail may name any number of Reply-To addresses, and
         # an automatic answer to all of them makes this account a relay.
         to = to[:1]
-        if not _settings.get('auto_reply_anyone') and not _is_contact(task, to[0][1]):
-            # Nobody is in the loop here, and anyone can write in. Unless the
-            # person opened it up, an automatic answer only goes to people they know.
-            logger.info(f"[EMAIL] No auto-reply to {handle}: the sender is not in People "
-                        "(Settings > Plugins > Email, 'Auto-reply to anyone', allows it)")
-            _say_not_a_contact(account)
+        # The rules for mail nobody is watching (unattended.py); her own
+        # send_email in a task run goes through the same ones.
+        no = unattended.refusal(account, original, flags, to[0][1], unattended.people_scope_of(task),
+                                bool(_settings.get('auto_reply_anyone')))
+        if no:
+            logger.info(f"[EMAIL] No auto-reply to {handle}: {no[1]}")
+            if no[0] == 'stranger':
+                _say_not_a_contact(account)
             return
-        if not _may_auto_reply(account, to[0][1]):
-            logger.warning(f"[EMAIL] No auto-reply to {handle}: this sender already got {MAX_AUTO_PER_SENDER} "
-                           "automatic replies in the last 24 hours (a loop guard)")
+        if not unattended.claim(creds['address'], handle):
+            logger.info(f"[EMAIL] No auto-reply to {handle}: another run is answering it, or has")
+            return
+        if not unattended.under_cap(account, to[0][1]):
+            unattended.release(creds['address'], handle)
+            logger.warning(f"[EMAIL] No auto-reply to {handle}: {unattended.CAP_WORDS}")
             return
         subject = message.prefixed(message.header(original, 'Subject'), 'Re')
         msg = message.build(creds['address'], to, (), subject, clean, original, 'reply', auto=True)
-        note = mailbox.send(account, creds, msg, [a for _, a in to])
+        try:
+            note = mailbox.send(account, creds, msg, [a for _, a in to])
+        except Exception as e:
+            if not getattr(e, 'unclear', False):
+                unattended.release(creds['address'], handle)      # nothing went out: it may be answered later
+            raise
         try:
             with Mailbox(account, creds, loose=True) as mb:
                 mb.flag([handle], b'\\Answered')
         except Exception as e:
             logger.warning(f"[EMAIL] auto-reply sent, but {handle} could not be marked answered: {e}")
         logger.info(f"[EMAIL] Auto-reply delivered for {handle} via {account}{note}")
+    except smtplib.SMTPException as e:
+        # The server's own words name addresses: the kind and the code are enough here.
+        logger.error(f"[EMAIL] Auto-reply failed: {type(e).__name__} {getattr(e, 'smtp_code', '')}")
     except Exception as e:
-        logger.error(f"[EMAIL] Auto-reply failed: {e}", exc_info=True)
+        logger.error(f"[EMAIL] Auto-reply failed: {getattr(e, 'words', '') or e}", exc_info=not getattr(e, 'words', ''))

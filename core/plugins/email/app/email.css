@@ -69,6 +69,13 @@
 .em-empty a { color: var(--em-accent); }
 .em-empty .btn { margin-top: 12px; }
 .em-error { color: var(--error-text, var(--danger)); }
+.em-cert { max-width: 640px; color: var(--text); }
+.em-cert-card { margin: 12px 0; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-secondary); text-align: left; font-size: 13px; }
+.em-cert-card code { font-size: 11px; word-break: break-all; }
+.em-cert .btn + .btn { margin-left: 8px; }
+.em-cert-card { overflow-wrap: anywhere; }
+.em-form-cert .em-cert { padding: 8px 0 0; text-align: left; max-width: none; }
 
 /* -- folders ---------------------------------------------------------------- */
 

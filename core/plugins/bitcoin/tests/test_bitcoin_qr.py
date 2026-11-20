@@ -155,10 +155,10 @@ def test_tool_with_no_wallet_says_so(monkeypatch):
 
 
 def test_receive_is_local_and_the_money_tools_are_not():
-    local = {t['function']['name']: t['is_local'] for t in bitcoin_tool.TOOLS}
-    assert local == {'get_wallet': False, 'bitcoin_receive': True,
-                     'send_bitcoin': False, 'get_transactions': False}
-    assert set(bitcoin_tool.AVAILABLE_FUNCTIONS) == set(local)
+    local = {t['function']['name']: t['is_local'] for t in bitcoin_tool.TOOLS if not t.get('hidden')}
+    assert local == {'bitcoin_wallet': False, 'bitcoin_receive': True,
+                     'bitcoin_send': False, 'bitcoin_transactions': False}
+    assert set(bitcoin_tool.AVAILABLE_FUNCTIONS) == {t['function']['name'] for t in bitcoin_tool.TOOLS}
 
 
 def test_a_bad_stored_key_never_reaches_the_model(monkeypatch, caplog):

@@ -6,11 +6,12 @@ listed with repeats expanded, what "remove" means for a repeating event.
 
 Every refusal is a CalError whose text is fit to show the person or the model.
 
-A calendar can have links: a Google calendar (two-way) or an ICS address
-(read-only) whose events are copied in by sync.py. An event made here goes to
-the calendar's "new events go to" choice: the local file, or a Google link.
-A change to a Google event is sent to Google first and the copy is refreshed
-after, so Google stays the authority and nothing is ever merged.
+A calendar can have links: a Google calendar or a CalDAV calendar (both
+two-way) or an ICS address (read-only), whose events are copied in by
+sync.py. An event made here goes to the calendar's "new events go to" choice:
+the local file, or a writable link. A change to a linked event is made where
+it is kept, by that kind of link's own module (sources.py), so the source
+stays the authority and nothing is ever merged.
 
 A repeating event, the same from every caller: its id alone means the whole
 series, its id plus a day means that one occurrence.
@@ -25,7 +26,7 @@ import re
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
-from . import google, ics, repeat, store, sync
+from . import accounts, google, ics, repeat, sources, store, sync
 from .errors import CalError
 
 logger = logging.getLogger(__name__)
@@ -68,12 +69,19 @@ def zone_name():
     """The IANA name of our local zone: Sapphire's setting, else the machine's;
     '' when the machine does not say (Windows)."""
     name = tz_name()
-    if name:
+    if name and _zone() is not None:                  # a setting that names no real zone is not written into events
         return name
     try:
-        key = getattr(datetime.now().astimezone().tzinfo, 'key', None)
-        if key:
-            return key
+        # The machine's own zone by name. Windows has no /etc/localtime, and a
+        # bare astimezone() only knows today's offset: without the name, a
+        # weekly event sent to Google drifts an hour when the clocks change.
+        try:
+            import tzlocal
+            key = tzlocal.get_localzone_name()
+            if key and key.upper() != 'UTC':
+                return key
+        except Exception as e:
+            logger.debug(f"[calendar] tzlocal did not name the zone: {e}")
         link = Path('/etc/localtime')
         if link.is_symlink():
             target = str(link.resolve())
@@ -209,11 +217,13 @@ def delete_calendar(name):
         raise CalError("The default calendar stays. Remove its events instead.")
     if not store.get().has_calendar(name):
         raise CalError(f"There is no calendar named '{name}'.")
-    removed = store.get().delete_calendar(name)
     if google.connected(name):
-        # its Google account is still connected: without this mark the next
-        # refresh would link it straight back and the calendar would reappear
+        # its Google account is still connected: without this mark (set BEFORE
+        # the calendar goes) a refresh would link it straight back and the
+        # calendar would reappear
         store.get().set_meta(f"gauto:{name}", 'off')
+    removed = store.get().delete_calendar(name)
+    accounts.remove_all(name)                # its CalDAV logins go with it
     return removed
 
 
@@ -369,7 +379,8 @@ def _clean(fields, base=None):
             end = start + (old_end - old_start)
         else:
             end = start + timedelta(hours=1)
-        if end <= start:
+        # (a moment with no length, as some apps make them, stays one while its end is not being set)
+        if end < start or (end == start and not (base and old_end == old_start and raw_end in (None, ''))):
             raise CalError("end must be after start.")
     if (end - start).days > MAX_SPAN_DAYS:
         raise CalError("An event can be at most a year long.")
@@ -446,6 +457,10 @@ def _occurrence(ev, occ_start, links=None):
         'color': link['color'] if link else None,
         'editable': ev['source'] == 'local' or bool(link and link['writable']),
         'guests': [g for g in ev.get('guests') or [] if not g.get('self')],
+        # the calendar owner's own answer, when they are on the guest list ('' when they are not, and
+        # '' where it could not be answered from here anyway: only a Google link takes an answer)
+        'my_rsvp': next((g.get('rsvp') or 'pending' for g in ev.get('guests') or [] if g.get('self')), '')
+        if (link and link['kind'] == 'google') else '',
         'url': ev.get('url') or '',
     }
 
@@ -511,9 +526,6 @@ def describe(ev):
 
 # -- events: write ------------------------------------------------------------
 
-_GOOGLE_READONLY = "That Google calendar is read-only for this account."
-
-
 def _link_of(ev):
     """The link a copied event came from; None for a local one. A read-only
     source refuses here, in words."""
@@ -526,15 +538,15 @@ def _link_of(ev):
         raise CalError(f"'{ev['title']}' comes from the linked calendar '{link['name']}', which is read-only. "
                        "Change it where that calendar is kept.")
     if not link['writable']:
-        raise CalError(_GOOGLE_READONLY)
+        raise CalError(f"'{ev['title']}' is in '{link['name']}', which is read-only for this account.")
     return link
 
 
 def target_of(calendar):
-    """Where a new event of this calendar goes: a writable Google link, or None for the local file."""
+    """Where a new event of this calendar goes: a writable link, or None for the local file."""
     link_id = store.get().meta(f"target:{calendar}")
     link = store.get().get_link(link_id) if link_id else None
-    if link and link['calendar'] == calendar and link['kind'] == 'google' and link['writable']:
+    if link and link['calendar'] == calendar and link['writable'] and link['kind'] in sources.BY_KIND:
         return link
     return None
 
@@ -550,31 +562,49 @@ def _pick_target(calendar, to):
     if not hit:
         names = ', '.join(["local"] + [l['name'] for l in links if l['writable']])
         raise CalError(f"This calendar has no link named '{to}'. New events can go to: {names}.")
-    if hit[0]['kind'] != 'google' or not hit[0]['writable']:
+    writable = [l for l in hit if l['writable']]
+    if not writable:
         raise CalError(f"'{hit[0]['name']}' is read-only, so an event cannot be added to it.")
-    return hit[0]
+    if len(writable) > 1:
+        raise CalError(f"Several linked calendars are named '{writable[0]['name']}'. Rename one on the Calendar page "
+                       "(Accounts), or leave save_to out to use where this calendar's new events go.")
+    return writable[0]
 
 
 def _days_of(row):
     return parse_day(row['start'][:10]), parse_day(row['end'][:10])
 
 
-def _refreshed(link, need):
-    """Refresh a Google link after a change. The change is already made at
-    Google, so a refresh that fails is logged, not raised."""
-    try:
-        sync.pull(link, need)
-    except CalError as e:
-        logger.warning(f"[calendar] changed at Google but the copy did not refresh: {e}")
+_LOCAL_GUESTS = ("Guests and invitations go through a Google calendar, and this event is kept on this machine. "
+                 "Link a Google calendar on the Calendar page first.")
+_ADDRESS = re.compile(r'^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$')
 
 
-def _notify(ev):
-    return any(not g.get('self') for g in ev.get('guests') or [])
+def typed_guests(raw):
+    """Addresses a person typed on the Calendar page -> Google attendee dicts."""
+    if raw in (None, ''):
+        return []
+    parts = re.split(r'[,;\s]+', raw) if isinstance(raw, str) else [str(x) for x in raw]
+    out, seen = [], set()
+    for part in parts:
+        address = part.strip().strip('<>')
+        if not address:
+            continue
+        if not _ADDRESS.match(address):
+            raise CalError(f"'{address}' is not an email address.")
+        if address.lower() not in seen:
+            seen.add(address.lower())
+            out.append({'email': address})
+    return out
+
+
+def _wants_guests(guests):
+    return bool(guests) and any(guests.get(k) for k in ('add', 'remove', 'rsvp'))
 
 
 def create(fields, calendar=None, by='user', to=None, guests=None):
     """Add an event. `to`: 'local', or a link's id or name; default the
-    calendar's own choice. `guests`: Google attendee dicts (a Google link only)."""
+    calendar's own choice. `guests`: attendee dicts (a Google link only)."""
     fields = dict(fields or {})
     calendar = _need_calendar(calendar if calendar is not None else fields.get('calendar'))
     row = _clean(fields)
@@ -585,20 +615,7 @@ def create(fields, calendar=None, by='user', to=None, guests=None):
                            "Link a Google calendar on the Calendar page first.")
         row.update(calendar=calendar, created_by=by, tz=tz_name(), source='local')
         return store.get().insert(row)
-    body = google.body(dict(row, attendees=guests or []), zone_name(), offset_of)
-    item = google.insert(link['calendar'], link['ref'], body, notify=bool(guests))
-    _refreshed(link, _days_of(row))
-    s = store.get()
-    ev = s.find(link['id'], item.get('id', '')) or next(iter(s.series(link['id'], item.get('id', ''))), None)
-    if ev is None:                                   # the refresh failed: keep what Google answered
-        got = google.to_row(item, to_local)
-        if got and not item.get('recurrence'):
-            s.sync_rows(link, [got], prune=False)
-            ev = s.find(link['id'], got['source_ref'])
-    if ev is None:
-        raise CalError(f"'{row['title']}' was added to Google, but it could not be read back yet. "
-                       "It will show after the next refresh.")
-    return ev
+    return sources.of(link).add(link, row, guests or None)
 
 
 def _local_occurrence(ev, day):
@@ -611,26 +628,23 @@ def _local_occurrence(ev, day):
     return hits[0]
 
 
-def _series_member(link, ev, day):
-    """The stored occurrence of a Google repeating event that starts on `day`."""
-    if not ev['series']:
-        raise CalError(f"'{ev['title']}' does not repeat. Leave the date out.")
-    for row in store.get().series(link['id'], ev['series']):
-        if row['start'][:10] == day.isoformat():
-            return row
-    raise CalError(f"'{ev['title']}' has no occurrence that starts on {day.isoformat()}.")
-
-
-def update(event_id, fields, calendar=None, day=None):
+def update(event_id, fields, calendar=None, day=None, guests=None, shown=None):
     """Change an event. A repeating one: the whole series, or with `day` only
     the occurrence that starts on that day. `calendar` set = the caller may
-    only touch events of that calendar (the tools)."""
+    only touch events of that calendar (the tools). `guests` (a Google event
+    only): who to invite, who to take off, or an answer to an invitation.
+    `shown`: for a change to a whole series, the day of the occurrence the
+    caller was looking at; a new time then moves the series by as much as
+    that occurrence was moved."""
     ev = get_event(event_id, calendar)
     fields = dict(fields or {})
     link = _link_of(ev)
     day = parse_day(day) if day not in (None, '') else None
+    guests = guests if _wants_guests(guests) else None
     if link is not None:
-        return _google_update(link, ev, fields, day)
+        return sources.of(link).change(link, ev, fields, day, guests, shown)
+    if guests:
+        raise CalError(_LOCAL_GUESTS)
     if day is not None:
         # One occurrence of a local series becomes its own event, and that day leaves the series.
         occ = _local_occurrence(ev, day)
@@ -647,47 +661,6 @@ def update(event_id, fields, calendar=None, day=None):
     return store.get().update(ev['id'], row)
 
 
-def _google_update(link, ev, fields, day):
-    scope, cal_id = link['calendar'], link['ref']
-    timing = any(fields.get(k) not in (None, '') for k in ('start', 'end')) or fields.get('all_day') is not None
-    repeating = any(k in fields for k in _REPEAT_KEYS)
-    target = _series_member(link, ev, day) if day is not None else ev
-    whole = bool(ev['series']) and day is None
-    if repeating and not whole and ev['series']:
-        raise CalError("One occurrence cannot have its own repeat. Leave the date out to change the whole series.")
-    row = _clean({k: v for k, v in fields.items() if k not in _REPEAT_KEYS}, target)
-    change = {k: row[k] for k in ('title', 'location', 'notes') if k in fields and fields[k] is not None}
-    if not whole:
-        if timing:
-            change.update(start=row['start'], end=row['end'], all_day=row['all_day'])
-        if repeating:                                 # a one-time Google event gains (or loses) a repeat
-            change['rrule'] = _rrule(fields, '', _load(row['start']))
-        if not change:
-            raise CalError("Nothing to change.")
-        google.patch(scope, cal_id, target['source_ref'],
-                     google.body(change, zone_name(), offset_of, patching=True), notify=_notify(target))
-    else:
-        master = google.get(scope, cal_id, ev['series'])
-        first = google.to_row(master, to_local)
-        if timing:
-            if first is None or row['all_day'] != target['all_day']:
-                raise CalError("Switching a whole repeating series between timed and all-day is not supported here. "
-                               "Change one occurrence (give its date), or change the series in Google.")
-            moved = _load(row['start']) - _load(target['start'])
-            length = _load(row['end']) - _load(row['start'])
-            new_start = _load(first['start']) + moved
-            change.update(start=_fmt(new_start), end=_fmt(new_start + length), all_day=row['all_day'])
-        if repeating:
-            old_rule = next((r[6:] for r in master.get('recurrence') or [] if str(r).upper().startswith('RRULE:')), '')
-            change['rrule'] = _rrule(fields, old_rule, _load(change.get('start') or (first or target)['start']))
-        if not change:
-            raise CalError("Nothing to change.")
-        google.patch(scope, cal_id, ev['series'],
-                     google.body(change, zone_name(), offset_of, patching=True), notify=_notify(ev))
-    _refreshed(link, _days_of(row))
-    return store.get().get(target['id']) or dict(target, **{k: v for k, v in change.items() if k != 'rrule'})
-
-
 def remove(event_id, day=None, calendar=None):
     """Remove an event, or with `day` just that one occurrence of a repeating
     event. Returns ('event' | 'occurrence', the event as it was)."""
@@ -695,17 +668,7 @@ def remove(event_id, day=None, calendar=None):
     link = _link_of(ev)
     day = parse_day(day) if day not in (None, '') else None
     if link is not None:
-        if day is not None:
-            target = _series_member(link, ev, day)
-            google.delete(link['calendar'], link['ref'], target['source_ref'], notify=_notify(target))
-            store.get().delete(target['id'])
-            return 'occurrence', ev
-        google.delete(link['calendar'], link['ref'], ev['series'] or ev['source_ref'], notify=_notify(ev))
-        if ev['series']:
-            for row in store.get().series(link['id'], ev['series']):
-                store.get().delete(row['id'])
-        store.get().delete(ev['id'])
-        return 'event', ev
+        return sources.of(link).remove(link, ev, day), ev
     if day is None:
         store.get().delete(ev['id'])
         return 'event', ev
@@ -723,15 +686,16 @@ def refresh(calendar=None, need=None, force=False, wait=True):
 
 def _link_view(link, target_id):
     host = ''
-    if link['kind'] == 'ics':
+    if link['kind'] != 'google':
         m = re.match(r'https?://([^/\s:]+)', link['ref'], re.I)
         host = m.group(1) if m else ''
     return {
         'id': link['id'], 'calendar': link['calendar'], 'kind': link['kind'], 'name': link['name'],
         'color': link['color'], 'writable': link['writable'], 'synced_at': link['synced_at'],
         'error': link['error'], 'note': store.get().meta(f"note:{link['id']}"),
-        # an ICS address can be a private one: the page gets its host, never the address
-        'where': host if link['kind'] == 'ics' else link['ref'],
+        # an address can be a private one (or name the account): the page gets its host, never the address
+        'where': link['ref'] if link['kind'] == 'google' else host,
+        'account': link.get('account') or '',
         'target': link['id'] == target_id, 'refreshing': sync.running(link['id']),
     }
 
@@ -810,6 +774,41 @@ def add_google(calendar, google_id, name=''):
         return s.get_link(link['id'])          # linked; the error is on the link for the page to show
 
 
+def _own_name(calendar, name, hint=''):
+    """A link name no other link of the calendar has: two accounts can each
+    have a 'Home', and she names a place to save to by its name."""
+    taken = {l['name'].lower() for l in store.get().links(calendar)}
+    if name.lower() not in taken:
+        return name
+    for tail in ([hint] if hint else []) + [str(n) for n in range(2, 50)]:
+        other = f"{name[:40 - len(tail) - 3]} ({tail})"
+        if other.lower() not in taken:
+            return other
+    return name
+
+
+def add_caldav(calendar, account_id, offered, name='', hint='', wait=True):
+    """Link one calendar of a CalDAV account. `offered`: what the account
+    itself listed for it ({'ref', 'name', 'writable'}), so a link can only
+    ever point where that login's own server said its calendars are.
+    `hint`: the account's name, used when another link already has this
+    calendar's name. wait=False: it is linked now and read at the next refresh."""
+    calendar = _need_calendar(calendar)
+    s = store.get()
+    if any(l['kind'] == 'caldav' and l['ref'] == offered['ref'] for l in s.links(calendar)):
+        raise CalError("That calendar is already linked.")
+    shown = _own_name(calendar, _link_name(name or offered['name'], 'Calendar'), _link_name(hint, ''))
+    link = s.add_link({'calendar': calendar, 'kind': 'caldav', 'name': shown,
+                       'ref': offered['ref'], 'color': _next_color(calendar), 'writable': bool(offered['writable']),
+                       'account': str(account_id)})
+    if not wait:
+        return link
+    try:
+        return sync.pull(link) or link
+    except CalError:
+        return s.get_link(link['id'])          # linked; the error is on the link for the page to show
+
+
 def remove_link(link_id):
     """Unlink. The copies go; nothing is touched at the source. Returns how many events went."""
     s = store.get()
@@ -822,6 +821,7 @@ def remove_link(link_id):
                                             for l in s.links(link['calendar'])):
         s.set_meta(f"gauto:{link['calendar']}", 'off')       # removed by hand: do not link it again unasked
     s.set_meta(f"note:{link['id']}", '')
+    s.set_meta(f"ctag:{link['id']}", '')
     return s.delete_link(link['id'])
 
 
@@ -843,7 +843,7 @@ def update_link(link_id, fields):
 
 
 def set_target(calendar, to):
-    """Choose where this calendar's new events go: 'local' or a writable Google link."""
+    """Choose where this calendar's new events go: 'local' or a writable link."""
     calendar = _need_calendar(calendar)
     link = _pick_target(calendar, to or 'local')
     store.get().set_meta(f"target:{calendar}", link['id'] if link else '')

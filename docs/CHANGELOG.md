@@ -2,6 +2,10 @@
 - Each sapphire has its own unique id for later memory sync
 - Mind palace records sapphire ID and model used at write
 - Fixed minor avatar hub sync issues
+- Total overhaul of email and calendar, has full UI for humans
+- Calendar has multiple providers
+- Email and calendar have almost all controls a human has
+- Bitcoin tool name changes, bitcoin_request and QR code added
 # 2.16.5 - Easy mode setup wizard and LLM
 - Setup wizard has easy mode, 5 clicks in the setup wizard to talk
 - Takes user from full install to chat in 12 mouse clicks

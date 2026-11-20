@@ -10,7 +10,7 @@ never changes, never by a position in a list.
 
 Times are the person's local wall time: no Z, no offsets.
 
-A calendar may have links (a Google calendar, an ICS address). Before a tool
+A calendar may have links (a Google or CalDAV calendar, an ICS address). Before a tool
 reads, the links are refreshed, and when one cannot be reached the answer
 says the copy is old. New events go where the person chose on the Calendar
 page ("new events go to"), unless the call names another place.
@@ -72,8 +72,8 @@ TOOLS = [
              "notes": {"type": "string", "description": "Anything else worth keeping"},
              "attendees": {"type": "array", "items": {"type": "string"},
                            "description": "Guests: contact names from People (or ids). Google emails each an invite, so "
-                                          "this needs a linked Google calendar. Only contacts with 'Allow AI to send "
-                                          "email' resolve."},
+                                          "this needs a linked Google calendar. Only contacts with 'Allow email' "
+                                          "ticked resolve."},
              "save_to": {"type": "string",
                          "description": "Optional: 'local' or a linked calendar's name. Default: where this calendar's new events go."},
              **_REPEAT,
@@ -90,6 +90,12 @@ TOOLS = [
              "end": {"type": "string", "description": "YYYY-MM-DD HH:MM or HH:MM. All-day: the last day."},
              "location": {"type": "string", "description": "Where ('' clears it)"},
              "notes": {"type": "string", "description": "Notes ('' clears them)"},
+             "add_guests": {"type": "array", "items": {"type": "string"},
+                            "description": "Invite more people: contact names from People. Google emails them. Google events only."},
+             "remove_guests": {"type": "array", "items": {"type": "string"},
+                               "description": "Guests to take off the event, by the name the event shows. Google tells them."},
+             "rsvp": {"type": "string", "enum": ["yes", "no", "maybe"],
+                      "description": "Answer an invitation this calendar's owner was sent (events marked 'your answer')."},
              **_REPEAT,
          }, "required": ["id"]}}},
     {"type": "function", "is_local": True, "network": True, "writes": True,
@@ -181,11 +187,18 @@ def _match_person(key, people):
         return exact[0], None
     if exact:
         return None, f"'{key}' matches several contacts: {names(exact)}. Use the id."
-    partial = [p for p in people if low in (p.get('name') or '').lower()]
+    # A part of a name counts only as a whole word of it: "Sam" is Sam Lee,
+    # never Samantha, and "Al" is never Sally. An invitation goes out by
+    # email the moment this resolves, so a near miss must be a question.
+    words = lambda p: re.findall(r"[^\W_]+(?:['-][^\W_]+)*", (p.get('name') or '').lower())
+    partial = [p for p in people if low in words(p) or (' ' in low and low in ' '.join(words(p)))]
     if len(partial) == 1:
         return partial[0], None
     if partial:
         return None, f"'{key}' matches several contacts: {names(partial)}. Use the full name or id."
+    near = [p for p in people if low in (p.get('name') or '').lower()]
+    if near:
+        return None, f"No contact named '{key}'. Close: {names(near)}. Use the full name or id."
     return None, f"No contact named '{key}'."
 
 
@@ -201,7 +214,7 @@ def _resolve_attendees(raw):
     people = get_people(scope)
     invitable = [p for p in people if p.get('email_whitelisted') and p.get('email')]
     hint = ("\nInvitable contacts: " + ', '.join(p['name'] for p in invitable)) if invitable else (
-        "\nNo contacts are allowed yet. Tick 'Allow AI to send email' on them in Mind, People.")
+        "\nNo contacts are allowed yet. Tick 'Allow email' on them in Mind, People.")
     out, seen = [], set()
     for key in wanted:
         person, err = _match_person(key, people)
@@ -209,12 +222,12 @@ def _resolve_attendees(raw):
             return None, err + hint
         name = person.get('name') or key
         if not person.get('email_whitelisted'):
-            return None, f"{name} isn't allowed for invites. Tick 'Allow AI to send email' on them in Mind, People."
+            return None, f"{name} isn't allowed for invites. Tick 'Allow email' on them in Mind, People."
         email = (person.get('email') or '').strip()
         if not email:
             return None, f"{name} has no email address in Mind, People."
         if not _EMAIL_RE.match(email):
-            return None, f"{name}'s email '{email}' isn't a valid address. Fix it in Mind, People."
+            return None, f"The email address stored for {name} isn't a valid one. The person can fix it in Mind, People."
         if email.lower() in seen:
             continue
         seen.add(email.lower())
@@ -247,10 +260,14 @@ def _guest_words(o, limit=8):
     guests = o.get('guests') or []
     if not guests:
         return ''
-    parts = [f"{g.get('name') or '?'} ({g.get('rsvp') or 'pending'})" for g in guests[:limit]]
+    # A guest Google gives no name for is known only by an address: she gets the part before the @.
+    seen = lambda g: (g.get('name') or '?').partition('@')[0] if '@' in (g.get('name') or '') else (g.get('name') or '?')
+    parts = [f"{seen(g)} ({g.get('rsvp') or 'pending'})" for g in guests[:limit]]
     if len(guests) > limit:
         parts.append(f"+{len(guests) - limit} more")
-    return f"  [guests: {', '.join(parts)}]"
+    # An invitation the owner has not said yes to: say so, it can be answered (calendar_update rsvp).
+    mine = f"; your answer: {o['my_rsvp']}" if o.get('my_rsvp') in ('pending', 'maybe', 'no') else ''
+    return f"  [guests: {', '.join(parts)}{mine}]"
 
 
 def _line(o, now=None):
@@ -296,13 +313,21 @@ def _fresh(calendar, first, last):
     if _private():
         has_links = bool(api.links(calendar))
         return ["(Private chat: linked calendars were not refreshed; this is the copy already here.)"] if has_links else []
-    out = []
-    for link, why in api.refresh(calendar, need=(first, last)):
+    out, said = [], set()
+
+    def say(link, why):
+        said.add(link['id'])
         if link['synced_at']:
             seen = datetime.fromtimestamp(link['synced_at']).strftime('%b %d %H:%M')
             out.append(f"('{link['name']}' could not be refreshed: {why} Showing its copy from {seen}.)")
         else:
             out.append(f"('{link['name']}' could not be read: {why} Its events are missing here.)")
+    for link, why in api.refresh(calendar, need=(first, last)):
+        say(link, why)
+    # a link that failed a moment ago is not tried again yet: its copy is still old, and she is still told
+    for link in api.links(calendar):
+        if link['error'] and link['id'] not in said:
+            say(link, link['error'])
     return out
 
 
@@ -396,7 +421,7 @@ def execute(function_name, arguments, config):
             return f"Unknown calendar function '{function_name}'.", False
         if _private():
             return ("This chat is private. The calendar is not inside the chat's vault and may be linked to "
-                    "Google, so it can be read here but not changed. Changes need a chat that is not private."), False
+                    "an outside account, so it can be read here but not changed. Changes need a chat that is not private."), False
         if function_name == 'calendar_add':
             guests, err = _resolve_attendees(arguments.get('attendees'))
             if err:
@@ -412,12 +437,25 @@ def execute(function_name, arguments, config):
         day = arguments.get('date') or None
         if function_name == 'calendar_update':
             fields = _given(arguments)
-            if not fields:
-                return "Nothing to change: give at least one of title, start, end, location, notes, repeat.", False
-            ev = api.describe(api.update(event_id, fields, calendar, day))
+            added, err = _resolve_attendees(arguments.get('add_guests'))       # People, and its allow-email tick
+            if err:
+                return err, False
+            guests = {'add': added, 'remove': _split_guests(arguments.get('remove_guests')),
+                      'rsvp': str(arguments.get('rsvp') or '').strip().lower()}
+            if not fields and not any(guests.values()):
+                return ("Nothing to change: give at least one of title, start, end, location, notes, repeat, "
+                        "add_guests, remove_guests, rsvp."), False
+            ev = api.describe(api.update(event_id, fields, calendar, day, guests=guests))
             more = f", {ev['repeat_text']}" if ev['repeats'] else ''
             only = ' (that one occurrence; the rest of the series is as it was)' if day else ''
-            return f"Updated '{ev['title']}'{only}: {_when(ev)}{more}. [id {ev['id']}]", True
+            told = ''
+            if added:
+                told += "\nInvited (Google is emailing them): " + ', '.join(g['displayName'] for g in added)
+            if guests['remove']:
+                told += "\nTaken off the guest list (Google tells them): " + ', '.join(guests['remove'])
+            if guests['rsvp']:
+                told += f"\nAnswered the invitation: {guests['rsvp']}."
+            return f"Updated '{ev['title']}'{only}: {_when(ev)}{more}. [id {ev['id']}]{told}", True
         kind, ev = api.remove(event_id, day, calendar)
         if kind == 'occurrence':
             words = _day_words(api.parse_day(day).isoformat())

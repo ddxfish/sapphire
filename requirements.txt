@@ -89,6 +89,9 @@ bit>=0.8.0
 # Telegram client
 telethon>=1.34.0
 
+# IMAP client (Email plugin, which is on by default)
+imapclient>=3.0
+
 # MCP client (Model Context Protocol) — <2: see the LLM API Clients note above
 mcp>=1.26.0,<2.0.0
 

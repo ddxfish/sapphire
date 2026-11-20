@@ -73,29 +73,38 @@ def list_events(query=None, settings=None, **_):
         calendar = q.get('calendar') or None
         api.refresh(calendar, need=(first, last), wait=False)
         events = api.list_range(first, last, calendar)
-        links = api.links(calendar)
+        # every calendar's links, whichever one is shown: the form can save a new event to another
+        # calendar, and has to know where that one's events can go
+        links = api.links()
     except api.CalError as e:
         return _refused(e)
     week_start = str((settings or {}).get('week_start') or 'sunday').lower()
     return {'events': events, 'calendars': _calendars(), 'links': links,
-            'refreshing': any(l['refreshing'] for l in links), 'today': api.today().isoformat(),
+            'refreshing': any(l['refreshing'] for l in links if calendar in (None, l['calendar'])),
+            'today': api.today().isoformat(),
             'timezone': api.tz_name(), 'week_start': 'monday' if week_start == 'monday' else 'sunday'}
 
 
 def create_event(body=None, **_):
+    body = dict(body or {})
     try:
-        ev = api.create(body or {}, by='user')
+        # The page is the person: a guest is an address they typed, not a People contact.
+        ev = api.create(body, by='user', guests=api.typed_guests(body.pop('guests', None)))
     except api.CalError as e:
         return _refused(e)
     return {'success': True, 'event': api.describe(ev)}
 
 
 def update_event(event_id, body=None, **_):
-    """PUT events/{id} - with {"day": "YYYY-MM-DD"} only that occurrence of a repeating one."""
+    """PUT events/{id} - with {"day": "YYYY-MM-DD"} only that occurrence of a repeating one;
+    {"shown": day} names the occurrence the form was opened on, for a change to a whole series."""
     body = dict(body or {})
-    day = body.pop('day', None)
+    day, shown = body.pop('day', None), body.pop('shown', None)
+    add, remove, rsvp = body.pop('add_guests', None), body.pop('remove_guests', None), body.pop('rsvp', None)
     try:
-        ev = api.update(event_id, body, day=day)
+        guests = {'add': api.typed_guests(add), 'remove': [str(x) for x in remove or [] if str(x).strip()],
+                  'rsvp': str(rsvp or '').strip().lower()}
+        ev = api.update(event_id, body, day=day, guests=guests, shown=shown)
     except api.CalError as e:
         return _refused(e)
     return {'success': True, 'event': api.describe(ev)}

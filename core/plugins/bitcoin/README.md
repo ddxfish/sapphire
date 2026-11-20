@@ -30,10 +30,10 @@ QR codes need one small package, `segno`. If it is missing, the wallet page show
 
 | Tool | What it does |
 |------|--------------|
-| `get_wallet` | Show your wallet address, current BTC balance and send limits |
+| `bitcoin_wallet` | Show your wallet address, current BTC balance and send limits |
 | `bitcoin_receive` | Show a QR code to pay the wallet, with an optional amount |
-| `send_bitcoin` | Send BTC to an address, within your limits |
-| `get_transactions` | What the wallet sent, and its transaction ids (up to 50) |
+| `bitcoin_send` | Send BTC to an address, within your limits |
+| `bitcoin_transactions` | What the wallet sent, and its transaction ids (up to 50) |
 
 ### Sending Bitcoin
 
@@ -99,10 +99,10 @@ SETUP:
 - Keys stored encrypted in credentials_manager
 
 AVAILABLE TOOLS:
-- get_wallet() - address, balance, the user's send limits and what was sent in the last 24 hours
+- bitcoin_wallet() - address, balance, the user's send limits and what was sent in the last 24 hours
 - bitcoin_receive(amount?) - show the user a pay QR code (bitcoin:<address>?amount=); local, no network; you get the address and pay link as text, the picture is for the user only
-- send_bitcoin(address, amount) - send BTC (amount as string e.g. "0.001"); returns the transaction id and the fee paid; cannot be undone
-- get_transactions(count?) - what this wallet sent (from the plugin's ledger, with outcome) and the explorer's transaction ids (1-50, default 10)
+- bitcoin_send(address, amount) - send BTC (amount as string e.g. "0.001"); returns the transaction id and the fee paid; cannot be undone
+- bitcoin_transactions(count?) - what this wallet sent (from the plugin's ledger, with outcome) and the explorer's transaction ids (1-50, default 10)
 
 SENDING (plugins/bitcoin/send.py):
 - Order of checks: person turn (send.lane) > address > exact amount > per-send limit > earlier unknown send > same payment in 10 min > 24 h limit > fee rate > build and check > ledger row > broadcast

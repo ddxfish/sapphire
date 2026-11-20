@@ -579,6 +579,142 @@ def test_guests_are_invited_through_google_and_shown_with_their_answer(cal, peop
     assert '[guests: Rob Smith (pending), Sam Lee (pending)]' in listing
 
 
+def test_a_part_of_a_name_must_be_a_whole_word_of_it(cal, people, monkeypatch):
+    import core.contacts as contacts
+    folks = PEOPLE + [{'id': 6, 'name': 'Samantha Ruiz', 'email': 'sr@example.com', 'email_whitelisted': True},
+                      {'id': 7, 'name': 'Sally Brown', 'email': 'sb@example.com', 'email_whitelisted': True}]
+    monkeypatch.setattr(contacts, 'get_people', lambda scope='default': list(folks))
+    resolve = cal.tools._resolve_attendees
+    assert resolve(['Rob'])[0][0]['email'] == 'rob@example.com'               # a first name on its own still works
+    assert resolve(['sam lee'])[0][0]['email'] == 'sam@example.com'
+    got, err = resolve(['Al'])                                                 # never Sally: an invite is an email
+    assert got is None and "No contact named 'Al'" in err and 'Sally Brown' in err
+    got, err = resolve(['Saman'])
+    assert got is None and 'Close: Samantha Ruiz' in err
+    got, err = resolve(['Sam'])                                                # Sam Lee or Sam Park, not Samantha
+    assert got is None and 'matches several' in err and 'Samantha' not in err.split('Invitable')[0]
+
+
+def test_a_guest_google_gives_no_name_for_is_not_shown_by_address(cal, people):
+    g = cal.use_google()
+    g.put(id='x', summary='Sync', attendees=[{'email': 'me@example.com', 'self': True, 'responseStatus': 'accepted'},
+                                             {'email': 'stranger@corp.example', 'responseStatus': 'needsAction'}],
+          **g.timed('2026-11-20', '09:00', '10:00'))
+    cal.api.refresh('default')
+    listing, _ = _run(cal, 'calendar_range', start_date='2026-11-20', end_date='2026-11-20')
+    assert '[guests: stranger (pending)]' in listing and 'corp.example' not in listing
+    eid = cal.api.list_range('2026-11-20', '2026-11-20', 'default')[0]['id']
+    msg, ok = _run(cal, 'calendar_update', id=eid, remove_guests=['stranger'])  # and can be named the way it is shown
+    assert ok and [a['email'] for a in g.named('patch')[0][4]['attendees']] == ['me@example.com']
+    cal.patch.setattr(cal.tools, '_people_scope', lambda: 'default')
+    import core.contacts as contacts
+    cal.patch.setattr(contacts, 'get_people', lambda scope='default': [
+        {'id': 9, 'name': 'Odd', 'email': 'not an address', 'email_whitelisted': True}])
+    got, err = cal.tools._resolve_attendees(['Odd'])
+    assert got is None and "isn't a valid one" in err and 'not an address' not in err
+
+
+def _lunch(cal, people_fixture=None, **extra):
+    """A Google event with the owner and Rob on it, copied down. Returns (fake Google, its id here)."""
+    g = cal.use_google()
+    g.put(id='lunch', summary='Lunch', attendees=[
+        {'email': 'me@example.com', 'self': True, 'responseStatus': 'accepted', 'organizer': True},
+        {'email': 'rob@example.com', 'displayName': 'Rob Smith', 'responseStatus': 'accepted'}],
+        **g.timed('2026-11-20', '12:00', '13:00'), **extra)
+    cal.api.refresh('default')
+    return g, cal.api.list_range('2026-11-20', '2026-11-20', 'default')[0]['id']
+
+
+def test_a_guest_can_be_added_later_and_nobody_elses_answer_is_lost(cal, people):
+    g, eid = _lunch(cal)
+    msg, ok = _run(cal, 'calendar_update', id=eid, add_guests=['Dana'])
+    assert not ok and "isn't allowed for invites" in msg and g.named('patch') == []      # the whitelist holds here too
+    msg, ok = _run(cal, 'calendar_update', id=eid, add_guests=['Sam Lee', 'Rob'])
+    assert ok and 'Invited (Google is emailing them): Sam Lee, Rob Smith' in msg
+    _, _, _, _, body, notify = g.named('patch')[0]
+    assert notify is True and set(body) == {'attendees'}                                 # nothing else is touched
+    assert [(a['email'], a.get('responseStatus')) for a in body['attendees']] == [
+        ('me@example.com', 'accepted'), ('rob@example.com', 'accepted'), ('sam@example.com', None)]   # Rob once, still a yes
+    listing, _ = _run(cal, 'calendar_range', start_date='2026-11-20', end_date='2026-11-20')
+    assert '[guests: Rob Smith (yes), Sam Lee (pending)]' in listing
+
+
+def test_a_guest_can_be_taken_off_by_the_name_the_event_shows(cal, people):
+    g, eid = _lunch(cal)
+    msg, ok = _run(cal, 'calendar_update', id=eid, remove_guests=['Nobody'])
+    assert not ok and "'Nobody' is not a guest of 'Lunch'" in msg and g.named('patch') == []
+    msg, ok = _run(cal, 'calendar_update', id=eid, remove_guests='rob', location='Cafe')
+    assert ok and 'Taken off the guest list (Google tells them): rob' in msg
+    _, _, _, _, body, notify = g.named('patch')[0]
+    assert notify is True and body['location'] == 'Cafe'
+    assert [a['email'] for a in body['attendees']] == ['me@example.com']                  # the owner is never removed
+    assert 'guests:' not in _run(cal, 'calendar_range', start_date='2026-11-20', end_date='2026-11-20')[0]
+
+
+def test_an_invitation_is_shown_as_one_and_can_be_answered(cal, people):
+    g = cal.use_google()
+    g.put(id='inv', summary='Review', attendees=[
+        {'email': 'boss@example.com', 'displayName': 'The Boss', 'responseStatus': 'accepted', 'organizer': True},
+        {'email': 'me@example.com', 'self': True, 'responseStatus': 'needsAction'}], **g.timed('2026-11-20', '15:00', '16:00'))
+    g.put(id='mine', summary='Solo', **g.timed('2026-11-20', '17:00', '18:00'))
+    cal.api.refresh('default')
+    by_title = {e['title']: e for e in cal.api.list_range('2026-11-20', '2026-11-20', 'default')}
+    assert by_title['Review']['my_rsvp'] == 'pending' and by_title['Solo']['my_rsvp'] == ''
+    listing, _ = _run(cal, 'calendar_range', start_date='2026-11-20', end_date='2026-11-20')
+    assert '[guests: The Boss (yes); your answer: pending]' in listing
+
+    msg, ok = _run(cal, 'calendar_update', id=by_title['Solo']['id'], rsvp='yes')
+    assert not ok and 'is not an invitation' in msg
+    msg, ok = _run(cal, 'calendar_update', id=by_title['Review']['id'], rsvp='later')
+    assert not ok and 'yes, no or maybe' in msg and g.named('patch') == []
+    msg, ok = _run(cal, 'calendar_update', id=by_title['Review']['id'], rsvp='maybe')
+    assert ok and 'Answered the invitation: maybe.' in msg
+    _, _, _, _, body, notify = g.named('patch')[0]
+    assert notify is True                                                                  # the organizer hears the answer
+    assert [(a['email'], a['responseStatus']) for a in body['attendees']] == [
+        ('boss@example.com', 'accepted'), ('me@example.com', 'tentative')]
+    assert 'your answer: maybe' in _run(cal, 'calendar_range', start_date='2026-11-20', end_date='2026-11-20')[0]
+
+
+def test_guests_hear_of_a_change_and_of_a_cancellation(cal, people):
+    g, eid = _lunch(cal)
+    msg, ok = _run(cal, 'calendar_update', id=eid, start='2026-11-20 13:00', notes='Bring the report')
+    assert ok
+    _, _, _, _, body, notify = g.named('patch')[0]
+    assert notify is True and body['description'] == 'Bring the report' and 'attendees' not in body
+    assert g.items['primary']['lunch']['attendees'][1]['responseStatus'] == 'accepted'    # an edit resets no answers
+    msg, ok = _run(cal, 'calendar_delete', id=eid)
+    assert ok and g.named('delete')[0][-1] is True
+
+
+def test_a_local_event_has_no_guests_and_says_why(cal, people):
+    ev = cal.api.create({'title': 'Here only', 'start': '2026-11-20T09:00'}, 'default')
+    for change in ({'add_guests': ['Rob']}, {'remove_guests': ['Rob']}, {'rsvp': 'yes'}):
+        msg, ok = _run(cal, 'calendar_update', id=ev['id'], **change)
+        assert not ok and 'go through a Google calendar' in msg, change
+    msg, ok = _run(cal, 'calendar_update', id=ev['id'])
+    assert not ok and 'add_guests, remove_guests, rsvp' in msg
+
+
+def test_the_page_invites_by_address_and_edits_the_guest_list(cal):
+    g = cal.use_google()
+    cal.api.refresh('default')
+    link = cal.api.links('default')[0]
+    made = cal.routes.create_event(body={'title': 'Demo', 'start': '2026-11-20T10:00', 'end': '2026-11-20T11:00',
+                                         'calendar': 'default', 'to': link['id'], 'guests': 'a@x.org, B <b@x.org>'})
+    assert isinstance(made, tuple) and "is not an email address" in made[0]['detail'] and g.named('insert') == []
+    made = cal.routes.create_event(body={'title': 'Demo', 'start': '2026-11-20T10:00', 'end': '2026-11-20T11:00',
+                                         'calendar': 'default', 'to': link['id'], 'guests': 'a@x.org; b@x.org, A@x.org'})
+    assert made['success'] and [x['email'] for x in g.named('insert')[0][3]['attendees']] == ['a@x.org', 'b@x.org']
+    assert g.named('insert')[0][4] is True
+    eid = made['event']['id']
+    got = cal.routes.update_event(eid, body={'title': 'Demo', 'add_guests': 'c@x.org', 'remove_guests': ['a@x.org']})
+    assert got['success'] and [x['email'] for x in g.named('patch')[0][4]['attendees']] == ['b@x.org', 'c@x.org']
+    local = cal.routes.create_event(body={'title': 'Local', 'start': '2026-11-21T10:00', 'calendar': 'default',
+                                          'to': 'local', 'guests': 'a@x.org'})
+    assert isinstance(local, tuple) and 'Google calendar' in local[0]['detail']
+
+
 # -- today ------------------------------------------------------------------------
 
 def test_today_marks_what_is_past_and_on_now(cal):
@@ -610,7 +746,7 @@ def test_links_routes(cal):
     added = r.add_link(body={'calendar': 'default', 'kind': 'ics', 'url': 'https://x.example/team.ics', 'name': '  Team   cal '})
     link = added['links'][0]
     assert (link['name'], link['kind'], link['writable'], link['target'], link['refreshing']) == ('Team cal', 'ics', False, False, False)
-    assert r.add_link(body={'kind': 'caldav'}) == ({'success': False, 'detail': "kind is 'ics' or 'google'."}, 400)
+    assert r.add_link(body={'kind': 'webdav'}) == ({'success': False, 'detail': "kind is 'ics', 'google' or 'caldav'."}, 400)
     assert r.add_link(body={'kind': 'ics', 'url': 'nope'})[1] == 400
     assert r.update_link(link_id=link['id'], body={'name': 'Renamed', 'color': 9})['links'][0]['color'] == 3
     assert r.set_target(body={'calendar': 'default', 'to': link['id']})[1] == 400       # read-only cannot be the target

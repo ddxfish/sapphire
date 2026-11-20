@@ -1,17 +1,14 @@
 # Email
 
-Sapphire can read any folder, search, send (to, cc, bcc, pictures), reply, reply-all, forward, save drafts, archive, delete, and handle spam, plus auto-reply to incoming messages. Supports multiple accounts, OAuth2 for Office 365/Exchange, and a privacy-first design where the AI never sees raw email addresses.
+Sapphire can read any folder, search, send (to, cc, bcc, pictures), reply, reply-all, forward, save drafts, archive, delete, and handle spam, plus auto-reply to incoming messages. Supports multiple accounts, OAuth2 for Office 365/Exchange, and a privacy-first design: she writes to people by contact, not by address.
 
 ## Setup
 
-1. Open Settings → Plugins → Email
-2. Click "Add Account"
-3. Enter your email server details:
-   - **IMAP Server** — e.g., `imap.gmail.com`, `outlook.office365.com`
-   - **SMTP Server** — e.g., `smtp.gmail.com`, `smtp.office365.com`
-   - **Email Address**
-   - **Password** or **OAuth2 token** (for O365/Exchange)
-4. Test the connection
+1. Open Settings → Plugins → Email and click "Add Account"
+2. Type your email address. For Gmail, Yahoo, iCloud, Fastmail and AOL the two server names fill in by themselves; pick the provider yourself for an address on your own domain (Google Workspace is "Gmail"). For anything else choose "Other" and type the IMAP and SMTP server names
+3. Type the password. The line under the field says which kind your provider takes: most of the big ones want an **app password**, not your normal one
+4. Press **Test**. It logs in for reading and for sending, each with its own result, and sends no email
+5. Press **Save**
 
 ### Gmail Users
 
@@ -23,6 +20,12 @@ Gmail requires an **App Password** (not your regular password). You must have **
 4. Create an app password — select "Mail" or name it "Sapphire"
 5. Google gives you a 16-character password — copy it
 6. Use that password in Sapphire (not your regular Google password)
+
+### Your own mail server and its certificate
+
+Sapphire checks the mail server's certificate before it sends your password. A server that cannot pass the check is refused: one that signed its own certificate, one you reach by IP address or a local name, one whose certificate ran out. (Before version 2.0 nothing was checked, so such a server worked and may now stop.)
+
+If the server is yours, press **Test** in the account's settings, or open the Email page. Either one shows you the certificate the server presented: who it is made out to, when it runs out, and its fingerprint. **Trust this certificate** keeps that fingerprint for that server and port. From then on exactly that certificate is accepted there and no other; if a different one shows up it is refused again and you are asked again. Your AI cannot trust a certificate, only a person can. A big provider (Gmail, Yahoo, iCloud, Fastmail, Microsoft) is never offered for trust: its certificate always checks out, so one that does not means something between you and it is answering in its place (security software that scans encrypted connections, a company or hotel network, or an attack). Trusted certificates are listed under the accounts in Settings → Plugins → Email, each with a Forget button, and the trust ends by itself once the server has a certificate that passes the normal check.
 
 ### Office 365 / Exchange
 
@@ -36,6 +39,8 @@ Sapphire supports OAuth2 (XOAUTH2) for Microsoft accounts. Select OAuth2 as the 
 | `read_email` | Read an email in full by its id: text, who it went to, attachments. She sees attached pictures and can open text attachments |
 | `search_emails` | Search a folder by sender, content (subject/body), or date |
 | `move_emails` | Move emails to a folder: `archive`, `trash` (recoverable), `spam` (mark as spam), `inbox` (restore, or "not spam") |
+| `archive_emails` | Archive emails. The same as `move_emails` to `archive`; kept under its old name so toolsets made before 2.0 still have it |
+| `delete_emails` | Move emails to Trash (recoverable). The same as `move_emails` to `trash`; kept for the same reason |
 | `mark_emails` | Mark emails read, unread, starred or unstarred |
 | `send_email` | Send a new email (to, cc, bcc, picture attachments), reply or reply-all (threaded and quoted), or save a draft |
 | `forward_email` | Forward an email to contacts, attachments included |
@@ -55,11 +60,18 @@ Replies carry the original as a real quoted block, so Gmail and other clients fo
 
 ### Privacy Design
 
-The AI **never sees email addresses** in her tools, only display names. This is intentional:
+The AI addresses people **by contact, not by email address**, and her tools show names where an email's headers carry addresses. This is intentional:
 - `get_recipients` shows names from your contacts (people in **Mind → Entities**)
 - `send_email` takes contact ids for `to`, `cc` and `bcc`, mapped to real addresses behind the scenes
 - A reply uses the email's id and goes to the people already on that thread, no address needed
 - Attachments she sends are pictures she already holds: one from the chat (`img:`) on any email, a library photo (`doc:`) only on a new email to contacts you allowed, never on a reply. File paths and web addresses are not attachable: a reply goes to whoever wrote in, and an incoming email could otherwise ask her to send out any picture on this machine or your home network
+
+What this does not hide, so you know where the edges are:
+- Her own account's address heads every listing, so she knows which mailbox she is in.
+- An email's own text is shown as it was written, addresses in it included (a quoted "On Monday, Bob <bob@x.com> wrote:").
+- A sender with no display name is shown by the part before the @.
+- Your memory engine has its own view of People: a person's card there can show their email address. That is the memory plugin's choice, not this one's.
+- With "Allow sending to any address" on, she types addresses herself, and a library photo can go to any of them.
 
 To allow the AI to email someone, add them as a person in **Mind → Entities** with an **Email** and tick **Allow email**.
 
@@ -132,11 +144,12 @@ Auto-replies are threaded and quoted like any other reply. New mail that arrived
 
 Who gets an automatic reply, whatever the task's prompt says:
 
-- **Only people in People**, unless you turn on "Auto-reply to anyone" in Settings > Plugins > Email. Nobody is in the loop when a task answers, and anyone can write in.
+- **Only people in People with "Allow email" ticked**, unless you turn on "Auto-reply to anyone" in Settings > Plugins > Email. Nobody is in the loop when a task answers, and anyone can write in.
 - **She can decline.** If her answer contains `<<PASS>>`, nothing is sent for that email. Tell her so in the task's prompt.
 - Never newsletters, mailing lists, bounces or other autoresponders (the event still fires, with `bulk` set, so she can file them).
-- Never the same email twice, one address per reply, and at most 10 automatic replies a day to one sender: the backstop against a responder that never says it is automatic.
-- Mail she sends with her tools during such a task is marked as automatic too, and she is refused when replying to automated mail there.
+- Never the same email twice (also when two tasks watch one account), one address per reply, at most 10 automatic replies a day to one sender and 30 an hour from one account: the backstop against a responder that never says it is automatic.
+- **The same rules hold when she replies with her own `send_email` tool during such a task.** That reply goes to the sender only, to people with that tick only (unless "Auto-reply to anyone" is on), never to automated mail, and counts against the same limits. An incoming email can ask her for anything; it cannot widen who she may answer. Mail she sends this way is marked as automatic.
+- "People" here means the People book the task runs with. A task with People switched off answers nobody automatically.
 
 ### Poll Interval
 
@@ -187,8 +200,12 @@ Auto-reply off. AI extracts invoice details and saves to knowledge.
 
 ## Troubleshooting
 
-- **Connection failed** — Check IMAP/SMTP server addresses and ports
+- **Connection failed** — Press Test in the account's settings: it says which half fails (reading or sending) and why (no such server, wrong port, refused login)
+- **"The connection to ... is being intercepted"** — Security software on this machine is re-signing encrypted connections, or the network you are on is. Switch off its "scan encrypted connections" (or "HTTPS/SSL scanning") option for mail, or use another network. Sapphire will not send your password through it
+- **"could not prove it is the right mail server"** — The server's certificate did not pass the check. See "Your own mail server and its certificate" above
 - **Gmail blocked** — Use an App Password, not your regular password
+- **Email is missing after an update** — The plugin needs the `imapclient` package. `pip install -r requirements.txt`, or press Install on the Email card in Settings → Plugins
+- **Archive or delete stopped working after an update** — Nothing to do: `archive_emails` and `delete_emails` are still there. Add `move_emails` and `mark_emails` to your toolset for spam, restore, folders and stars
 - **Can't send to someone** — In Mind → Entities, give them an Email and tick Allow email
 - **Daemon not firing** — Check poll interval, verify account is connected
 - **Tools not available** — Add Email tools to your active toolset
@@ -207,15 +224,21 @@ AVAILABLE TOOLS:
 - read_email(id, page?, attachment?) - full email; long bodies are paged; attachment=N opens a picture or text file
 - search_emails(sender?, content?, date?, folder?, count?) - sender matches name+address substring, content=subject OR body, date=YYYY-MM-DD returns ~10 each side
 - move_emails(ids, to) - to=archive / trash (recoverable) / spam (mark as spam) / inbox (restore, not-spam) / a folder name
+- archive_emails(ids), delete_emails(ids) - the old names for move_emails to archive / trash; same result
 - mark_emails(ids, mark) - read / unread / starred / unstarred
 - send_email(body, to? | reply_to?, reply_all?, subject?, cc?, bcc?, attach?, draft?) - exactly one of to (contact ids) or reply_to (an email id); attach = pictures you hold (img:<id>; doc:<N> only on a new email, not a reply); draft=true saves instead of sending
 - forward_email(id, to, cc?, note?) - attachments carried
 - get_recipients() - whitelisted contacts (ids + names, no addresses)
 
+CONNECTING (accounts.py):
+- Every connection checks the server certificate. A failure is CertUntrusted: nothing is sent, the tool answers with a sentence, and only a person can trust that certificate (Email page or Test in settings). You cannot; tell the person what the sentence says
+- A failed connection comes back as a plain sentence (no such server, wrong port, refused login and which kind of password the provider wants). Pass it on as it is
+- Routes: POST test (reading + sending, with what is typed), GET certs, POST trust, POST untrust
+
 EMAIL PAGE (Apps > Email, app/index.js + routes/mail.py):
 - The person's own mail reader: folders with counts, 50 per page, search, read, reply/reply-all/forward, compose, drafts, move, mark. Not a tool surface; the AI does not use it.
 - The page shows real addresses and is not limited by the People whitelist (that gate is on the tools only).
-- Routes under /api/plugin/email/: GET folder, GET message, GET attachment (always a download), POST move, POST mark, POST send. One request = one IMAP session; nothing cached.
+- Routes under /api/plugin/email/: GET folder, GET message, GET attachment (always a download), POST move, POST mark, POST send, POST test, GET certs, POST trust, POST untrust. The page keeps a login open per account for five minutes and a list of each folder's first page on disk (index.py); her tools and the daemon log in fresh each time.
 - HTML mail renders only in a sandboxed iframe with a no-remote-load policy; remote pictures are per-email opt-in.
 - Same ids as the tools (folder:uid). The browser sends back the folder's UIDVALIDITY with each id; the page never reads or writes the tools' stored validity mark.
 
@@ -226,7 +249,7 @@ IDS:
 - read_email marks a sender "(not in your contacts)" and warns when replies would go to someone other than the sender
 
 PRIVACY:
-- AI never sees raw email addresses in tool results
+- Contacts are addressed by id and shown by name; an email's own text is shown as written (it may contain addresses); her own account's address heads each listing
 - to/cc/bcc gated by contacts (person entities with email + allow_email); raw addresses need allow_all_recipients
 - A reply or reply-all goes to the people already on the thread (reply-all can be turned off in settings)
 

@@ -346,11 +346,11 @@ def mail(monkeypatch, tmp_path):
     monkeypatch.setattr(mailbox, '_TAGS', False)
     logins = []
 
-    def connect(creds):
+    def connect(creds, timeout=None):
         logins.append(dict(creds))
         return ns.imap
     monkeypatch.setattr(accounts, 'imap_connect', connect)
-    monkeypatch.setattr(accounts, 'smtp_connect', lambda creds: smtp)
+    monkeypatch.setattr(accounts, 'smtp_connect', lambda creds, timeout=None, **kw: smtp)
     monkeypatch.setattr(accounts, 'get_creds', lambda scope: (dict(CREDS), None) if scope else (None, "Email is disabled for this chat."))
     monkeypatch.setattr(mailbox, '_state', lambda: state)
     monkeypatch.setattr(email_tool, '_get_current_email_scope', lambda: 'work')

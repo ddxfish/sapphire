@@ -2,6 +2,7 @@
 scout made and the reason the fix exists."""
 import imaplib
 import ssl
+import sys
 
 import pytest
 
@@ -35,21 +36,24 @@ def test_smtp_checks_the_certificate_on_both_kinds_of_port(monkeypatch):
     seen = {}
 
     class FakeSSL:
-        def __init__(self, host, port, timeout=None, context=None):
-            seen['ssl'] = context
+        def __init__(self, host, port, local_hostname=None, timeout=None, context=None):
+            seen['ssl'], seen['helo'] = context, local_hostname
 
         def login(self, *a):
             pass
 
     class FakePlain(FakeSSL):
-        def __init__(self, host, port, timeout=None):
-            pass
+        def __init__(self, host, port, local_hostname=None, timeout=None):
+            seen['helo_plain'] = local_hostname
 
         def ehlo(self):
             pass
 
         def starttls(self, context=None):
             seen['starttls'] = context
+    monkeypatch.setattr(accounts, '_pins', lambda: {})        # never the real plugin state
+    monkeypatch.setattr(accounts, '_encrypted', lambda conn, opener: conn)      # these fakes have no socket
+    monkeypatch.setattr(accounts, '_refused', {})
     monkeypatch.setattr(accounts.smtplib, 'SMTP_SSL', FakeSSL)
     monkeypatch.setattr(accounts.smtplib, 'SMTP', FakePlain)
     creds = {'address': 'me@x.com', 'app_password': 'pw', 'smtp_server': 'smtp.x.com'}
@@ -57,6 +61,8 @@ def test_smtp_checks_the_certificate_on_both_kinds_of_port(monkeypatch):
     accounts.smtp_connect(dict(creds, smtp_port=587))
     for ctx in (seen['ssl'], seen['starttls']):
         assert ctx is not None and ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname is True
+    # this machine's own name is never announced to a mail server
+    assert seen['helo'] == seen['helo_plain'] == '[127.0.0.1]'
 
 
 # -- a search value cannot carry a second command to the server -----------------------
@@ -119,7 +125,7 @@ def test_her_tools_and_the_daemon_share_the_refused_login_hold(mail, monkeypatch
         raise LoginError("[AUTHENTICATIONFAILED] Authentication failed.")
     monkeypatch.setattr(mail.accounts, 'imap_connect', refused)
     text, ok = _run(mail, 'get_inbox')
-    assert not ok and 'login failed' in text.lower()
+    assert not ok and 'refused the login' in text
     text, ok = _run(mail, 'get_inbox')
     assert not ok and 'not tried again for' in text
     from plugins.email import daemon
@@ -279,7 +285,7 @@ def daemon(mail, monkeypatch):
 
 
 def _task(auto=True):
-    return {'name': 't', 'trigger_config': {'auto_reply': auto}}
+    return {'name': 't', 'people_scope': 'default', 'trigger_config': {'auto_reply': auto}}
 
 
 def test_a_stop_in_the_middle_of_a_batch_repeats_nothing(daemon):
@@ -333,7 +339,8 @@ def test_auto_reply_goes_to_one_address_once_and_stops_at_the_cap(daemon, monkey
     m.smtp.send_message.reset_mock()
     m.d._reply_handler(_task(), event, 'Thanks again!')                 # the same mail a second time: no
     assert not m.smtp.send_message.called
-    monkeypatch.setattr(m.d, 'MAX_AUTO_PER_SENDER', 3)
+    from plugins.email import unattended
+    monkeypatch.setattr(unattended, 'MAX_PER_SENDER', 3)
     for n in range(5):                                                  # a responder that never says it is one
         u = m.imap.add('INBOX', m.raw(frm='Bot <bot@helpdesk.io>', subject=f'Round {n}'))
         m.d._reply_handler(_task(), {'uid': f'inbox:{u}', 'account': 'work'}, 'ok')
@@ -390,7 +397,8 @@ def test_what_the_index_forgets_is_gone_from_the_file(mail):
     idx.forget()
     idx.close()
     assert b'UNIQUE-SUBJECT-MARKER-12345' not in idx.path.read_bytes()
-    assert oct(idx.path.stat().st_mode & 0o777) == '0o600'
+    if sys.platform != 'win32':                       # Windows has no such file mode
+        assert oct(idx.path.stat().st_mode & 0o777) == '0o600'
 
 
 def test_she_can_pass_and_strangers_get_no_automatic_answer_unless_allowed(daemon, people, monkeypatch):

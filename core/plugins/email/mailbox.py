@@ -26,6 +26,7 @@ import hashlib
 import imaplib
 import logging
 import re
+import smtplib
 import threading
 import time
 from datetime import datetime
@@ -82,12 +83,18 @@ class _Kept:
         self.lock = threading.Lock()       # one request at a time on a connection
         self.client = None
         self.mark = ''                     # which credentials it was opened with
+        self.epoch = 0                     # the value of _epoch it was opened under
         self.used = 0.0
         self.timer = None
 
 
 _kept: dict = {}
 _kept_guard = threading.Lock()
+# Raised by close_kept(): every line opened before it is retired at its next
+# use, also one that was in the middle of a request when the call came (a
+# certificate was just trusted or forgotten, and that line was opened under
+# the old answer).
+_epoch = 0
 
 
 def _slot(key):
@@ -135,7 +142,10 @@ def _arm(key, slot):
 def close_kept(scope=None):
     """Log out the kept logins (all, or one account's): plugin unload, or the
     account was changed or removed."""
+    global _epoch
     with _kept_guard:
+        if scope is None:
+            _epoch += 1
         keys = [k for k in _kept if scope is None or k == scope or k.startswith(f"{scope}\n")]
     for key in keys:
         slot = _kept.get(key)
@@ -143,11 +153,13 @@ def close_kept(scope=None):
             continue
         if slot.timer is not None:
             slot.timer.cancel()
-        if slot.lock.acquire(timeout=5):
+        if slot.lock.acquire(timeout=0.5):      # a busy one is retired by the epoch (or its own mark) instead
             try:
                 _drop(slot)
             finally:
                 slot.lock.release()
+        else:
+            slot.mark = ''                       # whoever holds it hands it back; nobody reuses it
 
 
 _STALE = ("That id is not for this mailbox as it is now: it came from another account, or the mail "
@@ -258,7 +270,7 @@ class Mailbox:
             raise MailError("That mailbox is still busy with the last request. Try again in a moment.")
         try:
             mark, idle = accounts.creds_mark(self.creds), time.time() - slot.used
-            if slot.client is not None and (slot.mark != mark or idle >= KEEP_IDLE):
+            if slot.client is not None and (slot.mark != mark or slot.epoch != _epoch or idle >= KEEP_IDLE):
                 _drop(slot)
             if slot.client is not None and idle > KEEP_CHECK:
                 try:
@@ -267,6 +279,7 @@ class Mailbox:
                     logger.info(f"[EMAIL] kept login for '{self.scope}' had gone quiet ({type(e).__name__}); logging in again")
                     _drop(slot)
             if slot.client is None:              # a line that is up is never judged by the hold
+                slot.epoch = _epoch
                 slot.client, slot.mark = _login(self.scope, self.creds), mark
             self.c, self._slot = slot.client, slot
         except BaseException:
@@ -609,6 +622,7 @@ class Mailbox:
             try:
                 self.c.add_flags([uid], [b'\\Seen'])
             except Exception as e:
+                self.swallowed(e)
                 logger.warning(f"[EMAIL] could not mark {handle} read: {e}")
         return message.parse(raw), flags
 
@@ -652,15 +666,29 @@ class Mailbox:
         moved, skipped = [], []
         for real, given in self._grouped(handles).items():
             key = self.key_for(real)
-            if real == target:
-                if key == 'archive' and self.c.has_capability('X-GM-EXT-1'):
-                    self._gmail_archive(real, given, moved, skipped)
-                else:
-                    skipped += [(h, f"already in {dest}") for h, _tag_ in given.values()]
+            gmail_archive = self.key_for(target) == 'archive' and self.c.has_capability('X-GM-EXT-1')
+            if gmail_archive and key not in ('inbox', 'trash', 'spam'):
+                # Gmail: a mail is "in" a folder by wearing its label, and archiving means
+                # taking the Inbox label off. Reached through All Mail or through one of
+                # the person's own labels, a MOVE to All Mail would instead strip THAT
+                # label and leave the mail sitting in the inbox (seen live, 2026-11-19).
+                self._gmail_archive(real, given, moved, skipped)
                 continue
-            self.select(real, readonly=False)
-            uids = self._checked(given, skipped)
-            rows = {r['uid']: r for r in self.headers(key, uids)}
+            if real == target:
+                skipped += [(h, f"already in {dest}") for h, _tag_ in given.values()]
+                continue
+            try:
+                self.select(real, readonly=False)
+                uids = self._checked(given, skipped)
+                rows = {r['uid']: r for r in self.headers(key, uids)}
+            except MailError:
+                raise
+            except Exception as e:
+                # The line failed between two folders: what moved so far DID move, and must be reported.
+                self.swallowed(e)
+                done = {h for h, _why in skipped}
+                skipped += [(h, f"not moved, the connection failed: {type(e).__name__}") for h, _tag_ in given.values() if h not in done]
+                continue
             skipped += [(given[u][0], "no longer there") for u in uids if u not in rows]
             present = [u for u in uids if u in rows]
             if not present:
@@ -691,10 +719,11 @@ class Mailbox:
         return moved, skipped
 
     def _gmail_archive(self, real, given, moved, skipped):
-        """Archive mail addressed by its All Mail id (what a search over all
-        mail returns on Gmail). It already IS in All Mail, so a move there
-        does nothing: what puts it in the inbox is the Inbox label, and
-        archiving means taking that label off."""
+        """Archive mail addressed through All Mail (what a search over all
+        mail returns on Gmail) or through one of the person's labels. It
+        already IS in All Mail, so a move there does nothing useful: what
+        puts it in the inbox is the Inbox label, and archiving means taking
+        that label off. Every other label it wears stays."""
         self.select(real, readonly=False)
         uids = self._checked(given, skipped)
         if not uids:
@@ -707,7 +736,7 @@ class Mailbox:
             skipped += [(given[u][0], "already archived") for u in uids if u not in in_inbox]
             if not in_inbox:
                 return
-            rows = {r['uid']: r for r in self.headers('archive', in_inbox)}
+            rows = {r['uid']: r for r in self.headers(self.key_for(real), in_inbox)}
             self.c.remove_gmail_labels(in_inbox, [b'\\Inbox'])
         except Exception as e:
             self.swallowed(e)
@@ -787,7 +816,17 @@ def _spawn(work):
     threading.Thread(target=work, name='email-sent-copy', daemon=True).start()
 
 
-def send(scope, creds, msg, rcpts, after=None, wait=True) -> str:
+def _hang_up(smtp):
+    try:
+        smtp.quit()
+    except Exception:
+        try:
+            smtp.close()
+        except Exception:
+            pass
+
+
+def send(scope, creds, msg, rcpts, after=None, wait=True, name_refused=False) -> str:
     """Hand `msg` to SMTP for `rcpts` (To + Cc + Bcc addresses), then keep a
     copy in Sent where the provider does not. Returns '' or a short note when
     the mail went out but the copy could not be saved. Raises if SMTP fails.
@@ -798,21 +837,35 @@ def send(scope, creds, msg, rcpts, after=None, wait=True) -> str:
     time for the Sent copy can take longer than a browser waits, and a person
     who is told "try again" after the mail already left sends it twice."""
     smtp = accounts.smtp_connect(creds)
-    with smtp:
+    try:
         refused = smtp.send_message(msg, from_addr=creds['address'], to_addrs=list(rcpts))
+    except (smtplib.SMTPRecipientsRefused, smtplib.SMTPResponseException):
+        _hang_up(smtp)
+        raise                      # the server said no: nothing went out
+    except Exception as e:
+        # The line failed while the mail was on its way. The server may or
+        # may not have taken it: whoever reports this must not call it "not sent".
+        _hang_up(smtp)
+        e.unclear = True
+        raise
+    _hang_up(smtp)                 # a goodbye that fails does not unsend the mail
     refused = refused if isinstance(refused, dict) else {}
     if refused:
         logger.warning(f"[EMAIL] the server refused {len(refused)} of {len(list(rcpts))} recipient(s)")
 
     def rest():
-        note = _file_sent(scope, creds, msg)
+        # `after` first: it marks the original answered, and an automatic reply
+        # that looks for that mark must not find it missing for as long as the
+        # (possibly large) Sent copy takes to upload.
         if after:
             try:
                 after()
             except Exception as e:
                 logger.debug(f"[EMAIL] after-send step failed: {e}")
-        return note
-    said = f" ({len(refused)} address{'es' if len(refused) != 1 else ''} refused by the server: {', '.join(refused)})" if refused else ''
+        return _file_sent(scope, creds, msg)
+    # Which addresses: only for the person (the Email page). Her tool result and the log get the count.
+    which = f": {', '.join(refused)}" if name_refused else ''
+    said = f" ({len(refused)} address{'es' if len(refused) != 1 else ''} refused by the server{which})" if refused else ''
     if not wait:
         _spawn(rest)
         return said

@@ -68,7 +68,8 @@ def _save_csrf(data):
     tmp = path.with_suffix(f'.json.tmp.{os.getpid()}')
     try:
         tmp.write_text(json.dumps(data), encoding='utf-8')
-        tmp.replace(path)
+        from core.fs_utils import replace_with_retry      # Windows: a scanner may hold the old file for a moment
+        replace_with_retry(tmp, path)
     finally:
         if tmp.exists():
             try: tmp.unlink()
@@ -297,6 +298,8 @@ def _connected_redirect(scope):
     try:
         from plugins.calendar import api
         api.google_connected(scope)        # link the account's calendar into the calendar of that name
+        from plugins.calendar import connect
+        connect._offers.pop((scope, 'google'), None)      # the Accounts panel asks Google again, not its memory
     except Exception as e:
         logger.warning(f"[GCAL] connected, but the calendar was not linked yet: {e}")
     return RedirectResponse(url=f"{PAGE}/connected", status_code=302)

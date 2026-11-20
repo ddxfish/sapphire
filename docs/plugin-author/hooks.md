@@ -442,8 +442,8 @@ def pre_execute(event):
 MAX_BTC_SEND = 0.01
 
 def pre_execute(event):
-    if event.function_name == "send_bitcoin":
-        amount = event.arguments.get("amount", 0)
+    if event.function_name in ("bitcoin_send", "send_bitcoin"):   # send_bitcoin: its name before Bitcoin 1.2
+        amount = float(event.arguments.get("amount") or 0)       # the amount arrives as a string
         if amount > MAX_BTC_SEND:
             event.skip_llm = True
             event.result = f"Blocked: {amount} BTC exceeds limit of {MAX_BTC_SEND}"

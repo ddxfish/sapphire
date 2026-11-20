@@ -72,6 +72,9 @@ class Index:
         self.path = Path(path) if path else DB_PATH
         self._lock = threading.RLock()
         self._conn = None
+        # False once the person turned the index off: a request that was
+        # already running when they did must not write its list back in.
+        self.enabled = True
 
     def _c(self):
         """The one connection; opened (and the tables made) on first use. Lock held by the caller."""
@@ -87,7 +90,7 @@ class Index:
                 conn.execute("ALTER TABLE folders ADD COLUMN address TEXT NOT NULL DEFAULT ''")     # a file from 2.4
             conn.commit()
             try:
-                os.chmod(self.path, 0o600)           # names and subjects: the owner's eyes only
+                os.chmod(self.path, 0o600)           # names and subjects: the owner's eyes only (Windows: the folder's permissions decide)
             except OSError as e:
                 logger.debug(f"[EMAIL] mail index permissions not set: {e}")
             self._conn = conn
@@ -109,7 +112,7 @@ class Index:
         first, no search). Returns True when it was kept. Only the first
         page: it is what the page opens on, and a deeper page kept next to an
         older first page would be a list with a hole in it."""
-        if max(1, int(page or 1)) != 1:
+        if max(1, int(page or 1)) != 1 or not self.enabled:
             return False
         kept = []
         for row in rows or []:
@@ -145,14 +148,10 @@ class Index:
             if meta is None:
                 return None
             if address and (meta['address'] or '') and meta['address'] != str(address).lower():
-                stale = True
-            else:
-                stale = False
-                found = c.execute("SELECT data FROM rows WHERE scope = ? AND folder = ? ORDER BY uid DESC LIMIT ?",
-                                  (scope, folder, per_page)).fetchall()
-        if stale:
-            self.forget(scope)
-            return None
+                self.forget(scope)             # under the same lock: a fresh list saved meanwhile is not lost
+                return None
+            found = c.execute("SELECT data FROM rows WHERE scope = ? AND folder = ? ORDER BY uid DESC LIMIT ?",
+                              (scope, folder, per_page)).fetchall()
         rows = []
         for r in found:
             try:
@@ -164,6 +163,8 @@ class Index:
     # -- an account's folder list ------------------------------------------------
 
     def save_folders(self, scope, folders):
+        if not self.enabled:
+            return
         with self._lock:
             c = self._c()
             c.execute("INSERT INTO accounts (scope, folders, saved_at) VALUES (?, ?, ?) "

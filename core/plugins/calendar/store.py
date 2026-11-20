@@ -1,7 +1,8 @@
 # core/plugins/calendar/store.py - the calendar's own SQLite
 """
 One file, user/plugin_state/calendar_events.db: calendars, their links (a
-Google calendar or an ICS address feeding one), events, and a few settings.
+calendar kept somewhere else feeding one: Google, a CalDAV account, an ICS
+address), events, and a few settings.
 
 ONE connection for the life of the process, every use under one lock. The
 app has frozen before on helpers that connect and close per call from many
@@ -88,12 +89,17 @@ CREATE TABLE IF NOT EXISTS meta (
 # Columns added after 1.0: a database from before gets them on first open.
 _ADDED = (('events', 'guests', "TEXT NOT NULL DEFAULT '[]'"),
           ('events', 'series', "TEXT NOT NULL DEFAULT ''"),
-          ('events', 'url', "TEXT NOT NULL DEFAULT ''"))
+          ('events', 'url', "TEXT NOT NULL DEFAULT ''"),
+          # CalDAV: the address of the event's file on its server
+          ('events', 'href', "TEXT NOT NULL DEFAULT ''"),
+          # the account a link is read with ('' = the Google account of the calendar's name, or none)
+          ('links', 'account', "TEXT NOT NULL DEFAULT ''"))
 
 # What a caller may set. id, uid and the stamps are the store's own.
 FIELDS = ('calendar', 'source', 'source_ref', 'title', 'start', 'end', 'all_day', 'tz',
-          'rrule', 'exdates', 'location', 'notes', 'created_by', 'guests', 'series', 'url')
-LINK_FIELDS = ('calendar', 'kind', 'name', 'ref', 'color', 'writable', 'synced_at', 'win_from', 'win_to', 'error')
+          'rrule', 'exdates', 'location', 'notes', 'created_by', 'guests', 'series', 'url', 'href')
+LINK_FIELDS = ('calendar', 'kind', 'name', 'ref', 'color', 'writable', 'synced_at', 'win_from', 'win_to', 'error',
+               'account')
 _SYNCED = tuple(f for f in FIELDS if f not in ('calendar', 'source', 'source_ref', 'created_by'))
 _ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'      # no l, o, 0, 1
 _ID_LETTERS = 'abcdefghijkmnpqrstuvwxyz'
@@ -192,6 +198,8 @@ class Store:
         with self._lock:
             c = self._c()
             n = c.execute("DELETE FROM events WHERE calendar = ?", (name,)).rowcount
+            for row in c.execute("SELECT id FROM links WHERE calendar = ?", (name,)).fetchall():
+                c.execute("DELETE FROM meta WHERE key IN (?, ?)", (f"note:{row['id']}", f"ctag:{row['id']}"))
             c.execute("DELETE FROM links WHERE calendar = ?", (name,))
             c.execute("DELETE FROM meta WHERE key = ?", (f"target:{name}",))
             c.execute("DELETE FROM calendars WHERE name = ?", (name,))
@@ -265,7 +273,7 @@ class Store:
         return [_row(r) for r in rows]
 
 
-    # -- links: a Google calendar or an ICS address feeding one calendar -------
+    # -- links: a calendar kept somewhere else, feeding one calendar ------------
 
     def links(self, calendar=None):
         sql, args = "SELECT * FROM links", []
@@ -317,10 +325,14 @@ class Store:
         """Make the copies of one link's events match `rows` (each carries its
         `source_ref`). A row already here keeps its id; one the source no
         longer has is removed (prune=False: only add and change).
-        All or nothing. Returns (added, changed, removed)."""
+        All or nothing. Returns (added, changed, removed). A link that was
+        removed while its events were being read takes nothing: its rows
+        would be copies nobody could ever delete."""
         added = changed = 0
         with self._lock:
             c = self._c()
+            if not c.execute("SELECT 1 FROM links WHERE id = ?", (link['id'],)).fetchone():
+                return 0, 0, 0
             have = {r['source_ref']: dict(r) for r in
                     c.execute("SELECT * FROM events WHERE source = ?", (link['id'],))}
             try:
@@ -358,6 +370,14 @@ class Store:
             r = self._c().execute("SELECT * FROM events WHERE source = ? AND source_ref = ?",
                                   (str(source), str(source_ref))).fetchone()
         return _row(r) if r else None
+
+    def at_href(self, source, href):
+        """Every stored row of one link that came from one event file (a
+        CalDAV event and its changed occurrences share a file)."""
+        with self._lock:
+            rows = self._c().execute("SELECT * FROM events WHERE source = ? AND href = ? ORDER BY start",
+                                     (str(source), str(href))).fetchall()
+        return [_row(r) for r in rows]
 
     def series(self, source, series):
         """Every stored occurrence of one repeating event of a link, in order."""

@@ -1,12 +1,13 @@
 # core/plugins/calendar/routes/links.py - linked calendars, for the Calendar page
 #
-# A link feeds one calendar from somewhere else: a Google calendar (two-way)
-# or an ICS address (read-only). Only the person makes or removes a link;
+# A link feeds one calendar from somewhere else: a calendar of a Google or
+# CalDAV account (two-way) or an ICS address (read-only). Accounts themselves
+# are routes/accounts.py. Only the person makes or removes a link;
 # there is no tool for it, so nothing she reads can point her calendar at a
 # new address.
 import logging
 
-from plugins.calendar import api
+from plugins.calendar import api, connect
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,8 @@ def get_links(query=None, **_):
 
 
 def add_link(body=None, **_):
-    """POST links {calendar, kind: 'ics', url, name} | {calendar, kind: 'google', google_id, name}"""
+    """POST links {calendar, kind: 'ics', url, name} | {calendar, kind: 'google', google_id, name}
+    | {calendar, kind: 'caldav', account, key} (key: the calendar's name in the accounts view)"""
     b = body or {}
     calendar = b.get('calendar') or 'default'
     try:
@@ -59,8 +61,10 @@ def add_link(body=None, **_):
             api.add_ics(calendar, b.get('url'), b.get('name') or '')
         elif b.get('kind') == 'google':
             api.add_google(calendar, b.get('google_id'), b.get('name') or '')
+        elif b.get('kind') == 'caldav':
+            connect.link_calendar(calendar, str(b.get('account') or ''), str(b.get('key') or ''))
         else:
-            return {'success': False, 'detail': "kind is 'ics' or 'google'."}, 400
+            return {'success': False, 'detail': "kind is 'ics', 'google' or 'caldav'."}, 400
         return _state(calendar)
     except api.CalError as e:
         return _refused(e)

@@ -424,7 +424,8 @@ def test_a_changed_password_or_a_broken_line_is_not_reused(page, monkeypatch):
         raise OSError('line dropped mid-answer')
     monkeypatch.setattr(page.imap, 'fetch', broken)
     page.imap.add('INBOX', page.raw(subject='x'))
-    _refusal(page.routes.folder_view(query={'scope': 'work', 'counts': '0'}), 500)
+    words = _refusal(page.routes.folder_view(query={'scope': 'work', 'counts': '0'}), 502)
+    assert 'stopped answering' in words and 'line dropped' not in words     # the error's own text stays in the log
     assert page.mailbox._kept['work'].client is None                   # thrown away, not handed to the next click
 
 
@@ -466,7 +467,7 @@ def test_a_refused_login_is_not_sent_again_on_every_click(page, monkeypatch):
     monkeypatch.setattr(page.accounts, 'imap_connect', refused)        # the hold runs out by itself
     page.mailbox.close_kept()
     _refusal(page.routes.folder_view(query={'scope': 'work', 'counts': '0'}))
-    mark, when = page.accounts._refused['work']
-    page.accounts._refused['work'] = (mark, when - page.accounts.REFUSED_HOLD - 1)
+    mark, when, words = page.accounts._refused['work']
+    page.accounts._refused['work'] = (mark, when - page.accounts.REFUSED_HOLD - 1, words)
     _refusal(page.routes.folder_view(query={'scope': 'work', 'counts': '0'}))
     assert tries == ['pw', 'right-one', 'right-one', 'right-one']

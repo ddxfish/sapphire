@@ -15,7 +15,7 @@ def daemon(mail, monkeypatch):
     return d
 
 
-TASK = {'name': 't', 'trigger_config': {'auto_reply': True}}
+TASK = {'name': 't', 'people_scope': 'default', 'trigger_config': {'auto_reply': True}}
 
 
 def test_first_look_fires_nothing_then_only_new_unread_mail_does(mail, daemon):

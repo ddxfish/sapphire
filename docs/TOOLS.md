@@ -206,20 +206,22 @@ Satellites, IP cameras, KDE Connect phones and other device plugins act through 
 | `read_email` | email_tool.py | Read email by id, with attachments |
 | `search_emails` | email_tool.py | Search the mailbox |
 | `move_emails` | email_tool.py | Archive, trash, mark spam / not spam, move to a folder |
+| `archive_emails` | email_tool.py | Archive (same as `move_emails` to archive; the pre-2.0 name, kept for saved toolsets) |
+| `delete_emails` | email_tool.py | Move to Trash (same as `move_emails` to trash; kept likewise) |
 | `mark_emails` | email_tool.py | Mark read, unread, starred, unstarred |
 | `forward_email` | email_tool.py | Forward an email, attachments included |
 | `get_recipients` | email_tool.py | List whitelisted contacts (IDs only) |
 | `send_email` | email_tool.py | Send, reply, reply-all, cc/bcc, pictures, drafts |
-| `get_wallet` | bitcoin_tool.py | Check wallet balance |
+| `bitcoin_wallet` | bitcoin_tool.py | Check wallet balance |
 | `bitcoin_receive` | bitcoin_tool.py | Show a pay QR code |
-| `send_bitcoin` | bitcoin_tool.py | Send BTC |
-| `get_transactions` | bitcoin_tool.py | Recent transactions |
+| `bitcoin_send` | bitcoin_tool.py | Send BTC |
+| `bitcoin_transactions` | bitcoin_tool.py | Recent transactions |
 | `ssh_get_servers` | ssh_tool.py | List SSH servers |
 | `ssh_run_command` | ssh_tool.py | Execute remote command |
 | `calendar_today` | calendar_tools.py | Today's events, what is on now, guests, hours scheduled |
 | `calendar_range` | calendar_tools.py | Events for a date range, with ids; optional text filter |
-| `calendar_add` | calendar_tools.py | Add an event (one-time or repeating), local or to a linked Google calendar; `attendees` invites email-whitelisted People contacts (Google emails them) |
-| `calendar_update` | calendar_tools.py | Change an event by id; with `date`, one occurrence of a repeating event |
+| `calendar_add` | calendar_tools.py | Add an event (one-time or repeating), local or to a linked Google or CalDAV calendar; `attendees` invites email-whitelisted People contacts (Google emails them) |
+| `calendar_update` | calendar_tools.py | Change an event by id; with `date`, one occurrence of a repeating event; `add_guests` / `remove_guests` / `rsvp` on Google events |
 | `calendar_delete` | calendar_tools.py | Delete an event by id; with `date`, one occurrence of a repeating event |
 
 Plugin integrations, one line each (default in brackets):
@@ -341,8 +343,8 @@ TOOL MODULES:
 - clock plugin: get_time, set_timer, set_stopwatch, set_alarm
 - agents.py (core): agent_list, agent_peek, agent_spawn, agent_action — kinds come from plugins (`llm` from the agents plugin, `claude_code` from the claude-code plugin)
 - schedule_tool.py: schedule_task
-- email_tool.py: get_inbox, read_email, search_emails, move_emails, mark_emails, forward_email, get_recipients, send_email
-- bitcoin_tool.py: get_wallet, bitcoin_receive, send_bitcoin, get_transactions
+- email_tool.py: get_inbox, read_email, search_emails, move_emails, archive_emails, delete_emails, mark_emails, forward_email, get_recipients, send_email
+- bitcoin_tool.py: bitcoin_wallet, bitcoin_receive, bitcoin_send, bitcoin_transactions
 - ssh_tool.py: ssh_get_servers, ssh_run_command
 - calendar_tools.py (core/plugins/calendar): calendar_today, calendar_range, calendar_add, calendar_update, calendar_delete
 - discord: discord_get_servers, discord_list_channels, discord_read_messages, discord_send_message, discord_send_image, discord_send_gif, discord_add_reaction, discord_join_voice, discord_leave_voice, discord_remind

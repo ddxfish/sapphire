@@ -23,6 +23,7 @@ const COUNTS_MS = 30000;                       // folder counts are asked for ap
 const KEEP_VIEWS = 60, KEEP_MAILS = 40;        // how much of what you looked at stays in this tab's memory
 const WAIT = 60000;
 const NO_COUNT = new Set(['sent', 'trash', 'archive']);       // an unread count there says nothing
+const CERT_WORDS = /certificate|could not prove|being intercepted/i;       // a server that was refused before login
 const MOVED = { archive: 'Archived', trash: 'Moved to Trash', spam: 'Marked as spam', inbox: 'Moved to Inbox' };
 
 let cssLink = null;
@@ -134,6 +135,7 @@ export function render(root) {
                 </select>
                 <label class="checkbox-wrap em-unread-wrap"><input type="checkbox" class="em-unread"><span>Unread only</span></label>
                 <button class="btn em-refresh" title="Check for new mail">Refresh</button>
+                <button class="btn em-accounts" title="Add or change email accounts (Settings, Plugins, Email)">Accounts</button>
                 <span class="em-status" role="status"></span>
             </div>
             <div class="em-main">
@@ -180,7 +182,8 @@ export function render(root) {
             data = await fetchWithTimeout(ACCOUNTS, {}, 20000);
         } catch (e) {
             if (st.dead) return;
-            rowsEl.innerHTML = `<div class="em-empty em-error">${escapeHtml(e.message || "Couldn't load your email accounts.")}</div>`;
+            rowsEl.innerHTML = `<div class="em-empty em-error">${escapeHtml(e.message || "Couldn't load your email accounts.")}
+                <div><button class="btn em-retry">Try again</button></div></div>`;
             return;
         }
         if (st.dead) return;
@@ -189,7 +192,9 @@ export function render(root) {
             foldersEl.innerHTML = '';
             barEl.innerHTML = '';
             rowsEl.innerHTML = `<div class="em-empty">No email account is set up yet.<br>
-                Add one in <a href="#settings">Settings</a>, under Plugins, Email. Then come back here.</div>`;
+                Add one in <a href="#settings" class="em-to-settings">Settings</a>, under Plugins, Email. Then come back here.</div>`;
+            // Settings opens on the Email card (the same switch a notification's "go" uses).
+            rowsEl.querySelector('.em-to-settings')?.addEventListener('click', () => { window._settingsTab = 'email'; });
             readEl.innerHTML = '';
             root.querySelectorAll('.em-compose, .em-search, .em-unread, .em-refresh').forEach(el => { el.disabled = true; });
             return;
@@ -253,7 +258,8 @@ export function render(root) {
             if (st.scope === scope) {
                 st.folders = data.folders;
                 paintFolders();
-                paintList();                               // "Move to..." lists the folders too
+                paintListBar();                            // "Move to..." lists the folders too
+                if (st.rows.length) paintList();           // rows carry folder names; an empty list is not ours to judge here
             }
         }
         if (st.countsAgain) { st.countsAgain = false; loadCounts(st.scope !== scope); }
@@ -298,10 +304,30 @@ export function render(root) {
                 remember('folder.' + st.scope, 'inbox');
                 return load({ quiet, counts });
             }
-            if (hadCopy) {
+            const certy = CERT_WORDS.test(e.message || '');
+            if (/not configured|no mail server set/i.test(e.message || '') && st.accounts.some(a => a.scope === st.scope)) {
+                return loadAccounts();                       // the account was removed or emptied in another tab
+            }
+            if (certy) {
+                // Nothing is read from a server that cannot prove itself, so the list last seen is
+                // not shown as if it were current: the person gets the certificate and the choice.
+                // Once, not at every quiet refresh.
+                statusEl.textContent = '';
+                if (st.certFor === st.scope && quiet) return;
+                st.certFor = st.scope;
+                live = true;
+                st.rows = [];
+                st.total = 0;
+                st.pages = 1;
+                st.shown = '';
+                paintListBar();
+                rowsEl.innerHTML = `<div class="em-empty em-error">${escapeHtml(e.message)}
+                    <div><button class="btn em-retry">Try again</button></div></div>`;
+                certPanel(mine, rowsEl);
+            } else if (hadCopy) {
                 // Offline or the server said no: what was last seen stays up, and says so.
                 statusEl.textContent = '';
-                showToast(`${e.message || "Couldn't reach the mail server."} Showing the list as it was last seen.`, 'error');
+                if (!quiet) showToast(`${e.message || "Couldn't reach the mail server."} Showing the list as it was last seen.`, 'error');
             } else if (!quiet || !st.loaded) {
                 live = true;
                 st.rows = [];
@@ -315,6 +341,7 @@ export function render(root) {
             return;
         }
         live = true;
+        st.certFor = '';
         if (!quiet) busy(false);
         if (st.dead || !data) return;
         keep(st.views, key, data, KEEP_VIEWS);              // kept even if you already clicked on
@@ -324,6 +351,63 @@ export function render(root) {
         show(data, key);
         remember('folder.' + st.scope, st.folder);
         if (counts || st.countsDirty) loadCounts();
+    }
+
+    // -- a mail server whose certificate cannot be verified ----------------------------
+    // The server side refused it before any password was sent. Here the person
+    // sees what the server showed and may trust exactly that certificate.
+
+    const fingerprint = fp => (String(fp || '').toUpperCase().match(/.{1,2}/g) || []).join(':');
+
+    // `into`: where to draw it (the list, or a box inside the compose dialog). `after`: what to do once trusted.
+    async function certPanel(mine, into, after) {
+        let data;
+        try {
+            data = await fetchWithTimeout(`${API}/certs?scope=${encodeURIComponent(st.scope)}`, {}, 30000);
+        } catch { return; }
+        if (st.dead || mine !== st.seq || !into.isConnected) return;
+        const certs = (data?.servers || []).filter(c => (c.state === 'untrusted' || c.state === 'changed') && c.fingerprint);
+        if (!certs.length) return;
+        // A big provider's certificate always verifies: one that does not is somebody in between, never a thing to trust.
+        const known = certs.some(c => c.known);
+        const cards = certs.map(c => `
+            <div class="em-cert-card">
+                <div><b>${escapeHtml(c.host)}</b>, port ${c.port} (${c.which === 'smtp' ? 'sending' : 'reading mail'})</div>
+                <div>Why it was refused: ${escapeHtml(c.reason || 'it could not be verified')}${c.state === 'changed' ? '. It is NOT the certificate you trusted before' : ''}</div>
+                ${c.subject ? `<div>It says it is for: ${escapeHtml(c.subject)}${c.self_signed ? ' (signed by itself)' : ''}</div>` : ''}
+                ${c.expires ? `<div>It says it is good until: ${escapeHtml(c.expires)}</div>` : ''}
+                <div>Fingerprint (SHA-256): <code>${escapeHtml(fingerprint(c.fingerprint))}</code></div>
+            </div>`).join('');
+        into.innerHTML = `<div class="em-empty em-cert">
+            <div class="em-error">${known
+                ? 'Something between this machine and your mail provider is answering in its place, so nothing was sent to it, your password included.'
+                : 'This mail server could not prove who it is, so nothing was sent to it, your password included.'}</div>
+            ${cards}
+            <div>${known
+                ? 'This provider always has a certificate that checks out, so this one cannot be trusted. It may be security software on this machine ("scan encrypted connections"), a company or hotel network, or an attack. Try another network.'
+                : 'What a certificate says about itself proves nothing: anyone between you and the server could show one like this. Trust it only if this is your own server, or its admin gave you this fingerprint.'}</div>
+            <div>${known ? '' : `<button class="btn em-trust">Trust ${certs.length > 1 ? 'these certificates' : 'this certificate'}</button>`}
+                ${into === rowsEl ? '<button class="btn em-retry">Try again</button>' : ''}</div></div>`;
+        into.querySelector('.em-trust')?.addEventListener('click', e => { e.stopPropagation(); trustCerts(certs, after); });
+    }
+
+    function trustCerts(certs, after) {
+        if (!certs?.length) return;
+        const hosts = certs.map(c => c.host).filter((h, i, all) => all.indexOf(h) === i).join(' and ');
+        showConfirm(`Trust ${hosts}? Sapphire will send this account's password to a server showing this certificate, and only this one.`,
+            async () => {
+                try {
+                    for (const c of certs) {
+                        await post('trust', { host: c.host, port: c.port, which: c.which, fingerprint: c.fingerprint });
+                    }
+                    st.certFor = '';
+                    if (after) return after();
+                    showToast('Trusted. Loading your mail...', 'success');
+                    load();
+                } catch (e) {
+                    showToast(e.message || "Couldn't trust that certificate.", 'error');
+                }
+            }, { title: 'Trust this certificate', saveLabel: 'Trust' });
     }
 
     // -- folders -------------------------------------------------------------------
@@ -663,6 +747,7 @@ export function render(root) {
                     <textarea id="em-f-body" rows="12"></textarea></div>
                 ${note ? `<div class="em-note">${escapeHtml(note)}</div>` : ''}
                 <div class="em-form-error" role="alert" hidden></div>
+                <div class="em-form-cert"></div>
             </div>
             <div class="modal-footer">
                 <button class="btn em-x">Cancel</button>
@@ -682,6 +767,7 @@ export function render(root) {
         const token = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 
         const shut = () => {
+            if (working) return;                             // leaving the page mid-send must not eat the dialog
             st.modals.delete(shut);
             overlay.classList.remove('active');
             setTimeout(() => overlay.remove(), 200);
@@ -711,15 +797,28 @@ export function render(root) {
                 });
             } catch (e) {
                 working = false;
+                const words = /took too long/i.test(e.message || '')
+                    ? 'This is taking long. It may still be going out: press Send again to see how it ended, it will not go twice.'
+                    : (e.message || "That didn't send. Try again.");
+                if (!overlay.isConnected) {
+                    // The page was left while this was going out: the dialog is gone, the outcome is still owed.
+                    return showToast(`Your email was not ${draft ? 'saved' : 'sent'}. ${words}`, 'error');
+                }
                 overlay.querySelectorAll('.modal-footer button').forEach(b => { b.disabled = false; });
-                return fail(/took too long/i.test(e.message || '')
-                    ? 'This is taking long. It may still be going out: pressing Send again is safe, it will not go twice.'
-                    : (e.message || "That didn't send. Try again."));
+                fail(words);
+                if (CERT_WORDS.test(e.message || '')) {
+                    certPanel(st.seq, overlay.querySelector('.em-form-cert'), () => {
+                        overlay.querySelector('.em-form-cert').innerHTML = '';
+                        fail('Trusted. Press Send again.');
+                    });
+                }
+                return;
             }
             working = false;
             shut();
-            if (st.dead) return;
+            // Said even after the page was left: a toast is the whole app's, and "did it go?" must have an answer.
             showToast((draft ? 'Draft saved.' : 'Sent.') + (res?.note ? ` ${res.note}` : ''), res?.note ? 'warning' : 'success');
+            if (st.dead) return;
             if (reply && !draft) {
                 const row = st.rows.find(r => r.id === m.id);
                 if (row) row.answered = true;
@@ -734,7 +833,7 @@ export function render(root) {
     // -- clicks --------------------------------------------------------------------------
 
     function onRowsClick(e) {
-        if (e.target.closest('.em-retry')) return load();
+        if (e.target.closest('.em-retry')) return st.scope ? load() : loadAccounts();
         const rowEl = e.target.closest('.em-row');
         if (!rowEl) return;
         const id = rowEl.dataset.id;
@@ -820,6 +919,7 @@ export function render(root) {
     });
     $('.em-compose').addEventListener('click', () => openCompose('new', null));
     $('.em-refresh').addEventListener('click', () => { st.countsDirty = true; load(); });
+    $('.em-accounts').addEventListener('click', () => { window._settingsTab = 'email'; location.hash = '#settings'; });
     $('.em-search').addEventListener('keydown', e => { if (e.key === 'Enter') onSearch(); });
     $('.em-search').addEventListener('search', onSearch);
     $('.em-where').value = st.where;

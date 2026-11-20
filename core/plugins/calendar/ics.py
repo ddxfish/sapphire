@@ -6,7 +6,8 @@ or Outlook calendar). fetch() downloads it, parse() turns its VEVENTs into
 the fields of stored rows.
 
 What parse() keeps from RFC 5545: UID, SUMMARY, DESCRIPTION, LOCATION, URL,
-DTSTART, DTEND or DURATION, RRULE, EXDATE, RECURRENCE-ID and STATUS.
+DTSTART, DTEND or DURATION, RRULE, EXDATE, RECURRENCE-ID, STATUS, and the
+guests (ATTENDEE: name, address, answer), so an event with guests shows them.
 
 Time zones. A time with a Z or a TZID is a real instant somewhere else. A
 one-time event is turned into local time here. A repeating one is kept in
@@ -31,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_EVENTS = 10000
+
+# As a kind of link (sources.py): the whole file each time, read-only.
+KIND = 'ics'
+WINDOWED = False
+GUESTS = False
+EVERY, RETRY = 900, 300
+MAX_GUESTS = 100
+_ANSWERS = {'ACCEPTED': 'yes', 'DECLINED': 'no', 'TENTATIVE': 'maybe'}
 _DURATION = re.compile(r'([+-])?P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?')
 
 # Outlook and Exchange name zones their own way. The common ones.
@@ -96,10 +105,17 @@ def fetch(url):
             raise CalError(f"The calendar download broke off ({type(e).__name__}).")
     finally:
         resp.close()
-    text = data.decode('utf-8', errors='replace').lstrip('﻿')
+    text = data.decode('utf-8', errors='replace').lstrip('\ufeff')
     if 'BEGIN:VCALENDAR' not in text[:2000].upper():
         raise CalError("That address did not return a calendar file (it may be a web page, not the .ics address).")
     return text
+
+
+def pull(link, lo, hi, force=False):
+    """The link's events (sources.py). The days asked for do not matter: an address is one whole file."""
+    from . import api
+    _name, rows, notes = parse(fetch(link['ref']), api.convert, api.zone_name())
+    return rows, ' '.join(notes), None
 
 
 # -- reading the file -----------------------------------------------------------
@@ -211,9 +227,17 @@ def _event(props, reader):
     """One VEVENT's properties -> a row dict (with private _keys), or None."""
     one = {}
     exdates = []
+    guests = []
     for name, params, value in props:
         if name == 'EXDATE':
             exdates.append((params, value))
+        elif name == 'ATTENDEE':
+            if len(guests) < MAX_GUESTS and params.get('CUTYPE', '').upper() not in ('ROOM', 'RESOURCE'):
+                address = re.sub(r'^mailto:', '', value.strip(), flags=re.I)
+                address = address if re.fullmatch(r'[^@\s<>,;]+@[^@\s<>,;]+', address) else ''
+                guests.append({'name': (' '.join(_text(params.get('CN') or '').split()) or address or '?')[:100],
+                               'email': address[:200],
+                               'rsvp': _ANSWERS.get(params.get('PARTSTAT', '').upper(), 'pending'), 'self': False})
         elif name not in one:
             one[name] = (params, value)
     if 'DTSTART' not in one or 'UID' not in one:
@@ -234,7 +258,7 @@ def _event(props, reader):
         end = max(start, end - timedelta(days=1))        # the file's end day is exclusive
     elif end < start:
         end = start
-    rrule = one['RRULE'][1].strip() if 'RRULE' in one else ''
+    rrule = _until_day(one['RRULE'][1].strip(), start, zone, reader) if 'RRULE' in one else ''
     status = one.get('STATUS', ({}, ''))[1].strip().upper()
     skipped = []
     for params, value in exdates:
@@ -265,9 +289,27 @@ def _event(props, reader):
         'location': _text(one.get('LOCATION', ({}, ''))[1])[:200],
         'notes': _text(one.get('DESCRIPTION', ({}, ''))[1])[:4000],
         'url': one.get('URL', ({}, ''))[1].strip()[:500],
-        'guests': [], 'series': '',
+        'guests': guests, 'series': '',
         '_cancelled': status == 'CANCELLED', '_recur': recur_day, '_zone': zone,
     }
+
+
+def _until_day(rule, start, zone, reader):
+    """A rule whose end is an instant in UTC (UNTIL=...Z), with that end as
+    the DAY of the last occurrence where the event is kept. Read as a UTC
+    date it is a day off for anyone far from Greenwich: one occurrence too
+    few in Sydney, one too many in New York."""
+    m = re.search(r'UNTIL=(\d{8}T\d{4,6})Z', rule, re.I)
+    if not m or not isinstance(start, datetime):
+        return rule
+    try:
+        until = _shift(reader, _stamp(m.group(1) + 'Z')[0], 'UTC', zone)
+    except (ValueError, OverflowError):
+        return rule
+    day = until.date()
+    if until.time() < start.time():                   # that day's occurrence would start after the end
+        day -= timedelta(days=1)
+    return rule[:m.start()] + f"UNTIL={day:%Y%m%d}" + rule[m.end():]
 
 
 def _shift(reader, stamp, from_zone, to_zone):

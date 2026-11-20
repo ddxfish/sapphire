@@ -14,9 +14,12 @@
 # opening a different mail, whichever folder the page happens to be showing.
 import base64
 import email.utils
+import imaplib
+import ipaddress
 import logging
 import re
 import smtplib
+import threading
 import time
 import urllib.parse
 
@@ -29,7 +32,9 @@ PER_PAGE = 50
 MAX_IDS = 200                     # per move / mark request
 MAX_STATUS = 40                   # folders counted per listing
 READ_WAIT = 8                     # seconds a list or a mail waits for the request in front of it
-SENT_TOKENS: dict = {}            # a Send's one-time token -> when; a mail goes out once per token
+SENT_TOKENS: dict = {}            # a Send's one-time token -> {'at', 'state', 'done', 'note', 'error'}
+_tokens_lock = threading.Lock()
+SEND_WAIT = 50                    # seconds a repeated Send waits for the first one to end
 TOKEN_KEEP = 900
 MAX_TEXT = 500_000                # characters of body text sent to the page
 MAX_HTML = 2_000_000              # characters of HTML sent to the page
@@ -52,6 +57,22 @@ _REMOTE_RE = re.compile(r'''(?:src|background|poster|srcset)\s*=\s*["']?\s*(?:ht
 
 # -- plumbing -------------------------------------------------------------------
 
+def _inside(host):
+    """True for a host name that means this machine or its own network. A
+    mail's picture must never be fetched from there: the request would come
+    from the person's own browser, to their own Sapphire or router."""
+    host = str(host or '').strip('[]').lower()
+    if not host or host == 'localhost' or host.endswith(('.localhost', '.local', '.lan', '.internal')):
+        return True
+    if '.' not in host and ':' not in host:
+        return True                              # a bare name: something on the local network
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_reserved
+
+
 def _refused(words, status=400):
     return {'success': False, 'detail': str(words)}, status
 
@@ -63,17 +84,24 @@ def _door(fn):
             return fn(**kw)
         except MailError as e:
             return _refused(e)
-        except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"[EMAIL] page: SMTP login refused: {e}")
-            return _refused("The mail server refused the login for sending. Check the account's "
-                            "password in Settings > Plugins > Email.")
+        except accounts.CertUntrusted as e:
+            logger.warning(f"[EMAIL] page: {e.info.get('host')}:{e.info.get('port')} certificate not trusted "
+                           f"({e.info.get('reason')})")
+            return {'success': False, 'detail': str(e), 'cert': e.info}, 400
         except Exception as e:
-            if type(e).__name__ == 'LoginError':
-                logger.error(f"[EMAIL] page: IMAP login refused: {e}")
-                return _refused("The mail server refused the login. Check the account's password "
-                                "in Settings > Plugins > Email.")
+            # accounts.py says why a CONNECTION failed (wrong name, port, password,
+            # provider rule) and hangs that on the error. An error without it
+            # happened later, on a line that was up: it is not a setup problem.
+            words = getattr(e, 'words', '')
+            if words:
+                logger.error(f"[EMAIL] page: {fn.__name__}: {type(e).__name__}")
+                return _refused(words)
+            if isinstance(e, (OSError, imaplib.IMAP4.error, smtplib.SMTPException)):
+                # The exception's text may be the mail server's own words: the log keeps it, the screen does not.
+                logger.error(f"[EMAIL] page: {fn.__name__}: {type(e).__name__}: {e}")
+                return _refused("The mail server stopped answering in the middle of that. Try again.", 502)
             logger.error(f"[EMAIL] page: {fn.__name__} failed: {e}", exc_info=True)
-            return _refused(f"Email error: {e}", 500)
+            return _refused(f"Email error: {e}", 500)             # a fault of our own: its text is ours
     run.__name__ = fn.__name__
     return run
 
@@ -97,10 +125,12 @@ def _mail_index(settings):
         from plugins.email import index
         idx = index.get()
         if (settings or {}).get('keep_mail_index', True) in (False, 0, 'false', 'False', '0', 'off'):
+            idx.enabled = False
             if not idx.empty():
                 idx.forget()
                 logger.info("[EMAIL] page: the mail index is off; what it held was deleted")
             return None
+        idx.enabled = True
         return idx
     except Exception as e:
         logger.warning(f"[EMAIL] page: mail index unavailable: {e}")
@@ -407,7 +437,7 @@ def _page_html(msg, own_host=''):
                     del tag.attrs[attr]
             elif low.startswith(('http://', 'https://')):
                 host = (urllib.parse.urlsplit(value).hostname or '').lower()
-                if own_host and host == own_host:
+                if (own_host and host == own_host) or _inside(host):
                     del tag.attrs[attr]
             elif low.startswith('data:image/') and tag.name == 'img' and not low.startswith('data:image/svg'):
                 pass
@@ -603,29 +633,274 @@ def send(body=None, **_):
         return {'success': True, 'draft': True, 'note': left_out}
 
     # One mail per Send. The browser gives up waiting long before a slow
-    # upload does, and the person then presses Send again: the token is the
-    # same, so the second press is answered without sending.
+    # upload does, and the person then presses Send again. The token is the
+    # same, so the second press never sends: it waits for the first one and
+    # reports how THAT ended. Telling it "already sent" while the first was
+    # still going closed the dialog on a mail that then failed.
     token = str(b.get('token') or '')[:80]
-    now = time.time()
-    for old in [t for t, when in SENT_TOKENS.items() if now - when > TOKEN_KEEP]:
-        SENT_TOKENS.pop(old, None)
+    entry = None
     if token:
-        if token in SENT_TOKENS:
-            return {'success': True, 'draft': False, 'duplicate': True,
-                    'note': 'This email was already sent (or is on its way). It was not sent again.'}
-        SENT_TOKENS[token] = now
+        now = time.time()
+        with _tokens_lock:
+            for old in [t for t, e in SENT_TOKENS.items() if now - e['at'] > TOKEN_KEEP]:
+                SENT_TOKENS.pop(old, None)
+            earlier = SENT_TOKENS.get(token)
+            if earlier is None:
+                entry = SENT_TOKENS[token] = {'at': now, 'state': 'sending', 'done': threading.Event(), 'note': '', 'error': ''}
+        if earlier is not None:
+            earlier['done'].wait(SEND_WAIT)
+            if earlier['state'] == 'sent':
+                return {'success': True, 'draft': False, 'duplicate': True,
+                        'note': ' '.join(x for x in ('This email was already sent. It was not sent again.', earlier['note']) if x)}
+            if earlier['state'] == 'sending':
+                return _refused("That email is still going out. Give it a moment, then press Send again to see how it ended.", 409)
+            raise MailError(earlier['error'] or "That didn't send. Try again.")
+
+    def ended(state, words=''):
+        """How this Send ended, for a repeated press that is waiting on it."""
+        if entry is None:
+            return
+        with _tokens_lock:
+            entry['state'] = state
+            entry['note' if state == 'sent' else 'error'] = words
+            if state == 'failed':
+                SENT_TOKENS.pop(token, None)         # nothing went out: the same Send may be tried again
+        entry['done'].set()
 
     def answered():
         if mode == 'reply':
             with Mailbox(scope, creds, keep=True) as mb:
                 mb.flag([handle], b'\\Answered')
     try:
-        note = mailbox.send(scope, creds, msg, [a for _n, a in to + cc + bcc], after=answered, wait=False)
+        note = mailbox.send(scope, creds, msg, [a for _n, a in to + cc + bcc], after=answered, wait=False,
+                            name_refused=True)
     except smtplib.SMTPRecipientsRefused as e:
-        SENT_TOKENS.pop(token, None)                 # nothing went out: the same Send may be tried again
-        raise MailError(f"The mail server refused the address: {', '.join(e.recipients) or e}")
-    except Exception:
-        SENT_TOKENS.pop(token, None)
+        words = f"The mail server refused the address: {', '.join(e.recipients) or 'every recipient'}. Nothing was sent."
+        ended('failed', words)
+        raise MailError(words)
+    except smtplib.SMTPResponseException as e:
+        logger.error(f"[EMAIL] page: send: {type(e).__name__} {e.smtp_code}")
+        words = getattr(e, 'words', '') or (
+            accounts.explain(e, creds, sending=True) if isinstance(e, smtplib.SMTPAuthenticationError) else
+            f"The mail server did not take the email (code {e.smtp_code}"
+            + (": it is too big for this server" if e.smtp_code == 552 else '') + "). Nothing was sent.")
+        ended('failed', words)
+        raise MailError(words)
+    except Exception as e:
+        if getattr(e, 'unclear', False):
+            logger.error(f"[EMAIL] page: send: the line failed mid-send ({type(e).__name__})")
+            words = ("The connection dropped while the email was going out, so it is not certain whether it was "
+                     "sent. Look in the Sent folder (or ask the recipient) before sending it again.")
+            ended('unclear', words)                  # the token stays: pressing Send again must not send twice
+            raise MailError(words)
+        ended('failed', getattr(e, 'words', '') or (str(e) if isinstance(e, MailError) else "That didn't send. Try again."))
         raise
+    clean = ' '.join(x for x in (note.strip(' ()'), left_out) if x)
+    ended('sent', clean)
     logger.info(f"[EMAIL] page: sent ({mode}) from '{scope}' to {len(to + cc + bcc)} recipient(s)")
-    return {'success': True, 'draft': False, 'note': ' '.join(x for x in (note.strip(' ()'), left_out) if x)}
+    return {'success': True, 'draft': False, 'note': clean}
+
+
+# -- setting an account up: the Test button and certificates ------------------------
+
+TEST_TIMEOUT = 12
+_FIELDS = ('address', 'app_password', 'imap_server', 'imap_port', 'smtp_server', 'smtp_port')
+_SAME_SERVER = (('imap_server', 'imap_port', 993), ('smtp_server', 'smtp_port', 465))
+
+
+def _port(value, default, what):
+    try:
+        port = int(value) if str(value if value is not None else '').strip() else default
+    except (TypeError, ValueError, OverflowError):
+        raise MailError(f"The {what} port is a number: 993 for reading mail, 465 or 587 for sending.")
+    if not 1 <= port <= 65535:
+        raise MailError(f"{port} is not a port. Reading mail is 993; sending is 465 or 587.")
+    return port
+
+
+def _server(value, what):
+    """A server name as typed, tidied; MailError when it cannot be one."""
+    text = str(value or '').strip()
+    text = re.sub(r'^[a-z][a-z0-9+.-]*://', '', text, flags=re.I).rstrip('/').strip('[]')
+    if '@' in text:
+        raise MailError(f"'{text}' is an email address, not a server name. The {what} server looks like mail.example.com.")
+    if not text or re.search(r'[\s/]', text) or accounts._CONTROL_HOST.search(text):
+        raise MailError(f"Fill in the {what} server first. It looks like mail.example.com.")
+    return text
+
+
+def _typed_account(b):
+    """(scope, creds, stored) from what is in the form. A stored password (or
+    Microsoft sign-in) is used ONLY with the servers it was stored for: a
+    typed server name gets a typed password, or nothing. Otherwise anything
+    able to post here could have the stored secret sent to a server of its
+    choosing, and it would keep that password for good."""
+    scope = str(b.get('scope') or '').strip()
+    from core.credentials_manager import credentials
+    stored = dict(credentials.get_email_account(scope) or {}) if scope else {}
+    typed = {k: b[k] for k in _FIELDS if str(b.get(k) if b.get(k) is not None else '').strip()}
+    creds = dict(stored)
+    creds.update({k: (str(v).strip() if isinstance(v, str) else v) for k, v in typed.items()})
+    missing = [label for key, label in (('address', 'the email address'), ('imap_server', 'the IMAP server'),
+                                         ('smtp_server', 'the SMTP server')) if not str(creds.get(key) or '').strip()]
+    if missing:
+        raise MailError(f"Fill in {', '.join(missing)} first.")
+    creds['imap_server'], creds['smtp_server'] = _server(creds['imap_server'], 'IMAP'), _server(creds['smtp_server'], 'SMTP')
+    creds['imap_port'], creds['smtp_port'] = _port(creds.get('imap_port'), 993, 'IMAP'), _port(creds.get('smtp_port'), 465, 'SMTP')
+
+    def same(key):
+        return str(creds.get(key) or '').strip().lower() == str(stored.get(key) or '').strip().lower()
+    as_stored = same('address') and all(
+        same(host) and creds[port] == _port(stored.get(port), default, 'stored') for host, port, default in _SAME_SERVER)
+    if typed.get('app_password'):
+        creds['auth_type'] = 'password'
+        for key in [k for k in creds if k.startswith('oauth_')]:
+            creds.pop(key)
+    elif not as_stored:
+        if stored.get('app_password') or stored.get('auth_type') == 'oauth2':
+            raise MailError("Type the password to test a changed address or server. The one that is stored is only "
+                            "ever sent to the server it was stored for.")
+        raise MailError("Fill in the password first.")
+    elif stored.get('auth_type') == 'oauth2':
+        fresh, why = accounts.get_creds(scope)             # a current token, refreshed if it ran out
+        if not fresh:
+            raise MailError(why)
+        creds = dict(fresh)
+    elif not creds.get('app_password'):
+        raise MailError("Fill in the password first.")
+    return scope, creds, as_stored
+
+
+def _plain(error, creds, sending):
+    """A failed step as words for the screen. Never the exception's own text:
+    that can be whatever the server on the other end chose to send."""
+    words = getattr(error, 'words', '') or accounts.explain(error, creds, sending)
+    return words or f"That did not work ({type(error).__name__}). The details are in Sapphire's log."
+
+
+def _daemon_again():
+    """A watched account that had failed is tried at its next poll, not after its back-off."""
+    try:
+        from plugins.email import daemon
+        daemon.retry_now()
+    except Exception as e:
+        logger.debug(f"[EMAIL] daemon not nudged: {e}")
+
+
+@_door
+def check_account(body=None, **_):
+    """POST test: log in for reading AND for sending with what is in the
+    form, the way the plugin itself connects (certificates checked). No mail
+    is sent. Each half answers for itself: reading can work while sending is
+    set up wrong, and that used to show only at the first send.
+
+    A person pressing Test is not held back by the refused-login hold, but a
+    refusal here is recorded like any other, so the daemon and her tools
+    stop sending a password the server just refused."""
+    scope, creds, as_stored = _typed_account(body or {})
+    out = {'success': True, 'certs': []}
+
+    def half(name, sending, work):
+        try:
+            out[name] = {'ok': True, **(work() or {})}
+        except accounts.CertUntrusted as e:
+            out[name] = {'ok': False, 'words': str(e)}
+            out['certs'].append(e.info)
+        except Exception as e:
+            logger.info(f"[EMAIL] test, {name}: {type(e).__name__}: {e}")
+            out[name] = {'ok': False, 'words': _plain(e, creds, sending)}
+
+    def reading():
+        client = accounts.connect(scope or '(new account)', creds, TEST_TIMEOUT, force=True)
+        try:
+            got = client.select_folder('INBOX', readonly=True)
+            return {'count': int(got.get(b'EXISTS') or 0)}
+        finally:
+            try:
+                client.logout()
+            except Exception:
+                pass
+
+    def sending():
+        smtp = accounts.smtp_connect(creds, TEST_TIMEOUT, force=True)
+        try:
+            smtp.quit()
+        except Exception:
+            pass
+
+    half('reading', False, reading)
+    half('sending', True, sending)
+    out['works'] = out['reading']['ok'] and out['sending']['ok']
+    if out['works'] and scope and as_stored:
+        mailbox.close_kept(scope)
+        _daemon_again()
+    return out
+
+
+@_door
+def certs(query=None, **_):
+    """GET certs: the certificates the person has trusted. With ?scope=, also
+    where that account's two servers stand right now (no login is made)."""
+    out = {'success': True, 'trusted': accounts.trusted_list()}
+    scope = str((query or {}).get('scope') or '').strip()
+    if scope:
+        from core.credentials_manager import credentials
+        creds = credentials.get_email_account(scope) or {}
+        out['servers'] = []
+        for which, host, port, default in (('imap', creds.get('imap_server'), creds.get('imap_port'), 993),
+                                           ('smtp', creds.get('smtp_server'), creds.get('smtp_port'), 465)):
+            if not str(host or '').strip():
+                continue
+            try:
+                port = _port(port, default, which.upper())
+                out['servers'].append(accounts.cert_status(host, port, which))
+            except MailError as e:
+                out['servers'].append({'host': host, 'port': 0, 'which': which, 'state': 'unreachable', 'words': str(e)})
+            except Exception as e:
+                logger.info(f"[EMAIL] certs, {which}: {type(e).__name__}: {e}")
+                out['servers'].append({'host': host, 'port': port, 'which': which, 'state': 'unreachable',
+                                       'words': _plain(e, creds, which == 'smtp')})
+    return out
+
+
+@_door
+def trust_cert(body=None, **_):
+    """POST trust: {host, port, which, fingerprint}. The server is asked for
+    its certificate again here, and it is trusted only if it is the one the
+    person was shown: what they agreed to is that fingerprint, nothing else.
+    Never for a well-known provider: its certificate always verifies, so one
+    that does not is somebody in between."""
+    b = body or {}
+    which = 'smtp' if b.get('which') == 'smtp' else 'imap'
+    shown = re.sub(r'[^0-9a-f]', '', str(b.get('fingerprint') or '').lower())
+    if not str(b.get('host') or '').strip() or len(shown) != 64:
+        raise MailError("Which certificate? Run the test again.")
+    host, port = _server(b.get('host'), which.upper()), _port(b.get('port'), 0, which.upper())
+    if accounts.well_known(host):
+        raise MailError(f"{host} is a well-known mail provider, and its certificate always checks out. One that does "
+                        "not means the connection is being intercepted, so it cannot be trusted here.")
+    try:
+        now = accounts.cert_status(host, port, which)
+    except Exception as e:
+        logger.info(f"[EMAIL] trust: {type(e).__name__}: {e}")
+        raise MailError(_plain(e, {'imap_server': host, 'imap_port': port, 'smtp_server': host, 'smtp_port': port},
+                               which == 'smtp'))
+    if now.get('state') == 'verified':
+        accounts.untrust(host, port)
+        return {'success': True, 'note': f"{host} has a certificate that checks out now. Nothing needs trusting."}
+    if now.get('fingerprint') != shown:
+        raise MailError(f"{host} is showing a different certificate from the one on your screen. "
+                        "Nothing was trusted. Run the test again and look at the new one.")
+    accounts.trust(host, port, shown)
+    mailbox.close_kept()
+    _daemon_again()
+    return {'success': True}
+
+
+@_door
+def untrust_cert(body=None, **_):
+    """POST untrust: {host, port}. The next connection checks that server the normal way again."""
+    b = body or {}
+    accounts.untrust(str(b.get('host') or '').strip(), _port(b.get('port'), 0, 'server'))
+    mailbox.close_kept()
+    return {'success': True, 'trusted': accounts.trusted_list()}

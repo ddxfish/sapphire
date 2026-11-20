@@ -15,7 +15,7 @@ def _creds_mgr(acct):
     return mgr
 
 
-_OAUTH = {'address': 'me@corp.com', 'auth_type': 'oauth2', 'oauth_refresh_token': 'rt',
+_OAUTH = {'address': 'me@corp.com', 'auth_type': 'oauth2', 'oauth_refresh_token': 'rt', 'imap_server': 'outlook.office365.com',
           'oauth_client_id': 'cid', 'oauth_client_secret': 'cs', 'oauth_expires_at': 0}
 
 
@@ -30,10 +30,10 @@ def test_no_address_means_not_configured():
 
 
 def test_missing_password_and_missing_refresh_token_are_named():
-    with patch('core.credentials_manager.credentials', _creds_mgr({'address': 'a@x.com', 'app_password': ''})):
+    with patch('core.credentials_manager.credentials', _creds_mgr({'address': 'a@x.com', 'app_password': '', 'imap_server': 'imap.x.com'})):
         assert 'App password not set' in accounts.get_creds('work')[1]
     with patch('core.credentials_manager.credentials', _creds_mgr(dict(_OAUTH, oauth_refresh_token=''))):
-        assert 'refresh token missing' in accounts.get_creds('work')[1]
+        assert 'sign-in is gone' in accounts.get_creds('work')[1]
 
 
 def test_refresh_failure_warns_against_redoing_setup():
@@ -47,7 +47,7 @@ def test_fresh_token_and_password_accounts_pass():
     fresh = dict(_OAUTH, oauth_expires_at=time.time() + 3600, oauth_access_token='at')
     with patch('core.credentials_manager.credentials', _creds_mgr(fresh)):
         assert accounts.get_creds('work') == (fresh, None)
-    pw = {'address': 'a@x.com', 'app_password': 'pw', 'auth_type': 'password'}
+    pw = {'address': 'a@x.com', 'app_password': 'pw', 'auth_type': 'password', 'imap_server': 'imap.x.com'}
     with patch('core.credentials_manager.credentials', _creds_mgr(pw)):
         assert accounts.get_creds('work') == (pw, None)
 
