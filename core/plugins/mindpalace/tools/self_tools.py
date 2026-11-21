@@ -330,13 +330,17 @@ def dashboard_data(cursor, scope, depth=2):
                 f"AND private_key IS NOT NULL", (scope,))
     retired = one("SELECT COUNT(*) FROM chunks WHERE layer='events' AND scope=? "
                   "AND json_extract(meta, '$.pruned_at') IS NOT NULL", (scope,))
+    # A day's 'retells' edges and rows are not memories of anyone (tools/
+    # daily.py): counted here, "Most woven" drifted toward whoever is named in
+    # days, the user every day, and "Mind since" could be a day's date.
     edges = one("SELECT COUNT(*) FROM edges d JOIN chunks c ON d.src_type='chunk' "
-                "AND c.id=d.src_id WHERE c.scope=?", (scope,))   # the Self page's card only
-    since = cursor.execute("SELECT MIN(created) FROM chunks WHERE scope=?", (scope,)).fetchone()[0]
+                "AND c.id=d.src_id WHERE c.scope=? AND d.kind != 'retells'", (scope,))   # the Self page's card only
+    since = cursor.execute("SELECT MIN(created) FROM chunks WHERE scope=? AND layer != 'daily'",
+                           (scope,)).fetchone()[0]
     woven = cursor.execute(
         f"SELECT e.name, COUNT(*) n FROM edges d JOIN entities e ON d.dst_type='entity' "
         f"AND e.id=d.dst_id JOIN chunks c ON d.src_type='chunk' AND c.id=d.src_id "
-        f"WHERE e.scope=? AND {_LIVE.replace('json_extract(meta', 'json_extract(c.meta')} "
+        f"WHERE e.scope=? AND d.kind != 'retells' AND {_LIVE.replace('json_extract(meta', 'json_extract(c.meta')} "
         + ''.join(f"AND {g} " for g in (_pt()._private_sql('e.wr_private'),
                                         _pt()._chunk_gate('c')) if g)
         + "GROUP BY e.id ORDER BY n DESC LIMIT 5",

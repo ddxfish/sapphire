@@ -300,7 +300,7 @@
         "type": "boolean",
         "label": "Keep each day's summary",
         "default": true,
-        "help": "When a chat is compacted by day (/compact-daily), each finished day's summary is also kept in the Daily layer of that chat's memory scope, so a day that rolls off the chat is still found by search and by date. A day is a retelling of that day's whole conversation, and it is kept per memory scope: every chat on the same scope, and any model that reads it, can find it. Give a chat its own scope (or scope none) if its days should not be shared. Private chats, chat rooms and chats with memory off are never recorded. Off: nothing new is recorded; days already kept stay.",
+        "help": "When a chat is compacted by day (/compact-daily), each finished day's summary is also kept in memory, in that chat's memory scope, so a day that rolls off the chat is still found by search and by date. See them in Mind > Daily. A day summary covers that day's whole conversation, and it is kept per memory scope: every chat on the same scope, and any model that reads it, can find it. Give a chat its own scope (or scope none) if its days should not be shared. Private chats, chat rooms, game chats and chats with memory off are never recorded. Making a chat private later, or deleting it, does not remove days already kept: delete those in Mind > Daily. Off: nothing new is recorded and days already kept stay; turning it back on records the days still sitting in your chats. How a day is written: Settings > Tools > Daily Compact.",
         "tab": "Memories"
       },
       {

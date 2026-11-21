@@ -138,7 +138,7 @@ export async function describeScopeForDelete(name) {
             .reduce((a, [, n]) => a + n, 0);
         return `Right now “${name}” holds ${L.events || 0} memories, `
             + `${L.self || 0} self entries, ${st.entities || 0} entities, `
-            + (L.daily ? `${L.daily} pieces of daily summaries, ` : '')
+            + (L.daily ? `the day summaries kept here, ` : '')
             + (extra ? `${extra} plugin-layer chunks, ` : '')
             + `and ${L.knowledge || 0} knowledge chunks — ALL of it goes.`;
     } catch { return ''; }

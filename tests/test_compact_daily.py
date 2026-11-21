@@ -1,5 +1,5 @@
 """/compact-daily (core/chat/compress.py daily mode): one labelled pair per day."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +7,14 @@ import pytest
 from core.chat import compress
 
 NOW = datetime(2026, 11, 3, 15, 0)
+
+
+@pytest.fixture(autouse=True)
+def _own_instruction_files(tmp_path, monkeypatch):
+    """The two editable texts live under user/prompts/: a test never reads or
+    writes the install's own."""
+    monkeypatch.setattr(compress, 'INSTRUCTIONS_PATH', tmp_path / 'compress_instructions.txt')
+    monkeypatch.setattr(compress, 'DAILY_INSTRUCTIONS_PATH', tmp_path / 'compact_daily_instructions.txt')
 
 
 def _turn(ts, n):
@@ -133,6 +141,7 @@ def test_a_days_size_is_a_ceiling_and_routine_tasks_are_not_recapped():
     compress.daily_pairs(compress.daily_plan(head, days=5, start_hour=4, now=NOW), p, 2000)
     assert 'ceiling, not a goal' in p.prompts[0] and 'SCHEDULED TASK' in p.prompts[0]
     assert 'tight prose' in p.prompts[0] and 'never in shorthand' in p.prompts[0]
+    assert 'tool housekeeping' in p.prompts[0]
     q = Provider()                                                  # no day: the plain frame
     compress.compress_messages(head, 'whole', q, 2000)
     assert 'ceiling, not a goal' not in q.prompts[0]
@@ -150,3 +159,134 @@ def test_a_row_the_person_did_not_write_is_not_labelled_user():
     # A room names its speakers; that rule still comes first.
     room = compress.render_transcript([{'role': 'user', 'content': 'hi', 'name': 'Ann', 'origin': 'room:Ann'}], room=True)
     assert room == 'Ann: hi'
+
+
+def test_the_day_wording_is_the_persons_to_edit_and_the_mechanics_are_not():
+    """Krem, 2026-11-20: how she writes a day is editable. What the size means
+    and what the transcript's labels mean stay in code, so no edit loses them."""
+    assert compress.load_instructions(daily=True) == compress.DAILY_INSTRUCTIONS
+    compress.save_instructions('  Keep the feelings {curly} and the jokes.  ', daily=True)
+    assert compress.load_instructions(daily=True) == 'Keep the feelings {curly} and the jokes.'
+    assert compress.load_instructions() == compress.DEFAULT_INSTRUCTIONS       # the other text is untouched
+    head = _turn('2026-11-02T10:00:00', 1)
+    p = Provider()
+    compress.daily_pairs(compress.daily_plan(head, days=5, start_hour=4, now=NOW), p, 2000,
+                         daily_instructions=compress.load_instructions(daily=True))
+    assert 'Keep the feelings {curly} and the jokes.' in p.prompts[0]           # a brace is just a brace
+    assert 'tight prose' not in p.prompts[0]
+    assert 'ceiling, not a goal' in p.prompts[0] and 'SCHEDULED TASK are automatic jobs' in p.prompts[0]
+    compress.save_instructions(compress.DAILY_INSTRUCTIONS, daily=True)        # the default is not stored
+    assert not compress.DAILY_INSTRUCTIONS_PATH.exists()
+    compress.save_instructions('edited', daily=True)
+    compress.save_instructions('', daily=True)                                  # blank = back to the default
+    assert compress.load_instructions(daily=True) == compress.DAILY_INSTRUCTIONS
+    with pytest.raises(ValueError):
+        compress.save_instructions('x' * (compress.MAX_INSTRUCTIONS_CHARS + 1), daily=True)
+
+
+def test_the_job_reads_the_edited_day_wording(monkeypatch):
+    compress.save_instructions('Write it as a haiku.', daily=True)
+    rows = _turn('2026-11-01T10:00:00', 1) + _turn(NOW.isoformat(), 2) + _turn(datetime.now().isoformat(), 3)
+    p = Provider()
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: p)
+
+    class SMx(FakeSM):
+        def read_chat_settings(self, chat):
+            return {}
+
+        def replace_messages(self, chat, msgs, **k):
+            return True, ''
+
+        def messages_digest(self, msgs):
+            return 'd'
+
+        def _prune_orphaned_tool_images(self, chat):
+            pass
+    old = [{'role': 'user', 'content': 'long ago ' * 200, 'timestamp': (datetime.now().replace(hour=12)
+            .fromordinal(datetime.now().toordinal() - 2)).isoformat()},
+           {'role': 'assistant', 'content': 'yes ' * 200, 'timestamp': (datetime.now().replace(hour=12)
+            .fromordinal(datetime.now().toordinal() - 2)).isoformat()}]
+    compress._compress_chat(SMx(old + rows[-2:]), 'c', 'daily', 'auto', '', 2000, 1, backup=False)
+    assert 'Write it as a haiku.' in p.prompts[0]
+
+
+def test_what_a_keyed_read_returned_never_reaches_the_summarizer():
+    """A summary carries no key, and a day's summary is kept in memory for the
+    whole scope. Her own words about what she read stay: ordinary chat text."""
+    rows = [
+        {'role': 'user', 'content': 'what is the door code?'},
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'a1', 'type': 'function', 'function': {'name': 'search_memory',
+             'arguments': '{"query": "door code", "private_key": "house"}'}},
+            {'id': 'a2', 'type': 'function', 'function': {'name': 'search_memory',
+             'arguments': '{"query": "weather"}'}},
+            {'id': 'a3', 'type': 'function', 'function': {'name': 'get_recent_memories',
+             'arguments': '{"private_key": "house", broken json'}},
+            {'id': 'a4', 'type': 'function', 'function': {'name': 'search_memory',
+             'arguments': '{"query": "x", "private_key": "  "}'}}]},
+        {'role': 'tool', 'tool_call_id': 'a1', 'name': 'search_memory', 'content': 'Found 1: the code is 4417'},
+        {'role': 'tool', 'tool_call_id': 'a2', 'name': 'search_memory', 'content': 'Found 1: rain on Tuesday'},
+        {'role': 'tool', 'tool_call_id': 'a3', 'name': 'get_recent_memories', 'content': 'gate pin 9902'},
+        {'role': 'tool', 'tool_call_id': 'a4', 'name': 'search_memory', 'content': 'nothing keyed here'},
+        {'role': 'assistant', 'content': 'It is the one you set in March.'},
+    ]
+    text = compress.render_transcript(rows)
+    assert '4417' not in text and '9902' not in text                       # unreadable arguments naming the key: withheld
+    assert text.count('[withheld: read with a private key]') == 2
+    assert '(search_memory result) [withheld' in text and 'rain on Tuesday' in text and 'nothing keyed here' in text
+    assert 'It is the one you set in March.' in text and '[called tools: search_memory, search_memory' in text
+
+
+def test_a_hand_edited_instructions_file_is_read_whatever_the_editor_did(monkeypatch):
+    """Windows scout, 2026-11-21. Notepad's "UTF-8 with BOM" put an invisible
+    character at the head of the prompt; a file saved as ANSI failed every
+    nightly compact with a codec error nobody could act on."""
+    compress.DAILY_INSTRUCTIONS_PATH.write_bytes(b'\xef\xbb\xbfKeep the jokes.\r\nAnd the feelings.\r\n')
+    assert compress.load_instructions(daily=True) == 'Keep the jokes.\nAnd the feelings.'
+    compress.DAILY_INSTRUCTIONS_PATH.write_bytes('Keep the “jokes”.'.encode('cp1252'))
+    with pytest.raises(ValueError) as e:
+        compress.load_instructions(daily=True)
+    assert 'not saved as UTF-8' in str(e.value) and 'compact_daily_instructions.txt' in str(e.value)
+    compress.save_instructions('fixed from the app', daily=True)             # a Save from the box repairs it
+    assert compress.load_instructions(daily=True) == 'fixed from the app'
+    compress.DAILY_INSTRUCTIONS_PATH.write_bytes(b'\x93broken again\x94')
+    compress.save_instructions('', daily=True)                               # and so does Reset
+    assert compress.load_instructions(daily=True) == compress.DAILY_INSTRUCTIONS
+
+
+def test_an_unreadable_day_wording_fails_the_job_before_a_backup_is_written(monkeypatch, tmp_path):
+    """It was read after the backup: every night left a full export of the
+    chat behind and then failed."""
+    compress.DAILY_INSTRUCTIONS_PATH.write_bytes(b'\x93not utf-8\x94')
+    wrote = []
+    monkeypatch.setattr(compress, '_write_backup', lambda *a, **k: wrote.append(1) or 'x')
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: Provider())
+    old = (datetime.now() - timedelta(days=2)).replace(hour=12).isoformat()
+    rows = [{'role': 'user', 'content': 'long ago ' * 200, 'timestamp': old},
+            {'role': 'assistant', 'content': 'yes ' * 200, 'timestamp': old}] + _turn(datetime.now().isoformat(), 3)
+
+    class Public(FakeSM):
+        def read_chat_settings(self, chat):
+            return {}
+    with pytest.raises(ValueError, match='not saved as UTF-8'):
+        compress._compress_chat(Public(rows), 'c', 'daily', 'auto', '', 2000, 1, backup=True)
+    assert wrote == []
+    # A whole or chunked compress never reads the day wording.
+    monkeypatch.setattr(compress, '_write_backup', lambda *a, **k: 'x')
+    with pytest.raises(Exception) as e:
+        compress._compress_chat(Public(rows), 'c', 'whole', 'auto', '', 2000, 1, backup=True)
+    assert 'not saved as UTF-8' not in str(e.value)
+
+
+def test_the_day_wording_asks_for_paragraphs_that_stand_alone():
+    """A day is stored and found paragraph by paragraph: one built on "he" or
+    "tomorrow" is noise when it is read alone months later (AIX scout)."""
+    text = compress.DAILY_INSTRUCTIONS
+    assert 'in the first person' in text and 'your own voice' not in text       # "you" is the USER in this prompt
+    assert 'may later be read on its own' in text and 'Write dates as dates' in text
+
+
+def test_a_timestamp_the_clock_cannot_place_is_no_day_not_a_crash():
+    got = compress.day_of('0001-01-01T00:00:00+00:00')          # raises OSError inside on Windows: None there
+    assert got is None or isinstance(got, date)
+    assert compress.day_of('not a time') is None and compress.day_of(None) is None

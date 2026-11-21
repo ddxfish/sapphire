@@ -1592,26 +1592,37 @@ async def compress_status(_=Depends(require_login)):
 
 
 @router.get("/api/chats/compress/instructions")
-async def get_compress_instructions(_=Depends(require_login)):
-    """The compress instructions in force, and the default a reset returns to."""
+async def get_compress_instructions(kind: str = '', _=Depends(require_login)):
+    """The compress instructions in force, and the default a reset returns to.
+    kind=daily: the day-summary wording of /compact-daily instead."""
     from core.chat import compress
-    return {"instructions": compress.load_instructions(),
-            "default": compress.DEFAULT_INSTRUCTIONS}
+    daily = kind == 'daily'
+    default = compress.DAILY_INSTRUCTIONS if daily else compress.DEFAULT_INSTRUCTIONS
+    try:
+        return {"instructions": compress.load_instructions(daily=daily), "default": default}
+    except (ValueError, OSError) as e:
+        # The saved file cannot be read: the box still opens, on the default,
+        # and says why, so a Save from here repairs it.
+        return {"instructions": default, "default": default, "unreadable": str(e)}
 
 
 @router.put("/api/chats/compress/instructions")
-async def put_compress_instructions(request: Request, _=Depends(require_login)):
-    """Save the override (user/prompts/compress_instructions.txt). Blank or
-    the default removes it."""
+async def put_compress_instructions(request: Request, kind: str = '', _=Depends(require_login)):
+    """Save the override (user/prompts/compress_instructions.txt, or
+    compact_daily_instructions.txt for kind=daily). Blank or the default
+    removes it."""
     from core.chat import compress
+    daily = kind == 'daily'
     text = ((await request.json()) or {}).get('instructions', '')
     if not isinstance(text, str):
         raise HTTPException(status_code=400, detail="instructions must be text")
     try:
-        compress.save_instructions(text)
+        compress.save_instructions(text, daily=daily)
+        return {"status": "success", "instructions": compress.load_instructions(daily=daily)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "success", "instructions": compress.load_instructions()}
+    except OSError as e:
+        raise HTTPException(status_code=503, detail=f"The instructions file could not be written ({e}). Try again.")
 
 
 @router.post("/api/chats/{chat_name}/trim")

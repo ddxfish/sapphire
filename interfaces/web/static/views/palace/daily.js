@@ -19,7 +19,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope, writerText } from './common.js';
+import { PALACE_TABS, PLUGIN_LAYERS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope, writerText } from './common.js';
 
 const LAYER = 'daily';
 const PAGE = 20;
@@ -41,6 +41,15 @@ export default {
     async show() {
         if (!unsub) unsub = subscribeMindDomain('memory', () => scope, () => container?.offsetParent !== null, () => load(false));
         await refreshPalaceTabs();
+        if (!PLUGIN_LAYERS.some(l => l.key === LAYER)) {
+            // The layer list is the palace's own route: no entry = it is off
+            // (or did not load). The menu item outlives a live switch-off.
+            if (container) container.innerHTML = `<div class="view-placeholder">
+                <h2>\u{1F4C5} Daily</h2>
+                <p style="color:var(--text-muted);font-size:var(--font-sm)">Mind Palace is off, so there are no day summaries to show. The days already kept are still stored and return when it is switched on again (Settings &rsaquo; Plugins).</p>
+            </div>`;
+            return;
+        }
         const s = recallMindScope() || await scopeForChatTab('memory_scope');
         if (s) scope = s;
         scopes = await listScopes(SCOPE_ENDPOINT);
@@ -69,7 +78,8 @@ function render() {
             </div>
         </div>`;
     bindSectionHeader(container);
-    const move = (s) => { scope = s || 'default'; rememberMindScope(scope); _search = ''; };
+    // A search typed just before the click must not fire into the new scope.
+    const move = (s) => { clearTimeout(_searchTimer); scope = s || 'default'; rememberMindScope(scope); _search = ''; };
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
         onScopeChange: (s) => { move(s); render(); },
@@ -110,8 +120,20 @@ async function load(more) {
         if (ticket === _ticket) list.innerHTML = `<div class="mind-empty">Failed to load: ${escHtml(e.message)}</div>`;
         return;
     }
-    const have = new Set(more ? _days.map(d => d.source) : []);
-    _days = (more ? _days : []).concat(got.filter(d => !have.has(d.source)));   // a day recorded meanwhile shifts the pages
+    const seen = new Set(), fresh = [];
+    for (const d of got) if (!seen.has(d.source)) { seen.add(d.source); fresh.push(d); }   // a long page comes in parts
+    if (more) {
+        // A day recorded or deleted meanwhile shifts every page: the next page
+        // then repeats a day or skips one, and the count no longer adds up
+        // (a "Load more (1 older)" that loaded nothing). Reload the whole list.
+        if (fresh.some(d => _days.some(x => x.source === d.source)) || total !== _total) {
+            _days = _days.concat(fresh.filter(d => !_days.some(x => x.source === d.source)));
+            return load(false);
+        }
+        _days = _days.concat(fresh);
+    } else {
+        _days = fresh;
+    }
     _total = total;
     paint(list, forScope);
 }
@@ -127,14 +149,15 @@ function dayCard(d) {
     const long = d.text.length > FOLD, open = _open.has(d.source);
     const chat = d.chat && d.chat !== '__private__' ? `<span class="palace-pill palace-pill-dim" title="The chat this day was compacted in">${escHtml(d.chat)}</span>` : '';
     const persona = d.persona ? `<span class="palace-pill palace-pill-dim" title="The persona whose day this is">${escHtml(d.persona)}</span>` : '';
-    const counts = [d.messages ? `${d.messages} messages` : '', `${d.parts} piece${d.parts === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+    const counts = d.messages ? `${d.messages} messages` : '';
     const meta = [];
-    const wrote = writerText(d.writer);
+    // A provider's model id can be a path ("accounts/x/models/glm-5p3"): the name is its last part.
+    const wrote = writerText(d.writer && { ...d.writer, model: d.writer.model ? String(d.writer.model).split('/').pop() : d.writer.model });
     if (wrote) meta.push(`<span class="palace-meta-kv">${escHtml(wrote)}</span>`);
     if (d.people.length) meta.push(`<b>people</b> ${d.people.map(n => `<span class="palace-pill">${escHtml(n)}</span>`).join('')}`);
     if (d.dates.length) meta.push(`<b>dates named</b> ${d.dates.map(n => `<span class="palace-pill palace-pill-dim">${escHtml(n)}</span>`).join('')}`);
-    const privTitle = d.private ? 'Private models only: not shown to a cloud model. Click to release this day to every model.'
-        : 'Shown to every model. Click to keep this day for private models only.';
+    const privTitle = d.private ? "Private models only: kept from any model not marked 'Local / private server' in Settings > LLM, while that filter is on (Mind > Settings). Click to show this day to every model."
+        : 'Shown to every model. Click to keep this day for models marked private.';
     return `
         <div class="ui-card palace-chunk" data-source="${escAttr(d.source)}" data-day="${escAttr(d.day)}">
             <button class="ui-card-x pal-day-del" title="Delete this day">✕</button>
@@ -154,12 +177,12 @@ function dayCard(d) {
 // never on whatever the sidebar says by the time it is clicked.
 function paint(list, forScope) {
     const count = container.querySelector('#pal-daily-count');
-    if (count) count.textContent = `${_total} day${_total === 1 ? '' : 's'} in scope`;
+    if (count) count.textContent = `${_total} day${_total === 1 ? '' : 's'}${_search ? ' match' : ' in scope'}`;
     const top = list.closest('.view-scroll')?.scrollTop;
     list.innerHTML = `
         ${_days.length
             ? `<div class="palace-chunk-list">${_days.map(dayCard).join('')}</div>`
-            : `<div class="mind-empty">${_search ? 'No days match' : 'No days kept yet. When a chat is compacted by day (/compact-daily, by hand or from her nightly task), each finished day’s summary is kept here.'}</div>`}
+            : `<div class="mind-empty">${_search ? 'No days match' : 'No day summaries in this scope yet. Type /compact-daily in a chat that uses this scope: each finished day gets a summary, and it is kept here. To do it every night, schedule a task that runs /compact-daily a few minutes after the day-start hour (docs: Slash commands, "Every night"). Keeping them can be switched off in Mind › Settings › Memories.'}</div>`}
         ${_days.length < _total
             ? `<div class="palace-more-wrap"><button class="mind-btn" id="pal-daily-more">Load more (${_total - _days.length} older)</button></div>`
             : ''}`;
@@ -180,7 +203,7 @@ function paint(list, forScope) {
             load(false);
         });
         card.querySelector('.pal-day-del')?.addEventListener('click', () => {
-            showConfirm(`Delete ${dayLabel(card.dataset.day)} from daily memory? It is not recorded again, even while the chat still holds that day's summary.`, async () => {
+            showConfirm(`Delete the day summary for ${dayLabel(card.dataset.day)} from memory? This can't be undone: it is not saved again and an import does not bring it back. The summary in the chat, if it is still there, stays.`, async () => {
                 try {
                     await palaceSend(`days?${new URLSearchParams({ scope: forScope, source })}`, 'DELETE');
                     _open.delete(source);

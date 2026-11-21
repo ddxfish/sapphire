@@ -83,9 +83,35 @@ def _speaker_label(m: Dict[str, Any], persona: str, room: bool) -> str:
     return role.upper()
 
 
+def _keyed_calls(msgs: List[Dict[str, Any]]) -> set:
+    """Ids of the tool calls made with a private_key. What such a call read is
+    kept behind that key; a summary carries no key, and a day's summary is
+    kept in memory for every reader of the scope (2026-11-20). Arguments that
+    cannot be read but name the key count as keyed."""
+    ids = set()
+    for m in msgs:
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            if not isinstance(tc, dict) or not tc.get("id"):
+                continue
+            args = (tc.get("function") or {}).get("arguments")
+            try:
+                parsed = json.loads(args) if isinstance(args, str) else args
+                keyed = isinstance(parsed, dict) and bool(str(parsed.get("private_key") or "").strip())
+            except ValueError:
+                keyed = "private_key" in str(args)
+            if keyed:
+                ids.add(tc["id"])
+    return ids
+
+
 def render_transcript(msgs: List[Dict[str, Any]], persona: str = "", room: bool = False) -> str:
-    """Render messages as a plain transcript for the summarizer."""
+    """Render messages as a plain transcript for the summarizer. The result of
+    a tool call made with a private_key is withheld: her own words about what
+    she read stay, as ordinary chat text."""
     from core.chat.llm_errors import is_error_row
+    keyed = _keyed_calls(msgs)
     lines = []
     for m in msgs:
         if is_error_row(m):
@@ -97,6 +123,8 @@ def render_transcript(msgs: List[Dict[str, Any]], persona: str = "", room: bool 
                               for tc in m["tool_calls"] if isinstance(tc, dict))
             text = f"{text}\n[called tools: {names}]".strip()
         elif role == "tool":
+            if m.get("tool_call_id") in keyed:
+                text = "[withheld: read with a private key]"
             text = f"({m.get('name', 'tool')} result) {text}"
         lines.append(f"{_speaker_label(m, persona, room)}: {text}")
     return "\n\n".join(lines)
@@ -206,47 +234,71 @@ _MERGE_FRAME = (
     "PARTIAL SUMMARIES:\n{text}"
 )
 
-# A day's summary only (it rides the frame, never the editable instructions,
-# so an instructions override cannot lose it). The size is a ceiling: said as
-# a size alone, models fill it on a quiet day.
+# A day's summary only. Two parts. _DAILY_CLAUSE is mechanics and stays in
+# code: what the size means and what the transcript's labels mean. An edit can
+# never lose those. DAILY_INSTRUCTIONS is how she writes a day and what she
+# leaves out: the person edits it (Settings > Tools > Daily Compact), stored
+# like the instructions above and kept only while it differs from the default.
 _DAILY_CLAUSE = (
     " That size is a ceiling, not a goal: write only as much as the day needs, "
-    "and a quiet day may take a few hundred tokens. Write tight prose in "
-    "your own voice: whatever you choose to keep, say it once, in plain "
-    "words, without padding, and never in shorthand or abbreviations. Lines "
-    "labelled SCHEDULED "
-    "TASK are automatic jobs, not the USER speaking: leave a task that found "
-    "or changed nothing out entirely, without a word that it ran, and keep "
-    "one only when something came of it."
+    "and a quiet day may take a few hundred tokens. Lines labelled SCHEDULED "
+    "TASK are automatic jobs, not the USER speaking."
+)
+
+DAILY_INSTRUCTIONS = (
+    "Write tight prose in the first person: whatever is kept, say it once, in "
+    "plain words, without padding, and never in shorthand or abbreviations. "
+    "Give each topic its own paragraph and name its people and things in it, "
+    "not \"he\" or \"that\": a paragraph may later be read on its own. Write "
+    "dates as dates (Saturday, November 21), not \"tomorrow\". Leave a "
+    "scheduled task that found or changed nothing out entirely, without a "
+    "word that it ran, and keep one only when something came of it. Do not "
+    "recount tool housekeeping either (that a memory was saved, searched or "
+    "read): keep what was learned or decided, not that it was stored."
 )
 
 INSTRUCTIONS_PATH = Path(__file__).parent.parent.parent / "user" / "prompts" / "compress_instructions.txt"
+DAILY_INSTRUCTIONS_PATH = INSTRUCTIONS_PATH.with_name("compact_daily_instructions.txt")
 MAX_INSTRUCTIONS_CHARS = 8000
 
 
-def load_instructions() -> str:
+def _instructions_file(daily: bool):
+    """(path, default) of the editable text: the compress instructions, or
+    the day-summary ones. Read at call time: tests point the paths elsewhere."""
+    return (DAILY_INSTRUCTIONS_PATH, DAILY_INSTRUCTIONS) if daily else (INSTRUCTIONS_PATH, DEFAULT_INSTRUCTIONS)
+
+
+def load_instructions(daily: bool = False) -> str:
     """The person's override, else the default. An unreadable override raises
     (the job fails loud) rather than quietly summarizing in the wrong voice."""
+    path, default = _instructions_file(daily)
     try:
-        text = INSTRUCTIONS_PATH.read_text(encoding="utf-8").strip()
+        # utf-8-sig: Notepad's "UTF-8 with BOM" would otherwise put an
+        # invisible character at the head of the prompt.
+        text = path.read_text(encoding="utf-8-sig").strip()
     except FileNotFoundError:
-        return DEFAULT_INSTRUCTIONS
-    return text or DEFAULT_INSTRUCTIONS
+        return default
+    except UnicodeDecodeError:
+        raise ValueError(f"{path.name} in user/prompts is not saved as UTF-8 (an editor saved it as ANSI). "
+                         f"Save it as UTF-8, or reset the text in the app.") from None
+    return text or default
 
 
-def save_instructions(text: str) -> None:
+def save_instructions(text: str, daily: bool = False) -> None:
     """Keep the override only while it differs from the default, so a later
     fix to the default still reaches everyone who never edited it."""
+    path, default = _instructions_file(daily)
     text = (text or "").strip()
     if len(text) > MAX_INSTRUCTIONS_CHARS:
         raise ValueError(f"Instructions must be under {MAX_INSTRUCTIONS_CHARS} characters")
-    if not text or text == DEFAULT_INSTRUCTIONS:
-        INSTRUCTIONS_PATH.unlink(missing_ok=True)
+    if not text or text == default:
+        path.unlink(missing_ok=True)
         return
-    INSTRUCTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = INSTRUCTIONS_PATH.with_suffix(".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, INSTRUCTIONS_PATH)
+    from core.fs_utils import replace_with_retry     # Windows: an indexer or scanner may hold the file a moment
+    replace_with_retry(tmp, path)
 
 
 def _guide(instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "") -> Dict[str, str]:
@@ -328,16 +380,19 @@ def _merge_partials(provider, partials: List[str], target_tokens: int,
 def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
                       target_tokens: int, on_progress=None,
                       instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
-                      room: bool = False, day: Optional[date] = None) -> List[Dict[str, Any]]:
+                      room: bool = False, day: Optional[date] = None,
+                      daily_instructions: str = DAILY_INSTRUCTIONS) -> List[Dict[str, Any]]:
     """Compress `head` into synthetic summary pairs. Pure of storage —
     testable with a mock provider. on_progress(str) narrates for job status.
-    day (whole mode): the pair is that day's summary."""
+    day (whole mode): the pair is that day's summary, written by the day
+    wording (daily_instructions) on top of `instructions`."""
     chunks = chunk_by_turns(head, CHUNK_INPUT_TOKENS)  # module global: patchable
     if not chunks:
         return []
     guide = _guide(instructions, persona)
     if day:
-        guide["voice"] += f" The conversation took place on {day_label(day)}." + _DAILY_CLAUSE
+        guide["voice"] += (f" The conversation took place on {day_label(day)}." + _DAILY_CLAUSE
+                           + " " + (daily_instructions or DAILY_INSTRUCTIONS).strip())
     if mode == "chunked":
         per = max(MIN_PAIR_TOKENS, target_tokens // len(chunks))
         pairs = []
@@ -373,11 +428,11 @@ def day_of(ts, start_hour: int = 0) -> Optional[date]:
     turn is still last night). Unreadable → None."""
     try:
         t = datetime.fromisoformat(str(ts))
-    except (TypeError, ValueError):
+        if t.tzinfo:
+            t = t.astimezone().replace(tzinfo=None)     # pre-1970 raises OSError on Windows
+        return (t - timedelta(hours=start_hour)).date()
+    except (TypeError, ValueError, OSError, OverflowError):
         return None
-    if t.tzinfo:
-        t = t.astimezone().replace(tzinfo=None)
-    return (t - timedelta(hours=start_hour)).date()
 
 
 def _stamped_day(rows) -> Optional[date]:
@@ -430,7 +485,7 @@ def daily_plan(head: List[Dict[str, Any]], days: int, start_hour: int,
 
 def daily_pairs(plan: Dict[str, Any], provider, target_tokens: int, on_progress=None,
                 instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
-                room: bool = False) -> List[Dict[str, Any]]:
+                room: bool = False, daily_instructions: str = DAILY_INSTRUCTIONS) -> List[Dict[str, Any]]:
     """One new pair per finished day of raw turns, merged in day order with
     the kept pairs and today's turns (raw, as they were)."""
     items = list(plan["kept"]) + list(plan.get("today") or [])
@@ -440,7 +495,7 @@ def daily_pairs(plan: Dict[str, Any], provider, target_tokens: int, on_progress=
             on_progress(f"day {i + 1}/{len(days)}")
         items.append((day, start, compress_messages(
             rows, "whole", provider, target_tokens, instructions=instructions,
-            persona=persona, room=room, day=day)))
+            persona=persona, room=room, day=day, daily_instructions=daily_instructions)))
     items.sort(key=lambda it: (it[0], it[1]))
     return [m for _, _, rows in items for m in rows]
 
@@ -490,6 +545,9 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
         chat_settings, _private = {}, True
     room = chat_settings.get("mode") == "room"
     instructions = ROOM_INSTRUCTIONS if room else load_instructions()
+    # Read here, with the other text: an unreadable file fails the job before
+    # the backup is written (it was read after, and left a backup every night).
+    day_wording = load_instructions(daily=True) if mode == "daily" else DAILY_INSTRUCTIONS
     plan = None
     if mode == "daily":
         import config
@@ -505,7 +563,8 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
                              private=_private)  # fail BEFORE any LLM spend
     if plan is not None:
         pairs = daily_pairs(plan, provider, int(target_tokens), on_progress=on_progress,
-                            instructions=instructions, persona="" if room else persona, room=room)
+                            instructions=instructions, persona="" if room else persona, room=room,
+                            daily_instructions=day_wording)
     else:
         pairs = compress_messages(head, mode, provider, int(target_tokens),
                                   on_progress=on_progress, instructions=instructions,

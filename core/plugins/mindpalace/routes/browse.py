@@ -462,7 +462,8 @@ def list_entities(query=None, **_):
         rows = cur.execute(
             'SELECT e.id, e.name, e.kind, e.mentions, e.meta, e.created, e.updated, '
             '  (SELECT COUNT(*) FROM chunks c WHERE c.entity_id = e.id) AS chunk_count, '
-            "  (SELECT COUNT(*) FROM edges d WHERE d.dst_type = 'entity' AND d.dst_id = e.id) AS edge_count, "
+            "  (SELECT COUNT(*) FROM edges d WHERE d.dst_type = 'entity' AND d.dst_id = e.id "
+            "   AND d.kind != 'retells') AS edge_count, "
             '  (SELECT content FROM chunks c WHERE c.entity_id = e.id AND c.tier = 1 '
             "   ORDER BY COALESCE(json_extract(c.meta, '$.headline'), 0) DESC, "
             '   c.created DESC LIMIT 1) AS headline, '
@@ -504,6 +505,7 @@ def entity_detail(eid=None, **_):
             f"SELECT c.id, c.layer, c.content, c.created, d.weight "
             f"FROM edges d JOIN chunks c ON c.id = d.src_id "
             f"WHERE d.dst_type = 'entity' AND d.dst_id = ? AND d.src_type = 'chunk' "
+            f"AND d.kind != 'retells' "      # a day that names them is not a memory of them (tools/daily.py)
             f"{dark_and}"
             f"ORDER BY c.created DESC LIMIT 100", [eid, *dark_params]).fetchall()
     return {
@@ -1442,6 +1444,9 @@ def maintenance(body=None, **_):
             return {'error': f"unknown layer '{layer}'"}, 400
         with pt._get_connection() as conn:
             cur = conn.cursor()
+            if layer == 'daily':    # "permanently delete": none of these days is recorded again
+                from plugins.mindpalace.tools import daily
+                daily.mark_gone(cur, scope)
             cur.execute(
                 "DELETE FROM edges WHERE "
                 "(src_type = 'chunk' AND src_id IN "
@@ -1470,9 +1475,7 @@ def maintenance(body=None, **_):
                 import_tools.forget_seen(cur, scope, layer=layer)
             except Exception as e:
                 logger.warning(f"[MINDPALACE] clear: import_seen reset skipped: {e}")
-            if layer == 'daily':    # a reset, like the import marks: days still in a chat are recorded again
-                from plugins.mindpalace.tools import daily
-                daily.reset(cur, scope)
+
             try:
                 from plugins.mindpalace.tools import ledger as lg
                 lg.record(scope, 'user', 'cleared', layer=layer,
@@ -1507,6 +1510,10 @@ def maintenance(body=None, **_):
             return {'error': 'confirm must equal the scope name exactly'}, 400
         with pt._get_connection() as conn:
             cur = conn.cursor()
+            # The wiped days are not recorded again ("Delete ALL memories"):
+            # unlike the classic rows below, nothing re-imports a day on purpose.
+            from plugins.mindpalace.tools import daily
+            daily.mark_gone(cur, scope)
             cur.execute(
                 "DELETE FROM edges WHERE "
                 "(src_type = 'chunk' AND src_id IN (SELECT id FROM chunks WHERE scope = ?)) "
@@ -1530,11 +1537,7 @@ def maintenance(body=None, **_):
                 import_tools.forget_seen(cur, scope)
             except Exception as e:
                 logger.warning(f"[MINDPALACE] wipe: import_seen reset skipped: {e}")
-            try:    # same for days deleted by hand: the next compact records what its chat still holds
-                from plugins.mindpalace.tools import daily
-                daily.reset(cur, scope)
-            except Exception as e:
-                logger.warning(f"[MINDPALACE] wipe: deleted-day marks not cleared: {e}")
+
             pt._ledger(scope, 'user', 'maintenance', cursor=cur,
                        summary=(f"wiped scope: {chunks} memories, {ents} entities, "
                                 f"{edges} connections deleted"))

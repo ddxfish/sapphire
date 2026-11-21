@@ -49,6 +49,10 @@ ROW_CAP = 500_000
 
 _lock = threading.Lock()    # one recorder at a time
 _stopping = False           # the palace is unloading: no new writes
+_index_tried = set()        # the databases whose piece index was tried (once per run each)
+WHY_MODEL = "the chat's model could not be resolved"
+WHY_CHANGED = 'the chat changed while its days were being recorded'
+WHY_FULL = 'the daily layer of this scope is full'
 
 
 def _pt():
@@ -164,7 +168,7 @@ def _user_tz():
     try:
         return ZoneInfo(getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC')
     except Exception:
-        return ZoneInfo('UTC')
+        return timezone.utc                 # needs no tz database (Windows without tzdata)
 
 
 def _created(day: str) -> str:
@@ -234,13 +238,25 @@ def _tables(cursor):
     cursor.execute('CREATE TABLE IF NOT EXISTS daily_gone (scope TEXT NOT NULL, source TEXT NOT NULL, '
                    'gone TEXT NOT NULL, PRIMARY KEY (scope, source))')
     try:
+        db = str(_pt()._get_db_path())
+    except Exception:
+        db = ''
+    if db in _index_tried:
+        return
+    _index_tried.add(db)
+    try:
         # One row per piece of a day, whoever writes it (a second recorder, an
         # import): the lock is a courtesy, this is the rule. It is also the
         # index every read of a day uses.
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_daily_piece "
                        "ON chunks(scope, source, chunk_index) WHERE layer = 'daily'")
     except Exception as e:
-        logger.warning(f"[DAILY] the day index could not be made (duplicate pieces already stored?): {e}")
+        # Tried once per run, said once. Nothing here removes the doubled
+        # pieces: rows already in her memory are not ours to delete. Until a
+        # person deletes that day in Mind > Daily, the recorder's lock is the
+        # only guard against a second copy.
+        logger.error(f"[DAILY] the one-row-per-piece index could not be made: a day is stored twice "
+                     f"(same scope, day and piece). Delete that day in Mind > Daily and restart. {e}")
 
 
 def record_chat(chat, sm=None, pt=None) -> dict:
@@ -283,7 +299,7 @@ def _record(pt, sm, scope, chat, settings, pairs):
             return [], ''
         writer = chat_writer(chat, settings)        # only now: most chats have nothing new
         if writer is None:
-            return [], "the chat's model could not be resolved"
+            return [], WHY_MODEL
         held = cur.execute("SELECT COUNT(*) FROM chunks WHERE scope = ? AND layer = 'daily'",
                            (scope,)).fetchone()[0]
         try:
@@ -314,7 +330,7 @@ def _record(pt, sm, scope, chat, settings, pairs):
             # while this ran: the check that let us read it is made again at
             # the moment of writing. Not committed = not written.
             if _stopping or chat_scope(sm, chat)[0] != scope:
-                return [], 'the chat changed while its days were being recorded'
+                return [], WHY_CHANGED
             days = sorted(set(new))
             pt._ledger(scope, 'system', 'recorded', layer=LAYER, cursor=cur, private=private,
                        summary=(f"{len(new)} day{'s' if len(new) != 1 else ''} kept in daily memory: "
@@ -328,25 +344,42 @@ def _record(pt, sm, scope, chat, settings, pairs):
         except Exception as e:
             logger.debug(f"[DAILY] embedding sweep not started: {e}")
         logger.info(f"[DAILY] recorded {len(new)} day(s) in scope '{scope}'")
-    _tell_cap(held, full)
-    return new, ('the daily layer of this scope is full' if full and not new else '')
+    _tell_cap(scope, held, full)
+    if new:
+        _tell_first()
+    return new, (WHY_FULL if full and not new else '')
 
 
-def _tell_cap(held, full):
+def _tell_first():
+    """Once ever, the first time a day is kept: the person updated, restarted,
+    and summaries of their conversations are now in memory. They are told
+    what, where, who can read it and where the switch is."""
+    try:
+        from core import notify
+        notify.notify('Day summaries are now kept in memory', level='info', source='mindpalace',
+                      key='daily-intro', once=True, go={'view': 'layer-daily'},
+                      body="Each finished day that /compact-daily summarized is also saved to that chat's "
+                           'memory scope, where every chat on the same scope can find it. See them in '
+                           "Mind > Daily. The switch is Mind > Settings > Memories > Keep each day's summary.")
+    except Exception as e:
+        logger.debug(f"[DAILY] first-day notice skipped: {e}")
+
+
+def _tell_cap(scope, held, full):
     try:
         if not full and held < ROW_CAP * 0.8:
             return
         from core import notify
         if full:
-            notify.notify('Daily memory is full', level='warning', source='mindpalace', key='daily-full',
-                          body=f"A memory scope holds {held:,} pieces of day summaries, the most it keeps. "
-                               'New days are NOT being recorded. Delete old days in Mind > Daily to make room.',
-                          go={'view': 'layer-daily'})
+            notify.notify(f"Day summaries are full in scope '{scope}'", level='warning', source='mindpalace',
+                          key='daily-full', go={'view': 'layer-daily'},
+                          body=f"New days are not being saved there. Delete old days in Mind > Daily "
+                               f"(scope '{scope}') to make room.")
         else:
-            notify.notify('Daily memory is four fifths full', level='warning', source='mindpalace',
-                          key='daily-cap-80', once=True,
-                          body=f"A memory scope holds {held:,} of {ROW_CAP:,} pieces of day summaries. "
-                               'When it is full, new days stop being recorded.', go={'view': 'layer-daily'})
+            notify.notify(f"Day summaries are 80% full in scope '{scope}'", level='warning',
+                          source='mindpalace', key='daily-cap-80', once=True, go={'view': 'layer-daily'},
+                          body='When it is full, new days stop being saved there. Old days can be deleted '
+                               f"in Mind > Daily (scope '{scope}').")
     except Exception as e:
         logger.debug(f"[DAILY] cap notice skipped: {e}")
 
@@ -422,6 +455,11 @@ def import_days(pt, cur, scope, chunks, src_scope, now) -> dict:
                 or not isinstance(c.get('content'), str) or not c['content'].strip():
             skipped += 1
             continue
+        try:
+            date.fromisoformat(src[4:14])   # the identity names its day: a file is untrusted
+        except ValueError:
+            skipped += 1
+            continue
         days.setdefault(src, []).append(c)
     try:
         arows = md.entity_aliases(cur, scope)
@@ -440,7 +478,8 @@ def import_days(pt, cur, scope, chunks, src_scope, now) -> dict:
         for i, c in enumerate(rows):
             meta = dict(c['meta']) if isinstance(c.get('meta'), dict) else {}
             for k in ('librarian_at', 'temporal_at', 'link_at', 'dedup_at', 'derived_from',
-                      'promoted_to', 'import_key', 'library_migrated'):
+                      'promoted_to', 'import_key', 'library_migrated', 'superseded_at', 'pruned_at',
+                      'pruned_reason', 'section'):     # keys that would hide the row from every read
                 meta.pop(k, None)
             meta['import_src'] = src_scope
             meta['part'], meta['parts'] = i, len(rows)
@@ -479,17 +518,24 @@ def sweep(chats=None, sm=None) -> dict:
         if _stopping:
             break
         try:
-            days += len(record_chat(chat, sm)['days'])
+            out = record_chat(chat, sm)
+            days += len(out['days'])
+            # A skip that leaves a day unrecorded is a failure to the person:
+            # it repeats silently until the day rolls off the chat.
+            if out['skipped'] in (WHY_MODEL, WHY_CHANGED):
+                failed += 1
+                logger.warning(f"[DAILY] a chat's days were not recorded: {out['skipped']}")
         except Exception:
             failed += 1
             logger.exception('[DAILY] a chat\'s days could not be recorded')   # no chat name: it may be private
     if failed:
         try:
             from core import notify
-            notify.notify("A day's summary was not saved to memory", level='warning', source='mindpalace',
-                          key='daily-record', body='The chat was compacted; its days were not recorded. '
-                          'It is tried again when Sapphire next starts and at that chat\'s next daily '
-                          'compact, while the chat still holds the day. See the log.')
+            notify.notify('Some day summaries were not saved to memory', level='warning',
+                          source='mindpalace', key='daily-record',
+                          body='They stay in their chat and are tried again at the next start and the next '
+                               'daily compact, until they roll off the chat. The reason is in the log '
+                               '(search for [DAILY]).')
         except Exception:
             pass
     return {'days': days, 'failed': failed}
@@ -600,9 +646,10 @@ _ISO = r'\d{4}-\d{2}-\d{2}'
 _DAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
 _MONTHS = ('january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september',
            'october', 'november', 'december')
-SPAN_FORMS = ("a date (2026-11-02 or Nov 2), a range (2026-11-02..2026-11-09), a month (2026-11), "
-              "a weekday (Monday = the last one), or today, yesterday, 3 days ago, this week, "
-              "last week, this month, last month, last N days")
+SPAN_FORMS = ("a date (2026-11-02 or Nov 2), a range (2026-11-02..2026-11-09), a month (2026-11 or "
+              "November), a year (2026), a weekday (Monday = the last one), or today, yesterday, "
+              "3 days ago, this week, last week, past week, this month, last month, last N days. "
+              "Leave day out to search all time")
 
 
 def _today() -> date:
@@ -623,10 +670,30 @@ def _month_day(t, today):
     months = [i for i, full in enumerate(_MONTHS, 1) if full.startswith(name)]
     if len(months) != 1:
         return None
-    d = date(int(year) if year else today.year, months[0], int(day))
-    if not year and d > today:
-        d = d.replace(year=d.year - 1)      # a bare "Nov 2" asked in memory is the last one
-    return d
+    if year:
+        return date(int(year), months[0], int(day))
+    for y in range(today.year, today.year - 9, -1):     # the last such day: "Feb 29" may be years back
+        try:
+            d = date(y, months[0], int(day))
+        except ValueError:
+            continue
+        if d <= today:
+            return d
+    raise ValueError(t)
+
+
+def _month(t, today):
+    """'november', 'nov', 'nov 2026': (first, last) of that month, the last
+    such month when no year is said. None when t is not that."""
+    m = re.fullmatch(r'([a-z]{3,9})\.?(?:,? (\d{4}))?', t)
+    if not m:
+        return None
+    months = [i for i, full in enumerate(_MONTHS, 1) if full.startswith(m[1])]
+    if len(months) != 1:
+        return None
+    year = int(m[2]) if m[2] else (today.year if months[0] <= today.month else today.year - 1)
+    first = date(year, months[0], 1)
+    return first, (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
 
 def parse_span(text, today=None):
@@ -635,15 +702,21 @@ def parse_span(text, today=None):
     guess that lands on the wrong day returns "nothing that day" and she has
     no error to correct from (the first version read "Monday" as a date a
     year back)."""
-    t = ' '.join(str(text or '').strip().lower().split())
+    t = ' '.join(str(text or '').strip().lower().split()).rstrip('.,;!?')
     if not t:
         return None, None
     today = today or _today()
+    # A weekday in front of a date is what she is SHOWN ("Mon 2026-11-16",
+    # "Monday, November 16, 2026" in the chat's own marker): it is dropped,
+    # the date decides.
+    lead = re.match(r'([a-z]{3,9}),? (?=\d|[a-z]{3,9}\.? \d)', t)
+    if lead and any(full.startswith(lead[1]) for full in _DAYS):
+        t = t[lead.end():]
 
     def one(d):
         return (d, d), None
     try:
-        m = re.fullmatch(rf'({_ISO})\s*(?:\.\.+|to|through|until|-)\s*({_ISO})', t)
+        m = re.fullmatch(rf'(?:from |between )?({_ISO})\s*(?:\.\.+|to|through|until|and|-|\u2013|\u2014)\s*({_ISO})', t)
         if m:
             a, b = date.fromisoformat(m[1]), date.fromisoformat(m[2])
             return (min(a, b), max(a, b)), None
@@ -652,6 +725,12 @@ def parse_span(text, today=None):
         if re.fullmatch(r'\d{4}-\d{2}', t):
             a = date.fromisoformat(t + '-01')
             return (a, (a.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)), None
+        if re.fullmatch(r'\d{4}', t) and 1970 <= int(t) <= today.year:
+            return (date(int(t), 1, 1), min(date(int(t), 12, 31), today)), None
+        if t == 'this year':
+            return (date(today.year, 1, 1), today), None
+        if t == 'last year':
+            return (date(today.year - 1, 1, 1), date(today.year - 1, 12, 31)), None
         if t == 'today':
             return one(today)
         if t == 'yesterday':
@@ -661,6 +740,10 @@ def parse_span(text, today=None):
         m = re.fullmatch(r'(\d{1,3}) days? ago', t)
         if m:
             return one(today - timedelta(days=int(m[1])))
+        if t in ('a week ago', '1 week ago', 'one week ago'):
+            return one(today - timedelta(days=7))
+        if t in ('past week', 'the past week', 'this past week', 'the last week'):
+            return (today - timedelta(days=7), today), None
         m = re.fullmatch(r'(?:the )?(?:last|past) (\d{1,3}) days?', t)
         if m and int(m[1]) > 0:
             return (today - timedelta(days=int(m[1])), today), None
@@ -682,7 +765,10 @@ def parse_span(text, today=None):
         d = _month_day(t, today)
         if d:
             return one(d)
-    except ValueError:
+        whole = _month(t, today)
+        if whole:
+            return whole, None
+    except (ValueError, OverflowError):
         return None, f"'{text}' is not a real date. day takes {SPAN_FORMS}."
     return None, f"Could not read day '{text}'. day takes {SPAN_FORMS}."
 
@@ -695,17 +781,23 @@ def span_bounds(span):
     tz = _user_tz()
 
     def at(d):
-        return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc).isoformat(timespec='seconds')
-    return at(span[0]), at(span[1] + timedelta(days=1)), span[0].isoformat(), span[1].isoformat()
+        try:
+            return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc).isoformat(timespec='seconds')
+        except (OverflowError, OSError, ValueError):    # the edge of the calendar: as far as a timestamp goes
+            return f"{d.isoformat()}T00:00:00+00:00"
+    last = min(span[1], date(9999, 12, 30))             # one more day must still be a date
+    return at(span[0]), at(last + timedelta(days=1)), span[0].isoformat(), span[1].isoformat()
 
 
 # ─── Reading ─────────────────────────────────────────────────────────────────
 
 def day_label(day: str) -> str:
-    """'Mon Nov 2 2026'. By hand: no %-d (Windows), ASCII (cp1252)."""
+    """'Mon 2026-11-02': the weekday for her, and a date she can hand
+    straight back as `day` (the label "Mon Nov 2 2026" was refused by the
+    very argument it was shown for; her AIX scout, 2026-11-21)."""
     try:
         d = date.fromisoformat(str(day)[:10])
-        return f"{d:%a} {d:%b} {d.day} {d.year}"
+        return f"{d:%a} {d.isoformat()}"
     except (TypeError, ValueError):
         return str(day)
 
@@ -838,6 +930,28 @@ def shape(cur, pt, hit_ids, scope, private_key, days, chars, span=None):
 DOOR = "A whole day in order: get_recent_memories(layer='daily', day='YYYY-MM-DD')."
 
 
+def door(lines=()) -> str:
+    """The door line, with the first shown day's own date in it."""
+    m = re.search(r'\[daily\] [A-Z][a-z]{2} (\d{4}-\d{2}-\d{2})', lines[0]) if lines else None
+    return DOOR.replace('YYYY-MM-DD', m[1]) if m else DOOR
+
+
+def _kept_from(pt, cur, scope, private_key, span=None) -> str:
+    """For a cloud reader: how many days of this read are kept for private
+    models. Said only where she ASKED for days ("No days recorded" was false
+    when they were all a private model's); never under an ordinary search."""
+    try:
+        if pt.reader_private():
+            return ''
+        where, params = pt._read_filters(scope, [], private_key, LAYER, hidden=True, span=span)
+        n = cur.execute(f"SELECT COUNT(DISTINCT c.source) FROM chunks c WHERE {where} "
+                        f"AND c.layer = 'daily'", params).fetchone()[0]
+        return f" {n} day{'s' if n != 1 else ''} here {'are' if n != 1 else 'is'} kept for private models." if n else ''
+    except Exception as e:
+        logger.debug(f"[DAILY] private-day count skipped: {e}")
+        return ''
+
+
 def _hits(pt, query, scope, private_key, labels, span, fetch, loose):
     """The palace's cascade over this layer: exact words, loose words, meaning;
     the first that finds anything answers. loose=False skips the middle step:
@@ -893,11 +1007,19 @@ def search(query, scope, private_key=None, labels=(), span=None, days=MIXED_DAYS
 def search_text(query, scope, limit=10, private_key=None, labels=(), span=None, depth=0, pt=None) -> str:
     """search_memory(layer='daily')."""
     pt = pt or _pt()
-    lines, seeds = search(query, scope, private_key, labels, span, days=limit, chars=LAYER_CHARS,
+    try:
+        days = max(1, min(int(limit or 10), 10))        # each day shows at least its best piece: 50 days blew the budget
+    except (TypeError, ValueError):
+        days = 10
+    lines, seeds = search(query, scope, private_key, labels, span, days=days, chars=LAYER_CHARS,
                           pt=pt, loose=True)
     if not lines:
-        return f"No days found for '{query}'" + (' in that range.' if span else '.')
-    out = f"Found {len(lines)} day{'s' if len(lines) != 1 else ''}:\n" + "\n".join(lines) + "\n" + DOOR
+        with pt._get_connection() as conn:
+            kept = _kept_from(pt, conn.cursor(), scope, private_key, span)
+        if not kept and not has_days(scope, pt):
+            return 'No days are kept in this memory yet.'
+        return f"No days found for '{query}'" + (' in that range.' if span else '.') + kept
+    out = f"Found {len(lines)} day{'s' if len(lines) != 1 else ''}:\n" + "\n".join(lines) + "\n" + door(lines)
     if depth and seeds:
         block = pt._spider_block(query, scope, private_key, seeds, depth)
         if block:
@@ -915,43 +1037,64 @@ def _sources(cur, pt, scope, private_key, span, count):
 
 
 def recent_text(scope, count=10, private_key=None, span=None, pt=None) -> str:
-    """get_recent_memories(layer='daily'). With `day`: those days whole and in
-    order while they fit READ_CHARS. Otherwise (or when they do not fit) the
-    index: one line per day, the door to each."""
+    """get_recent_memories(layer='daily'). Without `day`: the index, one line
+    per recent day. With `day`: those days whole and in order, as many as fit
+    READ_CHARS (always the first, however long: one date must be readable),
+    and the rest as index lines. The old rule showed nothing whole once the
+    total was over budget, and told her to make the same call again."""
     pt = pt or _pt()
     with pt._get_connection() as conn:
         cur = conn.cursor()
         found = _sources(cur, pt, scope, private_key, span, 400 if span else count)
-        if not found:
-            return 'No days recorded' + (' in that range.' if span else ' yet.')
-        full = _pieces(cur, pt, scope, private_key, [s for s, _ in found])
-    found = [(s, n) for s, n in found if full.get(s)]
-    if span and sum(len(r[1]) for s, _ in found for r in full[s]) <= READ_CHARS:
-        blocks = [f"{_head(s, full[s])}\n{_stitch(full[s], range(len(full[s])))}" for s, _ in reversed(found)]
-        return "\n\n".join(blocks)
-    lines = []
-    for s, _ in found[:count]:
+        kept = _kept_from(pt, cur, scope, private_key, span)
+        full = _pieces(cur, pt, scope, private_key, [s for s, _ in found]) if found else {}
+    found = [s for s, _ in found if full.get(s)]
+    if not found:
+        note = ''
+        if span and span[3] >= _today().isoformat():
+            note = ' A day is summarized after it ends: today is still in the chat.'
+        return ('No days recorded' + (' in that range.' if span else ' yet.')) + note + kept
+
+    def index_line(s):
         rows = full[s]
         first = ' '.join(rows[0][1].split())
         if len(first) > INDEX_CHARS:
             first = (first[:INDEX_CHARS].rsplit(' ', 1)[0] or first[:INDEX_CHARS]) + '...'
         one = len(rows) == 1 and _whole(rows) and not first.endswith('...')
-        lines.append(f"{_head(s, rows)} [{'whole day' if one else 'beginning'}] {first}")
-    more = len(found) - len(lines)
-    head = (f"{len(found)} days in that range are too long to show whole. " if span else '') \
-        + f"{'Newest ' if not span else ''}{len(lines)} day{'s' if len(lines) != 1 else ''}"
-    return (f"{head}:\n" + "\n".join(lines)
-            + (f"\n({more} more: narrow the day.)" if more > 0 else '') + "\n" + DOOR)
+        return f"{_head(s, rows)} [{'whole day' if one else 'beginning'}] {first}"
+
+    if not span:
+        lines = [index_line(s) for s in found[:count]]
+        return (f"Newest {len(lines)} day{'s' if len(lines) != 1 else ''}:\n" + "\n".join(lines)
+                + "\n" + door(lines) + kept)
+    whole, used = [], 0
+    for s in reversed(found):                           # oldest first: a span reads forward
+        size = sum(len(r[1]) for r in full[s])
+        if whole and used + size > READ_CHARS:
+            break
+        whole.append(s)
+        used += size
+    out = "\n\n".join(f"{_head(s, full[s])}\n{_stitch(full[s], range(len(full[s])))}" for s in whole)
+    rest = [s for s in reversed(found) if s not in whole]
+    if rest:
+        lines = [index_line(s) for s in rest[:count]]
+        more = len(rest) - len(lines)
+        out += (f"\n\n{len(rest)} more day{'s' if len(rest) != 1 else ''} in that range did not fit:\n"
+                + "\n".join(lines) + (f"\n({more} more.)" if more > 0 else '')
+                + "\nRead one with its own date as day, or find a part with "
+                  "search_memory(layer='daily', query=..., day=...).")
+    return out + kept
 
 
 def span_hint(scope, span, private_key=None, pt=None) -> str:
-    """One line for a read by `day` that found no memories while days of that
-    span are kept: the door, instead of "nothing"."""
+    """One line for a read by `day` with no layer, when days of that span are
+    kept: the door. She asks "what did we do Tuesday" with day= and no layer;
+    one memory saved that day came back and nothing said the day exists."""
     try:
         pt = pt or _pt()
         with pt._get_connection() as conn:
             if _sources(conn.cursor(), pt, scope, private_key, span, 1):
-                return " Your days hold that date: get_recent_memories(layer='daily', day=...) reads it."
+                return " Your days hold that date too: get_recent_memories(layer='daily', day=...) reads the whole day."
     except Exception as e:
         logger.debug(f"[DAILY] span hint skipped: {e}")
     return ''
@@ -960,11 +1103,23 @@ def span_hint(scope, span, private_key=None, pt=None) -> str:
 # ─── The app's side: whole days ──────────────────────────────────────────────
 
 def reset(cursor, scope):
-    """Forget which days were deleted by hand in this scope (a scope deleted,
-    wiped, or its Daily tab cleared: a reset, so days still in a chat are
-    recorded again). The caller commits."""
+    """Forget which days were deleted in this scope. Only for a scope that is
+    itself deleted: a new scope under that name starts clean. The caller
+    commits."""
     _tables(cursor)
     cursor.execute('DELETE FROM daily_gone WHERE scope = ?', (scope,))
+
+
+def mark_gone(cursor, scope):
+    """Every day of the scope is about to be deleted by the person (the Daily
+    tab cleared, the scope wiped): remember each, so none is recorded again.
+    "Permanently delete" brought back every day a chat still held, the ones
+    deleted by hand included, at the next start (two scouts, 2026-11-20).
+    The caller deletes the rows and commits."""
+    _tables(cursor)
+    cursor.execute("INSERT OR REPLACE INTO daily_gone (scope, source, gone) "
+                   "SELECT DISTINCT scope, source, ? FROM chunks "
+                   "WHERE layer = 'daily' AND scope = ? AND source IS NOT NULL", (_pt()._now(), scope))
 
 
 def forget(cursor, scope, sources) -> int:

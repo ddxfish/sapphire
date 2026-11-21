@@ -32,6 +32,7 @@ import sys
 import logging
 import re
 import threading
+import time
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timezone
@@ -67,8 +68,8 @@ LAYER_KEYS = list(LAYERS.keys())
 # Layers that write themselves: she reads them, and save/update/delete refuse.
 READ_ONLY_LAYERS = frozenset({'daily'})
 WRITE_KEYS = [k for k in LAYER_KEYS if k not in READ_ONLY_LAYERS]
-DAILY_READ_ONLY = ("The daily layer holds one summary per finished day and writes itself when a "
-                   "day is compacted. {} Search it with layer='daily'.")
+DAILY_READ_ONLY = ("{} The daily layer is written by the day compact, not by tools "
+                   "(you read it with layer='daily').")
 
 
 # ─── Plugin layers (v1.1, 2026-07-12) ────────────────────────────────────────
@@ -220,7 +221,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Most recent memories. layer='daily' lists past days; with day it reads them whole.",
+            "description": "Most recent memories. layer='daily': an index of past days; add day to read those days whole.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2291,7 +2292,7 @@ def _fts_search(cursor, fts_query, scope, labels, limit, private_key=None, layer
     return cursor.fetchall()
 
 
-_last_query_vec = (None, None, None)    # (provider, query text, vector): see _vector_search
+_last_query_vec = (None, None, None, 0.0)    # (provider, query text, vector or None, when): see _vector_search
 _mem_matrix_cache = {}
 _mem_matrix_lock = threading.Lock()
 _mem_matrix_gen = 0   # bumped on in-place re-embeds the row-count stamp can't see
@@ -2367,14 +2368,16 @@ def _vector_search(query: str, scope: str, labels: list, limit: int,
     # The days block asks for the same query right after the main cascade:
     # one embedding call, not two (a remote embedder bills each).
     global _last_query_vec
-    if _last_query_vec[:2] == (active_provider, query):
+    if _last_query_vec[:2] == (active_provider, query) and time.monotonic() - _last_query_vec[3] < 30:
         query_vec = _last_query_vec[2]
+        if query_vec is None:
+            return []                       # it just failed for this very query: no second timeout
     else:
         query_emb = embedder.embed([query], prefix='search_query')
-        if query_emb is None:
+        query_vec = None if query_emb is None else np.asarray(query_emb[0], dtype=np.float32)
+        _last_query_vec = (active_provider, query, query_vec, time.monotonic())
+        if query_vec is None:
             return []
-        query_vec = np.asarray(query_emb[0], dtype=np.float32)
-        _last_query_vec = (active_provider, query, query_vec)
     query_dim = int(query_vec.shape[0])
 
     ids, scales, matrix = _mem_matrix(scope, active_provider, query_dim)
@@ -2513,7 +2516,7 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                                             pt=sys.modules.get(__name__))
                 # The door line names arguments only her own tools take: the
                 # persona MCP door has no layer or day (core/mcp_persona.py).
-                door = ("\n" + daily.DOOR) if _added_by() == 'ai' else ''
+                door = ("\n" + daily.door(lines)) if _added_by() == 'ai' else ''
                 _days.append((("📅 From your days (summaries, not the memories themselves):\n"
                                + "\n".join(lines) + door) if lines else '', seeds))
             return _days[0]
@@ -2791,13 +2794,13 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                         hparams + [floor, count]).fetchall())
             except Exception as e:
                 logger.warning(f"[MINDPALACE] hidden-row count skipped: {e}")
+        hint = ''
+        if span and not layer and not wake:
+            from plugins.mindpalace.tools import daily
+            hint = daily.span_hint(scope, span, private_key, pt=sys.modules.get(__name__))
         if not rows:
             notes = ((f" in layer '{layer}'" if layer else "") + (f" with labels '{label}'" if labels else "")
                      + (f" for day '{day}'" if span else ""))
-            hint = ''
-            if span and not layer:
-                from plugins.mindpalace.tools import daily
-                hint = daily.span_hint(scope, span, private_key, pt=sys.modules.get(__name__))
             return f"No memories stored{notes}." + hint + hidden_note, True
         if trim:
             def cut(text):
@@ -2807,7 +2810,8 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                 return (text[:trim].rsplit(' ', 1)[0] or text[:trim]) + '…'
             rows = [(r[0], cut(r[1]), *r[2:]) for r in rows]
         results = [_format_chunk(*r) for r in rows]
-        return f"Recent {len(rows)} memories:\n" + "\n".join(results) + hidden_note, True
+        return (f"Recent {len(rows)} memories:\n" + "\n".join(results)
+                + (("\n" + hint.strip()) if hint else '') + hidden_note), True
     except Exception as e:
         logger.error(f"[MINDPALACE] Error getting recent memories: {e}")
         return f"Failed to retrieve memories: {e}", False

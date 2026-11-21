@@ -46,6 +46,9 @@ def palace(tmp_path, monkeypatch):
     monkeypatch.setattr(daily, 'enabled', lambda: True)
     monkeypatch.setattr(daily, '_stopping', False)
     monkeypatch.setattr(daily, '_today', lambda: date(2026, 11, 20))       # a Friday
+    from core.chat import compress                                         # never the install's own prompt files
+    monkeypatch.setattr(compress, 'INSTRUCTIONS_PATH', tmp_path / 'compress_instructions.txt')
+    monkeypatch.setattr(compress, 'DAILY_INSTRUCTIONS_PATH', tmp_path / 'compact_daily_instructions.txt')
     fm.tool_context.set(None)
     assert pt._ensure_db()
     yield SimpleNamespace(resolved=resolved)
@@ -367,17 +370,45 @@ def test_one_row_per_piece_of_a_day_is_the_databases_rule():
 def test_a_full_layer_keeps_the_days_that_fit_and_says_so_honestly(monkeypatch):
     told = []
     from core import notify
-    monkeypatch.setattr(notify, 'notify', lambda title, **k: told.append((k.get('key'), k.get('body', ''))))
+    monkeypatch.setattr(notify, 'notify', lambda title, **k: told.append((k.get('key'), title, k.get('body', ''))))
     monkeypatch.setattr(daily, 'ROW_CAP', 3)
     sm = SM(_pair('2026-11-01', 'one') + _pair('2026-11-02', 'two\n\nthree\n\nfour') + _pair('2026-11-03', 'five'))
     assert daily.record_chat('main', sm)['days'] == ['2026-11-01']          # stops at the day that does not fit
-    assert [k for k, _ in told] == ['daily-full'] and 'NOT being recorded' in told[0][1]
+    full = next(x for x in told if x[0] == 'daily-full')
+    assert S in full[1] and 'not being saved' in full[2] and 'pieces' not in full[1] + full[2]
     out = daily.record_chat('main', sm)
     assert out['days'] == [] and out['skipped'] == 'the daily layer of this scope is full'
     monkeypatch.setattr(daily, 'ROW_CAP', 10)
-    told.clear()
     assert daily.record_chat('main', sm)['days'] == ['2026-11-02', '2026-11-03']   # room made: they come in
-    assert told == [('daily-cap-80', told[0][1])] if told else True
+
+
+def test_the_person_is_told_once_when_days_start_being_kept(monkeypatch):
+    """Update day: summaries of whole conversations appear in shared memory.
+    The first one says what, where, who can read it and where the switch is."""
+    told = []
+    from core import notify
+    monkeypatch.setattr(notify, 'notify', lambda title, **k: told.append((k.get('key'), k.get('once'), title, k.get('body', ''))))
+    daily.record_chat('main', SM(_pair('2026-11-02', 'a day')))
+    key, once, title, body = told[0]
+    assert (key, once) == ('daily-intro', True) and 'kept in memory' in title
+    assert 'every chat on the same scope' in body and 'Mind > Daily' in body and "Keep each day's summary" in body
+    assert daily.record_chat('main', SM(_pair('2026-11-02', 'a day')))['days'] == [] and len(told) == 1
+
+
+def test_a_days_piece_index_that_cannot_be_made_is_said_once_and_nothing_of_hers_is_removed(caplog):
+    """A database that already holds a day twice: the index fails. It is tried
+    once per run, said loudly, and the doubled rows are left for a person."""
+    with pt._get_connection() as conn:
+        for _ in range(2):
+            conn.execute("INSERT INTO chunks (layer, scope, content, created, updated, chunk_index, source) "
+                         "VALUES ('daily', ?, 'doubled', 't', 't', 0, 'day:2026-11-01:x')", (S,))
+        conn.commit()
+    daily._index_tried.clear()
+    with caplog.at_level('ERROR'):
+        daily.record_chat('main', SM(_pair('2026-11-02', 'a day')))
+        daily.record_chat('main', SM(_pair('2026-11-03', 'another')))
+    assert sum('one-row-per-piece index could not be made' in r.message for r in caplog.records) == 1
+    assert len(_rows("source = 'day:2026-11-01:x'")) == 2 and {r[4] for r in _rows()} >= {'2026-11-02', '2026-11-03'}
 
 
 # ─── People, and the spider ──────────────────────────────────────────────────
@@ -489,8 +520,8 @@ def test_days_stay_out_of_the_recents_feed_and_come_as_their_own_block_in_a_sear
     text, ok = _ask('search_memory', query='pendant')
     assert ok and text.index('double tap') < text.index('From your days')
     head, block = text.split('From your days')
-    assert 'wake bug' in block and 'wake bug' not in head and '[daily] Mon Nov 2 2026' in block
-    assert "get_recent_memories(layer='daily', day='YYYY-MM-DD')" in block
+    assert 'wake bug' in block and 'wake bug' not in head and '[daily] Mon 2026-11-02' in block
+    assert "get_recent_memories(layer='daily', day='2026-11-02')" in block      # a date she can pass straight back
     text, ok = _ask('search_memory', query='lunch')                     # only a day holds the word
     assert ok and 'but your days have matches' in text and 'before lunch' in text
 
@@ -540,15 +571,15 @@ def test_a_match_brings_the_piece_after_it_before_a_far_match_or_another_day():
     daily.record_chat('main', SM(_pair('2026-11-01', f"{setup}\n\n{outcome}\n\n{middle}\n\n{far}")
                                  + _pair('2026-11-02', other)))
     lines, _ = daily.search('wombat price', S)
-    busy = next(ln for ln in lines if 'Nov 1 2026' in ln)
+    busy = next(ln for ln in lines if '2026-11-01' in ln)
     assert 'forty-five from January' in busy                     # the piece after the best match
-    assert len(lines) == 2 and len(busy) > len(next(ln for ln in lines if 'Nov 2 2026' in ln))
+    assert len(lines) == 2 and len(busy) > len(next(ln for ln in lines if '2026-11-02' in ln))
 
 
 def test_a_short_day_comes_back_whole_and_a_day_with_a_piece_missing_does_not_say_so():
     daily.record_chat('main', SM(_pair('2026-11-02', 'A quiet day. We read.')))
     lines, _ = daily.search('quiet', S)
-    assert lines == ["[daily] Mon Nov 2 2026 (12 messages, chat 'main') [whole day] A quiet day. We read."]
+    assert lines == ["[daily] Mon 2026-11-02 (12 messages, chat 'main') [whole day] A quiet day. We read."]
     daily.record_chat('main', SM(_pair('2026-11-03', 'First line of three.\n\nSecond line.\n\nThird line.')))
     with pt._get_connection() as conn:
         conn.execute("DELETE FROM chunks WHERE layer = 'daily' AND content = 'Second line.'")
@@ -563,7 +594,7 @@ def test_recents_of_the_layer_is_an_index_and_a_day_reads_whole():
     daily.record_chat('main', SM(_pair('2026-11-01', 'First day text.') + _pair('2026-11-02', LONG)))
     text, ok = _ask('get_recent_memories', layer='daily')
     assert ok and text.startswith('Newest 2 days:')
-    assert text.index('Nov 2 2026') < text.index('Nov 1 2026')
+    assert text.index('2026-11-02') < text.index('2026-11-01')
     assert '[beginning] We spent the morning' in text and '[whole day] First day text.' in text
     assert 'reply rules were checked' not in text                       # the index, not the day
     text, ok = _ask('get_recent_memories', layer='daily', day='2026-11-02')
@@ -576,11 +607,20 @@ def test_recents_of_the_layer_is_an_index_and_a_day_reads_whole():
     assert not ok and 'day takes' in text
 
 
-def test_days_too_long_to_show_whole_come_as_the_index(monkeypatch):
+def test_a_date_always_reads_whole_and_a_long_span_reads_as_far_as_it_fits(monkeypatch):
+    """Her AIX scout, 2026-11-21: once the total was over the budget nothing
+    was shown whole, and the hint said to make the same call again. One long
+    day (a /compact-daily 4K day) could never be read."""
     monkeypatch.setattr(daily, 'READ_CHARS', 100)
-    daily.record_chat('main', SM(_pair('2026-11-01', LONG) + _pair('2026-11-02', LONG)))
+    daily.record_chat('main', SM(_pair('2026-11-01', LONG) + _pair('2026-11-02', LONG.replace('pendant', 'lantern'))
+                                 + _pair('2026-11-03', 'short third day')))
+    one = daily.recent_text(S, span=daily.span_bounds(daily.parse_span('2026-11-01')[0]))
+    assert LONG in one and 'did not fit' not in one                       # one date: whole, however long
     text = daily.recent_text(S, span=daily.span_bounds(daily.parse_span('2026-11')[0]))
-    assert text.startswith('2 days in that range are too long to show whole.') and '[beginning]' in text
+    assert LONG in text and 'lantern wake bug' not in text.split('did not fit')[0]      # the first day whole
+    rest = text.split('did not fit:')[1]
+    assert '2 more days in that range' in text and '[beginning]' in rest and '[whole day] short third day' in rest
+    assert "search_memory(layer='daily', query=..., day=...)" in rest and 'narrow the day' not in text
 
 
 def test_a_day_is_found_by_the_day_it_is_of_whatever_the_clock_did(monkeypatch):
@@ -612,6 +652,13 @@ def test_day_narrows_every_layer_and_points_at_the_days_when_only_they_hold_it()
     text, ok = _ask('get_recent_memories', day='2026-11-02')            # no memory that day, but the day is kept
     assert ok and text.startswith("No memories stored for day '2026-11-02'.") and "layer='daily'" in text
     assert "layer='daily'" not in _ask('get_recent_memories', day='2026-11-09')[0]
+    # One memory saved that day used to come back alone, as if it were the day.
+    pt._save_memory('one small note', S)
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET created = '2026-11-02T16:00:00+00:00' WHERE content = 'one small note'")
+        conn.commit()
+    text, ok = _ask('get_recent_memories', day='2026-11-02')
+    assert ok and 'one small note' in text and "Your days hold that date too" in text
     text, ok = _ask('search_memory', query='garage', layer='knowledge', day='yesterday')
     assert ok and 'day was not applied' in text
 
@@ -636,6 +683,25 @@ def test_day_narrows_every_layer_and_points_at_the_days_when_only_they_hold_it()
     ('november 2nd, 2025', '2025-11-02', '2025-11-02'),
     ('2 nov', '2026-11-02', '2026-11-02'),
     ('dec 25', '2025-12-25', '2025-12-25'),             # not come yet this year: the last one
+    ('feb 29', '2024-02-29', '2024-02-29'),             # the last real one, years back
+    # What she is SHOWN must be what she can pass back (her AIX scout, 2026-11-21):
+    ('Mon 2026-11-16', '2026-11-16', '2026-11-16'),
+    ('Monday, November 16, 2026', '2026-11-16', '2026-11-16'),      # the chat's own day marker
+    ('mon nov 16 2026', '2026-11-16', '2026-11-16'),
+    # ...and the phrasings an LLM writes:
+    ('November', '2026-11-01', '2026-11-30'),
+    ('nov', '2026-11-01', '2026-11-30'),
+    ('december', '2025-12-01', '2025-12-31'),           # the last such month
+    ('Nov 2026', '2026-11-01', '2026-11-30'),
+    ('march', '2026-03-01', '2026-03-31'),
+    ('2025', '2025-01-01', '2025-12-31'),
+    ('last year', '2025-01-01', '2025-12-31'),
+    ('past week', '2026-11-13', '2026-11-20'),
+    ('a week ago', '2026-11-13', '2026-11-13'),
+    ('2026-11-10\u20132026-11-14', '2026-11-10', '2026-11-14'),     # an en dash
+    ('from 2026-11-10 to 2026-11-14', '2026-11-10', '2026-11-14'),
+    ('between 2026-11-10 and 2026-11-14', '2026-11-10', '2026-11-14'),
+    ('Yesterday.', '2026-11-19', '2026-11-19'),
 ])
 def test_the_day_argument(text, first, last):
     span, err = daily.parse_span(text)
@@ -644,14 +710,15 @@ def test_the_day_argument(text, first, last):
 
 @pytest.mark.parametrize('bad', [
     '2026-13-40', 'whenever', 'tomorrow', 'in 2 weeks', 'since monday', 'before 2026-11-10', 'nov 2-9',
-    'week of nov 2', 'thanksgiving', 'the 18th', 'this weekend', 'feb 30', 'march', 'next friday',
+    'week of nov 2', 'thanksgiving', 'the 18th', 'this weekend', 'feb 30', 'next friday', '3 weeks ago',
+    'a few months ago', 'recently', '2099',
 ])
 def test_a_day_it_cannot_read_is_an_error_never_a_guess(bad):
     """The first version handed anything else to a plan parser and shifted a
     future answer back a year: "Monday" searched a Sunday 51 weeks ago and
     answered "nothing that day", with no error for her to correct from."""
     span, err = daily.parse_span(bad)
-    assert span is None and 'day takes' in err
+    assert span is None and 'day takes' in err and 'Leave day out to search all time' in err
 
 
 def test_no_day_argument_is_no_filter():
@@ -713,7 +780,7 @@ def test_a_compact_records_its_own_chat_and_every_start_walks_them_all(monkeypat
     assert len(seen) == 2
 
 
-def test_one_chat_failing_does_not_stop_the_sweep(monkeypatch):
+def test_one_chat_failing_does_not_stop_the_sweep_and_a_silent_skip_is_told_too(monkeypatch):
     sm = SM(_pair('2026-11-02', 'x'))
     sm.list_chat_files = lambda: [{'name': 'broken'}, {'name': 'main'}]
     exports = sm.export_chat
@@ -727,8 +794,17 @@ def test_one_chat_failing_does_not_stop_the_sweep(monkeypatch):
     from core import notify
     monkeypatch.setattr(notify, 'notify', lambda title, **k: told.append((title, k.get('key'), k.get('body'))))
     assert daily.sweep(sm=sm) == {'days': 1, 'failed': 1}
-    assert told[0][:2] == ("A day's summary was not saved to memory", 'daily-record')
-    assert 'when Sapphire next starts' in told[0][2]
+    note = next(x for x in told if x[1] == 'daily-record')
+    assert note[0] == 'Some day summaries were not saved to memory'
+    assert 'at the next start' in note[2] and '[DAILY]' in note[2] and 'was compacted' not in note[2]
+    # A chat whose model cannot be said records nothing; that used to be a
+    # quiet skip, every start, until the day rolled off the chat for good.
+    told.clear()
+    lost = SM(_pair('2026-11-05', 'y'), llm_primary='none')
+    assert daily.sweep(['lost'], lost) == {'days': 0, 'failed': 1} and told[0][1] == 'daily-record'
+    told.clear()
+    assert daily.sweep(['private'], SM(_pair('2026-11-06', 'z'), private_chat=True)) == {'days': 0, 'failed': 0}
+    assert told == []                                           # a chat that is not meant to be recorded is not a failure
 
 
 def test_the_listeners_are_registered_once():
@@ -837,18 +913,24 @@ def test_the_app_marks_and_deletes_a_whole_day():
     assert acts == ['recorded', 'private-model', 'released', 'deleted']
 
 
-def test_clearing_the_tab_is_a_reset_days_still_in_a_chat_come_back():
+def test_what_the_person_deletes_stays_deleted_by_any_button():
+    """Two scouts, 2026-11-21: deleting one day was permanent, while "Clear ONE
+    tab" and "Delete ALL memories in scope" reset the marks, so every day a
+    chat still held came back at the next start, the hand-deleted ones too."""
     from plugins.mindpalace.routes import daily_routes, browse
-    sm = SM(_pair('2026-11-02', 'a day'))
+    sm = SM(_pair('2026-11-01', 'deleted by hand') + _pair('2026-11-02', 'cleared with the tab'))
     daily.record_chat('main', sm)
-    daily_routes.delete_day(query={'scope': S, 'source': _rows()[0][2]})
-    assert daily.record_chat('main', sm)['days'] == []
+    daily_routes.delete_day(query={'scope': S, 'source': next(r[2] for r in _rows() if r[4] == '2026-11-01')})
     out = browse.maintenance(body={'action': 'clear_layer', 'scope': S, 'layer': 'daily', 'confirm': S})
     assert not isinstance(out, tuple), out
-    assert daily.record_chat('main', sm)['days'] == ['2026-11-02']
+    assert _rows() == [] and daily.record_chat('main', sm)['days'] == []
+    sm.rows = sm.rows + _pair('2026-11-03', 'a new day after the clear')            # new days are still kept
+    assert daily.record_chat('main', sm)['days'] == ['2026-11-03']
     out = browse.maintenance(body={'action': 'wipe_scope', 'scope': S, 'confirm': S})
     assert not isinstance(out, tuple) and _rows() == []
-    assert daily.record_chat('main', sm)['days'] == ['2026-11-02']
+    assert daily.record_chat('main', sm)['days'] == []
+    pt.delete_scope(S)                                          # the scope itself gone: a new one starts clean
+    assert len(daily.record_chat('main', sm)['days']) == 3
 
 
 def test_days_travel_in_a_file_whole_or_not_at_all():
@@ -1000,3 +1082,67 @@ def test_a_compact_cancelled_for_growing_the_chat_records_nothing(tmp_path, monk
         assert woke == [] and _rows() == []
         assert [m['content'] for m in mgr.export_chat('diary')['messages']] == [r['content'] for r in rows]
         assert daily.record_chat('diary', mgr)['days'] == []            # and nothing to pick up later
+
+
+# ─── Second hunt, 2026-11-21 ─────────────────────────────────────────────────
+
+def test_a_cloud_reader_is_told_days_are_kept_for_private_models_not_that_there_are_none():
+    daily.record_chat('den', SM(_pair('2026-11-02', 'told Qwen about the house'), llm_primary=LOCAL))
+    text, ok = _ask('get_recent_memories', layer='daily')
+    assert ok and text == 'No days recorded yet. 1 day here is kept for private models.'
+    text, ok = _ask('search_memory', query='house', layer='daily')
+    assert ok and "No days found for 'house'. 1 day here is kept for private models." == text
+    assert 'private models' not in _ask('search_memory', query='house')[0]      # never under an ordinary search
+    text, ok = _ask('search_memory', query='house', layer='daily', _turn={'provider': LOCAL, 'model': 'q', 'chat': 'c'})
+    assert 'told Qwen about the house' in text and 'kept for private' not in text
+
+
+def test_no_days_kept_is_not_the_same_as_no_match_and_today_has_no_summary_yet():
+    assert _ask('search_memory', query='anything', layer='daily')[0] == 'No days are kept in this memory yet.'
+    daily.record_chat('main', SM(_pair('2026-11-02', 'a day')))
+    assert _ask('search_memory', query='zebra', layer='daily')[0] == "No days found for 'zebra'."
+    text, ok = _ask('get_recent_memories', layer='daily', day='today')
+    assert ok and text == 'No days recorded in that range. A day is summarized after it ends: today is still in the chat.'
+
+
+def test_a_search_of_the_days_never_shows_more_than_ten_however_many_are_asked_for():
+    days = []
+    for d in range(1, 21):
+        days += _pair(f'2026-10-{d:02d}', f'The heron stood at the pond on day {d}.')
+    daily.record_chat('main', SM(days))
+    text, ok = _ask('search_memory', query='heron', layer='daily', limit=50)
+    assert ok and text.startswith('Found 10 days:')
+
+
+def test_a_day_that_names_someone_is_not_counted_as_a_memory_of_them_anywhere():
+    """The spider was fixed in the first hunt; the wake sheet's "Most woven",
+    the Self dashboard and the Entities tab still counted day edges."""
+    from plugins.mindpalace.routes import browse
+    from plugins.mindpalace.tools import self_tools
+    eid = _person('Ada')
+    fm.tool_context.set(TURN)
+    pt._save_memory('Ada keeps bees behind the workshop', S)
+    fm.tool_context.set(None)
+    days = []
+    for d in range(1, 8):
+        days += _pair(f'2026-10-{d:02d}', f'Ada and I talked about the hives on day {d}.')
+    daily.record_chat('main', SM(days))
+    listed = next(e for e in browse.list_entities(query={'scope': S})['entities'] if e['id'] == eid)
+    assert listed['edge_count'] == 1
+    shown = browse.entity_detail(eid=eid)
+    assert 'hives' not in json.dumps(shown) and 'keeps bees' in json.dumps(shown)
+    with pt._get_connection() as conn:
+        data = self_tools.dashboard_data(conn.cursor(), S)
+    assert data['most_woven'] == [{'name': 'Ada', 'count': 1}]
+
+
+def test_a_days_file_with_a_broken_identity_is_skipped_not_a_crash():
+    from plugins.mindpalace.routes import transfer
+    daily.record_chat('main', SM(_pair('2026-11-02', 'a day')))
+    data = transfer.export_data(query={'scope': S, 'layer': 'daily'})
+    bad = {**data, 'chunks': [{'content': 'no date in here', 'source': 'day:'},
+                              {'content': 'hidden by its meta', 'source': 'day:2026-11-09:x', 'chunk_index': 0,
+                               'meta': {'superseded_at': 'then', 'pruned_at': 'then', 'day': '2026-11-09'}}]}
+    out = transfer.import_data(body={'scope': 'elsewhere', 'expect_layer': 'daily', 'data': bad})
+    assert out['success'] and out['imported'] == 1 and out['skipped'] == 1
+    assert 'hidden by its meta' in daily.recent_text('elsewhere', span=daily.span_bounds(daily.parse_span('2026-11-09')[0]))

@@ -2,8 +2,81 @@
 import { updateSettingsBatch } from '../../shared/settings-api.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { showToast } from '../../shared/toast.js';
+import { fetchWithTimeout } from '../../shared/fetch.js';
 
 const DAILY_KEYS = ['COMPACT_DAILY_DAYS', 'DAY_START_HOUR'];
+const DAILY_TEXT = '/api/chats/compress/instructions?kind=daily';
+
+// How she writes a day and what she leaves out (core/chat/compress.py,
+// DAILY_INSTRUCTIONS). A short box that scrolls: the text is a paragraph, and
+// the page has no room for it at full height. Saved on its own button, like
+// the compress instructions in the Chat Manager; the size ceiling and the
+// meaning of the transcript's labels are not in here and cannot be lost.
+//
+// The page repaints this section on Save Changes, Reload, a field reset and a
+// tab switch, and the box is not one of its fields: `dailyDraft` carries what
+// was typed across a repaint (it used to come back as the saved text, the
+// edit gone without a word).
+let dailyDraft = null;
+
+function dailyTextHtml() {
+    return `<div id="daily-instr" style="margin-top: 0.75rem;">
+        <label for="daily-instr-text" style="display:block; font-weight:600; margin-bottom:0.25rem;">Day summary instructions</label>
+        <div class="setting-help" style="color: var(--text-muted); font-size: var(--font-sm); margin-bottom: 0.35rem;">How she writes each day and what she leaves out. /compact-daily also uses the compress instructions (Chat Manager, Compress, Advanced). Each day's summary is kept in memory too: Mind &rsaquo; Daily, with its switch under Mind &rsaquo; Settings &rsaquo; Memories. This box has its own Save.</div>
+        <textarea id="daily-instr-text" rows="4" spellcheck="true" disabled
+            style="width:100%; box-sizing:border-box; height:6.5em; max-height:14em; overflow-y:auto; resize:vertical; font:inherit; padding:0.4rem 0.5rem;"></textarea>
+        <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-top:0.35rem;">
+            <button type="button" class="btn-sm" id="daily-instr-save" disabled>Save</button>
+            <button type="button" class="btn-sm" id="daily-instr-reset" disabled title="Puts the default wording in the box. Nothing changes until you save.">Reset to default</button>
+            <span id="daily-instr-note" style="color: var(--text-muted); font-size: var(--font-sm);"></span>
+        </div>
+    </div>`;
+}
+
+async function bindDailyText(el) {
+    const box = el.querySelector('#daily-instr');
+    if (!box || box._bound) return;
+    box._bound = true;
+    const text = box.querySelector('#daily-instr-text'), note = box.querySelector('#daily-instr-note');
+    const saveBtn = box.querySelector('#daily-instr-save'), resetBtn = box.querySelector('#daily-instr-reset');
+    let saved = '', fallback = '', broken = '';
+    const sync = () => {
+        const now = text.value.trim();
+        saveBtn.disabled = now === saved && !broken;
+        resetBtn.disabled = now === fallback;
+        note.textContent = broken ? `The saved file could not be read (${broken}) Saving from here replaces it.`
+            : now !== saved ? 'Not saved yet.' : (saved === fallback ? 'The default.' : 'Edited.');
+    };
+    try {
+        const r = await fetchWithTimeout(DAILY_TEXT, {}, 10000);
+        saved = (r.instructions || '').trim();
+        fallback = (r.default || '').trim();
+        broken = r.unreadable || '';
+    } catch (e) {
+        note.textContent = `Could not load: ${e.message}`;
+        return;
+    }
+    text.value = dailyDraft !== null ? dailyDraft : saved;
+    text.disabled = false;
+    sync();
+    text.addEventListener('input', () => { dailyDraft = text.value; sync(); });
+    saveBtn.addEventListener('click', async () => {
+        const sent = text.value;
+        try {
+            const r = await fetchWithTimeout(DAILY_TEXT, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instructions: sent }),
+            }, 10000);
+            saved = (r.instructions || '').trim();
+            broken = '';
+            if (text.value === sent) { text.value = saved; dailyDraft = null; }   // typed on during the save: kept
+            sync();
+            showToast('Day summary instructions saved', 'success');
+        } catch (e) { showToast(`Not saved: ${e.message}`, 'error'); }
+    });
+    // The same as the compress dialog's Reset: it refills the box, Save commits.
+    resetBtn.addEventListener('click', () => { text.value = fallback; dailyDraft = fallback; sync(); });
+}
 
 // Local mirror of the self-management settings, kept in sync on save.
 // NOTE: these inputs intentionally have NO data-key attribute — they save
@@ -148,12 +221,14 @@ export default {
                `<details style="margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm);" open>
                     <summary style="cursor: pointer; padding: 0.25rem 0;"><strong>Daily Compact</strong></summary>
                     ${ctx.renderFields(DAILY_KEYS)}
+                    ${dailyTextHtml()}
                 </details>` +
                `<div id="ai-selfmgmt">${selfMgmtHtml()}</div>` +
                ctx.renderAccordion('tools-adv', this.advancedKeys);
     },
 
     attachListeners(ctx, el) {
+        bindDailyText(el);
         const wrap = el.querySelector('#ai-selfmgmt');
         if (!wrap || wrap._aiBound) return;
         wrap._aiBound = true;
