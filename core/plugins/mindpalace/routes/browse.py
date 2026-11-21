@@ -103,11 +103,17 @@ def status(query=None, **_):
 
 
 def list_layers(query=None, **_):
-    """Registered PLUGIN layers for the UI (tab strip + NavRail flyout).
-    Core layers aren't listed — the frontend owns those statically. Dark
-    layers aren't listed either: off means off."""
+    """Layers the UI builds a tab for (tab strip + NavRail flyout): the
+    registered PLUGIN layers, and the palace's own Daily layer, whose page
+    (`view`) shows whole days. The other core layers aren't listed — the
+    frontend owns those statically. Dark layers aren't listed either: off
+    means off."""
     pt = _pt()
     return {'layers': [
+        {'key': 'daily', 'label': 'Daily', 'icon': '\U0001F4C5', 'view': 'daily',
+         'description': 'One summary per finished day.', 'plugin': 'mindpalace',
+         'librarian': False, 'writable': False},
+    ] + [
         {'key': key, 'label': spec['label'], 'icon': spec['icon'],
          'description': spec['description'], 'plugin': spec['plugin_name'],
          'librarian': spec['librarian'], 'writable': spec.get('writable', False)}
@@ -310,6 +316,8 @@ def delete_chunk(cid=None, query=None, **_):
                           'FROM chunks WHERE id = ?', (cid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
+        if row[0] == 'daily':
+            return {'error': 'A day is one whole memory: delete or mark it in Mind > Daily.'}, 400
         cur.execute("DELETE FROM edges WHERE (src_type = 'chunk' AND src_id = ?) "
                     "OR (dst_type = 'chunk' AND dst_id = ?)", (cid, cid))
         cur.execute('DELETE FROM chunks WHERE id = ?', (cid,))
@@ -340,6 +348,8 @@ def toggle_favorite(cid=None, body=None, **_):
                           'WHERE id = ?', (cid,)).fetchone()
         if not row:
             return {'error': 'Not found'}, 404
+        if row[0] == 'daily':
+            return {'error': 'A day is one whole memory: delete or mark it in Mind > Daily.'}, 400
         cur.execute('UPDATE chunks SET favorite = ?, importance = ?, updated = ? '
                     'WHERE id = ?',
                     (1 if fav else 0, 0.95 if fav else None, pt._now(), cid))
@@ -375,6 +385,8 @@ def set_private(cid=None, body=None, **_):
             return {'error': 'Not found'}, 404
         if row[0] == 'self':
             return {'error': 'The self sheet is outside the private-model filter'}, 400
+        if row[0] == 'daily':
+            return {'error': 'A day is one whole memory: delete or mark it in Mind > Daily.'}, 400
         cur.execute('UPDATE chunks SET wr_private = ?, updated = ? WHERE id = ?',
                     (int(private), pt._now(), cid))
         if private:
@@ -1426,7 +1438,7 @@ def maintenance(body=None, **_):
         if (b.get('confirm') or '') != scope:
             return {'error': 'confirm must equal the scope name exactly'}, 400
         layer = (b.get('layer') or '').strip()
-        if layer not in ('events', 'self', 'entities', 'goals', 'knowledge'):
+        if layer not in ('events', 'self', 'entities', 'goals', 'knowledge', 'daily'):
             return {'error': f"unknown layer '{layer}'"}, 400
         with pt._get_connection() as conn:
             cur = conn.cursor()
@@ -1458,6 +1470,9 @@ def maintenance(body=None, **_):
                 import_tools.forget_seen(cur, scope, layer=layer)
             except Exception as e:
                 logger.warning(f"[MINDPALACE] clear: import_seen reset skipped: {e}")
+            if layer == 'daily':    # a reset, like the import marks: days still in a chat are recorded again
+                from plugins.mindpalace.tools import daily
+                daily.reset(cur, scope)
             try:
                 from plugins.mindpalace.tools import ledger as lg
                 lg.record(scope, 'user', 'cleared', layer=layer,
@@ -1515,6 +1530,11 @@ def maintenance(body=None, **_):
                 import_tools.forget_seen(cur, scope)
             except Exception as e:
                 logger.warning(f"[MINDPALACE] wipe: import_seen reset skipped: {e}")
+            try:    # same for days deleted by hand: the next compact records what its chat still holds
+                from plugins.mindpalace.tools import daily
+                daily.reset(cur, scope)
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] wipe: deleted-day marks not cleared: {e}")
             pt._ledger(scope, 'user', 'maintenance', cursor=cur,
                        summary=(f"wiped scope: {chunks} memories, {ents} entities, "
                                 f"{edges} connections deleted"))
@@ -1545,7 +1565,9 @@ def maintenance(body=None, **_):
         with pt._get_connection() as conn:
             cur = conn.cursor()
             rows = cur.execute(
-                "SELECT id, content, created, meta FROM chunks WHERE scope = ? "
+                # Not the daily layer: its writer dates each piece from the
+                # day it retells and strips the plan date on purpose.
+                "SELECT id, content, created, meta FROM chunks WHERE scope = ? AND layer != 'daily' "
                 "AND json_extract(meta, '$.superseded_at') IS NULL", (scope,)).fetchall()
             for cid, content, created, raw in rows:
                 meta = _parse_meta(raw) or {}
@@ -1687,7 +1709,9 @@ def maintenance(body=None, **_):
         with pt._get_connection() as conn:
             cur = conn.cursor()
             rows = cur.execute(
-                "SELECT id, meta FROM chunks WHERE scope = ? "
+                # Not the daily layer: nothing re-dates it afterwards (the
+                # backfill and the regex pass both leave it alone).
+                "SELECT id, meta FROM chunks WHERE scope = ? AND layer != 'daily' "
                 "AND json_extract(meta, '$.superseded_at') IS NULL "
                 "AND (json_extract(meta, '$.event_dates') IS NOT NULL "
                 "     OR json_extract(meta, '$.event_date_src') IS NOT NULL "

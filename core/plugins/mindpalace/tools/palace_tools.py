@@ -61,8 +61,14 @@ LAYERS = {
     'entities':  {'num': 2, 'label': 'Entities'},
     'knowledge': {'num': 3, 'label': 'Knowledge'},
     'goals':     {'num': 4, 'label': 'Goals'},   # 2026-07-11: goals joined the palace
+    'daily':     {'num': 5, 'label': 'Daily'},   # 2026-11-20: one summary per finished day (tools/daily.py)
 }
 LAYER_KEYS = list(LAYERS.keys())
+# Layers that write themselves: she reads them, and save/update/delete refuse.
+READ_ONLY_LAYERS = frozenset({'daily'})
+WRITE_KEYS = [k for k in LAYER_KEYS if k not in READ_ONLY_LAYERS]
+DAILY_READ_ONLY = ("The daily layer holds one summary per finished day and writes itself when a "
+                   "day is compacted. {} Search it with layer='daily'.")
 
 
 # ─── Plugin layers (v1.1, 2026-07-12) ────────────────────────────────────────
@@ -132,7 +138,7 @@ TOOLS = [
                     },
                     "layer": {
                         "type": "string",
-                        "enum": LAYER_KEYS,
+                        "enum": WRITE_KEYS,
                         "description": "Default events"
                     },
                     "entity": {
@@ -164,7 +170,8 @@ TOOLS = [
         "function": {
             "name": "search_memory",
             "description": "Semantic + full-text search across all memory layers. layer='knowledge' searches the library; "
-                           "results show [doc N] ids that read_document opens.",
+                           "results show [doc N] ids that read_document opens. layer='daily' searches the "
+                           "summaries of past days.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -188,6 +195,11 @@ TOOLS = [
                         "type": "integer",
                         "default": 10
                     },
+                    "day": {
+                        "type": "string",
+                        "description": "Only memories from then: 2026-11-02, 2026-11-02..2026-11-09, "
+                                       "yesterday, last week, last month"
+                    },
                     "depth": {
                         "type": "integer",
                         "description": "Follow connections from the results: 0 = matches only (default), 1 = plus linked "
@@ -208,7 +220,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Most recent memories.",
+            "description": "Most recent memories. layer='daily' lists past days; with day it reads them whole.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -220,6 +232,11 @@ TOOLS = [
                         "type": "string",
                         "enum": LAYER_KEYS,
                         "description": "Omit for all"
+                    },
+                    "day": {
+                        "type": "string",
+                        "description": "Only memories from then: 2026-11-02, 2026-11-02..2026-11-09, "
+                                       "yesterday, last week, last month"
                     },
                     "label": {
                         "type": "string",
@@ -336,7 +353,7 @@ def get_tools():
         return TOOLS
     import copy
     read_keys = LAYER_KEYS + list(plugin)
-    write_keys = LAYER_KEYS + [k for k, v in plugin.items() if v.get('writable')]
+    write_keys = WRITE_KEYS + [k for k, v in plugin.items() if v.get('writable')]
     tools = copy.deepcopy(TOOLS)
     for t in tools:
         fn = t['function']
@@ -931,10 +948,15 @@ def _sweep():
             where.append('embedding_provider != ?'); params.append(pid)
         if dim:
             where.append('embedding_dim != ?'); params.append(dim)
+        resets = _latch_resets
         with _get_connection() as conn:
             rows = conn.execute(f"SELECT id, content FROM chunks WHERE {' OR '.join(where)}", params).fetchall()
         if not rows:
-            _backfill_done = current
+            # Rows committed after that look (a night's days, an import) reset
+            # the latch; closing it now would leave them without vectors
+            # until something else reset it (race scout, 2026-11-20).
+            if resets == _latch_resets:
+                _backfill_done = current
             return
         logger.info(f"[MINDPALACE] Backfilling embeddings for {len(rows)} chunks (pass {n_pass + 1})...")
         filled = 0
@@ -965,10 +987,14 @@ def _sweep():
     logger.warning("[MINDPALACE] Backfill: rows kept arriving for 8 passes; the latch stays open")
 
 
+_latch_resets = 0     # bumped by every reset: a sweep latches only if none came while it looked
+
+
 def reset_backfill_latch():
     """Clear the backfill latch so the next search sweeps for unembedded rows.
     Called by import_tools after bulk-copying rows that may lack vectors."""
-    global _backfill_done
+    global _backfill_done, _latch_resets
+    _latch_resets += 1
     _backfill_done = False
     bump_matrix_gen()   # bulk writes → recall matrix rebuilds on next search
 
@@ -1207,15 +1233,17 @@ def _follow_instance_name(cursor):
     _name_seen = name
 
 
-def _stamp_writer(cursor, row_id, table='chunks', private=None, imported=False):
+def _stamp_writer(cursor, row_id, table='chunks', private=None, imported=False, writer=None):
     """Stamp who wrote the row just inserted. private: None = the writer's
     provider decides; said outright for rows whose words are not the
     writer's own (a merge, split or promote is private exactly when a source
     was) and for the self sheet (never). imported: the words were written
     elsewhere, by a writer nobody recorded (the model running the import
-    did not write them). One call after every INSERT:
-    tests/test_private_model.py fails on an INSERT INTO chunks without it."""
-    key, model = (None, None) if imported else _turn_writer()
+    did not write them). writer: (provider key, model) said by a writer that
+    has no turn (a day's summary, recorded after its compact). One call after
+    every INSERT: tests/test_private_model.py fails on an INSERT INTO chunks
+    without it."""
+    key, model = (None, None) if imported else (writer or _turn_writer())
     if imported:
         private = False
     private = int(bool(_provider_private(key) if private is None else private))
@@ -1545,6 +1573,11 @@ def delete_scope(name: str) -> dict:
             # ledger rows die; the ledger module itself stays append-only.
             cursor.execute('DELETE FROM ledger WHERE scope = ?', (name,))
             cursor.execute('DELETE FROM ledger_reads WHERE scope = ?', (name,))
+            try:   # a scope made again under this name starts with no deleted days
+                from plugins.mindpalace.tools import daily
+                daily.reset(cursor, name)
+            except Exception as e:
+                logger.warning(f"[MINDPALACE] delete_scope: deleted-day marks not cleared: {e}")
             try:   # its classic rows read NEW on the Import tab again, quietly
                 from plugins.mindpalace.tools import import_tools
                 import_tools.forget_seen(cursor, name)
@@ -1952,7 +1985,7 @@ def _sanitize_fts_query(query: str, use_or=False, use_prefix=False) -> str:
     return ' '.join(terms)
 
 
-def _read_filters(scope, labels, private_key, layer, hidden=False):
+def _read_filters(scope, labels, private_key, layer, hidden=False, span=None):
     """Shared WHERE fragments for the AI read paths (search cascade, recents,
     the wake pulls): scope overlay + private gate + optional layer + optional
     labels. Returns (sql, params) to AND together. The private-model gate
@@ -1960,7 +1993,10 @@ def _read_filters(scope, labels, private_key, layer, hidden=False):
     rows this reader is NOT given, for the count in _hidden_note. Archived self-sheet
     versions (meta.superseded_at) are excluded HERE — the becoming-history
     lives in the section 📜 trail, not in reads (Krem's ruling 2026-07-16);
-    current sheet sections remain searchable."""
+    current sheet sections remain searchable. span = (from, before) on
+    `created` (the `day` argument). An all-layer read leaves the daily layer
+    out: a day's summary retells memories that are already here, so search
+    shows days in a block of their own and the recents feed never holds them."""
     scope_sql, scope_params = _scope_condition(scope, 'c.scope')
     pk_sql, pk_params = _private_key_clause(private_key, 'c.private_key')
     sql = [scope_sql, pk_sql,
@@ -1978,12 +2014,21 @@ def _read_filters(scope, labels, private_key, layer, hidden=False):
         sql.append('c.layer = ?')
         params.append(layer)
     else:
+        sql.append("c.layer != 'daily'")
         # All-layer reads exclude dark plugin layers (named layers already
         # died at _validate_layer if dark).
         dark_sql, dark_params = _dark_clause('c')
         if dark_sql:
             sql.append(dark_sql)
             params.extend(dark_params)
+    if span and layer == 'daily':
+        # A day's rows carry the day they are OF in `label`: exact whatever
+        # the time zone was or becomes, and an index serves it.
+        sql.append('c.label >= ? AND c.label <= ?')
+        params.extend(span[2:4])
+    elif span:
+        sql.append('c.created >= ? AND c.created < ?')
+        params.extend(span[:2])
     if labels:
         placeholders = ','.join('?' * len(labels))
         sql.append(f'c.label IN ({placeholders})')
@@ -2034,6 +2079,8 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         layer, err = _validate_layer(layer)
         if err:
             return err, False
+        if layer in READ_ONLY_LAYERS:
+            return DAILY_READ_ONLY.format("Save this to events (the default) instead."), False
         layer = layer or 'events'
         self_note = ''
         if layer == 'self':
@@ -2230,8 +2277,8 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
 
 
 def _fts_search(cursor, fts_query, scope, labels, limit, private_key=None, layer=None,
-                hidden=False):
-    where, params = _read_filters(scope, labels, private_key, layer, hidden=hidden)
+                hidden=False, span=None):
+    where, params = _read_filters(scope, labels, private_key, layer, hidden=hidden, span=span)
     cursor.execute(f'''
         SELECT c.id, c.content, c.created, c.label, c.layer, e.name,
                bm25(chunks_fts) as rank
@@ -2244,6 +2291,7 @@ def _fts_search(cursor, fts_query, scope, labels, limit, private_key=None, layer
     return cursor.fetchall()
 
 
+_last_query_vec = (None, None, None)    # (provider, query text, vector): see _vector_search
 _mem_matrix_cache = {}
 _mem_matrix_lock = threading.Lock()
 _mem_matrix_gen = 0   # bumped on in-place re-embeds the row-count stamp can't see
@@ -2306,7 +2354,8 @@ def _mem_matrix(scope, provider, dim):
 
 
 def _vector_search(query: str, scope: str, labels: list, limit: int,
-                   private_key: str = None, layer: str = None, hidden: bool = False) -> list:
+                   private_key: str = None, layer: str = None, hidden: bool = False,
+                   span=None) -> list:
     """Cosine via the cached int8 matrix (one matmul, whole scope), then the
     exact same SQL filters as before applied as an id mask — filter semantics
     unchanged, no candidate window."""
@@ -2314,19 +2363,26 @@ def _vector_search(query: str, scope: str, labels: list, limit: int,
     if not embedder.available:
         return []
 
-    query_emb = embedder.embed([query], prefix='search_query')
-    if query_emb is None:
-        return []
-    query_vec = np.asarray(query_emb[0], dtype=np.float32)
-    query_dim = int(query_vec.shape[0])
     active_provider = getattr(embedder, 'provider_id', None)
+    # The days block asks for the same query right after the main cascade:
+    # one embedding call, not two (a remote embedder bills each).
+    global _last_query_vec
+    if _last_query_vec[:2] == (active_provider, query):
+        query_vec = _last_query_vec[2]
+    else:
+        query_emb = embedder.embed([query], prefix='search_query')
+        if query_emb is None:
+            return []
+        query_vec = np.asarray(query_emb[0], dtype=np.float32)
+        _last_query_vec = (active_provider, query, query_vec)
+    query_dim = int(query_vec.shape[0])
 
     ids, scales, matrix = _mem_matrix(scope, active_provider, query_dim)
     if not len(ids):
         return []
     scores = (matrix.astype(np.float32) @ query_vec) * (scales / 127.0)
 
-    where, params = _read_filters(scope, labels, private_key, layer, hidden=hidden)
+    where, params = _read_filters(scope, labels, private_key, layer, hidden=hidden, span=span)
     with _get_connection() as conn:
         cursor = conn.cursor()
         eligible = {r[0] for r in cursor.execute(
@@ -2388,9 +2444,22 @@ def _spider_block(query, scope, private_key, hit_ids, depth):
                                private_key, hit_ids, depth)
 
 
+def _day_span(day):
+    """The `day` argument to (span, None), (None, None) when not given, or
+    (None, error). span = daily.span_bounds(): (from, before) on created plus
+    the first and last ISO day (_read_filters picks by layer)."""
+    if day is None or not str(day).strip():
+        return None, None
+    from plugins.mindpalace.tools import daily
+    span, err = daily.parse_span(day)
+    if err:
+        return None, err
+    return daily.span_bounds(span), None
+
+
 def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                    layer: str = None, private_key: str = None, depth: int = 0,
-                   doc: int = None, boost: bool = True) -> tuple:
+                   doc: int = None, boost: bool = True, day: str = None) -> tuple:
     """v2 cascade with a layer filter: FTS-AND → FTS-OR+prefix → vector → LIKE.
     First non-empty strategy wins. depth>0 appends the spidered neighborhood
     of the results (tools/spider.py — Dijkstra, two edge prices).
@@ -2415,11 +2484,39 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
             text, _found = library.search_library(scope, query, limit=limit,
                                                   doc=doc,
                                                   private_key=private_key)
+            if day is not None and str(day).strip():
+                text += "\n(day was not applied: library documents carry no day.)"
             return text, True   # an honest empty is still a successful search
+        span, err = _day_span(day)
+        if err:
+            return err, False
         labels = _parse_labels(label)
         label_note = f" with labels '{label}'" if labels else ""
-        layer_note = f" in layer '{layer}'" if layer else ""
+        layer_note = (f" in layer '{layer}'" if layer else "") + (f" for day '{day}'" if span else "")
         private_key = private_key.strip() if (private_key and private_key.strip()) else None
+        if layer == 'daily':
+            # Days read as days, never as loose pieces (tools/daily.py: the
+            # sizing rule and the door to a whole day).
+            from plugins.mindpalace.tools import daily
+            return daily.search_text(query, scope, limit=limit, private_key=private_key,
+                                     labels=labels, span=span, depth=depth,
+                                     pt=sys.modules.get(__name__)), True
+
+        _days = []      # the days block of an all-layer search, worked out once
+
+        def _day_block():
+            if layer is not None:
+                return '', []
+            if not _days:
+                from plugins.mindpalace.tools import daily
+                lines, seeds = daily.search(query, scope, private_key, labels, span,
+                                            pt=sys.modules.get(__name__))
+                # The door line names arguments only her own tools take: the
+                # persona MCP door has no layer or day (core/mcp_persona.py).
+                door = ("\n" + daily.DOOR) if _added_by() == 'ai' else ''
+                _days.append((("📅 From your days (summaries, not the memories themselves):\n"
+                               + "\n".join(lines) + door) if lines else '', seeds))
+            return _days[0]
 
         # Mixed searches overfetch so the per-document knowledge cap can't
         # empty the result page; _finish trims back to `limit`.
@@ -2438,17 +2535,17 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                 if how == 'vector':
                     ids = [r[0] for r in _vector_search(
                         query, scope, labels, HIDDEN_CAP, private_key=private_key,
-                        layer=layer, hidden=True)]
+                        layer=layer, hidden=True, span=span)]
                 else:
                     with _get_connection() as hconn:
                         hcur = hconn.cursor()
                         if how == 'fts':
                             ids = [r[0] for r in _fts_search(
                                 hcur, fts_query, scope, labels, HIDDEN_CAP,
-                                private_key=private_key, layer=layer, hidden=True)]
+                                private_key=private_key, layer=layer, hidden=True, span=span)]
                         else:
                             hwhere, hparams = _read_filters(scope, labels, private_key,
-                                                            layer, hidden=True)
+                                                            layer, hidden=True, span=span)
                             hterms = query.lower().split()[:5]
                             ids = [r[0] for r in hcur.execute(
                                 f"SELECT c.id FROM chunks c WHERE {hwhere} AND ("
@@ -2500,13 +2597,16 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
             if out is None:
                 results = [_format_chunk(*r[:6]) for r in rows]
                 out = f"Found {len(rows)} memories:\n" + "\n".join(results)
-            if layer is None:
+            if layer is None and not span:      # a document has no day
                 lib_block = _library_mixed(query, scope, private_key)
                 if lib_block:
                     out += "\n\n🏛 From the library:\n" + lib_block
+            day_block, day_seeds = _day_block()
+            if day_block:
+                out += "\n\n" + day_block
             if depth:
                 block = _spider_block(query, scope, private_key,
-                                      [r[0] for r in rows], depth)
+                                      [r[0] for r in rows] + day_seeds, depth)
                 if block:
                     out += "\n\n" + block
             if card_txt:
@@ -2529,28 +2629,28 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
             if fts_exact:
                 try:
                     rows = _fts_search(cursor, fts_exact, scope, labels, fetch_n,
-                                       private_key=private_key, layer=layer)
+                                       private_key=private_key, layer=layer, span=span)
                     if rows:
                         return _finish(rows, _hidden('fts', fts_exact))
 
                     fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
                     if fts_broad != fts_exact:
                         rows = _fts_search(cursor, fts_broad, scope, labels, fetch_n,
-                                           private_key=private_key, layer=layer)
+                                           private_key=private_key, layer=layer, span=span)
                         if rows:
                             return _finish(rows, _hidden('fts', fts_broad))
                 except sqlite3.OperationalError as e:
                     logger.warning(f"[MINDPALACE] FTS5 query failed: {e}")
 
         vec_results = _vector_search(query, scope, labels, fetch_n,
-                                     private_key=private_key, layer=layer)
+                                     private_key=private_key, layer=layer, span=span)
         if vec_results:
             return _finish(vec_results, _hidden('vector'))
 
         # LIKE fallback
         terms = query.lower().split()[:5]
         if terms:
-            where, params = _read_filters(scope, labels, private_key, layer)
+            where, params = _read_filters(scope, labels, private_key, layer, span=span)
             conditions = ' OR '.join(['c.content LIKE ?' for _ in terms])
             like_params = [f'%{t}%' for t in terms]
             with _get_connection() as conn:
@@ -2580,17 +2680,22 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
         # Zero direct hits — G4 rung 1/2 can still find an entity epicenter
         # (e.g. the query names someone whose facts use different words).
         card_lead = (card_txt + "\n\n") if card_txt else ''
+        day_block, day_seeds = _day_block()
+        day_tail = ("\n\n" + day_block) if day_block else ''
         if depth:
-            block = _spider_block(query, scope, private_key, [], depth)
+            block = _spider_block(query, scope, private_key, day_seeds, depth)
             if block:
                 return (f"No direct matches for '{query}'{layer_note}{label_note}.\n\n"
-                        + card_lead + block + hidden_note), True
+                        + card_lead + block + day_tail + hidden_note), True
 
-        if layer is None:
+        if layer is None and not span:
             lib_block = _library_mixed(query, scope, private_key)
             if lib_block:
                 return (f"No memories found for '{query}'{label_note}, but the "
-                        f"library has matches:\n\n" + card_lead + lib_block + hidden_note), True
+                        f"library has matches:\n\n" + card_lead + lib_block + day_tail + hidden_note), True
+        if day_block:
+            return (f"No memories found for '{query}'{layer_note}{label_note}, but your days "
+                    f"have matches:\n\n" + card_lead + day_block + hidden_note), True
         return (f"No memories found for '{query}'{layer_note}{label_note}."
                 + ("\n\n" + card_txt if card_txt else '') + hidden_note), True
 
@@ -2601,7 +2706,7 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
 
 def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                          layer: str = None, private_key: str = None,
-                         trim: int = None, exclude_ids=None) -> tuple:
+                         trim: int = None, exclude_ids=None, day: str = None) -> tuple:
     # trim / exclude_ids: internal callers only (the wake leg) — per-record
     # char cut at a word boundary ([id] + search_memory reaches the full
     # text) and ids an earlier wake block already showed (Upcoming).
@@ -2616,9 +2721,16 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
         layer, err = _validate_layer(layer)
         if err:
             return err, False
+        span, err = _day_span(day)
+        if err:
+            return err, False
         labels = _parse_labels(label)
         private_key = private_key.strip() if (private_key and private_key.strip()) else None
-        where, params = _read_filters(scope, labels, private_key, layer)
+        if layer == 'daily':
+            from plugins.mindpalace.tools import daily
+            return daily.recent_text(scope, count=count, private_key=private_key, span=span,
+                                     pt=sys.modules.get(__name__)), True
+        where, params = _read_filters(scope, labels, private_key, layer, span=span)
         # Recency is a LIVED feed — infrastructure rows stay out (their
         # content stays reachable via read_self and search):
         # - self-sheet section chunks: every update_self writes a new chunk,
@@ -2666,7 +2778,7 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
             # The private-model rows among the newest `count`: what the feed
             # would have held for a private reader. The wake feed stays quiet.
             try:
-                hwhere, hparams = _read_filters(scope, labels, private_key, layer, hidden=True)
+                hwhere, hparams = _read_filters(scope, labels, private_key, layer, hidden=True, span=span)
                 floor = rows[-1][2] if len(rows) >= count else ''
                 with _get_connection() as conn:
                     hidden_note = _hidden_note(conn.execute(
@@ -2680,8 +2792,13 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
             except Exception as e:
                 logger.warning(f"[MINDPALACE] hidden-row count skipped: {e}")
         if not rows:
-            notes = (f" in layer '{layer}'" if layer else "") + (f" with labels '{label}'" if labels else "")
-            return f"No memories stored{notes}." + hidden_note, True
+            notes = ((f" in layer '{layer}'" if layer else "") + (f" with labels '{label}'" if labels else "")
+                     + (f" for day '{day}'" if span else ""))
+            hint = ''
+            if span and not layer:
+                from plugins.mindpalace.tools import daily
+                hint = daily.span_hint(scope, span, private_key, pt=sys.modules.get(__name__))
+            return f"No memories stored{notes}." + hint + hidden_note, True
         if trim:
             def cut(text):
                 text = ' '.join(str(text).split())
@@ -2774,6 +2891,9 @@ def _delete_memory(memory_id: int, scope: str, private_key: str = None) -> tuple
                         f"slot.{_doc_id_hint(memory_id, scope)}"), False
             if not reader_private() and _chunk_is_private(cursor, memory_id):
                 return PRIVATE_MODEL_ROW.format(memory_id, 'deleted'), False
+            if row[3] in READ_ONLY_LAYERS:
+                return DAILY_READ_ONLY.format(f"Memory [{memory_id}] is part of a day and cannot be deleted "
+                                              f"by tool; the person can delete a day in the app."), False
             row_pk = row[2]
             if row_pk is not None and row_pk != private_key:
                 return f"Memory [{memory_id}] is private — pass the matching private_key to delete.", False
@@ -2977,6 +3097,8 @@ def _update_memory(memory_id: int, scope: str, content: str = None,
                 return (f"Memory [{memory_id}] is private — pass the matching "
                         f"private_key to update."), False
             layer = row[3]
+            if layer in READ_ONLY_LAYERS:
+                return DAILY_READ_ONLY.format(f"Memory [{memory_id}] is part of a day and cannot be edited."), False
             plugin_spec = _plugin_layers().get(layer)
             if plugin_spec and not plugin_spec.get('writable'):
                 return (f"Memory [{memory_id}] lives in read-only plugin layer "
@@ -3100,12 +3222,14 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
                                   layer=arguments.get("layer"),
                                   private_key=arguments.get("private_key"),
                                   depth=arguments.get("depth", 0),
-                                  doc=arguments.get("document_id"))
+                                  doc=arguments.get("document_id"),
+                                  day=arguments.get("day"))
         elif function_name == "get_recent_memories":
             return _get_recent_memories(scope, count=arguments.get("count", 10),
                                         label=arguments.get("label"),
                                         layer=arguments.get("layer"),
-                                        private_key=arguments.get("private_key"))
+                                        private_key=arguments.get("private_key"),
+                                        day=arguments.get("day"))
         elif function_name == "update_memory":
             memory_id, err = _parse_memory_id(arguments.get("memory_id"))
             if err:
@@ -3305,6 +3429,11 @@ def on_load():
         prompt_audit.register()
     except Exception as e:
         logger.warning(f"[MINDPALACE] prompt audit sink registration failed: {e}")
+    try:
+        from plugins.mindpalace.tools import daily
+        daily.start()                       # days are recorded after each daily compact
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] daily layer listener not started: {e}")
 
 
 def shutdown():
@@ -3313,6 +3442,9 @@ def shutdown():
     threads writing mind.db (migration hunt 2026-11-01, D6)."""
     global _backfill_stop
     _backfill_stop = True
+    dl = sys.modules.get('plugins.mindpalace.tools.daily')
+    if dl is not None:
+        dl.stop()
     pa = sys.modules.get('plugins.mindpalace.tools.prompt_audit')
     if pa is not None:
         try:

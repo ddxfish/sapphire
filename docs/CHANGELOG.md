@@ -1,3 +1,7 @@
+# 2.16.7 - Forever Memory
+- using /compact-daily adds yesterday's compact to forever memory
+- forever memory can be spidered via entities and dates
+- uses RAG to search directly in chunks
 # 2.16.6 - Per Sapphire ID
 - Each sapphire has its own unique id for later memory sync
 - Mind palace records sapphire ID and model used at write

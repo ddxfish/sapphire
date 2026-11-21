@@ -230,10 +230,12 @@ def test_delete_scope_kills_plugin_layer_rows(palace):
 
 
 def test_list_layers_route(palace):
-    assert browse.list_layers(query={}) == {'layers': []}
+    # The palace's own Daily layer is always listed (its tab is built from
+    # this route); plugin layers follow it.
+    assert [l['key'] for l in browse.list_layers(query={})['layers']] == ['daily']
     _register(writable=True, librarian=True)
     out = browse.list_layers(query={})
-    assert len(out['layers']) == 1
-    l = out['layers'][0]
+    assert len(out['layers']) == 2 and out['layers'][0]['view'] == 'daily'
+    l = out['layers'][1]
     assert l['key'] == 'lore' and l['plugin'] == PLUG
     assert l['writable'] is True and l['librarian'] is True

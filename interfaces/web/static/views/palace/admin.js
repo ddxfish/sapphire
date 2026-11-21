@@ -150,6 +150,7 @@ const OPS = [
           { label: '⚠ Clear ONE tab: Self', maint: 'clear_layer', layer: 'self', danger: true },
           { label: '⚠ Clear ONE tab: Entities', maint: 'clear_layer', layer: 'entities', danger: true },
           { label: '⚠ Clear ONE tab: Goals', maint: 'clear_layer', layer: 'goals', danger: true },
+          { label: '⚠ Clear ONE tab: Daily', maint: 'clear_layer', layer: 'daily', danger: true },
           { label: '⚠ Clear ONE tab: Knowledge (incl. Library files)', maint: 'clear_layer', layer: 'knowledge', danger: true },
       ] },
 ];

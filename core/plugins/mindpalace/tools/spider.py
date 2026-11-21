@@ -135,8 +135,12 @@ def _visible_chunk_clause(pt, scope, private_key):
     pk_sql, pk_params = pt._private_key_clause(private_key, col='c.private_key')
     # Archived sheet versions keep their edges but never enter the frontier —
     # same read rule as search/recents (their home is the section 📜 trail).
+    # The daily layer never enters the frontier: a day is read as a day
+    # (tools/daily.py), and its pieces, newest every night, would fill every
+    # tie-broken slot of a walk (scout hunt 2026-11-20).
     sql = (f"{scope_sql} AND {pk_sql} "
-           f"AND json_extract(c.meta, '$.superseded_at') IS NULL")
+           f"AND json_extract(c.meta, '$.superseded_at') IS NULL "
+           f"AND c.layer != 'daily'")
     params = scope_params + pk_params
     # Private-model rows never enter a cloud reader's frontier.
     gate = pt._chunk_gate('c')
@@ -272,9 +276,14 @@ def traverse(pt, cursor, seed_chunks, seed_entities, budget, scope, private_key)
                 out.append(('c', cid, base * f_imp(imp)))
             # Sideways: memories that mention this entity — hub-damped so a
             # mega-hub's fan doesn't flood the walk (pricing v2 header).
+            # A day that retells someone is not a memory of them: 'retells'
+            # edges are walked FROM a day to its people and never counted
+            # here, or a month of days would price a person's real memories
+            # out of every walk.
             damp = _degree_factor(cursor.execute(
                 "SELECT COUNT(*) FROM edges WHERE dst_type = 'entity' "
-                "AND dst_id = ? AND src_type = 'chunk'", (node_id,)).fetchone()[0])
+                "AND dst_id = ? AND src_type = 'chunk' AND kind != 'retells'",
+                (node_id,)).fetchone()[0])
             for cid, ekind, imp in cursor.execute(
                     f"SELECT d.src_id, d.kind, c.importance FROM edges d "
                     f"JOIN chunks c ON c.id = d.src_id "

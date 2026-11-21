@@ -60,6 +60,8 @@ export async function refreshPalaceTabs() {
         palaceGet('status').catch(() => null),
     ]);
     PLUGIN_LAYERS = layers.layers || [];
+    // A tab with no view behind it is a dead click (main.js registers them).
+    try { await window.__ensureLayerViews?.(PLUGIN_LAYERS); } catch {}
     if (status) setImportFinished(status.import_finished);
     for (let i = PALACE_TABS.length - 1; i >= 0; i--) {
         if (PALACE_TABS[i].id.startsWith('layer-')) PALACE_TABS.splice(i, 1);
@@ -130,12 +132,13 @@ export async function describeScopeForDelete(name) {
     try {
         const st = await palaceGet(`status?scope=${encodeURIComponent(name)}`);
         const L = st.layers || {};
-        const core = ['events', 'self', 'entities', 'knowledge', 'goals'];
+        const core = ['events', 'self', 'entities', 'knowledge', 'goals', 'daily'];
         const extra = Object.entries(L)
             .filter(([k]) => !core.includes(k))
             .reduce((a, [, n]) => a + n, 0);
         return `Right now “${name}” holds ${L.events || 0} memories, `
             + `${L.self || 0} self entries, ${st.entities || 0} entities, `
+            + (L.daily ? `${L.daily} pieces of daily summaries, ` : '')
             + (extra ? `${extra} plugin-layer chunks, ` : '')
             + `and ${L.knowledge || 0} knowledge chunks — ALL of it goes.`;
     } catch { return ''; }

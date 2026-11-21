@@ -46,7 +46,7 @@ Your source of truth stays yours. The palace holds a copy keyed by your
 
 | Field | Required | Meaning |
 |---|---|---|
-| `key` | yes | Lowercase identifier — letters, digits, underscores only (must be a valid Python identifier, so no hyphens). Unique across plugins; the first registrant wins. The reserved core layers (`self`, `events`, `entities`, `knowledge`, `goals`) are refused. |
+| `key` | yes | Lowercase identifier — letters, digits, underscores only (must be a valid Python identifier, so no hyphens). Unique across plugins; the first registrant wins. The reserved core layers (`self`, `events`, `entities`, `knowledge`, `goals`, `daily`) are refused. |
 | `label` | no | Display name (tab, chips). Defaults to the key, title-cased. |
 | `icon` | no | Emoji for the tab and flyout entry. |
 | `description` | no | One line shown in the AI's search tool description and on your tab. |
@@ -172,7 +172,7 @@ ledger lines.
 ## Reference for AI
 
 MEMORY LAYERS (plugin-declared Mind Palace layers):
-- Manifest: `capabilities.memory_layers` = [{key, label?, icon?, description?, librarian? (default false), writable? (default false), mode? ('mirror' only)}]. Key: lowercase valid identifier (no hyphens), unique across plugins, first registrant wins; reserved keys refused: self, events, entities, knowledge, goals. Registered at plugin load, unregistered at unload/disable; the AI's tool schemas update live both ways.
+- Manifest: `capabilities.memory_layers` = [{key, label?, icon?, description?, librarian? (default false), writable? (default false), mode? ('mirror' only)}]. Key: lowercase valid identifier (no hyphens), unique across plugins, first registrant wins; reserved keys refused: self, events, entities, knowledge, goals, daily. Registered at plugin load, unregistered at unload/disable; the AI's tool schemas update live both ways.
 - Requires the `mindpalace` plugin. Import lazily INSIDE functions: `from plugins.mindpalace.tools import layer_api` wrapped in try/except ImportError — never at module top level. The ImportError is real: with Mind Palace switched off the module refuses to import, so a mirror never lands in the palace database under the other engine.
 - API (`core/plugins/mindpalace/tools/layer_api.py`; import name stays `plugins.mindpalace...`):
   - `save(content, layer, scope='default', label=None, fields=None, source=None) -> (chunk_id|None, message)` — full pipeline (inline embedding, FTS, entity weaving), one ledger line per call; single items only, never loops.

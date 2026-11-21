@@ -125,3 +125,28 @@ def test_a_private_chat_resolves_privately(monkeypatch):
     monkeypatch.setattr('core.chat.llm_providers.resolve.resolve', _resolve)
     compress.make_provider('auto', '', conversation='c', private=True)
     assert seen['private'] is True
+
+
+def test_a_days_size_is_a_ceiling_and_routine_tasks_are_not_recapped():
+    head = _turn('2026-11-02T10:00:00', 1)
+    p = Provider()
+    compress.daily_pairs(compress.daily_plan(head, days=5, start_hour=4, now=NOW), p, 2000)
+    assert 'ceiling, not a goal' in p.prompts[0] and 'SCHEDULED TASK' in p.prompts[0]
+    assert 'tight prose' in p.prompts[0] and 'never in shorthand' in p.prompts[0]
+    q = Provider()                                                  # no day: the plain frame
+    compress.compress_messages(head, 'whole', q, 2000)
+    assert 'ceiling, not a goal' not in q.prompts[0]
+
+
+def test_a_row_the_person_did_not_write_is_not_labelled_user():
+    rows = [{'role': 'user', 'content': 'check the mail', 'origin': 'task:Morning mail'},
+            {'role': 'assistant', 'content': 'nothing new'},
+            {'role': 'user', 'content': 'tick', 'origin': 'cadence'},
+            {'role': 'user', 'content': 'hello'}]
+    text = compress.render_transcript(rows)
+    assert 'SCHEDULED TASK (Morning mail): check the mail' in text
+    assert 'NOT THE USER (cadence): tick' in text and '\n\nUSER: hello' in text
+    assert 'USER: check the mail' not in text
+    # A room names its speakers; that rule still comes first.
+    room = compress.render_transcript([{'role': 'user', 'content': 'hi', 'name': 'Ann', 'origin': 'room:Ann'}], room=True)
+    assert room == 'Ann: hi'

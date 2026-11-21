@@ -97,21 +97,32 @@ async function loadViews() {
 // (?layer= on the import URL = distinct instance), plus a Mind flyout item
 // after Goals. Registration + injection only happen for layers that exist,
 // so there's nothing to click before this resolves.
-async function loadPluginLayerViews() {
-    let layers = [];
-    try {
-        const r = await fetch('/api/plugin/mindpalace/layers', { credentials: 'same-origin' });
-        if (!r.ok) return;
-        layers = (await r.json()).layers || [];
-    } catch { return; }
+// Runs at boot and again from every Mind visit (refreshPalaceTabs hands it
+// the list it just fetched): a palace switched on after page load had its
+// layer tabs in the strip and no view behind them, so the click did nothing.
+const _layerViews = new Set();
+async function loadPluginLayerViews(known) {
+    let layers = Array.isArray(known) ? known : [];
+    if (!Array.isArray(known)) {
+        try {
+            const r = await fetch('/api/plugin/mindpalace/layers', { credentials: 'same-origin' });
+            if (!r.ok) return;
+            layers = (await r.json()).layers || [];
+        } catch { return; }
+    }
     if (!layers.length) return;
     const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let anchor = document.querySelector('.nav-flyout-item[data-view="goals"]');
     for (const l of layers) {
         const id = `layer-${l.key}`;
+        if (_layerViews.has(id)) continue;      // registering twice would reset a view that is open
+        // A layer may name its own page in views/palace/ (the palace's Daily
+        // layer shows whole days); every other layer gets the generic one.
+        const page = /^[a-z][a-z-]*$/.test(l.view || '') ? l.view : 'layer';
         try {
-            const mod = await import(`./views/palace/layer.js?layer=${encodeURIComponent(l.key)}${_v ? '&v=' + window.__v : ''}`);
+            const mod = await import(`./views/palace/${page}.js?layer=${encodeURIComponent(l.key)}${_v ? '&v=' + window.__v : ''}`);
             registerView(id, mod.default, { group: 'mind' });
+            _layerViews.add(id);
             if (anchor && !document.querySelector(`.nav-flyout-item[data-view="${id}"]`)) {
                 const item = document.createElement('div');
                 item.className = 'nav-flyout-item';
@@ -127,6 +138,8 @@ async function loadPluginLayerViews() {
         }
     }
 }
+
+window.__ensureLayerViews = loadPluginLayerViews;
 
 // DOM-dependent appearance bits only — density/font restore moved into the
 // index.html inline guard (pre-CSS, no reflow), theme re-assert lives in

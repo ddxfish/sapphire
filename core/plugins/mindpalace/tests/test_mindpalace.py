@@ -90,9 +90,9 @@ def test_schema_tables_and_seed(palace):
                          "mind_scopes", "chunks_fts"):
             assert expected in tables, f"missing table: {expected}"
 
-        # layers table seeded with exactly the 4 layer keys
+        # layers table seeded with exactly the seed layer keys
         layer_keys = {r[0] for r in conn.execute("SELECT key FROM layers").fetchall()}
-        assert layer_keys == {"self", "events", "entities", "knowledge", "goals"}
+        assert layer_keys == {"self", "events", "entities", "knowledge", "goals", "daily"}
 
         # FTS triggers present
         triggers = {r[0] for r in conn.execute(

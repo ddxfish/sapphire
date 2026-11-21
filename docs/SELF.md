@@ -158,6 +158,7 @@ MCP persona keys
 ## Plugins
 ### Mind
 Mind Palace memory
+Daily day summaries
 Keyed memories
 Entity contacts
 Goals subtasks journal

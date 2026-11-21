@@ -16,7 +16,7 @@ import threading
 logger = logging.getLogger(__name__)
 
 # The memory plugin's seed layers — plugin layers may never shadow these.
-RESERVED_KEYS = frozenset({'self', 'events', 'entities', 'knowledge', 'goals'})
+RESERVED_KEYS = frozenset({'self', 'events', 'entities', 'knowledge', 'goals', 'daily'})
 
 _lock = threading.Lock()
 _layers = {}        # key → {label, icon, description, librarian, mode, plugin_name}

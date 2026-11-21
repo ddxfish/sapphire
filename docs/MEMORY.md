@@ -17,6 +17,7 @@ The Mind Palace (the `mindpalace` plugin, on by default) keeps one database, `us
 | Entities | People, places, projects, things, each with a card | [PEOPLE.md](PEOPLE.md) |
 | Knowledge | The Library: notes, files, books, pictures | [KNOWLEDGE.md](KNOWLEDGE.md) |
 | Goals | What she's working toward, with subtasks and a journal | [GOALS.md](GOALS.md) |
+| Daily | One summary per finished day, kept when a chat is compacted by day | below |
 
 A graph of connections runs through all of it. A memory that names a person links to that person's card, a goal links to the people it involves, and a search can follow those links outward.
 
@@ -44,6 +45,22 @@ A memory saved with a private key is visible only to tool calls that pass the sa
 **One honest disclosure:** keyed text still goes to your embedding provider at save time. Embeddings power meaning-based search, so with a local embedder keyed text never leaves your machine, but with a remote one it's sent to that server. The key gates recall, not embedding. If fully local matters, use a local provider (Settings → Embedding).
 
 ---
+
+## Daily: a summary of every day
+
+When a chat is compacted by day (`/compact-daily`, by hand or from her nightly task, see [SLASH-COMMANDS.md](SLASH-COMMANDS.md#compact-daily)), each finished day becomes one summary in the chat. The chat only holds the last few days. The Daily layer keeps every one of them: the same summary is also saved to that chat's memory scope, so a day that has rolled off the chat is still found.
+
+- **She reads it, she doesn't write it.** A search shows matching days in their own block after her memories, marked as summaries. `layer='daily'` searches only the days, and `day=` asks by date: `2026-11-02`, `Nov 2`, `2026-11-02..2026-11-09`, `Monday` (the last one), `yesterday`, `3 days ago`, `last week`, `last month`. A date it can't read is an error, never a guess. Saving, editing and deleting there are refused for her.
+- **Mind → Daily** shows one card per day: the date, the chat and persona, the day's text, how many messages it covered, the model that wrote it and the people it names. The 🏠 switch keeps a day for private models only; ✕ deletes a whole day, and a deleted day is not recorded again.
+- **What is never recorded:** private chats, chat rooms, game chats, and chats with memory set to none. `/compact` (whole or chunked) does not feed it, only the by-day compact.
+- **Two chats on one scope** each keep their own day, named by chat. A day is kept once: a chat that moves to another persona does not copy its earlier days into the new one's memory.
+- **Shared by scope.** A day retells that day's whole conversation, and every chat on the same memory scope (and any model reading it) can find it. Most chats share `default`. Give a chat its own scope, or scope none, if its days should stay apart.
+- **People.** A day links to the people it names, once per person per day. A search that follows connections can go from a matching day to those people; a day never counts as a memory of them, so it can't crowd their real memories out.
+- **Renames and export.** A renamed chat's days follow the new name. Export and import move whole days, and a day you deleted is not brought back by an import.
+- **The librarian never tends this layer.** Days are not merged, dated, sorted or retired.
+- **Switch:** Mind → Settings → Memories → *Keep each day's summary* (on by default). Off stops new days; the ones already kept stay.
+
+Each time Sapphire starts, it also records any day summaries still sitting in your chats that it doesn't hold yet. That is the repair for a night when recording failed or the Mind Palace was off.
 
 ## Scopes
 
@@ -165,14 +182,15 @@ Installs older than 2.16 ran the classic engine, "Memory (legacy)". It still wor
 
 ## Reference for AI
 
-Memory = Mind Palace (plugin `mindpalace`, default). One DB user/memory/mind.db; layers self/events/entities/knowledge/goals + connection graph. Legacy plugin `memory` is retired from docs (README in core/plugins/memory); the two are mutually exclusive (same tool names).
+Memory = Mind Palace (plugin `mindpalace`, default). One DB user/memory/mind.db; layers self/events/entities/knowledge/goals/daily + connection graph. Legacy plugin `memory` is retired from docs (README in core/plugins/memory); the two are mutually exclusive (same tool names).
 
 SCOPES: one per chat, memory_scope (sidebar Mind section); 'global' overlay read-only for you; 'none' = no memory. Goals, library and entities ride the same scope (no goal/knowledge scope). Separate `people` scope ("contacts") = which person cards email/phone tools see.
 
 TOOLS:
 - save_memory(content, layer?, entity?, label?, private_key?, when?) — 512 cap (aim 450); over-cap = trimmed + receipt shows the cut ("Skip update_memory unless it's critical"); never write today's date in the text; when=YYYY-MM-DD marks a plan (Upcoming), 'none' clears; layer default events; layer='entities' needs entity=; entity= resolves nicknames, a near-name saves + asks "did you mean".
-- search_memory(query, layer?, label?, depth?, private_key?) — all layers; layer='knowledge' = library; depth 1-2 follows connections.
-- get_recent_memories, update_memory (keeps id/age/history), delete_memory.
+- search_memory(query, layer?, label?, day?, depth?, private_key?) — all layers; layer='knowledge' = library; depth 1-2 follows connections. day = only memories from then (not the library): 2026-11-02, Nov 2, 2026-11-02..2026-11-09, 2026-11, a weekday (the most recent one, never today), today, yesterday, day before yesterday, N days ago, this week, last week, this month, last month, last N days. Anything else ("tomorrow", "since Monday", "the 18th") is an error naming the accepted forms.
+- get_recent_memories(count?, layer?, label?, day?, private_key?), update_memory (keeps id/age/history), delete_memory.
+- DAILY layer (read-only for you): one summary per finished day, written by /compact-daily and kept by the palace in the chat's scope (source = that chat's day pairs; private chats, rooms, games, scope none never recorded; setting daily_enabled, default on). An all-layer search_memory leaves days out of the main results and adds a block "From your days" (at most 3 days, ~2400 chars shared by how much of each day matched; a matched passage brings the passage after it; one day matched reads long, several read short), tagged [daily] + date + [whole day] or [excerpt]; they are retellings, the memory itself is the source. That block needs every word of the query or a match by meaning (no loose single-word or prefix match); layer='daily' matches loosely. search_memory(layer='daily') = days only (~6000 chars shared). get_recent_memories(layer='daily') = index of recent days ([beginning] of each); with day= the days come whole and in order (over ~12000 chars: the index instead, narrow the day). Plain get_recent_memories never lists days. save_memory/update_memory/delete_memory refuse the layer; the user deletes a whole day in Mind → Daily and it is not recorded again. One connection per person per day (first mention), of its own kind: depth walks go from a matched day to its people, never land on a day's pieces, and a day never counts toward a person's mention load. A day is recorded once, in the scope the chat had then (a later persona or scope change copies nothing); a renamed chat's days follow the name. get_recent_memories(day=) with no layer, when only the days hold that date, says so. Librarian never tends it. Rows carry the chat's model as writer: a day summarized on a private model is a private-model row.
 - list_entities(kind?, limit?) — read-only roster; with kind, the filled-in fields. Merge/delete are UI-only.
 - read_self(section?, depth?, extra_tools?) — depth 0 (default) = sheet only; depth=1 at chat start = sheet + recent ledger + active goals + recent/important memories + who the sheet touches + wake tools' live results; depth 2 = wider. update_self edits the sheet (archived). read_ledger.
 - Goals: create_goal/list_goals/update_goal/delete_goal — see GOALS.md. Library: library, read_document, memory_save_image, memory_view_image, local_view_images — see KNOWLEDGE.md.

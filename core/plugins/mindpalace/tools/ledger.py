@@ -167,7 +167,9 @@ def tail_block(cursor, scope, depth=2):
         # plain 'saved' rows stay out of the tail there; quiet librarian
         # nights ("nothing to do") fold into one line instead of pushing
         # the human's own edits off the end (2026-10-31).
-        where = SHEET_WHERE + (" AND l.action != 'saved'" if depth else '') + _gate('l.wr_private')
+        # 'recorded' (a day kept, one line a night) stays out with them:
+        # read_ledger still shows it (scout hunt 2026-11-20).
+        where = SHEET_WHERE + (" AND l.action NOT IN ('saved', 'recorded')" if depth else '') + _gate('l.wr_private')
         rows = cursor.execute(
             f"SELECT l.ts, l.actor, l.summary, "
             f"  (SELECT r.summary FROM ledger r WHERE r.parent_id = l.id "

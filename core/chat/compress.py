@@ -66,10 +66,18 @@ def _text_of(content) -> str:
 def _speaker_label(m: Dict[str, Any], persona: str, room: bool) -> str:
     """Who a transcript line belongs to. A room's rows name their speaker. In
     a plain chat, ASSISTANT is the persona writing the summary ("I"), and a
-    reply stamped with another persona keeps that persona's name."""
+    reply stamped with another persona keeps that persona's name. A user row
+    the person did not write (origin: a task, cadence, an agent, the MCP
+    door) says so: labelled USER, the summary would tell them "you asked me
+    to". Such a row's own text usually names its sender."""
     role = m.get("role", "?")
     if room and role in ("user", "assistant") and m.get("name"):
         return str(m["name"])
+    if role == "user" and m.get("origin"):
+        kind, _, name = str(m["origin"]).partition(":")
+        if kind == "task":
+            return f"SCHEDULED TASK ({name})" if name else "SCHEDULED TASK"
+        return f"NOT THE USER ({m['origin']})"
     if role == "assistant" and persona and m.get("persona") not in (None, "", persona):
         return str(m["persona"])
     return role.upper()
@@ -198,6 +206,20 @@ _MERGE_FRAME = (
     "PARTIAL SUMMARIES:\n{text}"
 )
 
+# A day's summary only (it rides the frame, never the editable instructions,
+# so an instructions override cannot lose it). The size is a ceiling: said as
+# a size alone, models fill it on a quiet day.
+_DAILY_CLAUSE = (
+    " That size is a ceiling, not a goal: write only as much as the day needs, "
+    "and a quiet day may take a few hundred tokens. Write tight prose in "
+    "your own voice: whatever you choose to keep, say it once, in plain "
+    "words, without padding, and never in shorthand or abbreviations. Lines "
+    "labelled SCHEDULED "
+    "TASK are automatic jobs, not the USER speaking: leave a task that found "
+    "or changed nothing out entirely, without a word that it ran, and keep "
+    "one only when something came of it."
+)
+
 INSTRUCTIONS_PATH = Path(__file__).parent.parent.parent / "user" / "prompts" / "compress_instructions.txt"
 MAX_INSTRUCTIONS_CHARS = 8000
 
@@ -315,7 +337,7 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
         return []
     guide = _guide(instructions, persona)
     if day:
-        guide["voice"] += f" The conversation took place on {day_label(day)}."
+        guide["voice"] += f" The conversation took place on {day_label(day)}." + _DAILY_CLAUSE
     if mode == "chunked":
         per = max(MIN_PAIR_TOKENS, target_tokens // len(chunks))
         pairs = []

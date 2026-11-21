@@ -153,6 +153,34 @@ def import_data(body=None, **_):
     now = pt._now()
     keep_stamps = bool(b.get('keep_librarian_stamps'))
 
+    if layer == 'daily':
+        # Days arrive whole or not at all (tools/daily.py import_days): the
+        # row-by-row path below dedupes on content+created, and every piece
+        # of a day shares `created`.
+        from plugins.mindpalace.tools import daily
+        with pt._get_connection() as conn:
+            cur = conn.cursor()
+            out = daily.import_days(pt, cur, scope, chunks, data.get('scope'), now)
+            if out['imported']:
+                pt._ledger(scope, 'import', 'imported', layer=layer, cursor=cur,
+                           summary=(f"imported {out['days']} days ({out['imported']} pieces) from a file"
+                                    + (f" ({out['skipped']} pieces skipped)" if out['skipped'] else '')),
+                           detail={'src_scope': data.get('scope')})
+            conn.commit()
+        if out['imported']:
+            pt.reset_backfill_latch()
+            import threading
+            threading.Thread(target=pt._backfill_embeddings, name='mindpalace-import-backfill',
+                             daemon=True).start()
+        try:
+            pt._publish_mind(layer, scope, 'save')
+        except Exception:
+            pass
+        logger.info(f"[MINDPALACE] Import into '{scope}'/daily: {out['days']} days, "
+                    f"{out['imported']} pieces, {out['skipped']} skipped")
+        return {'success': True, 'imported': out['imported'], 'skipped': out['skipped'],
+                'entities_upserted': 0, 'edges_seeded': 0, 'arrived_as_history': 0}
+
     imported = skipped = edges_seeded = ents_upserted = as_history = 0
     with pt._get_connection() as conn:
         cur = conn.cursor()

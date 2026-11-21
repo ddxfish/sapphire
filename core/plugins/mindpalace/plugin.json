@@ -3,7 +3,7 @@
   "tool_expires": "never",
   "short_display_name": "Mind Palace",
   "short_name": "Mind Palace",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Mind Palace, Sapphire's memory engine: memories, people, knowledge and goals in layers behind one tool surface, tended by a librarian. One of two engines with Memory (legacy); only one runs at a time. The palace's Import tab copies the old data and never changes it.",
   "author": "sapphire",
   "icon": "🏛️",
@@ -296,6 +296,14 @@
         "tab": "Memories"
       },
       {
+        "key": "daily_enabled",
+        "type": "boolean",
+        "label": "Keep each day's summary",
+        "default": true,
+        "help": "When a chat is compacted by day (/compact-daily), each finished day's summary is also kept in the Daily layer of that chat's memory scope, so a day that rolls off the chat is still found by search and by date. A day is a retelling of that day's whole conversation, and it is kept per memory scope: every chat on the same scope, and any model that reads it, can find it. Give a chat its own scope (or scope none) if its days should not be shared. Private chats, chat rooms and chats with memory off are never recorded. Off: nothing new is recorded; days already kept stay.",
+        "tab": "Memories"
+      },
+      {
         "key": "knowledge_search_chunks",
         "type": "number",
         "label": "Knowledge: chunks per document in mixed search",
@@ -370,6 +378,21 @@
         "method": "GET",
         "path": "layers",
         "handler": "routes/browse.py:list_layers"
+      },
+      {
+        "method": "GET",
+        "path": "days",
+        "handler": "routes/daily_routes.py:list_days"
+      },
+      {
+        "method": "DELETE",
+        "path": "days",
+        "handler": "routes/daily_routes.py:delete_day"
+      },
+      {
+        "method": "POST",
+        "path": "days/private",
+        "handler": "routes/daily_routes.py:set_day_private"
       },
       {
         "method": "GET",

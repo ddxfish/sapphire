@@ -389,9 +389,11 @@ def backfill() -> dict:
         with pt._get_connection() as conn:
             cursor = conn.cursor()
             rows = cursor.execute(
+                # The daily layer stamps itself (tools/daily.py): one edge per
+                # person per DAY, which a per-row restamp here would undo.
                 "SELECT id, scope, content, entity_id, meta, created FROM chunks "
-                "WHERE meta IS NULL "
-                "OR COALESCE(json_extract(meta, '$.md_v'), 0) < ?",
+                "WHERE layer != 'daily' AND (meta IS NULL "
+                "OR COALESCE(json_extract(meta, '$.md_v'), 0) < ?)",
                 (MD_VERSION,)).fetchall()
             ent_cache = {}
             for cid, scope, content, entity_id, meta_raw, created in rows:
