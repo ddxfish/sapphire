@@ -1,16 +1,14 @@
-"""ComfyUI image generation — submit custom workflows to a local ComfyUI server.
+"""ComfyUI tools: run one of the installed workflows on the user's ComfyUI server.
 
-Users drop their workflow JSON (API format) into user/comfyui/workflows/.
-The tool loads the workflow, injects the prompt text, and submits to ComfyUI.
+Workflows are added in Settings > Plugins > ComfyUI (upload a file, or import ComfyUI's
+last run). The graph logic and the HTTP client live in plugins.comfyui.comfy.
 """
-
-import base64
 import io
-import json
 import logging
 import random
-import time
 from pathlib import Path
+
+from plugins.comfyui import comfy as cf
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +16,9 @@ ENABLED = True
 EMOJI = "\U0001F3A8"
 TOOL_CATEGORY = 'media'
 
-from core.paths import PROJECT_ROOT
-WORKFLOW_DIR = PROJECT_ROOT / "user" / "comfyui" / "workflows"
+MAX_PX = 2160          # the long side of a picture kept in chat
+MAX_PICS = 12
+MAX_FILES = 4
 
 TOOLS = [
     {
@@ -29,18 +28,22 @@ TOOLS = [
         "function": {
             "name": "comfy_generate",
             "description": (
-                "Generate an image with ComfyUI. It appears in chat for you and the user."
+                "Generate an image or a video with ComfyUI. It appears in chat for you and the user."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "Detailed description: subject, style, lighting, composition"
+                        "description": "Detailed description: subject, style, lighting, composition (for video: what happens)"
                     },
                     "workflow": {
                         "type": "string",
-                        "description": "Workflow filename without .json. Omit for the default."
+                        "description": "Workflow name from comfy_list_workflows. Omit for the default."
+                    },
+                    "image": {
+                        "type": "string",
+                        "description": "Input image for a workflow that edits or animates one: img:<id>, doc:<N>, a path or a URL"
                     },
                     "width": {
                         "type": "integer",
@@ -64,7 +67,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "comfy_list_workflows",
-            "description": "List installed ComfyUI workflows.",
+            "description": "List installed ComfyUI workflows: what each makes and whether it takes an input image.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -75,7 +78,9 @@ TOOLS = [
 ]
 
 
-def _get_settings():
+def _settings(given=None):
+    if given:
+        return given
     try:
         from core.plugin_loader import plugin_loader
         return plugin_loader.get_plugin_settings("comfyui") or {}
@@ -83,283 +88,191 @@ def _get_settings():
         return {}
 
 
-def _get_workflows():
-    """List available workflow files."""
-    WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
-    return sorted(WORKFLOW_DIR.glob("*.json"))
+def _int(v):
+    if v in (None, '') or isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
-def _load_workflow(name=None):
-    """Load a workflow JSON. Priority: explicit name > settings default > first alphabetically."""
-    workflows = _get_workflows()
-    if not workflows:
-        return None, "No workflows found. Put a ComfyUI API-format workflow JSON in user/comfyui/workflows/"
-
-    if name:
-        # Find by name (with or without .json)
-        target = WORKFLOW_DIR / f"{name}.json"
-        if not target.exists():
-            target = WORKFLOW_DIR / name
-        if not target.exists():
-            available = ", ".join(w.stem for w in workflows)
-            return None, f"Workflow '{name}' not found. Available: {available}"
-        return json.loads(target.read_text(encoding="utf-8")), None
-
-    # Check settings for a default
-    settings = _get_settings()
-    default_name = settings.get("default_workflow", "").strip()
-    if default_name:
-        target = WORKFLOW_DIR / f"{default_name}.json"
-        if target.exists():
-            return json.loads(target.read_text(encoding="utf-8")), None
-
-    # Fall back to first alphabetically
-    return json.loads(workflows[0].read_text(encoding="utf-8")), None
+def _private():
+    """Is this a private chat? Any doubt reads as yes."""
+    try:
+        from core.chat.function_manager import scope_private
+        return bool(scope_private.get())
+    except Exception:
+        return True
 
 
-def _available_workflow_names():
-    """Get list of workflow names for tool descriptions."""
-    return [w.stem for w in _get_workflows()]
+def _guard_private(url, source):
+    """The tool is flagged local so it works in a private chat. That only holds while
+    nothing leaves this network: no picture fetched from the web, no ComfyUI out on it."""
+    from core import net
+    host = cf.host_of(url)
+    if net.classify(host) == 'wan':
+        raise cf.ComfyError(f"This chat is private and ComfyUI is at {host}, outside this network, so nothing was sent.")
+    if source and not (source.startswith(('img:', 'doc:')) or Path(source).is_absolute()):
+        raise cf.ComfyError("In a private chat the input image has to be one that is already here "
+                            "(img:<id>, doc:<N> or a file path), not a web address.")
 
 
-def _inject_prompt(workflow, prompt_text, seed=None, width=None, height=None):
-    """Inject prompt text, seed, width, height into a workflow.
-
-    Scans all nodes for common patterns:
-    - CLIPTextEncode with a 'text' input → inject prompt (first match = positive prompt)
-    - KSampler/SamplerCustom with 'seed' → inject seed
-    - EmptyLatentImage with 'width'/'height' → inject dimensions
-    - Any node with a 'text' widget that looks like a prompt field
-    """
-    prompt_injected = False
-    seed_injected = False
-    size_injected = False
-
-    for node_id, node in workflow.items():
-        if not isinstance(node, dict):
-            continue
-        class_type = node.get("class_type", "")
-        inputs = node.get("inputs", {})
-
-        # Prompt injection — CLIPTextEncode or similar text nodes
-        if not prompt_injected:
-            if class_type in ("CLIPTextEncode", "CLIPTextEncodeFlux"):
-                if "text" in inputs:
-                    # Only inject into nodes that have non-empty text or are the first text encoder
-                    existing = inputs.get("text", "")
-                    if isinstance(existing, str):  # Not a link
-                        inputs["text"] = prompt_text
-                        prompt_injected = True
-                        logger.info(f"[COMFY] Injected prompt into node {node_id} ({class_type})")
-
-        # Seed injection
-        if seed is not None and not seed_injected:
-            if class_type in ("KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced"):
-                if "seed" in inputs and isinstance(inputs["seed"], (int, float)):
-                    inputs["seed"] = seed
-                    seed_injected = True
-                    logger.info(f"[COMFY] Injected seed {seed} into node {node_id}")
-
-        # Size injection
-        if (width or height) and not size_injected:
-            if class_type in ("EmptyLatentImage", "EmptySD3LatentImage"):
-                if width and "width" in inputs:
-                    inputs["width"] = width
-                if height and "height" in inputs:
-                    inputs["height"] = height
-                size_injected = True
-                logger.info(f"[COMFY] Injected size {width}x{height} into node {node_id}")
-
-    # Fallback: if no CLIPTextEncode found, scan for any 'text' string field
-    if not prompt_injected:
-        for node_id, node in workflow.items():
-            if not isinstance(node, dict):
-                continue
-            inputs = node.get("inputs", {})
-            if "text" in inputs and isinstance(inputs["text"], str):
-                inputs["text"] = prompt_text
-                prompt_injected = True
-                logger.info(f"[COMFY] Injected prompt into node {node_id} (fallback)")
-                break
-
-    if not prompt_injected:
-        logger.warning("[COMFY] Could not find a text node to inject prompt into")
-
-    return prompt_injected
+def _seconds(v, default):
+    try:
+        return max(10.0, min(float(v), 86400.0))
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def execute(function_name, arguments, config=None, plugin_settings=None, credentials=None):
-    if function_name == "comfy_list_workflows":
-        return _exec_list_workflows()
-    elif function_name == "comfy_generate":
-        return _exec_generate(arguments, plugin_settings)
+    try:
+        if function_name == "comfy_list_workflows":
+            return _list(_settings(plugin_settings)), True
+        if function_name == "comfy_generate":
+            return _generate(arguments or {}, _settings(plugin_settings)), True
+    except cf.ComfyError as e:
+        return str(e), False
+    except Exception as e:
+        # the log keeps the detail; her copy gets no Python text and no paths from this machine
+        logger.error(f"[COMFY] {function_name} failed: {e}", exc_info=True)
+        return f"Something went wrong inside the ComfyUI plugin ({type(e).__name__}). Its log has the detail.", False
     return f"Unknown function: {function_name}", False
 
 
-def _exec_list_workflows():
-    workflows = _get_workflows()
-    if not workflows:
-        return "No workflows installed. Put ComfyUI API-format .json files in user/comfyui/workflows/", True
-
-    settings = _get_settings()
-    default_name = settings.get("default_workflow", "").strip()
-
-    # Determine which is actually the default
-    if default_name and (WORKFLOW_DIR / f"{default_name}.json").exists():
-        active_default = default_name
-    else:
-        active_default = workflows[0].stem
-
-    lines = ["Available workflows:"]
-    for w in workflows:
-        size_kb = w.stat().st_size // 1024
-        is_default = " (default)" if w.stem == active_default else ""
-        lines.append(f"  {w.stem}{is_default} ({size_kb}KB)")
-    lines.append(f"\nUse: comfy_generate(prompt='...', workflow='{workflows[0].stem}') to specify one.")
-    return "\n".join(lines), True
-
-
-def _exec_generate(arguments, plugin_settings=None):
-    import requests
-    from core import net
-
-    prompt_text = arguments.get("prompt", "").strip()
-    if not prompt_text:
-        return "No prompt provided", False
-
-    workflow_name = arguments.get("workflow")
-    seed = arguments.get("seed") or random.randint(1, 2**31)
-    width = arguments.get("width")
-    height = arguments.get("height")
-
-    settings = plugin_settings or _get_settings()
-    comfy_url = settings.get("comfy_url", "http://127.0.0.1:8188")
-    poll_interval = int(settings.get("poll_interval", 2))
-    timeout = int(settings.get("timeout", 300))
-
-    # Load workflow
-    workflow, err = _load_workflow(workflow_name)
-    if err:
-        return err, False
-
-    # Strip non-node keys (comments, metadata) — ComfyUI expects only node dicts
-    workflow = {k: v for k, v in workflow.items() if isinstance(v, dict) and "class_type" in v}
-
-    if not workflow:
-        return "Workflow has no valid nodes — make sure you exported in API format", False
-
-    # Inject prompt, seed, dimensions
-    injected = _inject_prompt(workflow, prompt_text, seed=seed, width=width, height=height)
-    if not injected:
-        return "Could not inject prompt into workflow — no compatible text node found", False
-
-    logger.info(f"[COMFY] Generating: {prompt_text[:60]}... (seed={seed})")
-
+def _line(name, path, default):
     try:
-        # Check if ComfyUI is running
+        d = cf.describe(*cf.read(path))
+    except cf.ComfyError as e:
+        return f"  {name}: unusable. {e}"
+    except Exception as e:                       # one odd file must not take the list down
+        logger.warning(f"[COMFY] {name} can't be described: {e}")
+        return f"  {name}: unusable. Its file isn't a workflow ComfyUI could run."
+    bits = [d['kind']]
+    if d['takes_image']:
+        bits.append('takes an input image')
+    if d['size']:
+        bits.append(f"{d['size'][0]}x{d['size'][1]}")
+    return (f"  {name}{' (default)' if name == default else ''}: {', '.join(bits)}"
+            + (f". {d['description']}" if d['description'] else ''))
+
+
+def _list(settings):
+    default = cf.pick(None, settings.get('default_workflow'))[0]         # raises the "none installed" words
+    lines = [_line(name, path, default) for name, path in cf.workflows().items()]
+    return "Installed workflows:\n" + "\n".join(lines) + f"\n\nUse comfy_generate(prompt='...', workflow='{default}')."
+
+
+def _generate(args, settings):
+    prompt = args.get('prompt')
+    if prompt is not None and not isinstance(prompt, str):
+        raise cf.ComfyError("The prompt has to be text.")
+    if not (prompt or '').strip():
+        raise cf.ComfyError("No prompt provided")
+    prompt = prompt.strip()
+    workflow = args.get('workflow')
+    name, path = cf.pick(workflow if isinstance(workflow, str) else None, settings.get('default_workflow'))
+    graph, meta = cf.read(path)
+    kind = cf.kind(graph)
+
+    comfy, image = cf.Comfy(settings.get('comfy_url')), None
+    source = args.get('image')
+    source = source.strip() if isinstance(source, str) else ''
+    if _private():
+        _guard_private(comfy.url, source)
+    if source:
+        if not cf.image_target(graph, meta):
+            raise cf.ComfyError(f"Workflow '{name}' takes no input image. comfy_list_workflows shows the ones that do.")
+        from core import images as ci
         try:
-            net.get(f"{comfy_url}/system_stats", timeout=3)
-        except Exception:
-            return f"ComfyUI not reachable at {comfy_url}. Make sure it's running.", False
+            image = comfy.upload(ci.resolve(source).data)
+        except ci.ImageError as e:
+            raise cf.ComfyError(str(e)) from None
 
-        # Submit workflow
-        resp = net.post(
-            f"{comfy_url}/prompt",
-            json={"prompt": workflow},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            error_text = resp.text[:300]
-            return f"ComfyUI rejected the workflow: {error_text}", False
+    seed = _int(args.get('seed'))
+    if seed is None or seed < 0:
+        seed = random.randint(1, 2 ** 31 - 1)
+    size = {k: _int(args.get(k)) for k in ('width', 'height')}
+    unread = [f"{k} {str(args[k])[:20]!r}" for k in size if args.get(k) not in (None, '') and (size[k] is None or size[k] <= 0)]
+    run, notes = cf.apply(graph, meta, prompt, seed, size['width'] if not unread else None,
+                          size['height'] if not unread else None, image)
+    if unread:
+        notes.append(f"Couldn't read the size ({', '.join(unread)}): width and height are whole numbers of pixels. "
+                     "The workflow kept its own.")
+    wait = (_seconds(settings.get('timeout'), 300) if kind == 'image'
+            else _seconds(settings.get('video_timeout'), 1200))
+    logger.info(f"[COMFY] {name}: {kind}, seed {seed}, waiting up to {int(wait)} s")
 
-        data = resp.json()
-        prompt_id = data.get("prompt_id")
-        if not prompt_id:
-            return "ComfyUI returned no prompt_id", False
+    outputs, fixed = comfy.run(run, wait)
+    notes += [f"Read '{f['value']}' as '{f['to']}' on this ComfyUI." for f in fixed]
+    items = cf.outputs_of(outputs)
+    if not items:
+        raise cf.ComfyError("ComfyUI finished but handed back no file. The workflow needs a Save Image or Save Video "
+                            "node" + ("" if cf.seed_inputs(graph) else
+                                      ", and with no seed input ComfyUI skips a run it has already made") + ".")
+    return _deliver(comfy, name, items, seed, prompt, notes)
 
-        logger.info(f"[COMFY] Queued prompt {prompt_id}")
 
-        # Poll for completion
-        elapsed = 0
-        output_images = None
-
-        while elapsed < timeout:
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-
-            hist_resp = net.get(f"{comfy_url}/history/{prompt_id}", timeout=10)
-            if hist_resp.status_code != 200:
-                continue
-
-            history = hist_resp.json()
-            if prompt_id not in history:
-                continue
-
-            entry = history[prompt_id]
-            status = entry.get("status", {})
-
-            if status.get("status_str") == "error":
-                msgs = status.get("messages", [])
-                error_text = str(msgs) if msgs else "Unknown error"
-                return f"ComfyUI generation failed: {error_text}", False
-
-            if status.get("completed", False) or entry.get("outputs"):
-                output_images = entry.get("outputs", {})
-                break
-
-        if output_images is None:
-            return f"ComfyUI timed out after {timeout}s", False
-
-        # Find output image
-        image_data = None
-        for node_id, node_output in output_images.items():
-            images = node_output.get("images", [])
-            if images:
-                img_info = images[0]
-                filename = img_info.get("filename")
-                subfolder = img_info.get("subfolder", "")
-                img_type = img_info.get("type", "output")
-
-                params = {"filename": filename, "type": img_type}
-                if subfolder:
-                    params["subfolder"] = subfolder
-                img_resp = net.get(f"{comfy_url}/view", params=params, timeout=30)
-                if img_resp.status_code == 200:
-                    image_data = img_resp.content
-                    break
-
-        if not image_data:
-            return "Generation completed but no image found in output", False
-
-        # Resize for chat if huge
-        try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(image_data))
-            max_px = 2160
-            if max(img.size) > max_px:
-                ratio = max_px / max(img.size)
-                img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
-            if img.mode in ('RGBA', 'P'):
-                img = img.convert('RGB')
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=90)
-            image_data = buf.getvalue()
-        except Exception:
-            pass
-
-        b64 = base64.b64encode(image_data).decode()
-
-        wf_label = workflow_name or _get_workflows()[0].stem if _get_workflows() else "unknown"
-        summary = (
-            f"Generated image with workflow '{wf_label}', seed={seed}\n"
-            f"Prompt: {prompt_text[:200]}"
-        )
-
-        return {
-            "text": summary,
-            "images": [{"data": b64, "media_type": "image/jpeg"}]
-        }, True
-
+def _shape(raw):
+    """A still as the chat keeps it: at most MAX_PX on the long side; PNG only when it
+    is really see-through (a JPEG would paint that black)."""
+    from core import images as ci
+    from PIL import Image
+    try:
+        # the bytes come from another machine: only the plain picture formats are ever decoded
+        img = Image.open(io.BytesIO(raw), formats=cf.SAFE_FORMATS)
+        if img.mode in ('RGBA', 'LA', 'PA') or 'transparency' in img.info:
+            rgba = img.convert('RGBA')
+            if rgba.getextrema()[3][0] < 255:
+                rgba.thumbnail((MAX_PX, MAX_PX), Image.LANCZOS)
+                buf = io.BytesIO()
+                rgba.save(buf, 'PNG')
+                return buf.getvalue()
+        return ci.for_chat(raw, max_px=MAX_PX, quality=90)
     except Exception as e:
-        logger.error(f"[COMFY] Generation failed: {e}", exc_info=True)
-        return f"ComfyUI generation error: {e}", False
+        logger.warning(f"[COMFY] an output picture can't be opened: {e}")
+        raise cf.ComfyError("ComfyUI handed back a picture that can't be opened.") from None
+
+
+def _deliver(comfy, name, items, seed, prompt, notes):
+    """Fetch what the run made and shape the tool result: stills go to the chat's image
+    store, clips are kept on disk and played from this plugin's file route."""
+    from core import attachments, images as ci
+    pics = [i for i in items if i['kind'] == 'image'][:MAX_PICS]
+    files = [i for i in items if i['kind'] != 'image'][:MAX_FILES]
+    made, lines, shown, links = [], [], [], []
+
+    for n, item in enumerate(files):
+        dest = cf.keep(name, Path(item['filename']).suffix.lower())
+        comfy.fetch(item, dest)
+        links.append({'url': f'/api/plugin/comfyui/file/{dest.name}', 'name': dest.name})
+        frames, seconds = cf.stills(dest) if n == 0 else ([], None)
+        what = {'video': 'clip', 'audio': 'audio file'}.get(item['kind'], 'file')
+        made.append(f"a {f'{seconds:.0f} s ' if seconds else ''}{what} '{dest.name}'")
+        if len(frames) > 1:
+            shown.append(ci.contact_sheet(frames))
+            lines.append(f"You're looking at {len(frames)} frames of it, start to end.")
+        elif frames:
+            shown.append(ci.for_chat(frames[0]))
+            lines.append("You're looking at its first frame.")
+        elif n == 0 and item['kind'] == 'video':
+            lines.append("(No frames to show you: " + ("ffmpeg couldn't read the clip.)" if cf.has_ffmpeg()
+                                                        else "this machine has no ffmpeg.)"))
+
+    if len(pics) == 1:
+        shown.append(_shape(comfy.fetch(pics[0])))
+        made.append("an image")
+    elif pics:
+        entries = [{'raw': _shape(comfy.fetch(p))} for p in pics]
+        sheet, tail = ci.gallery(f"ComfyUI: {name}", entries)
+        shown += sheet
+        made.append(f"{len(pics)} images")
+        lines += [f"{i}. {e['handle']}" for i, e in enumerate(entries, 1) if e.get('handle')] + [tail]
+
+    text = (f"Made {' and '.join(made)} with workflow '{name}', seed {seed}. Already shown to the user.\n"
+            f"Prompt: {prompt[:200]}")
+    for extra in notes + lines:
+        text += "\n" + extra
+    if links:
+        text += "\n" + attachments.marker(f"ComfyUI: {name}", links)
+    return ci.result(text, shown) if shown else text

@@ -193,7 +193,7 @@ SSH remote commands
 MCP client
 WordPress admin
 ### Media
-ComfyUI images
+ComfyUI images, video
 SD server images
 Blender bpy control
 Webcam

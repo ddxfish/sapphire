@@ -110,7 +110,7 @@ One primitive (`core/images.py`), one return contract, one handle. Every tool th
 | `telegram_send_image` | telegram plugin | Send an image (`source=` any handle; default = newest image of this chat) |
 | `discord_send_image` | discord plugin | Post an image to a Discord channel (`source=` any handle or URL; default = newest image of this chat) |
 | `generate_image` | sd-server plugin (off) | Generate images on a local SD server (single or contact sheet) |
-| `comfy_generate` / `comfy_list_workflows` | comfyui plugin (off) | Generate an image with a ComfyUI workflow / list installed workflows |
+| `comfy_generate` / `comfy_list_workflows` | comfyui plugin (off) | Generate an image or a video with a ComfyUI workflow / list installed workflows |
 
 Images you paste into the composer get the same treatment: they're kept in the chat's image store with an `img:` receipt she can hand to any image tool.
 

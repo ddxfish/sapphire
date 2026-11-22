@@ -1,132 +1,111 @@
 # ComfyUI Plugin
 
-Generate images using your local ComfyUI server. Bring any workflow — Sapphire injects your prompt and handles the rest. She sees the generated image and can comment on it.
+Generate images and video with your own ComfyUI workflows. ComfyUI can run on this machine or on another one. Sapphire writes the prompt into your workflow, runs it, and shows the result in chat. She sees the image (or three frames of a video) and can comment on it.
 
 ## Quick Start
 
-1. Install and run [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
-2. Enable this plugin in Sapphire **Settings > Plugins**
-3. Set the **ComfyUI Server URL** (default: `http://127.0.0.1:8188`)
-4. Add a workflow (see below)
-5. Ask Sapphire to generate an image
+1. Install and run [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
+2. Enable this plugin in Sapphire: **Settings > Plugins**.
+3. Open **Settings > Plugins > ComfyUI**. Set the ComfyUI address and press **Test**.
+4. Add a workflow (below).
+5. Ask Sapphire to generate an image.
+
+No workflow ships with the plugin. Models change too fast for a shipped one to stay useful, and yours are better.
 
 ## Adding a Workflow
 
-The plugin needs a ComfyUI workflow in **API format** — a simplified version of the visual workflow that contains just the processing nodes.
+Get the workflow working in ComfyUI first: load it, let ComfyUI download its models, and run it once. Then use one of three ways in.
 
-### Step 1: Set Up in ComfyUI
-
-1. Open ComfyUI in your browser (`http://localhost:8188`)
-2. Load or build any workflow you want (from templates, Civitai, etc.)
-3. ComfyUI will prompt you to download any missing models — **do this now**
-4. Test it: enter a prompt, click Generate, make sure it produces an image
-
-### Step 2: Export for Sapphire
-
-1. In ComfyUI, go to **File > Export (API)**
-2. Save the `.json` file to: `user/comfyui/workflows/`
-
-That's it. The workflow is now available to Sapphire.
-
-### What is "API Format"?
-
-ComfyUI has two workflow formats:
-
-| Format | What it contains | Used by |
-|---|---|---|
-| **Visual** (default Save) | Node positions, colors, UI layout, link arrays | ComfyUI's visual editor |
-| **API** (File > Export API) | Just nodes: class_type + inputs, no UI data | ComfyUI's `/prompt` REST API |
-
-Sapphire uses the API format because it only needs to know **what to run**, not how it looks in the editor. The API format is typically much smaller.
-
-### Multiple Workflows
-
-Drop multiple `.json` files in the workflows folder:
-
-```
-user/comfyui/workflows/
-  qwen-image-2512.json     <- used by default (first alphabetically)
-  sdxl-turbo.json
-  flux-schnell.json
-```
-
-Sapphire uses the first one by default. To use a specific workflow:
-- Ask: "generate with sdxl-turbo: a cat in space"
-- Or: "list workflows" to see what's available
-
-## How It Works
-
-When Sapphire generates an image:
-
-1. **Loads** your workflow JSON from `user/comfyui/workflows/`
-2. **Finds** the text prompt node (`CLIPTextEncode`) and injects your prompt
-3. **Sets** a random seed on the sampler node (`KSampler`)
-4. **Submits** the workflow to ComfyUI's `/prompt` API
-5. **Polls** until ComfyUI finishes generating
-6. **Downloads** the output image from ComfyUI
-7. **Shows** it in chat — both you and Sapphire see it
-
-The plugin auto-detects standard node types:
-
-| Node Type | What gets injected |
+| Way | How |
 |---|---|
-| `CLIPTextEncode` | Your prompt text (first text node found) |
-| `KSampler` | Random seed (for reproducibility) |
-| `EmptyLatentImage` | Width/height (if you specify them) |
-| `SaveImage` | Where the output image is saved |
+| **Import last ComfyUI run** | Press the button in the panel and give it a name. Sapphire takes the last run that worked, exactly as ComfyUI executed it. Nothing to export. |
+| **Upload a workflow file** | In ComfyUI: **File > Export (API)**. Upload that `.json` in the panel. |
+| **Upload a picture** | Any PNG that ComfyUI's Save Image node saved carries its workflow. Upload the PNG. |
 
-Most standard workflows work without any modification.
+ComfyUI's normal **Save** writes its editor format, which only ComfyUI's own page can run. The panel says so if you upload one. Use Export (API) or Import last run instead.
 
-## Important: Models
+Workflows are kept in `user/comfyui/workflows/`. You can also drop API-format `.json` files there by hand.
 
-The workflow references model files by name (e.g. `qwen_image_2512_fp8_e4m3fn.safetensors`). These models must be installed in your ComfyUI `models/` directory.
+Adding a workflow under a name that is already there asks before it replaces the old one. The description stays; a prompt node you picked does not, because node numbers belong to the old graph.
 
-**Sapphire does not download models.** ComfyUI handles model management. The recommended flow:
+## ComfyUI on Another Machine
 
-1. Load the visual workflow in ComfyUI first
-2. ComfyUI detects missing models and offers download links
-3. Download them through ComfyUI
-4. Then export the API format for Sapphire
+1. On the ComfyUI machine, start it with `--listen` (for example `python main.py --listen`). Without it, ComfyUI answers only its own machine.
+2. In the panel, set the address to that machine: `http://192.168.1.20:8188`. Press **Test**; it answers with the ComfyUI version and GPU.
 
-If someone shares a workflow with you, load it in ComfyUI first to get the model downloads, then export the API format.
+Workflows stay with Sapphire. Only the models live with ComfyUI.
 
-## Included Workflow
+### Moving a workflow between machines
 
-A **Qwen Image 2512** workflow is included as an example. It requires these models:
+Press **Download** on a workflow, carry the file to the other Sapphire, and **Upload** it there. Its description and settings travel inside the file.
 
-```
-ComfyUI/models/
-  diffusion_models/  qwen_image_2512_fp8_e4m3fn.safetensors
-  text_encoders/     qwen_2.5_vl_7b_fp8_scaled.safetensors
-  vae/               qwen_image_vae.safetensors
-```
+Then press **Check**. It compares the workflow with that ComfyUI's own lists and names what is missing:
 
-Load the Qwen Image 2512 template in ComfyUI to download these automatically.
+- a model file, and the `models/` folder it belongs in
+- a custom node that is not installed there
+
+A model that is the same file under another path is matched by itself: a Windows `flux\dev.safetensors` runs on a Linux `flux/dev.safetensors`, and the same file kept in another subfolder is found by name.
+
+## What Sapphire Sets
+
+| In your workflow | What she sets |
+|---|---|
+| The positive prompt | Found by following the main sampler's `positive` link back to where the text is typed, through guiders, ControlNet and image-to-video nodes, and string nodes. A negative prompt is never overwritten. A face detailer or tiled upscaler keeps its own prompt |
+| Every seed | A random seed, or the one she names. Also a seed typed in a number node and wired in |
+| The size | Width and height, on the node that sets the size at the start of the sampler's chain. A workflow that upscales on the way (hires fix) keeps its own size |
+| A Load Image node | The picture she passes, for workflows that edit or animate one. A reference image (a ControlNet pose, an IPAdapter style, a mask) is left alone |
+
+Only the part of the workflow that reaches a save or preview node counts. A leftover branch that ComfyUI would not run is ignored.
+
+When a workflow has no place for something she asked for, or two places would both fit, the tool says so in its answer instead of guessing in silence. The panel shows **Her prompt goes into** and **Her input image goes into** wherever there is a choice, and what you pick there wins.
+
+Give each workflow a description in the panel. She reads it when she chooses one.
+
+## Video and Audio
+
+A workflow with a Save Video node works the same way. The clip is kept in `user/comfyui/outputs/` and plays in chat, with a download button. Sapphire is shown three frames of it (start, middle, end); this needs `ffmpeg` on the Sapphire machine. Without ffmpeg the clip still reaches you, and she is told she can't see it.
+
+Clips are never deleted by themselves. The panel shows how much space they take and has a **Delete all** button. Clips are plain files: unlike chat images, they are not stored inside a private chat's vault.
+
+Video takes longer than an image, so it has its own wait.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `comfy_generate` | Generate an image from a text prompt |
-| `comfy_list_workflows` | List available workflow files |
+| `comfy_generate` | Run a workflow: `prompt`, and optionally `workflow`, `image`, `width`, `height`, `seed` |
+| `comfy_list_workflows` | List the workflows: what each makes, its size, whether it takes an input image, your description |
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| ComfyUI Server URL | `http://127.0.0.1:8188` | Where ComfyUI is running |
-| Poll Interval | 2 seconds | How often to check for completion |
-| Timeout | 300 seconds | Max wait time for generation |
-| Default Workflow | _(first alphabetically)_ | Workflow used when the AI doesn't name one |
+| ComfyUI address | `http://127.0.0.1:8188` | Where ComfyUI runs |
+| Default workflow | the first in the list | Used when she names none |
+| Image wait | 300 seconds | The longest to wait for an image |
+| Video wait | 1200 seconds | The longest to wait for video or audio |
+
+When a wait runs out, Sapphire takes her job out of ComfyUI's queue, and stops it only when it is the one running. (A ComfyUI from before 2025 stops whatever is running.)
+
+Pressing Stop in the chat does not reach ComfyUI yet: the job runs to its end or to the wait.
+
+## Privacy
+
+- Everything goes to the ComfyUI address you set and nowhere else. The one exception: in an ordinary chat she may pass a web address as the input image, and Sapphire fetches that picture.
+- **Private chats.** The tool works in a private chat only while nothing leaves your network. If the ComfyUI address is out on the internet, it refuses. The input image has to be one that is already here; a web address is refused.
+- **What stays on the ComfyUI machine.** ComfyUI keeps the prompts in its history, writes them into the pictures it saves, and keeps every input image in its input folder. ComfyUI has no login. Started with `--listen`, anyone on your network can read these, including what came from a private chat.
+- **Clips** made in a private chat are plain files in `user/comfyui/outputs/` (see above).
 
 ## Troubleshooting
 
-**"ComfyUI not reachable"** — Start ComfyUI: `python main.py` in your ComfyUI directory.
+**"Nothing answers at ..."** ComfyUI is not running, the address is wrong, or (on another machine) it was started without `--listen` or a firewall blocks the port.
 
-**"No workflows found"** — Export a workflow from ComfyUI using "Save (API Format)" and put the .json in `user/comfyui/workflows/`.
+**"the model file '...' isn't there"** That ComfyUI does not have the model. Put it in the folder the message names, or load the workflow in ComfyUI and let it download.
 
-**"ComfyUI rejected the workflow"** — Usually means missing models. Load the visual workflow in ComfyUI first to trigger model downloads. Check ComfyUI's terminal for the specific error.
+**"it has no '...' node"** The workflow uses a custom node that ComfyUI does not have. Install it with ComfyUI Manager.
 
-**"Could not inject prompt"** — The workflow doesn't have a standard `CLIPTextEncode` node. Custom node types may need the prompt field name adjusted.
+**"Can't tell where the prompt goes"** Pick the prompt node for that workflow in the panel.
 
-**Generation is slow** — Depends on your GPU and model. The timeout setting (default 5 minutes) controls how long Sapphire waits.
+**"takes no input image"** The workflow has no Load Image node, or its only one feeds a ControlNet or similar. If that one is meant for her picture, pick it under **Her input image goes into**.
+
+**"ComfyUI took longer than ..."** Raise the image or video wait in the panel.

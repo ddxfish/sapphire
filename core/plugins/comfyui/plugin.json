@@ -1,42 +1,55 @@
 {
   "name": "comfyui",
   "short_display_name": "ComfyUI",
-  "version": "1.0.0",
-  "description": "ComfyUI — generate images using your local ComfyUI server and custom workflows",
+  "version": "2.0.0",
+  "description": "ComfyUI: generate images and video with your own workflows, on this machine or another one",
   "author": "sapphire",
-  "icon": "\ud83c\udfa8",
+  "icon": "🎨",
   "priority": 50,
   "default_enabled": false,
+  "settingsUI": "plugin",
   "capabilities": {
     "tools": ["tools/comfy_tools.py"],
+    "routes": [
+      {"method": "GET", "path": "workflows", "handler": "routes/api.py:list_workflows"},
+      {"method": "POST", "path": "workflows", "handler": "routes/api.py:upload"},
+      {"method": "POST", "path": "import", "handler": "routes/api.py:import_last"},
+      {"method": "PUT", "path": "workflows/{name}", "handler": "routes/api.py:update"},
+      {"method": "DELETE", "path": "workflows/{name}", "handler": "routes/api.py:delete"},
+      {"method": "GET", "path": "workflows/{name}/file", "handler": "routes/api.py:download"},
+      {"method": "POST", "path": "workflows/{name}/check", "handler": "routes/api.py:check"},
+      {"method": "POST", "path": "test", "handler": "routes/api.py:test"},
+      {"method": "GET", "path": "file/{name}", "handler": "routes/api.py:file", "media": true},
+      {"method": "DELETE", "path": "outputs", "handler": "routes/api.py:clear_outputs"}
+    ],
     "settings": [
-      {
-        "key": "default_workflow",
-        "type": "string",
-        "label": "Default Workflow",
-        "default": "",
-        "help": "Filename (without .json) of the default workflow. Leave empty to use the first one alphabetically."
-      },
       {
         "key": "comfy_url",
         "type": "string",
-        "label": "ComfyUI Server URL",
+        "label": "ComfyUI address",
         "default": "http://127.0.0.1:8188",
-        "help": "URL of your ComfyUI server"
+        "help": "Where ComfyUI runs. On another machine: its address, with ComfyUI started with --listen."
       },
       {
-        "key": "poll_interval",
-        "type": "number",
-        "label": "Poll Interval (seconds)",
-        "default": 2,
-        "help": "How often to check if generation is complete"
+        "key": "default_workflow",
+        "type": "string",
+        "label": "Default workflow",
+        "default": "",
+        "help": "The workflow used when the AI names none. Empty = the first in the list."
       },
       {
         "key": "timeout",
         "type": "number",
-        "label": "Timeout (seconds)",
+        "label": "Image wait (seconds)",
         "default": 300,
-        "help": "Maximum time to wait for image generation"
+        "help": "The longest to wait for an image workflow."
+      },
+      {
+        "key": "video_timeout",
+        "type": "number",
+        "label": "Video wait (seconds)",
+        "default": 1200,
+        "help": "The longest to wait for a video or audio workflow."
       }
     ]
   }
