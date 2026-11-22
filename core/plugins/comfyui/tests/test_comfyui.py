@@ -143,6 +143,9 @@ class Server:
                                'devices': [{'name': 'cuda:0 NVIDIA Test : cudaMallocAsync', 'vram_total': 32 * 2 ** 30}]})
         if path == '/object_info':
             return Reply(body=self.info)
+        if path.startswith('/object_info/'):
+            cls = path.rsplit('/', 1)[1]
+            return Reply(body={cls: self.info[cls]}) if cls in self.info else Reply(404)
         if path == '/queue':
             item = lambda p: [0, p, {}, {}, []]
             return Reply(body={'queue_running': [item(p) for p in self.running], 'queue_pending': [item(p) for p in self.pending]})
@@ -257,16 +260,27 @@ def test_no_place_for_the_prompt_is_said_not_guessed():
     assert g['1']['inputs']['image'] == 'mine.png' and any('no prompt input' in n for n in notes)
 
 
-def test_size_is_set_on_one_size_node_and_left_alone_on_two():
-    g, notes = cf.apply(sd_graph(), {}, 'x', 1, width=1001, height=None)
-    assert (g['5']['inputs']['width'], g['5']['inputs']['height']) == (992, 1024)
+def test_a_shape_keeps_the_pixel_count_and_the_three_words_follow_the_workflow():
+    size = lambda g, n: (g[n]['inputs']['width'], g[n]['inputs']['height'])
+    g = sd_graph()
+    assert cf.reshape(g, 'landscape') and size(g, '5') == (1248, 832)          # a square still: 3:2
+    assert cf.reshape(g, 'portrait') and size(g, '5') == (832, 1248)           # the workflow's own ratio, turned
+    assert cf.reshape(g, 'square') and size(g, '5') == (1024, 1024)
+    assert cf.reshape(g, 9 / 16) and size(g, '5') == (768, 1376)               # her picture's own ratio
+    clip = video_graph()
+    assert cf.reshape(clip, 'landscape') and size(clip, 'i2v') == (768, 512)   # already lying that way: untouched
+    assert cf.reshape(clip, 'portrait') and size(clip, 'i2v') == (512, 768)
+    wide = video_graph()
+    wide['i2v']['inputs'].update(width=640, height=640)
+    assert cf.reshape(wide, 'landscape') and size(wide, 'i2v') == (864, 480)   # a square video: 16:9
     two = sd_graph()
     two['12'] = node('EmptyLatentImage', width=512, height=512, batch_size=1)
     two['13'] = node('KSampler', positive=['7', 0], negative=['6', 0], latent_image=['12', 0], seed=3)
     two['14'] = node('SaveImage', images=['13', 0])
-    g, notes = cf.apply(two, {}, 'x', 1, width=512, height=512)
-    assert g['5']['inputs']['width'] == 1024 and g['12']['inputs']['width'] == 512
-    assert any('more than one size input' in n for n in notes)
+    assert cf.reshape(two, 'landscape') and size(two, '5') == (1248, 832) and size(two, '12') == (640, 416)
+    odd = sd_graph()
+    odd['5']['inputs'].update(width=1000, height=1000)                         # not on the 32 grid: 16 it is
+    assert cf.reshape(odd, 'landscape') and size(odd, '5') == (1232, 816)
 
 
 def test_a_graph_without_a_seed_says_so():
@@ -275,10 +289,11 @@ def test_a_graph_without_a_seed_says_so():
     assert any('no seed input' in n for n in cf.apply(graph, {}, 'x', 1)[1])
 
 
-def test_describe_reads_kind_size_and_image_input():
-    assert cf.describe(sd_graph())['kind'] == 'image' and cf.describe(sd_graph())['size'] == [1024, 1024]
+def test_describe_reads_kind_shape_and_image_input():
+    assert cf.describe(sd_graph())['kind'] == 'image' and cf.describe(sd_graph())['shape'] == 'square'
     d = cf.describe(video_graph())
-    assert (d['kind'], d['takes_image'], d['size'], d['prompt_node'], d['image_node']) == ('video', True, [768, 512], 'pos', 'img')
+    assert (d['kind'], d['takes_image'], d['shape'], d['prompt_node'], d['image_node']) == ('video', True, 'landscape', 'pos', 'img')
+    assert cf.describe(_img2img({}))['shape'] == ''                             # no size anywhere: nothing to set
 
 
 # -- workflow files ------------------------------------------------------------------------
@@ -525,11 +540,16 @@ def test_an_input_image_is_uploaded_and_wired_in(comfy, tool, server, monkeypatc
     cf.write('clip', video_graph())
     cf.write('plain', sd_graph())
     monkeypatch.setattr(ci, 'resolve', lambda src, **k: SimpleNamespace(data=png()))
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))
     result, ok = run(tool, prompt='x', workflow='clip', image='img:abc.jpg')
-    assert ok or 'ffmpeg' in str(result)
-    assert server.uploads and server.graphs[0]['img']['inputs']['image'] == server.uploads[0]
+    assert ok and 'Your picture is 64x48: the result takes its shape.' in result['text']
+    sent = server.graphs[0]
+    assert server.uploads and sent['img']['inputs']['image'] == server.uploads[0]
+    assert (sent['i2v']['inputs']['width'], sent['i2v']['inputs']['height']) == (736, 544)      # 4:3, the pixels it had
+    result, ok = run(tool, prompt='x', workflow='clip', image='img:abc.jpg', shape='portrait')  # her word beats the picture
+    assert ok and 'Your picture' not in result['text'] and server.graphs[1]['i2v']['inputs']['width'] == 512
     result, ok = run(tool, prompt='x', workflow='plain', image='img:abc.jpg')
-    assert not ok and 'takes no input image' in result and len(server.graphs) == 1
+    assert not ok and 'takes no input image' in result and len(server.graphs) == 2
 
 
 def test_tool_failures_are_words(comfy, tool, server):
@@ -550,9 +570,11 @@ def test_the_list_tells_her_what_each_workflow_is(comfy, tool):
     cf.write('portrait', sd_graph(), {'description': 'Faces, 1024 square'})
     cf.write('clip', video_graph())
     (cf.WORKFLOW_DIR / 'broken.json').write_text('[]')
+    cf.write('fixed', _img2img({}))
     text, ok = tool.execute('comfy_list_workflows', {}, None, {'default_workflow': 'portrait'})
-    assert ok and 'portrait (default): image, 1024x1024. Faces, 1024 square' in text
-    assert 'clip: video, takes an input image' in text and 'broken: unusable' in text
+    assert ok and 'portrait (default): image, square. Faces, 1024 square' in text
+    assert 'clip: video, takes an input image, landscape' in text and 'broken: unusable' in text
+    assert 'fixed: image, takes an input image, fixed shape' in text
 
 
 def test_waits_are_bounded(tool):
@@ -739,17 +761,68 @@ def test_a_seed_typed_in_a_number_node_is_set():
 
 # -- the size ------------------------------------------------------------------------------
 
-def test_size_goes_to_the_node_that_types_it_and_not_past_an_upscale():
-    g, notes = cf.apply(video_graph(), {}, 'x', 1, width=640, height=480)
-    assert (g['i2v']['inputs']['width'], g['i2v']['inputs']['height']) == (640, 480)
-    g, notes = cf.apply(hires_graph(), {}, 'x', 1, width=768, height=768)
-    assert g['5']['inputs']['width'] == 1024 and g['10']['inputs']['width'] == 2048 and g['21']['inputs']['width'] == 512
-    assert any('upscales on the way' in n for n in notes) and cf.describe(hires_graph())['size'] is None
-    by = sd_graph()
-    by['10'] = node('LatentUpscaleBy', samples=['3', 0], scale_by=2.0)
-    by['11'] = node('KSampler', positive=['7', 0], negative=['6', 0], latent_image=['10', 0], seed=2)
-    by['8'] = node('VAEDecode', samples=['11', 0], vae=['4', 2])
-    assert any('upscales on the way' in n for n in cf.apply(by, {}, 'x', 1, width=768)[1])
+def test_a_shape_carries_through_an_upscale_and_skips_a_leftover_branch():
+    g = hires_graph()
+    assert cf.reshape(g, 'landscape')
+    size = lambda n: (g[n]['inputs']['width'], g[n]['inputs']['height'])
+    assert size('5') == (1248, 832) and size('10') == (2496, 1664)             # both passes, each its own pixels
+    assert size('21') == (512, 512)                                             # runs never, touched never
+    assert cf.size_plan(hires_graph())[1] is True
+
+
+def ratio_graph():
+    """ComfyUI's LTX template: a ratio list feeds Width and Height number nodes, halved by math
+    nodes on the way to the latent, and a x2 upsampler after the first pass."""
+    g = video_graph()
+    g.update({
+        'pick': node('ResolutionSelector', aspect_ratio='16:9 (Widescreen)', megapixels=0.9, multiple=32),
+        'w': node('PrimitiveInt', 'Width', value=['pick', 0]), 'h': node('PrimitiveInt', 'Height', value=['pick', 1]),
+        'w2': node('ComfyMathExpression', **{'expression': 'a/2', 'values.a': ['w', 0]}),
+        'h2': node('ComfyMathExpression', **{'expression': 'a/2', 'values.a': ['h', 0]}),
+        'empty': node('EmptyLTXVLatentVideo', width=['w2', 1], height=['h2', 1], length=121, batch_size=1),
+        'i2v': node('LTXVImgToVideoInplace', vae=['v', 0], image=['img', 0], latent=['empty', 0], strength=0.7),
+        'guide': node('CFGGuider', model=['u', 0], positive=['cond', 0], negative=['cond', 1], cfg=1.0),
+        'samp': node('SamplerCustomAdvanced', noise=['noise', 0], guider=['guide', 0], latent_image=['i2v', 0]),
+        'up': node('LTXVLatentUpsampler', samples=['samp', 0], vae=['v', 0]),
+        'dec': node('VAEDecode', samples=['up', 0], vae=['v', 0]),
+    })
+    return g
+
+
+RATIOS = ['1:1 (Square)', '2:3 (Portrait Photo)', '3:2 (Photo)', '9:16 (Portrait Widescreen)', '16:9 (Widescreen)']
+
+
+def test_a_ratio_list_gets_the_nearest_choice_that_comfy_offers():
+    offers = lambda cls, key: RATIOS if (cls, key) == ('ResolutionSelector', 'aspect_ratio') else []
+    assert cf.describe(ratio_graph())['shape'] == 'landscape'
+    for want, picked in ((1.0, '1:1 (Square)'), (1024 / 1100, '1:1 (Square)'), ('portrait', '9:16 (Portrait Widescreen)'),
+                         (0.7, '2:3 (Portrait Photo)'), ('landscape', '16:9 (Widescreen)'), (3.0, '16:9 (Widescreen)')):
+        g = ratio_graph()
+        assert cf.reshape(g, want, offers) and g['pick']['inputs']['aspect_ratio'] == picked, want
+        assert g['empty']['inputs']['width'] == ['w2', 1] and g['w']['inputs']['value'] == ['pick', 0]   # the wiring stays
+    g = ratio_graph()
+    assert cf.reshape(g, 1.0) is False and cf.reshape(g, 1.0, lambda cls, key: []) is False     # a list nobody can read
+    assert g['pick']['inputs']['aspect_ratio'] == '16:9 (Widescreen)'
+    sizes = lambda cls, key: ['512x512', '1024x1024 (1.0 MP)', '1344x768', '768x1344']
+    preset = sd_graph()
+    preset['5'] = node('SizePicker', resolution='1344x768')
+    assert cf.reshape(preset, 'square', sizes) and preset['5']['inputs']['resolution'] == '1024x1024 (1.0 MP)'
+
+
+def test_a_size_typed_in_number_nodes_is_set_there():
+    g = ratio_graph()
+    del g['pick']
+    g['w']['inputs']['value'], g['h']['inputs']['value'] = 1280, 704
+    assert cf.reshape(g, 'portrait') and (g['w']['inputs']['value'], g['h']['inputs']['value']) == (704, 1280)
+    assert g['empty']['inputs']['width'] == ['w2', 1]
+    one = ratio_graph()                             # both sides wired to one plain number: that is no size
+    del one['pick']
+    one['w']['inputs']['value'] = one['h']['inputs']['value'] = 1024
+    one['empty']['inputs']['height'] = ['w2', 1]
+    assert cf.reshape(one, 'portrait') is False and cf.describe(one)['shape'] == ''
+    tiny = sd_graph()
+    tiny['5']['inputs'].update(width=2, height=3)   # numbers, but not pixels
+    assert cf.reshape(tiny, 'square') is False
 
 
 # -- the input image -----------------------------------------------------------------------
@@ -947,8 +1020,14 @@ def test_what_goes_wrong_reaches_her_without_paths_or_python(comfy, tool, server
 
 def test_arguments_she_gets_wrong_are_answered(comfy, tool, server):
     cf.write('w', sd_graph())
+    result, ok = run(tool, prompt='x', shape='widescreen')
+    assert not ok and 'square, portrait, landscape' in result and not server.graphs     # said before anything runs
+    result, ok = run(tool, prompt='x', shape=' Portrait ')
+    assert ok and server.graphs[0]['5']['inputs']['height'] == 1248 and 'an image (64x48)' in result['text']
+    result, ok = run(tool, prompt='x', width=1344, height=768)                           # the arguments it used to take
+    assert ok and "read as shape='landscape'" in result['text'] and server.graphs[1]['5']['inputs']['width'] == 1248
     result, ok = run(tool, prompt='x', width='1024px', height=768)
-    assert ok and "Couldn't read the size" in result['text'] and server.graphs[0]['5']['inputs']['height'] == 1024
+    assert ok and 'Pass shape instead' in result['text'] and server.graphs[2]['5']['inputs']['height'] == 1024
     assert run(tool, prompt=['a', 'b']) == ('The prompt has to be text.', False)
     assert run(tool, prompt='x', seed=float('inf'))[1] and run(tool, prompt='x', workflow=7)[1]
 
@@ -960,3 +1039,29 @@ def test_an_empty_file_from_comfy_is_not_a_clip(comfy, tool, server):
     result, ok = run(tool, prompt='x')
     assert not ok and 'empty file' in result and cf.saved() == (0, 0)
     assert not list(cf.OUTPUT_DIR.glob('.*'))
+
+
+def test_a_shape_nobody_can_set_is_said_with_her_pictures_size(comfy, tool, server, monkeypatch):
+    from core import images as ci
+    cf.write('fixed', _img2img({}))
+    cf.write('ratio', ratio_graph())
+    monkeypatch.setattr(ci, 'resolve', lambda src, **k: SimpleNamespace(data=png(size=(512, 512))))
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([png(size=(1280, 704))], 5.0))
+    result, ok = run(tool, prompt='x', workflow='fixed', image='img:a')
+    assert ok and "shape can't be set from here" in result['text'] and 'Your picture is 512x512' in result['text']
+    monkeypatch.setattr(ci, 'resolve', lambda src, **k: SimpleNamespace(data=png(size=(640, 480))))
+    result, ok = run(tool, prompt='x', workflow='fixed', image='img:a')                # it came out her picture's shape anyway
+    assert ok and "can't be set" not in result['text'] and 'an image (64x48)' in result['text']
+    monkeypatch.setattr(ci, 'resolve', lambda src, **k: SimpleNamespace(data=png(size=(512, 512))))
+    result, ok = run(tool, prompt='x', workflow='fixed', shape='square')
+    assert ok and "shape can't be set from here, so it kept its own." in result['text'] and 'Your picture' not in result['text']
+    server.info = {'ResolutionSelector': {'input': {'required': {'aspect_ratio': ['COMBO', {'options': RATIOS}]}}}}
+    server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}], 'animated': [True]}}
+    server.files['c.mp4'] = b'mp4'
+    result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a')        # the run that went wrong for her
+    assert ok and server.graphs[-1]['pick']['inputs']['aspect_ratio'] == '1:1 (Square)'
+    assert "a 5 s clip" in result['text'] and '(1280x704)' in result['text'] and 'takes its shape' in result['text']
+    server.info = {}                                                                    # a ComfyUI that won't list them
+    result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a')
+    assert ok and "shape can't be set from here" in result['text']
+    assert server.graphs[-1]['pick']['inputs']['aspect_ratio'] == '16:9 (Widescreen)'

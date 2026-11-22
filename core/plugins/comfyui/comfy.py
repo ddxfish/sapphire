@@ -11,7 +11,8 @@ The wiring rules, stated once:
   pass conditioning along, and string nodes, to where the text is typed. A sampler that works
   on pixels (a face detailer, an upscaler) keeps its own prompt.
 - Every seed is set, also one typed in a number node and wired in.
-- The size is set at the root of the sampler's latent chain, and only when nothing upscales on the way.
+- The shape is set on every size in the sampler's latent chain, each keeping its pixel count: numbers typed
+  there or in a number node wired in, or a pick from a list of ratios. Pixels are never asked for.
 - Her input image goes into the image loader that is not a reference (a pose, a style, a mask).
 - Where two answers are possible, the call takes the nearest and says so. It never stays silent.
 """
@@ -29,7 +30,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from core.paths import PROJECT_ROOT
 
@@ -67,6 +68,10 @@ _REFERENCE = re.compile(r'(?i)control|ip.?adapter|clip.?vision|preprocessor|pose
 _REF_TITLE = re.compile(r'(?i)pose|reference|style|control|mask')
 _OUTPUT = re.compile(r'(?i)save|preview|combine|output|export|write|show|display|send')
 _UPSCALE = re.compile(r'(?i)upscal|upsampl')
+SHAPES = ('square', 'portrait', 'landscape')
+SIZE_KEYS = ('value', 'int', 'number')                              # a number node feeding a width or a height
+_RATIO = re.compile(r'\s*(\d+(?:\.\d+)?)\s*[:x\u00d7/]\s*(\d+(?:\.\d+)?)')
+_RATIO_KEY = re.compile(r'(?i)ratio|aspect|resolution|size|dimension|preset')
 IMAGE_EXT = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff'}
 VIDEO_EXT = {'.mp4', '.webm', '.mov', '.m4v', '.mkv'}
 AUDIO_EXT = {'.mp3', '.wav', '.ogg', '.oga', '.m4a', '.flac', '.opus'}
@@ -403,34 +408,122 @@ def seed_inputs(graph, alive=None):
     return out
 
 
-def _sized(node):
-    return all(_num(node['inputs'].get(k)) for k in ('width', 'height'))
+def _ratio(text):
+    """'16:9 (Widescreen)' or '1344x768 landscape' -> (16.0, 9.0), else None."""
+    m = _RATIO.match(text) if isinstance(text, str) else None
+    pair = (float(m[1]), float(m[2])) if m else None
+    return pair if pair and min(pair) > 0 else None
+
+
+def _picker(node):
+    """The input of a node that picks the shape from a list of ratios, or None."""
+    return next((k for k, v in node['inputs'].items() if _RATIO_KEY.search(k) and _ratio(v)), None)
+
+
+def _typed_at(graph, nid, key, depth=6):
+    """(node, key) where the number behind a width or height input is typed, through the number
+    and math nodes wired in. A node that picks from a list of ratios ends the search and is the answer."""
+    v = graph[nid]['inputs'].get(key)
+    if _num(v):
+        return (nid, key) if v >= 16 else None
+    src = _link(v)
+    if src not in graph or depth <= 0:
+        return None
+    pick = _picker(graph[src])
+    if pick:
+        return src, pick
+    for k, x in graph[src]['inputs'].items():
+        if _link(x) in graph or (k in SIZE_KEYS and _num(x)):
+            hit = _typed_at(graph, src, k, depth - 1)
+            if hit:
+                return hit
+    return None
+
+
+def _place(graph, nid):
+    """Where this node gets the picture's shape from: {'w': (node, key), 'h': (node, key)} for
+    two typed numbers, {'pick': (node, key)} for a list of ratios, None when it sets no size."""
+    ins = graph[nid]['inputs']
+    if 'width' in ins and 'height' in ins:
+        w, h = _typed_at(graph, nid, 'width'), _typed_at(graph, nid, 'height')
+        if not (w and h):
+            return None
+        if w == h:                                  # both sides come out of one node: only a ratio list does that
+            return {'pick': w} if _ratio(graph[w[0]]['inputs'][w[1]]) else None
+        return {'w': w, 'h': h} if all(_num(graph[n]['inputs'][k]) for n, k in (w, h)) else None
+    pick = _picker(graph[nid])
+    return {'pick': (nid, pick)} if pick and not any(k in LATENT_IN for k, _ in _links(graph, nid)) else None
 
 
 def size_plan(graph, alive=None):
-    """(roots, staged): the nodes that set the picture's size at the start of a sampler's
-    latent chain, and whether something upscales on the way (then the root is not the final size)."""
+    """(places, staged): every place the picture's shape is set on a sampler's latent chain,
+    and whether something upscales on the way (then a typed size is not the final one)."""
     alive = live(graph) if alive is None else alive
-    roots, staged, seen = [], False, set()
+    places, staged, seen = [], False, set()
     todo = [src for nid in order(graph) if nid in alive for k, src in _links(graph, nid) if k == 'latent_image']
     while todo:
         nid = todo.pop(0)
         if nid in seen:
             continue
         seen.add(nid)
-        node, links = graph[nid], _links(graph, nid)
-        latent_in = [src for k, src in links if k in LATENT_IN]
-        if _UPSCALE.search(node['class_type']) or (_sized(node) and latent_in):
+        links = _links(graph, nid)
+        latent_in = any(k in LATENT_IN for k, _ in links)
+        place = _place(graph, nid)
+        if place and place not in places:
+            places.append(place)
+        if _UPSCALE.search(graph[nid]['class_type']) or (place and latent_in):
             staged = True
-        if _sized(node) and not latent_in:
-            roots.append(nid)                       # the size is typed here; what feeds it is resized to fit
+        if not place or latent_in:                  # a size with nothing before it starts the chain: what feeds it is resized to fit
+            todo += [src for k, src in links if k not in _NOT_SIZE and k not in ('width', 'height')]
+    return places, staged
+
+
+def _own(graph, place):
+    """(width, height) a place holds now: pixels when typed, the two sides of the ratio when picked."""
+    if 'pick' in place:
+        return _ratio(graph[place['pick'][0]]['inputs'][place['pick'][1]])
+    return tuple(graph[n]['inputs'][k] for n, k in (place['w'], place['h']))
+
+
+def shape_of(ratio):
+    """width / height in the three words she uses."""
+    return 'square' if abs(math.log(ratio)) < 0.1 else 'landscape' if ratio > 1 else 'portrait'
+
+
+def reshape(graph, want, choices=None, alive=None):
+    """Give the picture another shape, in place. `want` is width / height (her input picture's),
+    or one of SHAPES: then a workflow already lying that way keeps its ratio, one lying the other
+    way is turned, and a square one gets 16:9 for video and 3:2 for a still. Every size keeps its
+    pixel count, on the grid it was typed on. `choices(class, input)` is what a ratio list offers
+    on that ComfyUI. False when the workflow has no size that can be set."""
+    places, _ = size_plan(graph, alive)
+    if places and want in SHAPES:
+        w, h = _own(graph, places[0])
+        long = max(w / h, h / w)
+        if shape_of(long) == 'square':
+            long = 16 / 9 if kind(graph) == 'video' else 3 / 2
+        want = {'square': 1.0, 'landscape': long, 'portrait': 1 / long}[want]
+    done = False
+    for place in places:
+        w, h = _own(graph, place)
+        if abs(math.log(want * h / w)) < 0.03:
+            done = True                             # already that shape
+        elif 'pick' in place:
+            nid, key = place['pick']
+            offered = [(o, _ratio(o)) for o in (choices(graph[nid]['class_type'], key) if choices else None) or []]
+            offered = [(o, r) for o, r in offered if r]
+            if offered:                             # the nearest ratio; of two alike, the one nearest in pixels
+                near = lambda p: (round(abs(math.log(want * p[1][1] / p[1][0])), 3),
+                                  abs(math.log(p[1][0] * p[1][1] / (w * h))))
+                graph[nid]['inputs'][key] = min(offered, key=near)[0]
+                done = True
         else:
-            todo += [src for k, src in links if k not in _NOT_SIZE]
-    return roots, staged
-
-
-def size_nodes(graph):
-    return size_plan(graph)[0]
+            step = 32 if w % 32 == 0 and h % 32 == 0 else 16
+            side = lambda area: int(max(64, min(round(math.sqrt(area) / step) * step, 8192)))
+            (wn, wk), (hn, hk) = place['w'], place['h']
+            graph[wn]['inputs'][wk], graph[hn]['inputs'][hk] = side(w * h * want), side(w * h / want)
+            done = True
+    return done
 
 
 def _users(graph):
@@ -499,27 +592,23 @@ def kind(graph):
 def describe(graph, meta=None):
     meta, alive = meta or {}, live(graph)
     targets, _ = prompt_plan(graph, meta, alive)
-    roots, staged = size_plan(graph, alive)
+    places, _ = size_plan(graph, alive)
     named = lambda ids: [{'id': n, 'title': title(graph, n)} for n in ids]
-    size = None
-    if len(roots) == 1 and not staged:
-        i = graph[roots[0]]['inputs']
-        size = [int(i['width']), int(i['height'])]
+    own = _own(graph, places[0]) if places else None
     target = image_plan(graph, meta, alive)[0]
-    return {'kind': kind(graph), 'nodes': len(graph), 'size': size, 'seeds': len(seed_inputs(graph, alive)),
+    # shape: the workflow's own, in her three words; '' when it has no size that can be set
+    return {'kind': kind(graph), 'nodes': len(graph), 'shape': shape_of(own[0] / own[1]) if own else '',
+            'seeds': len(seed_inputs(graph, alive)),
             'description': meta.get('description', ''),
             'prompt_node': targets[0][0] if targets else '', 'prompt_nodes': named(text_nodes(graph, alive)),
             'takes_image': target is not None,
             'image_node': target or '', 'image_nodes': named(image_nodes(graph, alive))}
 
 
-def _dim(v):
-    return max(64, min(int(v), 8192)) // 16 * 16
-
-
-def apply(graph, meta, prompt, seed, width=None, height=None, image=None):
+def apply(graph, meta, prompt, seed, image=None):
     """A copy of the graph with this call written in. Returns (graph, notes); a note is
-    something the call asked for that the workflow has no place for, or a choice that was made."""
+    something the call asked for that the workflow has no place for, or a choice that was made.
+    The shape is reshape()'s, on the copy this returns."""
     g, notes = copy.deepcopy(graph), []
     alive = live(g)
     quoted = lambda nodes: ', '.join(f"'{title(g, n)}'" for n in nodes[:3])
@@ -543,16 +632,6 @@ def apply(graph, meta, prompt, seed, width=None, height=None, image=None):
         g[nid]['inputs'][key] = seed
     if not seeds:
         notes.append("This workflow has no seed input: the same prompt gives the same result.")
-    if width or height:
-        roots, staged = size_plan(g, alive)
-        if len(roots) == 1 and not staged:
-            i = g[roots[0]]['inputs']
-            i['width'], i['height'] = _dim(width or i['width']), _dim(height or i['height'])
-            notes.append(f"Size {i['width']}x{i['height']}.")
-        else:
-            why = ('upscales on the way' if staged and roots else
-                   'has more than one size input' if roots else 'has no size input')
-            notes.append(f"This workflow {why}, so it kept its own size.")
     if image and loader:
         g[loader]['inputs']['image'] = image
         if other_loaders:
@@ -766,6 +845,17 @@ class Comfy:
             raise ComfyError(f"ComfyUI at {self.shown} wouldn't list its nodes (HTTP {r.status_code}).")
         return j
 
+    def choices(self, cls, key):
+        """What a pick-one input of a node class offers on this ComfyUI; [] when it won't say."""
+        r = self._call('get', f"/object_info/{quote(str(cls), safe='')}", timeout=30)
+        j = self._json(r) if r.status_code == 200 else None
+        known = j.get(cls) if isinstance(j, dict) else None
+        ins = known.get('input') if isinstance(known, dict) and isinstance(known.get('input'), dict) else {}
+        for part in ('required', 'optional'):
+            if isinstance(ins.get(part), dict) and key in ins[part]:
+                return [o for o in _options(ins[part][key]) or [] if isinstance(o, str)]
+        return []
+
     def last_run(self):
         """The graph of the newest run that worked, exactly as ComfyUI executed it."""
         r = self._call('get', '/history', params={'max_items': 8}, timeout=30)
@@ -781,7 +871,8 @@ class Comfy:
         return max(runs, key=lambda p: p[0])[2]
 
     def upload(self, raw):
-        """An input image into ComfyUI's input folder; returns the name a LoadImage node takes."""
+        """An input image into ComfyUI's input folder; returns (the name a LoadImage node takes,
+        (width, height) as ComfyUI will see it)."""
         from PIL import Image, ImageOps
         try:
             img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw), formats=SAFE_FORMATS))
@@ -796,7 +887,7 @@ class Comfy:
         j = self._json(r) if r.status_code == 200 else None
         if not isinstance(j, dict) or not isinstance(j.get('name'), str) or not j['name']:
             raise ComfyError(f"ComfyUI wouldn't take the input image (HTTP {r.status_code}).")
-        return (f"{j['subfolder']}/" if isinstance(j.get('subfolder'), str) and j['subfolder'] else '') + j['name']
+        return (f"{j['subfolder']}/" if isinstance(j.get('subfolder'), str) and j['subfolder'] else '') + j['name'], img.size
 
     def queue(self, graph):
         r = self._call('post', '/prompt', json={'prompt': graph, 'client_id': self.cid}, timeout=60)

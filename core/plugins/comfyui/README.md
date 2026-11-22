@@ -52,8 +52,20 @@ A model that is the same file under another path is matched by itself: a Windows
 |---|---|
 | The positive prompt | Found by following the main sampler's `positive` link back to where the text is typed, through guiders, ControlNet and image-to-video nodes, and string nodes. A negative prompt is never overwritten. A face detailer or tiled upscaler keeps its own prompt |
 | Every seed | A random seed, or the one she names. Also a seed typed in a number node and wired in |
-| The size | Width and height, on the node that sets the size at the start of the sampler's chain. A workflow that upscales on the way (hires fix) keeps its own size |
+| The shape | Square, portrait or landscape (see below). Never a number of pixels: every size in the workflow keeps the pixel count you gave it |
 | A Load Image node | The picture she passes, for workflows that edit or animate one. A reference image (a ControlNet pose, an IPAdapter style, a mask) is left alone |
+
+### The shape of the picture
+
+She does not choose pixels. The workflow keeps the pixel count you tuned it to, and only its shape changes:
+
+- **With an input image**, the result takes the shape of that image. A square portrait animated by a widescreen workflow would otherwise be cropped, and the face redrawn when it comes back into frame.
+- **She can name a shape instead**: `square`, `portrait` or `landscape`. A workflow that is already landscape keeps its own ratio, and `portrait` turns it on its side. A square workflow becomes 3:2 for a still and 16:9 for video.
+- **With neither**, the workflow runs as you saved it.
+
+The shape is set wherever the workflow sets its size: width and height typed on a node, typed in number nodes wired to it, or a ratio list such as ComfyUI's Resolution Selector (she gets the nearest ratio on the list). A workflow with a hires pass gets the shape on both passes.
+
+A workflow with no size of its own shows **fixed shape** in the panel and in her list. If her picture does not fit it, the tool tells her so. Every result tells her the real size of what was made.
 
 Only the part of the workflow that reaches a save or preview node counts. A leftover branch that ComfyUI would not run is ignored.
 
@@ -73,8 +85,8 @@ Video takes longer than an image, so it has its own wait.
 
 | Tool | What it does |
 |---|---|
-| `comfy_generate` | Run a workflow: `prompt`, and optionally `workflow`, `image`, `width`, `height`, `seed` |
-| `comfy_list_workflows` | List the workflows: what each makes, its size, whether it takes an input image, your description |
+| `comfy_generate` | Run a workflow: `prompt`, and optionally `workflow`, `image`, `shape`, `seed` |
+| `comfy_list_workflows` | List the workflows: what each makes, its shape, whether it takes an input image, your description |
 
 ## Settings
 

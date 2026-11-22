@@ -146,7 +146,7 @@ function flowRow(container, flow) {
     return row;
   }
 
-  const tags = [flow.kind, flow.takes_image && 'takes an image', flow.size && `${flow.size[0]}×${flow.size[1]}`];
+  const tags = [flow.kind, flow.takes_image && 'takes an image', flow.kind !== 'audio' && (flow.shape || 'fixed shape')];
   row.append(el('div', { class: 'cfy-line' }, el('span', { class: 'cfy-name', text: flow.name }),
     ...tags.filter(Boolean).map(t => el('span', { class: 'cfy-tag', text: t }))));
   row.append(el('input', { type: 'text', value: flow.description || '', maxLength: 300,
