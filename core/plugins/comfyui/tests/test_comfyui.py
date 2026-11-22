@@ -169,12 +169,12 @@ class Server:
             if self.refuse:
                 return Reply(400, self.refuse.pop(0))
             pid = f'job{len(self.graphs)}'
-            if self.partial:
-                return Reply(body={'prompt_id': pid, 'number': 1, 'node_errors': self.partial.pop(0)})
             if self.finish:
                 self.history[pid] = {'prompt': [len(self.graphs), pid, kw['json']['prompt']],
                                      'status': {'status_str': 'success', 'completed': True, 'messages': []},
                                      'outputs': self.outputs}
+            if self.partial:                         # the real one runs what it could check, and says what it dropped
+                return Reply(body={'prompt_id': pid, 'number': 1, 'node_errors': self.partial.pop(0)})
             return Reply(body={'prompt_id': pid})
         if path == '/upload/image':
             self.uploads.append(kw['files']['image'][0])
@@ -462,8 +462,28 @@ def test_the_wait_ends_whatever_the_poll_interval(server):
     c = cf.Comfy()
     pid = c.queue(sd_graph())
     server.pending = [pid]
+    server.running = [pid]
     with pytest.raises(cf.ComfyError, match='longer than'):
         c.wait(pid, 5, poll=0)
+
+
+def test_time_spent_waiting_its_turn_is_not_the_jobs_time(server, monkeypatch):
+    """Her long video is rendering and a still is queued behind it: the still's five minutes
+    start when ComfyUI starts on it."""
+    server.finish = False
+    c = cf.Comfy()
+    pid = c.queue(sd_graph())
+    t0 = cf._now()
+    monkeypatch.setattr(c, '_where', lambda p: 'pending' if cf._now() - t0 < 500 else 'running')
+    with pytest.raises(cf.ComfyError, match='longer than 20 seconds'):
+        c.wait(pid, 20)
+    assert 515 <= cf._now() - t0 <= 525                 # 500 s in the queue, then its own 20
+    forever = cf.Comfy()
+    pid = forever.queue(sd_graph())
+    server.pending = [pid]
+    with pytest.raises(cf.ComfyError, match='never got to this job'):
+        forever.wait(pid, 20)
+    assert ('POST', '/queue', {'delete': [pid]}) in server.calls
 
 
 def test_outputs_are_sorted_by_what_they_are():
@@ -572,9 +592,9 @@ def test_the_list_tells_her_what_each_workflow_is(comfy, tool):
     (cf.WORKFLOW_DIR / 'broken.json').write_text('[]')
     cf.write('fixed', _img2img({}))
     text, ok = tool.execute('comfy_list_workflows', {}, None, {'default_workflow': 'portrait'})
-    assert ok and 'portrait (default): image, square. Faces, 1024 square' in text
-    assert 'clip: video, takes an input image, landscape' in text and 'broken: unusable' in text
-    assert 'fixed: image, takes an input image, fixed shape' in text
+    assert ok and 'portrait (default): image, square by default. Faces, 1024 square' in text
+    assert 'clip: video, takes an input image, landscape by default' in text and 'broken: unusable' in text
+    assert 'fixed: image, takes an input image, shape not settable' in text
 
 
 def test_waits_are_bounded(tool):
@@ -770,6 +790,32 @@ def test_a_shape_carries_through_an_upscale_and_skips_a_leftover_branch():
     assert cf.size_plan(hires_graph())[1] is True
 
 
+def test_a_resize_between_two_passes_takes_the_shape_with_the_pass_before_it():
+    """Hires through pixels: decode, resize to a typed size, encode, sample again. Shaping only the
+    resize would squeeze a square first pass into a wide frame."""
+    g = sd_graph()
+    g.update({
+        '10': node('ImageScale', image=['8', 0], width=2048, height=2048, upscale_method='lanczos', crop='disabled'),
+        '11': node('VAEEncode', pixels=['10', 0], vae=['4', 2]),
+        '12': node('KSampler', model=['4', 0], positive=['7', 0], negative=['6', 0], latent_image=['11', 0], seed=2, denoise=0.4),
+        '13': node('VAEDecode', samples=['12', 0], vae=['4', 2]),
+        '9': node('SaveImage', images=['13', 0]),
+    })
+    assert cf.reshape(g, 'landscape')
+    size = lambda n: (g[n]['inputs']['width'], g[n]['inputs']['height'])
+    assert size('5') == (1248, 832) and size('10') == (2496, 1664)
+    # a picture resized on its way INTO an image-to-video node is that node's business: the walk ends at the node
+    clip = video_graph()
+    clip['fit'] = node('ImageScale', image=['img', 0], width=768, height=512, upscale_method='lanczos', crop='center')
+    clip['i2v']['inputs']['image'] = ['fit', 0]
+    assert cf.reshape(clip, 'portrait')
+    assert (clip['i2v']['inputs']['width'], clip['i2v']['inputs']['height']) == (512, 768) and clip['fit']['inputs']['width'] == 768
+    # plain image-to-image: the resize of her picture is the only size there is
+    edit = _img2img({'32': node('ImageScale', image=['30', 0], width=1024, height=1024, upscale_method='lanczos', crop='center')})
+    edit['31']['inputs']['pixels'] = ['32', 0]
+    assert cf.reshape(edit, 'landscape') and edit['32']['inputs']['width'] == 1248
+
+
 def ratio_graph():
     """ComfyUI's LTX template: a ratio list feeds Width and Height number nodes, halved by math
     nodes on the way to the latent, and a x2 upsampler after the first pass."""
@@ -867,9 +913,9 @@ def test_two_possible_input_images_are_said_and_none_passed_is_said():
     two = _img2img({'40': node('LoadImage', 'Second picture', image='b.png'), '41': node('ImageBlend', image1=['30', 0], image2=['40', 0]),
                     '31': node('VAEEncode', pixels=['41', 0], vae=['4', 2])})
     g, notes = cf.apply(two, {}, 'x', 1, image='mine.png')
-    assert g['30']['inputs']['image'] == 'mine.png' and any("also loads 'Second picture'" in n for n in notes)
+    assert g['30']['inputs']['image'] == 'mine.png' and notes == ["Slot 2 of this workflow can't be left empty, so its saved picture ('b.png') went in too."]
     g, notes = cf.apply(_img2img({}), {}, 'x', 1)
-    assert g['30']['inputs']['image'] == 'photo.png' and any("none was passed" in n and 'photo.png' in n for n in notes)
+    assert g['30']['inputs']['image'] == 'photo.png' and any(n.startswith(cf.NO_PICTURE) and 'photo.png' in n for n in notes)
     upscale = {'1': node('LoadImage', image='a.png'), '2': node('ImageScaleBy', image=['1', 0]), '3': node('SaveImage', images=['2', 0])}
     with pytest.raises(cf.ComfyError, match='works on a picture'):
         cf.apply(upscale, {}, 'x', 1)
@@ -942,7 +988,7 @@ def test_one_bad_file_never_takes_the_list_down(comfy, tool, server):
 def test_a_replaced_workflow_forgets_the_picked_nodes(comfy, server):
     import plugins.comfyui.routes.api as api
     _upload(api, 'w.json', json.dumps(sd_graph()).encode())
-    api.update(name='w', body={'description': 'faces', 'prompt_node': '7', 'image_node': '30'})
+    api.update(name='w', body={'description': 'faces', 'prompt_node': '7', 'image_node': '30', 'extras': {'3:steps': {'max': 30}}})
     swapped = sd_graph()
     swapped['6'], swapped['7'] = swapped['7'], swapped['6']       # same ids, the other way round
     swapped['3']['inputs'].update(positive=['6', 0], negative=['7', 0])
@@ -1024,12 +1070,17 @@ def test_arguments_she_gets_wrong_are_answered(comfy, tool, server):
     assert not ok and 'square, portrait, landscape' in result and not server.graphs     # said before anything runs
     result, ok = run(tool, prompt='x', shape=' Portrait ')
     assert ok and server.graphs[0]['5']['inputs']['height'] == 1248 and 'an image (64x48)' in result['text']
-    result, ok = run(tool, prompt='x', width=1344, height=768)                           # the arguments it used to take
-    assert ok and "read as shape='landscape'" in result['text'] and server.graphs[1]['5']['inputs']['width'] == 1248
-    result, ok = run(tool, prompt='x', width='1024px', height=768)
-    assert ok and 'Pass shape instead' in result['text'] and server.graphs[2]['5']['inputs']['height'] == 1024
+    for old, word in (({'width': 1344, 'height': 768}, "pass shape='landscape'"), ({'width': '1024px', 'height': 768}, 'pass shape (square'),
+                      ({'width': 1024}, 'pass shape (square'), ({'shape': 1}, 'shape is one of'), ({'shape': ['portrait']}, 'shape is one of')):
+        result, ok = run(tool, prompt='x', **old)                                        # the arguments it used to take: said, never run
+        assert not ok and word in result and len(server.graphs) == 1, old
+    result, ok = run(tool, prompt='x', extras=[])                                        # an empty extras of any kind is no extras
+    assert ok and len(server.graphs) == 2
+    result, ok = run(tool, prompt='x', extras={'Steps': 10 ** 400})
+    assert not ok and 'Steps takes a whole number' in result
     assert run(tool, prompt=['a', 'b']) == ('The prompt has to be text.', False)
-    assert run(tool, prompt='x', seed=float('inf'))[1] and run(tool, prompt='x', workflow=7)[1]
+    assert run(tool, prompt='x', seed=float('inf'))[1]
+    assert run(tool, prompt='x', workflow=7) == ('workflow is a name from comfy_list_workflows.', False)
 
 
 def test_an_empty_file_from_comfy_is_not_a_clip(comfy, tool, server):
@@ -1053,15 +1104,828 @@ def test_a_shape_nobody_can_set_is_said_with_her_pictures_size(comfy, tool, serv
     result, ok = run(tool, prompt='x', workflow='fixed', image='img:a')                # it came out her picture's shape anyway
     assert ok and "can't be set" not in result['text'] and 'an image (64x48)' in result['text']
     monkeypatch.setattr(ci, 'resolve', lambda src, **k: SimpleNamespace(data=png(size=(512, 512))))
-    result, ok = run(tool, prompt='x', workflow='fixed', shape='square')
-    assert ok and "shape can't be set from here, so it kept its own." in result['text'] and 'Your picture' not in result['text']
+    sent = len(server.graphs)
+    result, ok = run(tool, prompt='x', workflow='fixed', shape='square')               # her own word, no place for it: before the render
+    assert not ok and "makes its own shape" in result and 'without shape' in result and len(server.graphs) == sent
     server.info = {'ResolutionSelector': {'input': {'required': {'aspect_ratio': ['COMBO', {'options': RATIOS}]}}}}
     server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}], 'animated': [True]}}
     server.files['c.mp4'] = b'mp4'
     result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a')        # the run that went wrong for her
     assert ok and server.graphs[-1]['pick']['inputs']['aspect_ratio'] == '1:1 (Square)'
-    assert "a 5 s clip" in result['text'] and '(1280x704)' in result['text'] and 'takes its shape' in result['text']
+    # the frames stood in for the clip here are 1280x704: the note goes by what came out, not by what was set
+    assert "a 5 s clip" in result['text'] and '(1280x704)' in result['text'] and 'takes its shape' not in result['text']
+    assert 'Your picture is 512x512 and the nearest shape this workflow makes is 1280x704' in result['text']
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([png(size=(960, 960))], 5.0))
+    result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a')
+    assert ok and 'Your picture is 512x512: the result takes its shape.' in result['text']
+    result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a', shape='portrait')
+    assert ok and server.graphs[-1]['pick']['inputs']['aspect_ratio'] == '9:16 (Portrait Widescreen)'
+    assert 'Asked for portrait and it came out 960x960' in result['text']                 # a workflow may ignore what was set
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([png(size=(704, 1280))], 5.0))
+    result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a', shape='portrait')
+    assert ok and 'Your picture is 512x512 and you asked for portrait: it is cropped or squeezed to fit.' in result['text']
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([png(size=(960, 960))], 5.0))
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))                       # no ffmpeg: nothing measured, the plan is said
+    result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a')
+    assert ok and 'Your picture is 512x512: the result takes its shape.' in result
     server.info = {}                                                                    # a ComfyUI that won't list them
     result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a')
-    assert ok and "shape can't be set from here" in result['text']
+    assert ok and "shape can't be set from here" in result
     assert server.graphs[-1]['pick']['inputs']['aspect_ratio'] == '16:9 (Widescreen)'
+    sent = len(server.graphs)
+    result, ok = run(tool, prompt='she waves', workflow='ratio', image='img:a', shape='square')
+    assert not ok and 'makes its own shape' in result and len(server.graphs) == sent
+
+
+# -- her extras ----------------------------------------------------------------------------
+
+def knob_graph():
+    """ComfyUI's template style: the author's own controls are titled number and switch nodes."""
+    g = ratio_graph()
+    g.update({
+        'dur': node('PrimitiveInt', 'Duration', value=5), 'rate': node('PrimitiveInt', 'Frame Rate', value=24),
+        'len': node('ComfyMathExpression', **{'expression': 'a * b + 1', 'values.a': ['dur', 0], 'values.b': ['rate', 0]}),
+        't2v': node('PrimitiveBoolean', 'Switch to Text to Video?', value=False),
+        'enh': node('PrimitiveBoolean', 'Boolean (Enable Prompt Enhance)', value=False),
+        'plain': node('PrimitiveInt', value=7), 'int': node('PrimitiveInt', 'Int', value=3),      # no name of their own
+        'seedn': node('PrimitiveInt', 'Seed', value=42),                                          # the tool's, not hers
+        'spare': node('PrimitiveInt', 'Leftover', value=9),                                       # wired to nothing
+    })
+    g['empty']['inputs']['length'] = ['len', 1]
+    g['cond']['inputs']['frame_rate'] = ['rate', 0]
+    g['i2v']['inputs'].update(bypass=['t2v', 0], extra=['enh', 0], a=['plain', 0], b=['int', 0])
+    g['noise']['inputs']['noise_seed'] = ['seedn', 0]
+    return g
+
+
+def test_a_workflows_own_controls_are_found_and_the_tools_are_not():
+    line = lambda g, meta=None: cf.controls_line(cf.controls(g, meta))
+    assert line(knob_graph()) == 'Duration 5 (1 to 20), Enable Prompt Enhance off, Frame Rate 24 (6 to 96), Switch to Text to Video off'
+    assert line(sd_graph()) == 'Steps 20 (5 to 80), Images 1 (1 to 4)'                 # seed, width, height: never
+    assert line(video_graph()) == 'Frame Rate 24 (6 to 96), Frames 121 (30 to 484)'    # and no batch of videos
+    assert line(_img2img({})) == 'Steps 20 (5 to 80)'
+    edit = _img2img({})
+    edit['3']['inputs'].update(denoise=0.6, cfg=4.5)
+    assert line(edit) == 'Steps 20 (5 to 80), CFG 4.5 (1.125 to 18), Denoise 0.6 (0.15 to 1)'
+    edit['3']['inputs'].update(denoise=1.0, cfg=1.0)                                    # a full denoise and a distilled cfg 1 are not settings
+    assert line(edit) == 'Steps 20 (5 to 80)'
+    detail = _detailer(sd_graph())
+    detail['fd']['inputs'].update(steps=8, cfg=3.0)                                     # a detailer keeps its own
+    assert line(detail) == 'Steps 20 (5 to 80), Images 1 (1 to 4)'
+    typed = sd_graph()                                                                  # a size typed in number nodes is the shape's
+    typed.update({'w': node('PrimitiveInt', 'Width', value=1024), 'h': node('PrimitiveInt', 'Height', value=768)})
+    typed['5']['inputs'].update(width=['w', 0], height=['h', 0])
+    assert line(typed) == 'Steps 20 (5 to 80), Images 1 (1 to 4)'
+
+
+def test_one_name_in_two_places_moves_together_and_two_values_are_two_controls():
+    g = video_graph()
+    g['save'] = node('CreateVideo', images=['dec', 0], fps=24)
+    g['out'] = node('SaveVideo', video=['save', 0])
+    rate = next(c for c in cf.controls(g) if c['name'] == 'Frame Rate')
+    assert rate['places'] == [('cond', 'frame_rate'), ('save', 'fps')]
+    assert cf.set_extras(g, {}, {'frame rate': 30}) == ["Frame Rate 30 (the workflow's own is 24)."]
+    assert g['cond']['inputs']['frame_rate'] == 30 and g['save']['inputs']['fps'] == 30
+    two = hires_graph()
+    two['3']['inputs']['steps'], two['11']['inputs']['steps'] = 20, 10
+    assert [c['name'] for c in cf.controls(two)] == ['Steps', 'Images', 'Steps #2']
+    cf.set_extras(two, {}, {'steps #2': 12})
+    assert (two['3']['inputs']['steps'], two['11']['inputs']['steps']) == (20, 12)
+
+
+def test_extras_are_checked_before_they_are_written():
+    g = knob_graph()
+    notes = cf.set_extras(g, {}, {'duration': 8, 'FRAME_RATE': '30', 'switch to text to video': 'on', 'Enable Prompt Enhance': None})
+    assert notes == ["Duration 8 (the workflow's own is 5).", "Frame Rate 30 (the workflow's own is 24).",
+                     "Switch to Text to Video on (the workflow's own is off)."]
+    assert (g['dur']['inputs']['value'], g['rate']['inputs']['value'], g['t2v']['inputs']['value']) == (8, 30, True)
+    assert cf.set_extras(knob_graph(), {}, {'Duration': 5}) == [] and cf.set_extras(knob_graph(), {}, '{"Duration": 6}')
+    for bad, words in (({'steps': 9}, "has no 'steps' to set. It has: Duration 5 (1 to 20)"), ({'Duration': 60}, 'goes from 1 to 20'),
+                       ({'Duration': 2.5}, 'whole number'), ({'Duration': 'long'}, 'whole number'), ({'Duration': True}, 'whole number'),
+                       ({'Duration': float('nan')}, 'whole number'), ({'Enable Prompt Enhance': 'maybe'}, 'true or false'),
+                       ('nope', 'name: value pairs'), ([1], 'name: value pairs')):
+        with pytest.raises(cf.ComfyError, match=words.replace('(', r'\(').replace(')', r'\)')):
+            cf.set_extras(knob_graph(), {}, bad)
+    bare = {'1': node('LoadImage', image='a.png'), '2': node('SaveImage', images=['1', 0])}
+    with pytest.raises(cf.ComfyError, match='It has no extras'):
+        cf.set_extras(bare, {}, {'Steps': 4})
+
+
+def test_a_person_names_limits_and_hides_a_control(comfy, api):
+    cf.write('clip', knob_graph())
+    row = lambda: api.list_workflows()['workflows'][0]
+    assert [(c['id'], c['name'], c['auto']) for c in row()['extras']][0] == ('dur:value', 'Duration', [1, 20])
+    api.update(name='clip', body={'extras': {'dur:value': {'name': 'Seconds', 'max': 10}}})
+    api.update(name='clip', body={'extras': {'t2v:value': {'off': True, 'min': 'x', 'junk': 1}}})
+    g, meta = cf.read(cf.find('clip')[1])
+    assert meta['extras'] == {'dur:value': {'name': 'Seconds', 'max': 10}, 't2v:value': {'off': True}}
+    assert cf.controls_line(cf.controls(g, meta)) == 'Seconds 5 (1 to 10), Enable Prompt Enhance off, Frame Rate 24 (6 to 96)'
+    assert cf.set_extras(g, meta, {'seconds': 10}) and g['dur']['inputs']['value'] == 10
+    for bad in ({'Seconds': 12}, {'Duration': 8}, {'Switch to Text to Video': True}):
+        with pytest.raises(cf.ComfyError):
+            cf.set_extras(cf.read(cf.find('clip')[1])[0], meta, bad)
+    api.update(name='clip', body={'extras': {'dur:value': {}}})                          # an empty row: as found again
+    assert cf.read(cf.find('clip')[1])[1]['extras'] == {'t2v:value': {'off': True}}
+    assert row()['extras'][0]['name'] == 'Duration' and [c['off'] for c in row()['extras'] if c['id'] == 't2v:value'] == [True]
+
+
+def test_she_sees_the_extras_in_the_list_and_sets_them_in_a_call(comfy, tool, server):
+    cf.write('clip', knob_graph())
+    cf.write('bare', {'1': node('LoadImage', image='a.png'), '2': node('SaveImage', images=['1', 0])})
+    text, ok = tool.execute('comfy_list_workflows', {}, None, {})
+    assert ok and '\n      extras: Duration 5 (1 to 20), Enable Prompt Enhance off' in text and 'extras are optional' in text
+    assert text.count('extras: ') == 1
+    result, ok = run(tool, prompt='she waves', workflow='clip', extras={'Duration': 8})
+    assert ok and "Duration 8 (the workflow's own is 5)." in result['text'] and server.graphs[0]['dur']['inputs']['value'] == 8
+    result, ok = run(tool, prompt='she waves', workflow='clip', extras={'Duration': 99})
+    assert not ok and 'goes from 1 to 20' in result and len(server.graphs) == 1         # refused before anything ran
+    result, ok = run(tool, prompt='she waves', workflow='clip', extras={})
+    assert ok and server.graphs[1]['dur']['inputs']['value'] == 5
+    cf.WORKFLOW_DIR.joinpath('bare.json').unlink()
+    cf.WORKFLOW_DIR.joinpath('clip.json').unlink()
+    cf.write('none', {'1': node('CLIPTextEncode', text='x'), '2': node('KSampler', positive=['1', 0], seed=1), '3': node('SaveImage', images=['2', 0])})
+    assert 'extras' not in tool.execute('comfy_list_workflows', {}, None, {})[0]
+
+
+# -- found by the hunt of 2026-11-22 -------------------------------------------------------
+
+def test_core_resize_node_between_two_passes_takes_the_shape_too():
+    """ComfyUI's own resize node types its sides as `resize_type.width` / `resize_type.height`."""
+    g = sd_graph()
+    g.update({
+        '10': node('ResizeImageMaskNode', **{'input': ['8', 0], 'resize_type': 'scale dimensions', 'resize_type.width': 2048,
+                                             'resize_type.height': 2048, 'resize_type.crop': 'disabled', 'scale_method': 'lanczos'}),
+        '11': node('VAEEncode', pixels=['10', 0], vae=['4', 2]),
+        '12': node('KSampler', model=['4', 0], positive=['7', 0], negative=['6', 0], latent_image=['11', 0], seed=2, denoise=0.4),
+        '13': node('VAEDecode', samples=['12', 0], vae=['4', 2]), '9': node('SaveImage', images=['13', 0]),
+    })
+    assert cf.reshape(g, 'landscape')
+    assert (g['5']['inputs']['width'], g['5']['inputs']['height']) == (1248, 832)
+    assert (g['10']['inputs']['resize_type.width'], g['10']['inputs']['resize_type.height']) == (2496, 1664)
+    only = _img2img({'32': node('ResizeImageMaskNode', **{'input': ['30', 0], 'resize_type': 'scale dimensions',
+                                                          'resize_type.width': 1024, 'resize_type.height': 1024})})
+    only['31']['inputs']['pixels'] = ['32', 0]
+    assert cf.describe(only)['shape'] == 'square' and cf.reshape(only, 'portrait') and only['32']['inputs']['resize_type.height'] == 1248
+    longer = _img2img({'32': node('ResizeImageMaskNode', **{'input': ['30', 0], 'resize_type': 'scale longer dimension',
+                                                            'resize_type.longer_size': 1536})})
+    longer['31']['inputs']['pixels'] = ['32', 0]
+    assert cf.describe(longer)['shape'] == ''                                    # keeps the picture's own shape: nothing to set
+
+
+def test_typed_sizes_follow_the_ratio_a_list_landed_on():
+    g = ratio_graph()                                # a ratio list on the first pass, a typed resize on the second
+    g.update({'fit': node('ImageScale', image=['dec', 0], width=2048, height=1152, upscale_method='lanczos', crop='disabled'),
+              'enc': node('VAEEncode', pixels=['fit', 0], vae=['v', 0]),
+              'samp2': node('SamplerCustomAdvanced', noise=['noise', 0], guider=['guide', 0], latent_image=['enc', 0]),
+              'dec2': node('VAEDecode', samples=['samp2', 0], vae=['v', 0]), 'save': node('SaveVideo', video=['dec2', 0])})
+    assert cf.reshape(g, 1.25, lambda cls, key: RATIOS)          # her picture is 5:4, the list only has 3:2
+    assert g['pick']['inputs']['aspect_ratio'] == '3:2 (Photo)'
+    w, h = g['fit']['inputs']['width'], g['fit']['inputs']['height']
+    assert abs(w / h - 1.5) < 0.03, (w, h)                       # 3:2 as well, not her 5:4: the two passes agree
+    blind = ratio_graph()
+    blind.update({k: copy_of for k, copy_of in g.items() if k in ('fit', 'enc', 'samp2', 'dec2', 'save')})
+    blind['fit']['inputs'].update(width=2048, height=1152)
+    blind['pick']['inputs']['aspect_ratio'] = '16:9 (Widescreen)'
+    assert cf.reshape(blind, 1.0) is False and blind['fit']['inputs']['width'] == 2048   # a list nobody can read: nothing is touched
+
+
+def test_a_ratio_list_wins_over_sides_typed_beside_it_and_a_turn_switch_is_used():
+    cr = sd_graph()                                  # a size picker that keeps width/height for its "custom" entry only
+    cr['5'] = node('CR SDXL Aspect Ratio', width=1024, height=1024, aspect_ratio='16:9 landscape 1344x768', batch_size=1)
+    offers = lambda cls, key: ['1:1 square 1024x1024', '3:4 portrait 896x1152', '16:9 landscape 1344x768', '9:16 portrait 768x1344']
+    assert cf.describe(cr)['shape'] == 'landscape'
+    assert cf.reshape(cr, 'portrait', offers) and cr['5']['inputs']['aspect_ratio'] == '9:16 portrait 768x1344'
+    assert cr['5']['inputs']['width'] == 1024
+    custom = sd_graph()                              # the same picker on "custom", wired into a plain latent: its typed sides count
+    custom.update({'cr': node('CR SDXL Aspect Ratio', width=1024, height=1024, aspect_ratio='custom', batch_size=1)})
+    custom['5']['inputs'].update(width=['cr', 0], height=['cr', 1])
+    assert cf.reshape(custom, 'landscape') and (custom['cr']['inputs']['width'], custom['cr']['inputs']['height']) == (1248, 832)
+    kj = sd_graph()                                  # a list of wide sizes only, with a switch that lays one on its side
+    kj['5'] = node('EmptyLatentImagePresets', dimensions='1024 x 576 (1.778:1)', invert=False, batch_size=1)
+    wide = lambda cls, key: ['512 x 512 (1:1)', '768 x 512 (1.5:1)', '1024 x 576 (1.778:1)', '1536 x 640 (2.4:1)']
+    assert cf.reshape(kj, 'portrait', wide) and kj['5']['inputs'] == {'dimensions': '1024 x 576 (1.778:1)', 'invert': True, 'batch_size': 1}
+    assert cf.describe(kj)['shape'] == 'portrait'
+    assert cf.reshape(kj, 'landscape', wide) and kj['5']['inputs']['invert'] is False
+    assert cf.reshape(kj, 0.66, wide) and (kj['5']['inputs']['dimensions'], kj['5']['inputs']['invert']) == ('768 x 512 (1.5:1)', True)
+    assert cf._ratio('1344X768') == (1344.0, 768.0) and cf._ratio('9' * 400 + ':1') is None
+
+
+def test_a_sampler_that_types_its_own_size_or_takes_it_under_another_name_is_found():
+    wrap = {'e': node('WanVideoEmptyEmbeds', width=832, height=480, num_frames=81),
+            's': node('WanVideoSampler', model=['m', 0], image_embeds=['e', 0], steps=30, cfg=6.0, seed=1),
+            'd': node('WanVideoDecode', samples=['s', 0], vae=['v', 0]), 'o': node('SaveVideo', video=['d', 0])}
+    assert cf.describe(wrap)['shape'] == 'landscape' and cf.reshape(wrap, 'portrait')
+    assert (wrap['e']['inputs']['width'], wrap['e']['inputs']['height']) == (480, 832)
+    own = {'s': node('HyVideoSampler', model=['m', 0], width=960, height=544, num_frames=73, steps=30, seed=1),
+           'd': node('VAEDecode', samples=['s', 0], vae=['v', 0]), 'o': node('SaveVideo', video=['d', 0])}
+    assert cf.reshape(own, 'square') and own['s']['inputs']['width'] == own['s']['inputs']['height'] == 736
+    flux = sd_graph()                                # a model-side node with a width and height of its own is never a size
+    flux['20'] = node('ModelSamplingFlux', model=['4', 0], width=1024, height=1024, max_shift=1.15, base_shift=0.5)
+    flux['3']['inputs']['model'] = ['20', 0]
+    assert cf.reshape(flux, 'landscape') and flux['20']['inputs']['width'] == 1024 and len(cf.size_plan(flux)[0]) == 1
+
+
+def test_a_size_read_off_another_picture_is_not_typed_anywhere():
+    g = video_graph()                                # width and height come from a picture's own size, behind a pass with a Steps node
+    g.update({'st': node('PrimitiveInt', 'Steps', value=30), 'gs': node('GetImageSize', image=['first', 0]),
+              'first': node('VAEDecode', samples=['pre', 0], vae=['v', 0]),
+              'pre': node('KSampler', positive=['pos', 0], negative=['neg', 0], latent_image=['el', 0], steps=['st', 0], seed=1),
+              'el': node('EmptyLatentImage', width=1024, height=576, batch_size=1)})
+    g['i2v']['inputs'].update(width=['gs', 0], height=['gs', 1], image=['first', 0])
+    assert cf._typed_at(g, 'i2v', 'width', 'width') is None
+    assert cf.reshape(g, 'portrait') and (g['el']['inputs']['width'], g['el']['inputs']['height']) == (576, 1024)
+    assert g['st']['inputs']['value'] == 30
+    deep = sd_graph()                                # a wide web of pass-through nodes is walked once, not once per path
+    for i in range(8):
+        deep[f'm{i}'] = node('ComfyMathExpression', expression='a', **{f'values.{c}': [f'm{i + 1}', 0] for c in 'abcdefghijklmn'})
+    deep['m8'] = node('PrimitiveInt', 'W', value=1024)
+    deep['5']['inputs']['width'] = ['m0', 0]
+    assert cf._typed_at(deep, '5', 'width', 'width') == ('m8', 'value')
+    huge = sd_graph()
+    huge['5']['inputs']['width'] = 10 ** 400         # a number no size can be: no crash, no place
+    assert cf.describe(huge)['shape'] == '' and cf.reshape(huge, 'square') is False
+
+
+def test_steps_shared_by_two_samplers_are_not_hers_to_change():
+    split = sd_graph()                               # two models share one run and hand over at step 10
+    split['3'] = node('KSamplerAdvanced', model=['4', 0], positive=['7', 0], negative=['6', 0], latent_image=['5', 0],
+                      noise_seed=1, steps=20, cfg=3.5, start_at_step=0, end_at_step=10)
+    split['11'] = node('KSamplerAdvanced', model=['4', 0], positive=['7', 0], negative=['6', 0], latent_image=['3', 0],
+                       noise_seed=1, steps=20, cfg=3.5, start_at_step=10, end_at_step=10000)
+    split['8']['inputs']['samples'] = ['11', 0]
+    assert cf.controls_line(cf.controls(split)) == 'CFG 3.5 (0.875 to 14), Images 1 (1 to 4)'
+    whole = sd_graph()                               # one advanced sampler doing the whole run: steps are hers
+    whole['3'] = node('KSamplerAdvanced', model=['4', 0], positive=['7', 0], negative=['6', 0], latent_image=['5', 0],
+                      noise_seed=1, steps=20, cfg=3.5, start_at_step=0, end_at_step=10000)
+    assert 'Steps 20 (5 to 80)' in cf.controls_line(cf.controls(whole))
+    sig = flux_graph()                               # a scheduler whose steps are cut in two further on
+    sig.update({'9': node('BasicScheduler', model=['m', 0], scheduler='simple', steps=20, denoise=1.0),
+                '10': node('SplitSigmas', sigmas=['9', 0], step=12)})
+    sig['5']['inputs']['sigmas'] = ['10', 0]
+    assert 'Steps' not in cf.controls_line(cf.controls(sig))
+    plain = flux_graph()
+    plain['9'] = node('BasicScheduler', model=['m', 0], scheduler='simple', steps=20, denoise=1.0)
+    assert 'Steps 20 (5 to 80)' in cf.controls_line(cf.controls(plain))
+
+
+def test_a_title_keeps_its_note_and_a_short_name_still_reaches_it():
+    g = knob_graph()
+    g['dur']['_meta']['title'], g['rate']['_meta']['title'] = 'Duration (seconds)', 'Shift (5)'
+    assert cf.controls_line(cf.controls(g)).startswith('Duration (seconds) 5 (1 to 20), Enable Prompt Enhance off, Shift (5) 24')
+    assert cf.set_extras(g, {}, {'duration': 8}) == ["Duration (seconds) 8 (the workflow's own is 5)."]   # the start of one name
+    two = knob_graph()
+    two['dur']['_meta']['title'], two['rate']['_meta']['title'] = 'Frames in', 'Frames out'
+    with pytest.raises(cf.ComfyError, match="more than one 'frames'"):
+        cf.set_extras(two, {}, {'frames': 8})
+    assert cf.set_extras(two, {}, {'frames out': 30}) == ["Frames out 30 (the workflow's own is 24)."]
+
+
+def test_names_in_any_script_reach_their_own_control():
+    g = knob_graph()
+    g['dur']['_meta']['title'], g['rate']['_meta']['title'] = '\u65f6\u957f', '\u5e27\u7387'
+    assert cf.set_extras(g, {}, {'\u5e27\u7387': 30}) == ["\u5e27\u7387 30 (the workflow's own is 24)."]
+    assert (g['dur']['inputs']['value'], g['rate']['inputs']['value']) == (5, 30)
+    for nothing in ('', '???', '\U0001f3ac'):
+        with pytest.raises(cf.ComfyError, match='to set'):
+            cf.set_extras(knob_graph(), {}, {nothing: 9})
+    marks = knob_graph()
+    marks['plain']['_meta'] = {'title': '!!!'}       # a title with nothing to call it by is no control
+    assert '!!!' not in cf.controls_line(cf.controls(marks))
+
+
+def test_a_titled_number_node_obeys_the_rules_of_the_input_it_feeds():
+    g = sd_graph()
+    g.update({'c': node('PrimitiveFloat', 'CFG', value=1.0), 'd': node('PrimitiveFloat', 'Denoise', value=1.0),
+              's': node('PrimitiveInt', 'Steps', value=20), 'sd': node('PrimitiveInt', 'Seed', value=123456),
+              'm': node('ComfyMathExpression', **{'expression': 'a+1', 'values.a': ['sd', 0]}),
+              'w': node('PrimitiveInt', 'Width', value=1344),
+              'hm': node('ComfyMathExpression', **{'expression': 'a*9/16', 'values.a': ['w', 0]})})
+    g['3']['inputs'].update(cfg=['c', 0], denoise=['d', 0], steps=['s', 0], seed=['m', 0])
+    g['5']['inputs'].update(width=['w', 0], height=['hm', 0])
+    assert cf.controls_line(cf.controls(g)) == 'Images 1 (1 to 4), Steps 20 (5 to 80)'     # the node's title, the input's limits
+    g['s']['inputs']['value'] = 100
+    assert 'Steps 100 (25 to 150)' in cf.controls_line(cf.controls(g))
+    face = _detailer(sd_graph())
+    face['ds'] = node('PrimitiveInt', 'Detailer Steps', value=20)
+    face['fd']['inputs']['steps'] = ['ds', 0]
+    assert 'Detailer' not in cf.controls_line(cf.controls(face))
+
+
+def test_a_person_cannot_widen_a_control_past_its_input_or_name_two_alike():
+    g = sd_graph()
+    meta = {'extras': {'3:steps': {'min': -5, 'max': 100000}, '5:batch_size': {'max': 500, 'name': 'Steps'}}}
+    found = cf.controls(g, meta)
+    assert [(c['name'], c['min'], c['max']) for c in found] == [('Steps', 1, 150), ('Images #2', 1, 4)]
+    with pytest.raises(cf.ComfyError):
+        cf.set_extras(sd_graph(), meta, {'Steps': -5})
+    assert cf.clean_meta({'extras': {'a': {'min': 10 ** 400, 'max': 1e12, 'name': 'x' * 90}}})['extras']['a'] == {'name': 'x' * 37 + '...'}
+
+
+def test_a_file_full_of_controls_shows_her_twelve_and_never_breaks_the_list(comfy, api):
+    g = sd_graph()
+    for i in range(40):
+        g[f'p{i:02}'] = node('PrimitiveInt', f'Knob {i:02}', value=20 + i)
+        g[f'u{i:02}'] = node('SomeNode', n=[f'p{i:02}', 0])
+        g['9']['inputs'][f'x{i:02}'] = [f'u{i:02}', 0]
+    line = cf.controls_line(cf.controls(g))
+    assert line.count(' to ') == 12 and 'Knob 09' in line and 'Knob 12' not in line and len(line) < 400
+    with pytest.raises(cf.ComfyError, match="no 'Knob 30'"):
+        cf.set_extras(g, {}, {'Knob 30': 40})
+    g['big'] = node('PrimitiveFloat', 'Strength', value=1e308)   # a number no setting can be
+    g['9']['inputs']['big'] = ['big', 0]
+    cf.write('many', g)
+    row = api.list_workflows()['workflows'][0]
+    assert 'error' not in row and 'Strength' not in [c['name'] for c in row['extras']]
+    json.dumps(row, allow_nan=False)                 # the panel's list must always be sendable
+    junk = {f'gone{i}:value': {'off': True} for i in range(70)}
+    api.update(name='many', body={'extras': junk})
+    api.update(name='many', body={'extras': {'p00:value': {'max': 30}}})
+    assert cf.read(cf.find('many')[1])[1]['extras'] == {'p00:value': {'max': 30}}        # rows for nodes that are gone never crowd one out
+
+
+def test_frames_seconds_and_a_matching_audio_length_are_known():
+    g = video_graph()
+    g['aud'] = node('LTXVEmptyLatentAudio', frames_number=121, frame_rate=24, batch_size=1)
+    g['save']['inputs']['audio'] = ['aud', 0]
+    frames = next(c for c in cf.controls(g) if c['name'] == 'Frames')
+    assert frames['places'] == [('aud', 'frames_number'), ('i2v', 'length')]             # the two lengths move as one
+    song = {'1': node('CLIPTextEncode', text='x'), '2': node('EmptyLatentAudio', seconds=47.6, batch_size=1),
+            '3': node('KSampler', positive=['1', 0], latent_image=['2', 0], seed=1, steps=50, cfg=5.0),
+            '4': node('VAEDecodeAudio', samples=['3', 0]), '5': node('SaveAudio', audio=['4', 0])}
+    assert cf.controls_line(cf.controls(song)) == 'Seconds 47.6 (11.9 to 190.4), Steps 50 (12 to 150), CFG 5 (1.25 to 20)'
+
+
+def test_one_unreadable_picture_never_costs_her_the_rest(comfy, tool, server, monkeypatch):
+    cf.write('clip', video_graph())
+    server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}, {'filename': 'bad.png', 'type': 'output'}],
+                               'animated': [True]}}
+    server.files.update({'c.mp4': b'mp4', 'bad.png': b'not a picture'})
+    server.outputs['save']['animated'] = [False]
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([png()], 5.0))
+    result, ok = run(tool, prompt='x')
+    assert ok and "a 5 s clip" in result['text'] and "1 picture ComfyUI handed back couldn't be opened and was left out." in result['text']
+    assert len(list(cf.OUTPUT_DIR.iterdir())) == 1 and '<!--FILES:' in result['text']
+    cf.write('still', sd_graph())
+    server.outputs = {'9': {'images': [{'filename': 'out.png', 'type': 'output'}, {'filename': 'bad.png', 'type': 'output'}]}}
+    result, ok = run(tool, prompt='x', workflow='still')
+    assert ok and 'an image (64x48)' in result['text'] and 'left out' in result['text']
+    server.outputs = {'9': {'images': [{'filename': 'bad.png', 'type': 'output'}]}}
+    assert run(tool, prompt='x', workflow='still') == ("ComfyUI handed back a picture that can't be opened.", False)
+
+
+def test_an_upload_is_named_the_same_on_every_system_and_utf16_is_said(comfy, api):
+    got = _upload(api, 'C:\\Users\\me\\wan:v2.json', json.dumps(sd_graph()).encode())
+    assert got['name'] == 'wan-v2'
+    cf.WORKFLOW_DIR.joinpath('pad.json').write_bytes(json.dumps(sd_graph()).encode('utf-16'))
+    with pytest.raises(cf.ComfyError, match='UTF-8'):
+        cf.read(cf.WORKFLOW_DIR / 'pad.json')
+
+
+# -- the Apps page: a person runs a workflow -----------------------------------------------
+
+def _run(api, picture=None, **fields):
+    """POST run as the page sends it: a form, and maybe a picture file."""
+    async def read(size=-1):
+        return picture if size < 0 else picture[:size]
+    form = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in fields.items()}
+    if picture is not None:
+        form['image'] = SimpleNamespace(read=read, filename='in.png')
+    async def get_form():
+        return form
+    return asyncio.run(api.run(request=SimpleNamespace(form=get_form, headers={}), settings={'comfy_url': 'http://127.0.0.1:8188'}))
+
+
+def _finished(api, job):
+    import time
+    for _ in range(500):
+        told = api.run_state(job=job['id'])
+        if told['state'] != 'running':
+            return told
+        time.sleep(0.01)
+    raise AssertionError('the run never ended')
+
+
+def test_the_page_runs_a_workflow_as_a_job_and_keeps_what_it_made(comfy, api, server, monkeypatch):
+    api.JOBS.clear()
+    cf.write('still', sd_graph())
+    cf.write('clip', video_graph())
+    job = _run(api, workflow='still', prompt='a red apple', shape='landscape', seed='77', extras={'steps': 30})
+    assert job['state'] == 'running' and job['seed'] == 77 and job['workflow'] == 'still'
+    done = _finished(api, job)
+    sent = server.graphs[0]
+    assert done['state'] == 'done' and sent['7']['inputs']['text'] == 'a red apple' and sent['3']['inputs']['seed'] == 77
+    assert (sent['5']['inputs']['width'], sent['3']['inputs']['steps']) == (1248, 30)
+    assert done['notes'] == ["Steps 30 (the workflow's own is 20)."]
+    kept = list(cf.OUTPUT_DIR.iterdir())
+    assert len(kept) == 1 and done['files'] == [{'url': f'/api/plugin/comfyui/file/{kept[0].name}', 'name': kept[0].name, 'kind': 'image'}]
+    json.dumps(done)                                 # the comfy client and the paths never leave the server
+    assert api.outputs()['files'][0] == {'name': kept[0].name, 'kind': 'image', 'url': f'/api/plugin/comfyui/file/{kept[0].name}'}
+    # her picture's shape is followed here too, and the note goes by what came out (the frame stood in for the clip)
+    server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}], 'animated': [True]}}
+    server.files['c.mp4'] = b'mp4'
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([png(size=(736, 544))], 5.0))
+    done = _finished(api, _run(api, png(), workflow='clip', prompt='she waves'))
+    assert done['state'] == 'done' and done['files'][0]['kind'] == 'video' and server.uploads
+    assert done['notes'] == ['Your picture is 64x48: the result takes its shape.']
+    assert (server.graphs[1]['i2v']['inputs']['width'], server.graphs[1]['i2v']['inputs']['height']) == (736, 544)
+    assert api.run_state(job='nope')[1] == 404
+
+
+def test_the_page_is_told_no_before_anything_is_sent(comfy, api, server):
+    api.JOBS.clear()
+    cf.write('still', sd_graph())
+    cf.write('fixed', _img2img({}))
+    for fields, words in (({'workflow': 'still', 'prompt': '  '}, 'Type a prompt'),
+                          ({'workflow': 'still', 'prompt': 'x', 'shape': 'wide'}, 'The shape is one of'),
+                          ({'workflow': 'still', 'prompt': 'x', 'extras': {'Steps': 9999}}, 'Steps goes from 5 to 80'),
+                          ({'workflow': 'still', 'prompt': 'x', 'extras': '{broken'}, "didn't arrive whole"),
+                          ({'workflow': 'still', 'prompt': 'x', 'seed': 'abc'}, 'whole number'),
+                          ({'workflow': 'gone', 'prompt': 'x'}, "No workflow called 'gone'"),
+                          ({'workflow': 'fixed', 'prompt': 'x', 'shape': 'square'}, 'makes its own shape')):
+        body, status = _run(api, **fields)
+        assert status == 400 and words in body['error'], (fields, body)
+    assert 'Call again' not in _run(api, workflow='fixed', prompt='x', shape='square')[0]['error']     # words for a person
+    body, status = _run(api, png(), workflow='still', prompt='x')
+    assert status == 400 and 'takes no input image' in body['error']
+    assert not server.graphs and not server.uploads and not api.JOBS
+
+
+def test_stop_reaches_comfy_and_a_failure_is_words(comfy, api, server, monkeypatch):
+    api.JOBS.clear()
+    cf.write('still', sd_graph())
+    new = lambda **k: {'id': 'j', 'state': 'running', 'phase': 'sending', 'workflow': 'still', 'seed': 1, 'started': 0.0,
+                       'pid': None, 'stop': False, 'comfy': None, **k}
+    work = lambda job: api._work(job, sd_graph(), {}, 'x', None, None, [], 30, 'http://127.0.0.1:8188')
+    early = new(stop=True)                           # Stop pressed while the pictures were still going out: never queued
+    work(early)
+    assert early['state'] == 'stopped' and not server.graphs
+    server.finish = False                            # ComfyUI takes the job and never finishes it
+    late, real = new(), cf.Comfy.queue
+    monkeypatch.setattr(cf.Comfy, 'queue', lambda self, g: (late.__setitem__('stop', True), real(self, g))[1])
+    work(late)                                       # Stop pressed in the moment ComfyUI was taking it: taken out at once
+    assert late['state'] == 'stopped' and late['pid'] == 'job1' and late['phase'] == 'working'
+    assert ('POST', '/queue', {'delete': ['job1']}) in server.calls
+    monkeypatch.setattr(cf.Comfy, 'queue', real)
+    live = new(pid='job9', comfy=cf.Comfy('http://127.0.0.1:8188'))
+    api.JOBS['j2'] = live
+    assert api.run_stop(job='j2')['state'] == 'running' and live['stop'] is True
+    assert ('POST', '/queue', {'delete': ['job9']}) in server.calls
+    assert api.run_stop(job='nope')[1] == 404 and 'no longer tracked' in api.run_state(job='nope')[0]['error']
+    server.finish, server.outputs = True, {}
+    failed = new()
+    work(failed)
+    assert failed['state'] == 'failed' and 'handed back no file' in failed['error']
+    json.dumps(api._told(failed))
+
+
+def test_a_run_on_the_workflows_own_picture_is_the_first_thing_she_reads(comfy, tool, server, monkeypatch):
+    cf.write('clip', video_graph())
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))
+    result, ok = run(tool, prompt='she waves')
+    assert ok and result['text'].startswith("No input picture was passed, so this used the workflow's saved one ('start.png'). To use yours, pass image.")
+    assert result['text'].count(cf.NO_PICTURE) == 1 and '\nMade an image' in result['text']
+
+
+def test_every_route_in_the_manifest_has_its_handler(api):
+    manifest = json.loads((Path(cf.__file__).parent / 'plugin.json').read_text(encoding='utf-8'))
+    for route in manifest['capabilities']['routes']:
+        file, name = route['handler'].split(':')
+        assert file == 'routes/api.py' and callable(getattr(api, name, None)), route
+    assert (Path(cf.__file__).parent / 'app' / 'index.js').is_file() and manifest['capabilities']['app']['label']
+
+
+# -- an either/or switch on the prompt's way (Krem's Qwen Image 2.1 template, 2026-11-22) --
+
+def switch_graph(switch=False):
+    """The picture's prompt comes through a switch: off = the text typed on the switch itself,
+    on = that text run through a prompt rewriter first."""
+    return {
+        'enc': node('TextEncodeQwenImage21', prompt=['show', 0], negative_prompt='', clip=['c', 0]),
+        'show': node('PreviewAny', 'Preview as Text', source=['sw', 0]),
+        'sw': node('ComfySwitchNode', 'If/Else Switch', switch=switch, on_false='the saved prompt', on_true=['gen', 0]),
+        'gen': node('TextGenerate', 'Generate Text', prompt='the saved prompt', clip=['c2', 0], system_prompt=['sys', 0]),
+        'sys': node('PrimitiveStringMultiline', 'Text (System Prompt)', value='You rewrite prompts.'),
+        'samp': node('KSampler', positive=['enc', 0], negative=['enc', 1], latent_image=['lat', 0], seed=1, steps=25, cfg=1),
+        'lat': node('EmptyLatentImage', width=1024, height=1024, batch_size=1),
+        'dec': node('VAEDecode', samples=['samp', 0], vae=['v', 0]), 'save': node('SaveImage', images=['dec', 0]),
+    }
+
+
+def test_the_prompt_follows_a_switch_down_the_side_it_is_set_to():
+    off, notes = cf.apply(switch_graph(False), {}, 'a red fox', 1)
+    assert off['sw']['inputs']['on_false'] == 'a red fox' and off['gen']['inputs']['prompt'] == 'the saved prompt' and notes == []
+    assert off['sys']['inputs']['value'] == 'You rewrite prompts.'
+    on, notes = cf.apply(switch_graph(True), {}, 'a red fox', 1)
+    assert on['gen']['inputs']['prompt'] == 'a red fox' and on['sw']['inputs']['on_false'] == 'the saved prompt' and notes == []
+    wired = switch_graph()                           # the switch is set by a titled yes/no node, as ComfyUI's templates do
+    wired['pe'] = node('PrimitiveBoolean', 'Boolean (Enable Prompt Enhance)', value=False)
+    wired['sw']['inputs']['switch'] = ['pe', 0]
+    assert cf.apply(wired, {}, 'a red fox', 1)[0]['sw']['inputs']['on_false'] == 'a red fox'
+    wired['pe']['inputs']['value'] = True
+    assert cf.apply(wired, {}, 'a red fox', 1)[0]['gen']['inputs']['prompt'] == 'a red fox'
+    blind = switch_graph()                           # what sets it can't be read: both sides get it
+    blind['sw']['inputs']['switch'] = ['other', 0]
+    both = cf.apply(blind, {}, 'a red fox', 1)[0]
+    assert both['sw']['inputs']['on_false'] == 'a red fox' and both['gen']['inputs']['prompt'] == 'a red fox'
+    assert [n['title'] for n in cf.describe(switch_graph())['prompt_nodes']] == ['If/Else Switch']       # the rewriter is switched off
+    assert [n['title'] for n in cf.describe(switch_graph(True))['prompt_nodes']] == ['Generate Text', 'Text (System Prompt)']
+    assert cf.apply(switch_graph(True), {'prompt_node': 'sys'}, 'picked', 1)[0]['sys']['inputs']['value'] == 'picked'   # a person's pick still wins
+    dead = cf.apply(switch_graph(), {'prompt_node': 'gen'}, 'hers', 1)[0]       # ...unless it is switched off right now: it would swallow the prompt
+    assert dead['sw']['inputs']['on_false'] == 'hers' and dead['gen']['inputs']['prompt'] == 'the saved prompt'
+    worked_out = switch_graph()                      # the switch is set by a node that works it out: nobody can read that
+    worked_out['not'] = node('Logic NOT', boolean=True)
+    worked_out['sw']['inputs']['switch'] = ['not', 0]
+    both = cf.apply(worked_out, {}, 'hers', 1)[0]
+    assert both['sw']['inputs']['on_false'] == 'hers' and both['gen']['inputs']['prompt'] == 'hers' and 'gen' in cf.live(worked_out)
+
+
+def test_a_setting_that_flips_the_switch_moves_the_prompt_with_it(server):
+    g = switch_graph()
+    g['pe'] = node('PrimitiveBoolean', 'Boolean (Enable Prompt Enhance)', value=False)
+    g['sw']['inputs']['switch'] = ['pe', 0]
+    client = cf.Comfy('http://127.0.0.1:8188')
+    run, notes, _ = cf.plan(client, g, {}, 'w', 'a red fox', 1, extras={'Enable Prompt Enhance': True})
+    assert run['pe']['inputs']['value'] is True and run['gen']['inputs']['prompt'] == 'a red fox'
+    assert run['sw']['inputs']['on_false'] == 'the saved prompt' and notes == ["Enable Prompt Enhance on (the workflow's own is off)."]
+    assert g['pe']['inputs']['value'] is False and g['gen']['inputs']['prompt'] == 'the saved prompt'      # the stored graph is never touched
+
+
+# -- Krem's Qwen Image 2.1 edit workflow, imported from a PNG ComfyUI saved (2026-11-22) -----
+
+def edit_graph():
+    """Two input pictures into one encoder, a latent taken from the picture (switch off) or an
+    empty one (switch on), and a compare viewer whose saved setting ComfyUI reads as a wire."""
+    return {
+        'a': node('LoadImage', image='person.png'), 'b': node('LoadImage', image='shirt.png'),
+        'enc': node('TextEncodeQwenImage21', prompt='old', negative_prompt='', resolution=0, clip=['c', 0], vae=['v', 0],
+                    **{'images.image_1': ['a', 0], 'images.image_2': ['b', 0]}),
+        'empty': node('EmptyLatentImage', width=1024, height=1024, batch_size=1),
+        'lat': node('ComfySwitchNode', switch=False, on_false=['enc', 2], on_true=['empty', 0]),
+        'samp': node('KSampler', positive=['enc', 0], negative=['enc', 1], latent_image=['lat', 0], seed=1, steps=25, cfg=1.0),
+        'dec': node('VAEDecode', samples=['samp', 0], vae=['v', 0]),
+        'save': node('SaveImageAdvanced', images=['dec', 0]),
+        'cmp': node('ImageCompare', 'Compare Images', compare_view=['', ''], image_a=['a', 0], image_b=['save', 0]),
+    }
+
+
+def test_a_viewer_comfy_could_not_check_never_stops_the_run(comfy, tool, server):
+    lost = lambda outs, cls='ImageCompare': {'cmp': {'class_type': cls, 'dependent_outputs': outs,
+                                                      'errors': [{'type': 'exception_during_validation', 'message': 'Exception when validating node'}]}}
+    server.partial = [lost(['cmp'])]
+    client = cf.Comfy()
+    outputs, fixed = client.run(edit_graph(), 30)
+    assert outputs and client.left_out == ['Compare Images'] and ('POST', '/queue', {'delete': ['job1']}) not in server.calls
+    assert client.said(fixed) == []                  # nothing she can act on: it is in the log, not in her result
+    client.run(edit_graph(), 30)                     # the next run starts clean
+    assert client.left_out == []
+    for bad in (lost(['cmp', 'save']), lost([]), lost(['gone']), {'cmp': 'junk'}, ['junk']):    # a saver lost, or no word on what was
+        server.partial = [bad]
+        with pytest.raises(cf.ComfyError):
+            cf.Comfy().run(edit_graph(), 30)
+    cf.write('edit', edit_graph())
+    server.partial = [lost(['cmp'])]
+    result, ok = run(tool, prompt='swap the shirt')
+    assert ok and 'Compare Images' not in result['text']
+    preview_only = {k: v for k, v in edit_graph().items() if k != 'save'}      # no saver: a preview IS the result, nothing to spare
+    preview_only.update({'pv': node('PreviewImage', images=['dec', 0])})
+    preview_only['cmp']['inputs'].pop('image_b')
+    server.partial = [{'pv': {'class_type': 'PreviewImage', 'dependent_outputs': ['pv'], 'errors': []}}]
+    with pytest.raises(cf.ComfyError):
+        cf.Comfy().run(preview_only, 30)
+    server.partial = [lost(['samp'])]                # "an output" that feeds other nodes is no viewer
+    with pytest.raises(cf.ComfyError):
+        cf.Comfy().run(edit_graph(), 30)
+
+
+def test_the_switched_off_side_of_a_switch_is_not_part_of_the_workflow():
+    g = edit_graph()
+    assert 'empty' not in cf.live(g) and 'enc' in cf.live(g)
+    d = cf.describe(g)
+    assert d['shape'] == '' and cf.reshape(g, 'landscape') is False and g['empty']['inputs']['width'] == 1024     # the latent comes from the picture
+    assert cf.controls_line(d['extras']) == 'Steps 25 (6 to 100)'                                                # no Images on a latent nobody uses
+    on = edit_graph()
+    on['lat']['inputs']['switch'] = True
+    assert 'empty' in cf.live(on) and cf.describe(on)['shape'] == 'square' and cf.reshape(on, 'landscape')
+    assert on['empty']['inputs']['width'] == 1248 and 'Images 1 (1 to 4)' in cf.controls_line(cf.describe(on)['extras'])
+
+
+# -- room for several input pictures ---------------------------------------------------------
+
+EDIT_INFO = {
+    'TextEncodeQwenImage21': {'input': {'required': {'prompt': ['STRING', {}], 'images': ['COMFY_AUTOGROW_V3', {'template': {'min': 0}}]},
+                                        'optional': {'vae': ['VAE', {}]}}},
+    'BatchImagesNode': {'input': {'required': {'images': ['COMFY_AUTOGROW_V3', {'template': {'min': 1, 'max': 50}}]}}},
+    'ImageCompare': {'input': {'required': {'compare_view': ['IMAGECOMPARE', {}]}, 'optional': {'image_a': ['IMAGE', {}], 'image_b': ['IMAGE', {}]}}},
+    'ImageScale': {'input': {'required': {'image': ['IMAGE', {}], 'width': ['INT', {}], 'height': ['INT', {}]}}},
+    'ImageBlend': {'input': {'required': {'image1': ['IMAGE', {}], 'image2': ['IMAGE', {}]}}},
+    'VAEEncode': {'input': {'required': {'pixels': ['IMAGE', {}], 'vae': ['VAE', {}]}}},
+}
+
+
+def test_comfy_says_which_inputs_may_stay_unwired(server):
+    server.info = EDIT_INFO
+    c = cf.Comfy()
+    assert c.can_drop('ImageCompare', 'image_a') and not c.can_drop('ImageCompare', 'compare_view')
+    assert c.can_drop('TextEncodeQwenImage21', 'images.image_2', 1) and c.can_drop('TextEncodeQwenImage21', 'images.image_1', 0)
+    assert c.can_drop('BatchImagesNode', 'images.image1', 1) and not c.can_drop('BatchImagesNode', 'images.image0', 0)    # one must stay
+    assert not c.can_drop('ImageBlend', 'image2') and not c.can_drop('NoSuchNode', 'image') and not c.can_drop('TextEncodeQwenImage21', 'prompt')
+    assert len([call for call in server.calls if call[1].startswith('/object_info/')]) == 5       # each class is asked once
+
+
+def test_a_slot_nobody_filled_is_unplugged_so_the_saved_picture_never_rides_along(server):
+    server.info = EDIT_INFO
+    drop = cf.Comfy().can_drop
+    g = edit_graph()
+    g['batch'] = node('BatchImagesNode', **{'images.image0': ['a', 0], 'images.image1': ['b', 0]})
+    g['enc']['inputs']['hint'] = ['batch', 0]
+    assert cf.image_slots(g) == ['a', 'b'] and cf.describe(g)['image_slots'] == 2
+    one, notes = cf.apply(g, {}, 'swap the shirt', 1, 'mine.png', drop)
+    assert one['a']['inputs']['image'] == 'mine.png' and notes == []
+    assert 'images.image_2' not in one['enc']['inputs'] and one['enc']['inputs']['images.image_1'] == ['a', 0]
+    assert one['batch']['inputs'] == {'images.image0': ['a', 0]} and 'b' not in cf.live(one)        # the shirt feeds nothing now
+    two, notes = cf.apply(g, {}, 'swap the shirt', 1, ['mine.png', 'shirt2.png'], drop)
+    assert (two['a']['inputs']['image'], two['b']['inputs']['image']) == ('mine.png', 'shirt2.png') and notes == []
+    assert two['enc']['inputs']['images.image_2'] == ['b', 0]
+    none, notes = cf.apply(g, {}, 'x', 1, None, drop)                                                # no picture at all: the file as saved, and said
+    assert none['enc']['inputs']['images.image_2'] == ['b', 0]
+    assert notes == ["No input picture was passed, so this used the workflow's saved ones ('person.png', 'shirt.png'). To use yours, pass image."]
+    blind, notes = cf.apply(g, {}, 'x', 1, 'mine.png')                                               # nobody to ask what may stay unwired
+    assert blind['enc']['inputs']['images.image_2'] == ['b', 0]
+    assert notes == ["Slot 2 of this workflow can't be left empty, so its saved picture ('shirt.png') went in too."]
+    picked = cf.apply(g, {'image_node': 'b'}, 'x', 1, 'mine.png', drop)[0]                           # a person's pick is the first slot
+    assert picked['b']['inputs']['image'] == 'mine.png' and 'images.image_1' not in picked['enc']['inputs']
+    # a resize between the spare loader and its slot goes with it; a slot the picture is blended through cannot go
+    via = edit_graph()
+    via['fit'] = node('ImageScale', image=['b', 0], width=1024, height=1024)
+    via['enc']['inputs']['images.image_2'] = ['fit', 0]
+    assert 'images.image_2' not in cf.apply(via, {}, 'x', 1, 'mine.png', drop)[0]['enc']['inputs']
+    blend = _img2img({'40': node('LoadImage', 'Second picture', image='b.png'), '41': node('ImageBlend', image1=['30', 0], image2=['40', 0]),
+                      '31': node('VAEEncode', pixels=['41', 0], vae=['4', 2])})
+    kept, notes = cf.apply(blend, {}, 'x', 1, 'mine.png', drop)
+    assert kept['41']['inputs']['image2'] == ['40', 0] and kept['3']['inputs']['latent_image'] == ['31', 0]
+    assert notes == ["Slot 2 of this workflow can't be left empty, so its saved picture ('b.png') went in too."]
+
+
+def test_the_tool_and_the_page_take_one_picture_or_several(comfy, tool, api, server, monkeypatch):
+    from core import images as ci
+    api.JOBS.clear()
+    server.info = EDIT_INFO
+    cf.write('edit', edit_graph())
+    cf.write('clip', video_graph())
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))
+    asked = []
+    monkeypatch.setattr(ci, 'resolve', lambda src, **k: asked.append(src) or SimpleNamespace(data=png(color=(len(asked), 0, 0))))
+    text, ok = tool.execute('comfy_list_workflows', {}, None, {})
+    assert 'edit: image, takes up to 2 input images' in text and 'clip (default): video, takes an input image,' in text
+    result, ok = run(tool, prompt='x', workflow='edit', image='img:a')
+    assert ok and 'images.image_2' not in server.graphs[-1]['enc']['inputs'] and 'kept the picture' not in result['text']
+    result, ok = run(tool, prompt='x', workflow='edit', image='img:a, img:b')
+    assert ok and asked[-2:] == ['img:a', 'img:b'] and server.graphs[-1]['enc']['inputs']['images.image_2'] == ['b', 0]
+    assert server.graphs[-1]['a']['inputs']['image'] != server.graphs[-1]['b']['inputs']['image']
+    result, ok = run(tool, prompt='x', workflow='edit', image=['img:a', 'img:b', 'img:c'])
+    assert not ok and 'at most 2 input images' in result
+    result, ok = run(tool, prompt='x', workflow='clip', image='https://x.test/a,b.png')         # one slot: a comma is part of the name
+    assert ok and asked[-1] == 'https://x.test/a,b.png'
+    sent = len(server.graphs)
+    async def read_one(size=-1):
+        return png(color=(9, 9, 9))
+    async def read_two(size=-1):
+        return png(color=(8, 8, 8))
+    files = [SimpleNamespace(read=read_one, filename='1.png'), SimpleNamespace(read=read_two, filename='2.png')]
+    form = SimpleNamespace(get=lambda k: {'workflow': 'edit', 'prompt': 'x'}.get(k), getlist=lambda k: files if k == 'image' else [])
+    async def get_form():
+        return form
+    job = asyncio.run(api.run(request=SimpleNamespace(form=get_form, headers={}), settings={'comfy_url': 'http://127.0.0.1:8188'}))
+    assert _finished(api, job)['state'] == 'done' and server.graphs[sent]['enc']['inputs']['images.image_2'] == ['b', 0]
+
+
+# -- found by the second hunt of 2026-11-22 ------------------------------------------------
+
+def test_unplugging_a_spare_slot_never_takes_her_picture_or_a_harmless_branch(server):
+    server.info = {**EDIT_INFO, 'ImageBatch': {'input': {'required': {'image1': ['IMAGE', {}], 'image2': ['IMAGE', {}]}}},
+                   'PreviewImage': {'input': {'required': {'images': ['IMAGE', {}]}}}}
+    drop = cf.Comfy().can_drop
+    joined = edit_graph()                            # both pictures meet in a combiner before the model sees them
+    joined['bat'] = node('ImageBatch', image1=['a', 0], image2=['b', 0])
+    joined['enc']['inputs'] = {'prompt': 'old', 'clip': ['c', 0], 'images.image_1': ['bat', 0]}
+    g, notes = cf.apply(joined, {}, 'x', 1, 'mine.png', drop)
+    assert g['enc']['inputs']['images.image_1'] == ['bat', 0] and g['bat']['inputs']['image1'] == ['a', 0]      # hers is still in
+    assert notes == ["Slot 2 of this workflow can't be left empty, so its saved picture ('shirt.png') went in too."]
+    seen = edit_graph()                              # the spare picture is also shown in a viewer: that costs nothing
+    seen['pv'] = node('PreviewImage', images=['b', 0])
+    g, notes = cf.apply(seen, {}, 'x', 1, 'mine.png', drop)
+    assert 'images.image_2' not in g['enc']['inputs'] and g['pv']['inputs']['images'] == ['b', 0] and notes == []
+    off = edit_graph()                               # ...or it also feeds the switched-off side of a switch, or a leftover branch
+    off.update({'ve': node('VAEEncode', pixels=['b', 0], vae=['v', 0]), 'stray': node('ImageScale', image=['b', 0], width=64, height=64)})
+    off['lat']['inputs']['on_true'] = ['ve', 0]
+    g, notes = cf.apply(off, {}, 'x', 1, 'mine.png', drop)
+    assert 'images.image_2' not in g['enc']['inputs'] and g['ve']['inputs']['pixels'] == ['b', 0] and notes == []
+    assert cf.apply(edit_graph(), {}, 'x', 1, '', drop)[0]['a']['inputs']['image'] == 'person.png'              # an empty name is no picture
+
+
+def test_slots_are_filled_in_the_order_the_model_reads_them():
+    g = edit_graph()                                 # the clothing loader was made first: a lower id, the second input
+    g['5'], g['9'] = node('LoadImage', image='shirt.png'), node('LoadImage', image='person.png')
+    del g['a'], g['b']
+    g['enc']['inputs'].update({'images.image_1': ['9', 0], 'images.image_2': ['5', 0]})
+    g['cmp']['inputs']['image_a'] = ['9', 0]
+    assert cf.image_slots(g) == ['9', '5']
+    two = cf.apply(g, {}, 'x', 1, ['person-mine.png', 'shirt-mine.png'])[0]
+    assert (two['9']['inputs']['image'], two['5']['inputs']['image']) == ('person-mine.png', 'shirt-mine.png')
+    via = edit_graph()                               # a resize on the way does not hide which input a picture ends in
+    via.update({'fa': node('ImageScale', image=['a', 0], width=8, height=8), 'fb': node('ImageScale', image=['b', 0], width=8, height=8)})
+    via['enc']['inputs'].update({'images.image_1': ['fb', 0], 'images.image_2': ['fa', 0]})
+    via['cmp']['inputs'].pop('image_a')
+    assert cf.image_slots(via) == ['b', 'a'] and cf.image_slots(via, {'image_node': 'a'}) == ['a', 'b']
+
+
+def test_a_workflow_switched_to_text_only_takes_no_picture(comfy, tool, server, monkeypatch):
+    from core import images as ci
+    g = video_graph()                                # image-to-video with a "text to video" switch that passes the picture by
+    g['t2v'] = node('PrimitiveBoolean', 'Switch to Text to Video?', value=False)
+    g['i2v'] = node('LTXVImgToVideoInplace', vae=['v', 0], image=['img', 0], latent=['empty', 0], bypass=['t2v', 0])
+    g['empty'] = node('EmptyLTXVLatentVideo', width=768, height=512, length=121)
+    g.update({'guide': node('CFGGuider', model=['u', 0], positive=['cond', 0], negative=['cond', 1], cfg=1.0),
+              'samp': node('SamplerCustomAdvanced', noise=['noise', 0], guider=['guide', 0], latent_image=['i2v', 0])})
+    assert cf.image_slots(g) == ['img'] and cf.describe(g)['takes_image']
+    cf.write('clip', g)
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))
+    monkeypatch.setattr(ci, 'resolve', lambda src, **k: SimpleNamespace(data=png()))
+    result, ok = run(tool, prompt='a river', extras={'Switch to Text to Video': True})
+    assert ok and cf.NO_PICTURE not in str(result) and 'Switch to Text to Video on' in str(result)
+    result, ok = run(tool, prompt='a river', extras={'Switch to Text to Video': True}, image='img:a')
+    assert not ok and 'takes no input image the way it is set here' in result and not server.uploads
+    result, ok = run(tool, prompt='a river')
+    assert ok and (result['text'] if isinstance(result, dict) else result).startswith(cf.NO_PICTURE)
+
+
+def test_a_setting_a_switch_brings_to_life_can_be_set_in_the_same_call():
+    g = switch_graph()
+    g['pe'] = node('PrimitiveBoolean', 'Boolean (Enable Prompt Enhance)', value=False)
+    g['temp'] = node('PrimitiveFloat', 'Enhance Temperature', value=0.7)
+    g['sw']['inputs']['switch'] = ['pe', 0]
+    g['gen']['inputs']['temperature'] = ['temp', 0]
+    assert 'Enhance Temperature' not in cf.controls_line(cf.controls(g))        # the rewriter is switched off
+    with pytest.raises(cf.ComfyError, match="no 'Enhance Temperature'"):
+        cf.set_extras(switch_graph_with(g), {}, {'Enhance Temperature': 0.9})
+    done = switch_graph_with(g)
+    notes = cf.set_extras(done, {}, {'Enhance Temperature': 0.9, 'Enable Prompt Enhance': True})    # whatever order she wrote them in
+    assert done['temp']['inputs']['value'] == 0.9 and done['pe']['inputs']['value'] is True
+    assert notes == ["Enhance Temperature 0.9 (the workflow's own is 0.7).", "Enable Prompt Enhance on (the workflow's own is off)."]
+
+
+def switch_graph_with(g):
+    return json.loads(json.dumps(g))
+
+
+def test_only_a_spec_comfy_spells_out_lets_an_input_go(server):
+    grow = lambda template: {'input': {'required': {'images': ['COMFY_AUTOGROW_V3', {'template': template} if template is not None else {}]}}}
+    server.info = {'A': grow({'min': '1'}), 'B': grow(None), 'C': grow(['x']), 'D': grow({'min': True}), 'E': grow({'min': 0}), 'F': grow({})}
+    c = cf.Comfy()
+    assert [c.can_drop(k, 'images.image_1', 1) for k in 'ABCDEF'] == [False, False, False, False, True, False]
+
+
+def test_pictures_are_all_opened_before_one_is_sent_and_named_when_one_is_bad(server):
+    client = cf.Comfy()
+    with pytest.raises(cf.ComfyError) as said:
+        cf.plan(client, edit_graph(), {}, 'edit', 'x', 1, picture=[png(), b'not a picture'])
+    assert str(said.value).startswith("Picture 2: That isn't a picture ComfyUI can take (PNG, JPEG") and '0x' not in str(said.value)
+    assert not server.uploads                        # the good one was not sent either
+    with pytest.raises(cf.ComfyError, match="^That isn't a picture"):
+        cf.plan(client, video_graph(), {}, 'clip', 'x', 1, picture=b'nope')
+    run_, notes, shaped = cf.plan(client, edit_graph(), {}, 'edit', 'x', 1, picture=[png(size=(60, 90)), png(size=(90, 60))])
+    assert shaped[3] == 'Your first picture' and cf.shape_note(*shaped, (600, 900)) == 'Your first picture is 60x90: the result takes its shape.'
+    assert cf.plan(client, video_graph(), {}, 'clip', 'x', 1, picture=png())[2][3] == 'Your picture'
+    assert len({cf.keep('w', '.png').name for _ in range(200)}) == 200
+
+
+def test_a_picture_argument_she_gets_wrong_is_said_before_anything_is_fetched(comfy, tool, server, monkeypatch):
+    from core import images as ci
+    cf.write('edit', edit_graph())
+    cf.write('clip', video_graph())
+    asked = []
+    monkeypatch.setattr(ci, 'resolve', lambda src, **k: asked.append(src) or SimpleNamespace(data=png()))
+    for bad in ({'id': 'img:p'}, 5, ['img:p', {'x': 1}], ['img:p', ''], 'the picture above', ['img:p', 'jacket.png']):
+        result, ok = run(tool, prompt='x', workflow='edit', image=bad)
+        assert not ok and 'img:<id>, doc:<N>, a path or a URL' in result, bad
+    result, ok = run(tool, prompt='x', workflow='clip', image='img:p, img:j')
+    assert not ok and result == 'This workflow takes one input image.'
+    cf.write('fixed', _img2img({}))
+    result, ok = run(tool, prompt='x', workflow='fixed', shape='square', image='img:p')        # no size to set: said before the picture is fetched
+    assert not ok and 'makes its own shape' in result
+    assert not asked and not server.uploads and not server.graphs
+    monkeypatch.setattr(ci, 'resolve', lambda src, **k: (_ for _ in ()).throw(ci.ImageError("'" + 'x' * 5000 + "' is not a handle")))
+    result, ok = run(tool, prompt='x', workflow='clip', image='https://x.test/a.png')
+    assert not ok and len(result) <= 300
+
+
+def test_the_page_gets_its_job_at_once_and_the_sending_is_the_jobs_first_step(comfy, api, server):
+    api.JOBS.clear()
+    cf.write('clip', video_graph())
+    job = _run(api, b'this is not a picture', workflow='clip', prompt='she waves')
+    assert isinstance(job, dict) and job['id'] and job['phase'] == 'sending'     # a job, not a refusal: the picture is its business
+    done = _finished(api, job)
+    assert done['state'] == 'failed' and done['error'].startswith("That isn't a picture ComfyUI can take") and not server.graphs
+    ok = _finished(api, _run(api, png(), workflow='clip', prompt='she waves'))
+    assert ok['state'] == 'done' and ok['phase'] == 'working'
+

@@ -75,6 +75,14 @@ function whenSeen(player) {
     watcher.observe(player);
 }
 
+// The browser's own Download (the player's menu, right-click > Save as) makes its own
+// request, which our self-signed certificate fails: "connection failed", and Resume
+// fails again. The chip under the player is the one way to save (shared/download.js).
+function ownDoor(player) {
+    player.controlsList = 'nodownload';
+    player.addEventListener('contextmenu', ev => ev.preventDefault());
+}
+
 function chip(file) {
     const a = document.createElement('a');
     a.className = 'files-chip';
@@ -108,6 +116,7 @@ export function buildFilesRows(groups) {
             player.controls = true; player.playsInline = true;
             player.preload = 'none';
             player.src = f.url;
+            ownDoor(player);
             whenSeen(player);
             row.appendChild(player);
         });
@@ -117,6 +126,7 @@ export function buildFilesRows(groups) {
             player.controls = true;
             player.preload = 'none';          // nothing is fetched until it is seen
             player.src = f.url;
+            ownDoor(player);
             whenSeen(player);
             row.appendChild(player);
         });

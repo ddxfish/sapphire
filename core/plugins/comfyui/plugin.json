@@ -1,7 +1,7 @@
 {
   "name": "comfyui",
   "short_display_name": "ComfyUI",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "ComfyUI: generate images and video with your own workflows, on this machine or another one",
   "author": "sapphire",
   "icon": "🎨",
@@ -9,6 +9,11 @@
   "default_enabled": false,
   "settingsUI": "plugin",
   "capabilities": {
+    "app": {
+      "label": "ComfyUI",
+      "icon": "🎨",
+      "description": "Run your ComfyUI workflows by hand: prompt, shape and settings on the left, the result large on the right"
+    },
     "tools": ["tools/comfy_tools.py"],
     "routes": [
       {"method": "GET", "path": "workflows", "handler": "routes/api.py:list_workflows"},
@@ -19,6 +24,10 @@
       {"method": "GET", "path": "workflows/{name}/file", "handler": "routes/api.py:download"},
       {"method": "POST", "path": "workflows/{name}/check", "handler": "routes/api.py:check"},
       {"method": "POST", "path": "test", "handler": "routes/api.py:test"},
+      {"method": "POST", "path": "run", "handler": "routes/api.py:run"},
+      {"method": "GET", "path": "run/{job}", "handler": "routes/api.py:run_state", "live": true},
+      {"method": "DELETE", "path": "run/{job}", "handler": "routes/api.py:run_stop"},
+      {"method": "GET", "path": "outputs", "handler": "routes/api.py:outputs"},
       {"method": "GET", "path": "file/{name}", "handler": "routes/api.py:file", "media": true},
       {"method": "DELETE", "path": "outputs", "handler": "routes/api.py:clear_outputs"}
     ],

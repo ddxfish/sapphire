@@ -68,6 +68,9 @@ function injectStyles() {
     .cfy-tag { font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--border); color:var(--text-muted); }
     .cfy-wire { font-size:12px; color:var(--text-muted); }
     .cfy-wire select { padding:4px 8px; font-size:12px; max-width:100%; }
+    .cfy-extra { display:grid; grid-template-columns:auto minmax(120px,1fr) 84px 84px auto; gap:6px; align-items:center;
+      font-size:12px; color:var(--text-muted); }
+    .cfy-extra input[type=text], .cfy-extra input[type=number] { padding:4px 8px; font-size:12px; }
   `;
   document.head.appendChild(style);
 }
@@ -120,6 +123,26 @@ function nodeSelect(nodes, picked, lead, onPick) {
   return select;
 }
 
+// One control of a workflow: on or off for her, the name she sees, and how far a number may go.
+// Only what differs from what was found is saved, so an untouched range follows the workflow.
+function extraRow(c, patch) {
+  const num = (v, title) => el('input', { type: 'number', step: 'any', value: v, title, onchange: save });
+  const on = el('input', { type: 'checkbox', checked: !c.off, title: 'She can set this', onchange: save });
+  const name = el('input', { type: 'text', value: c.name, maxLength: 40, placeholder: c.found, onchange: save });
+  const lo = c.auto ? num(c.min, 'Lowest') : null, hi = c.auto ? num(c.max, 'Highest') : null;
+  const own = typeof c.value === 'boolean' ? (c.value ? 'on' : 'off') : String(c.value);
+  function save() {
+    const row = { off: !on.checked };
+    if (name.value.trim() && name.value.trim() !== c.found) row.name = name.value.trim();
+    const typed = (box, auto) => (box && box.value !== '' && Number(box.value) !== auto ? Number(box.value) : undefined);
+    row.min = typed(lo, c.auto?.[0]);
+    row.max = typed(hi, c.auto?.[1]);
+    patch({ extras: { [c.id]: row } });
+  }
+  return el('div', { class: 'cfy-extra' }, on, name, lo || el('span'), hi || el('span'),
+    el('span', { text: `workflow's own: ${own}` }));
+}
+
 function flowRow(container, flow) {
   const out = el('div', { class: 'cfy-say' });
   const row = el('div', { class: 'cfy-flow' });
@@ -146,7 +169,7 @@ function flowRow(container, flow) {
     return row;
   }
 
-  const tags = [flow.kind, flow.takes_image && 'takes an image', flow.kind !== 'audio' && (flow.shape || 'fixed shape')];
+  const tags = [flow.kind, flow.takes_image && 'takes an image', flow.kind !== 'audio' && (flow.shape || 'shape not settable')];
   row.append(el('div', { class: 'cfy-line' }, el('span', { class: 'cfy-name', text: flow.name }),
     ...tags.filter(Boolean).map(t => el('span', { class: 'cfy-tag', text: t }))));
   row.append(el('input', { type: 'text', value: flow.description || '', maxLength: 300,
@@ -162,6 +185,12 @@ function flowRow(container, flow) {
   if (flow.image_nodes.length > 1 || (flow.image_nodes.length && !flow.image_node)) {
     row.append(el('div', { class: 'cfy-wire cfy-line' }, el('span', { text: 'Her input image goes into' }),
       nodeSelect(flow.image_nodes, flow.image_node, 'None: these are all references', id => patch({ image_node: id }))));
+  }
+
+  if (flow.extras?.length) {
+    row.append(el('div', { class: 'cfy-wire', text: 'She can also set (ticked), by this name, from / to:'
+        + (flow.extras.length > 12 ? ' She is shown the first 12 that are ticked.' : '') }),
+      ...flow.extras.map(c => extraRow(c, patch)));
   }
 
   const check = el('button', { type: 'button', class: 'cfy-btn', text: 'Check', title: 'Will it run on that ComfyUI?',
@@ -188,7 +217,8 @@ function fillDefault(container, flows) {
 
 // What a row was built from, minus what the row edits itself: a row is rebuilt only when
 // the workflow under it changed (a replace), never for its own description or picks.
-const sigOf = flow => JSON.stringify({ ...flow, description: null, prompt_node: null, image_node: null });
+const sigOf = flow => JSON.stringify({ ...flow, description: null, prompt_node: null, image_node: null,
+  extras: (flow.extras || []).map(c => [c.id, c.found, c.value, c.auto]) });
 
 async function refresh(container) {
   const panel = panels.get(container);

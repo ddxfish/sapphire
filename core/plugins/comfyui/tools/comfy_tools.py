@@ -3,10 +3,11 @@
 Workflows are added in Settings > Plugins > ComfyUI (upload a file, or import ComfyUI's
 last run). The graph logic and the HTTP client live in plugins.comfyui.comfy.
 """
+import copy
 import io
 import logging
-import math
 import random
+import re
 from pathlib import Path
 
 from plugins.comfyui import comfy as cf
@@ -20,7 +21,6 @@ TOOL_CATEGORY = 'media'
 MAX_PX = 2160          # the long side of a picture kept in chat
 MAX_PICS = 12
 MAX_FILES = 4
-FIXED = "This workflow's shape can't be set from here, so it kept its own."
 
 TOOLS = [
     {
@@ -45,16 +45,20 @@ TOOLS = [
                     },
                     "image": {
                         "type": "string",
-                        "description": "Input image for a workflow that edits or animates one: img:<id>, doc:<N>, a path or a URL. The result takes its shape."
+                        "description": "Input image for a workflow that edits or animates: img:<id>, doc:<N>, a path or a URL. Several, if it has room: comma-separated, main picture first (the result takes its shape)."
                     },
                     "shape": {
                         "type": "string",
                         "enum": ["square", "portrait", "landscape"],
-                        "description": "Omit to keep the input image's shape (with no image: the workflow's own)"
+                        "description": "portrait = taller than wide, landscape = wider. Omit to keep the main input image's shape (no image: the workflow's own)"
                     },
                     "seed": {
                         "type": "integer",
                         "description": "Omit for random"
+                    },
+                    "extras": {
+                        "type": "object",
+                        "description": "A workflow's own settings, by the names comfy_list_workflows gives (each workflow has its own): {\"Duration\": 8}. Omit for its defaults."
                     }
                 },
                 "required": ["prompt"]
@@ -66,7 +70,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "comfy_list_workflows",
-            "description": "List installed ComfyUI workflows: what each makes, its own shape and whether it takes an input image.",
+            "description": "List installed ComfyUI workflows: what each makes, its own shape, whether it takes an input image, and the extras it can be given.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -118,19 +122,47 @@ def _guard_private(url, source):
 
 
 def _wanted(args):
-    """(the shape she asked for or None, a note or None). The width and height this tool used
-    to take are read as the shape they describe, and said."""
+    """The shape she named, or None. A word that is not one, and the width and height this tool
+    used to take, are answered before anything runs, with the word to pass instead."""
     shape = args.get('shape')
-    if isinstance(shape, str) and shape.strip():
-        if shape.strip().lower() not in cf.SHAPES:
+    if shape not in (None, ''):
+        word = shape.strip().lower() if isinstance(shape, str) else None
+        if word not in cf.SHAPES:
             raise cf.ComfyError(f"shape is one of: {', '.join(cf.SHAPES)}. Leave it out to keep the input image's shape.")
-        return shape.strip().lower(), None
-    if all(args.get(k) in (None, '') for k in ('width', 'height')):
-        return None, None
-    w, h = _int(args.get('width')), _int(args.get('height'))
-    shape = cf.shape_of(w / h) if w and h and w > 0 and h > 0 else None
-    return shape, "width and height are no longer taken" + (
-        f": read as shape='{shape}'." if shape else f". Pass shape instead ({', '.join(cf.SHAPES)}).")
+        return word
+    if any(args.get(k) not in (None, '') for k in ('width', 'height')):
+        w, h = _int(args.get('width')), _int(args.get('height'))
+        word = f"shape='{cf.shape_of(w / h)}'" if w and h and w > 0 and h > 0 else f"shape ({', '.join(cf.SHAPES)})"
+        raise cf.ComfyError(f"width and height are no longer taken: pass {word}, or leave it out to keep the input "
+                            "image's shape. The workflow keeps its own pixel count.")
+    return None
+
+
+_HANDLE = re.compile(r'(?i)^(img:|doc:|https?://|/|~|[a-z]:[\\/])')        # what core.images takes as a picture
+
+
+def _sources(image, room):
+    """Her `image` argument as a list of picture handles: one, or several for a workflow with
+    room for them (a list, or one text with commas). Anything that is not a handle is refused
+    here, before the first picture is fetched: a wrong one would otherwise be dropped in
+    silence, or a comma inside an address would cut it in two."""
+    form = "image is a picture: img:<id>, doc:<N>, a path or a URL. Several: separated by commas."
+    if image in (None, '', []):
+        return []
+    if isinstance(image, str):
+        parts = [s.strip() for s in re.split(r',\s*|\n', image) if s.strip()]
+        several = len(parts) > 1 and all(_HANDLE.match(s) for s in parts)
+        if several and room == 1:
+            raise cf.ComfyError("This workflow takes one input image.")
+        items = parts if several and room > 1 else [image.strip()]
+    elif isinstance(image, list) and all(isinstance(s, str) and s.strip() for s in image):
+        items = [s.strip() for s in image]
+    else:
+        raise cf.ComfyError(form)
+    bad = next((s for s in items if not _HANDLE.match(s)), None)
+    if bad is not None:
+        raise cf.ComfyError(f"'{cf._clip(bad, 60)}' is not a picture. {form}")
+    return items
 
 
 def _seconds(v, default):
@@ -165,17 +197,21 @@ def _line(name, path, default):
         return f"  {name}: unusable. Its file isn't a workflow ComfyUI could run."
     bits = [d['kind']]
     if d['takes_image']:
-        bits.append('takes an input image')
+        bits.append('takes an input image' if d['image_slots'] < 2 else f"takes up to {d['image_slots']} input images")
     if d['kind'] != 'audio':
-        bits.append(d['shape'] or 'fixed shape')
+        bits.append(f"{d['shape']} by default" if d['shape'] else 'shape not settable')
+    extras = cf.controls_line(d['extras'])
     return (f"  {name}{' (default)' if name == default else ''}: {', '.join(bits)}"
-            + (f". {d['description']}" if d['description'] else ''))
+            + (f". {d['description']}" if d['description'] else '')
+            + (f"\n      extras: {extras}" if extras else ''))
 
 
 def _list(settings):
     default = cf.pick(None, settings.get('default_workflow'))[0]         # raises the "none installed" words
     lines = [_line(name, path, default) for name, path in cf.workflows().items()]
-    return "Installed workflows:\n" + "\n".join(lines) + f"\n\nUse comfy_generate(prompt='...', workflow='{default}')."
+    hint = (" extras are optional and each workflow has its own: the list shows its value now and how far it goes. "
+            "Pass them as extras={\"Name\": value}.") if any('\n      extras: ' in line for line in lines) else ''
+    return "Installed workflows:\n" + "\n".join(lines) + f"\n\nUse comfy_generate(prompt='...', workflow='{default}').{hint}"
 
 
 def _generate(args, settings):
@@ -186,51 +222,53 @@ def _generate(args, settings):
         raise cf.ComfyError("No prompt provided")
     prompt = prompt.strip()
     workflow = args.get('workflow')
-    name, path = cf.pick(workflow if isinstance(workflow, str) else None, settings.get('default_workflow'))
+    if workflow not in (None, '') and not isinstance(workflow, str):
+        raise cf.ComfyError("workflow is a name from comfy_list_workflows.")
+    name, path = cf.pick(workflow, settings.get('default_workflow'))
     graph, meta = cf.read(path)
     kind = cf.kind(graph)
-    shape, said = _wanted(args)
-
-    comfy, image, pic = cf.Comfy(settings.get('comfy_url')), None, None
-    source = args.get('image')
-    source = source.strip() if isinstance(source, str) else ''
+    shape, extras = _wanted(args), args.get('extras') or None
+    # Everything that can be refused without a picture is refused first, on the workflow as her
+    # settings leave it: a setting may be the switch that decides whether it takes a picture at all.
+    as_set = copy.deepcopy(graph)
+    if extras:
+        cf.set_extras(as_set, meta, extras)
+    if shape and not cf.size_plan(as_set)[0]:
+        raise cf.ComfyError(f"Workflow '{name}' makes its own shape, which can't be set from here. Call again without shape.")
+    room = len(cf.image_slots(as_set, meta))
+    sources = _sources(args.get('image'), room)
+    comfy, picture = cf.Comfy(settings.get('comfy_url')), None
     if _private():
-        _guard_private(comfy.url, source)
-    if source:
-        if not cf.image_target(graph, meta):
-            raise cf.ComfyError(f"Workflow '{name}' takes no input image. comfy_list_workflows shows the ones that do.")
+        for one in sources or ['']:
+            _guard_private(comfy.url, one)
+    if sources:
+        if not room:
+            raise cf.ComfyError(f"Workflow '{name}' takes no input image"
+                                + (" the way it is set here." if cf.image_slots(graph, meta) else ". comfy_list_workflows shows the ones that do."))
+        if len(sources) > room:
+            raise cf.ComfyError(f"Workflow '{name}' takes {'one input image' if room == 1 else f'at most {room} input images'}.")
         from core import images as ci
         try:
-            image, pic = comfy.upload(ci.resolve(source).data)
+            picture = [ci.resolve(one).data for one in sources]
         except ci.ImageError as e:
-            raise cf.ComfyError(str(e)) from None
+            raise cf.ComfyError(cf._clip(e, 300)) from None
 
     seed = _int(args.get('seed'))
     if seed is None or seed < 0:
         seed = random.randint(1, 2 ** 31 - 1)
-    run, notes = cf.apply(graph, meta, prompt, seed, image)
-    notes += [said] if said else []
-    # the shape: the one she named, else her picture's, else the workflow is left as it is
-    unmet = None                                    # her picture's size, when the workflow couldn't be given its shape
-    if shape or pic:
-        if cf.reshape(run, shape or pic[0] / pic[1], comfy.choices):
-            notes += [f"Your picture is {pic[0]}x{pic[1]}: the result takes its shape."] if not shape else []
-        elif shape:
-            notes.append(FIXED)
-        else:
-            unmet = pic
+    run, notes, shaped = cf.plan(comfy, graph, meta, name, prompt, seed, shape, extras, picture)
     wait = (_seconds(settings.get('timeout'), 300) if kind == 'image'
             else _seconds(settings.get('video_timeout'), 1200))
     logger.info(f"[COMFY] {name}: {kind}, seed {seed}, waiting up to {int(wait)} s")
 
     outputs, fixed = comfy.run(run, wait)
-    notes += [f"Read '{f['value']}' as '{f['to']}' on this ComfyUI." for f in fixed]
+    notes += comfy.said(fixed)
     items = cf.outputs_of(outputs)
     if not items:
         raise cf.ComfyError("ComfyUI finished but handed back no file. The workflow needs a Save Image or Save Video "
                             "node" + ("" if cf.seed_inputs(graph) else
                                       ", and with no seed input ComfyUI skips a run it has already made") + ".")
-    return _deliver(comfy, name, items, seed, prompt, notes, unmet)
+    return _deliver(comfy, name, items, seed, prompt, notes, shaped)
 
 
 def _shape(raw):
@@ -263,11 +301,11 @@ def _size(raw):
         return None
 
 
-def _deliver(comfy, name, items, seed, prompt, notes, unmet=None):
+def _deliver(comfy, name, items, seed, prompt, notes, shaped=None):
     """Fetch what the run made and shape the tool result: stills go to the chat's image
-    store, clips are kept on disk and played from this plugin's file route. Every result
-    names its real size. `unmet` is her input picture's size when the workflow couldn't be
-    given its shape: said, unless what came out has that shape anyway."""
+    store, clips are kept on disk and played from this plugin's file route. A result names
+    its real size wherever it can be measured. `shaped` is (the shape she named, her input
+    picture's size, whether the workflow had a size to set) when a shape was wanted."""
     from core import attachments, images as ci
     pics = [i for i in items if i['kind'] == 'image'][:MAX_PICS]
     files = [i for i in items if i['kind'] != 'image'][:MAX_FILES]
@@ -286,7 +324,7 @@ def _deliver(comfy, name, items, seed, prompt, notes, unmet=None):
         made.append(sized(f"a {f'{seconds:.0f} s ' if seconds else ''}{what} '{dest.name}'", frames[0] if frames else b''))
         if len(frames) > 1:
             shown.append(ci.contact_sheet(frames))
-            lines.append(f"You're looking at {len(frames)} frames of it, start to end.")
+            lines.append(f"You're looking at {len(frames)} frames of it on one sheet, start to end.")
         elif frames:
             shown.append(ci.for_chat(frames[0]))
             lines.append("You're looking at its first frame.")
@@ -294,24 +332,36 @@ def _deliver(comfy, name, items, seed, prompt, notes, unmet=None):
             lines.append("(No frames to show you: " + ("ffmpeg couldn't read the clip.)" if cf.has_ffmpeg()
                                                         else "this machine has no ffmpeg.)"))
 
-    raws = [comfy.fetch(p) for p in pics]
-    if len(raws) == 1:
-        shown.append(_shape(raws[0]))
-        made.append(sized("an image", raws[0]))
-    elif raws:
-        entries = [{'raw': _shape(r)} for r in raws]
+    good = []                                       # (the bytes as made, the bytes as the chat keeps them)
+    for p in pics:
+        raw = comfy.fetch(p)
+        try:
+            good.append((raw, _shape(raw)))
+        except cf.ComfyError:
+            if len(pics) == 1 and not files:        # the only thing made: that is the answer
+                raise
+    if len(good) < len(pics):                       # one bad picture never costs her the clip or the other pictures
+        n = len(pics) - len(good)
+        lines.append(f"{n} picture{'' if n == 1 else 's'} ComfyUI handed back couldn't be opened and {'was' if n == 1 else 'were'} left out.")
+    if len(good) == 1:
+        shown.append(good[0][1])
+        made.append(sized("an image", good[0][0]))
+    elif good:
+        entries = [{'raw': kept} for _, kept in good]
         sheet, tail = ci.gallery(f"ComfyUI: {name}", entries)
         shown += sheet
-        made.append(sized(f"{len(raws)} images", raws[0]))
+        made.append(sized(f"{len(good)} images", good[0][0]))
         lines += [f"{i}. {e['handle']}" for i, e in enumerate(entries, 1) if e.get('handle')] + [tail]
+    if not made:
+        raise cf.ComfyError("ComfyUI handed back pictures that can't be opened.")
 
-    text = (f"Made {' and '.join(made)} with workflow '{name}', seed {seed}. Already shown to the user.\n"
-            f"Prompt: {prompt[:200]}")
-    got = next((wh for wh in sizes if wh), None)
-    if unmet and not (got and abs(math.log(got[0] * unmet[1] / (got[1] * unmet[0]))) < 0.05):
-        notes = notes + [f"{FIXED} Your picture is {unmet[0]}x{unmet[1]}: where the two shapes differ it is "
-                         "cropped or squeezed to fit."]
-    for extra in notes + lines:
+    first = [n for n in notes if n.startswith(cf.LEADS)]           # not the run that was asked for: she reads that before anything else
+    notes = [n for n in notes if n not in first]
+    text = ''.join(n + "\n" for n in first) + (
+        f"Made {' and '.join(made)} with workflow '{name}', seed {seed}. Already shown to the user.\n"
+        f"Prompt: {prompt[:200]}")
+    said = cf.shape_note(*shaped, sizes[0]) if shaped else None    # sizes[0]: the main thing made, never a preview beside it
+    for extra in notes + ([said] if said else []) + lines:
         text += "\n" + extra
     if links:
         text += "\n" + attachments.marker(f"ComfyUI: {name}", links)

@@ -12,6 +12,17 @@ Generate images and video with your own ComfyUI workflows. ComfyUI can run on th
 
 No workflow ships with the plugin. Models change too fast for a shipped one to stay useful, and yours are better.
 
+## The ComfyUI Page
+
+**Apps > ComfyUI** runs a workflow by hand, with no AI in between.
+
+- **Left:** pick a workflow, type the prompt, choose an input picture when the workflow takes one (or several when it has room; click a picture to remove it), pick a shape, and set the workflow's own settings (the same extras Sapphire is shown, with the same limits). An empty setting keeps the workflow's own value.
+- **Right:** the result, large. Under it: a download button, the seed, and **Use as input picture**, which sends a still straight into a workflow that animates or edits one.
+- **Stop** takes the job out of ComfyUI.
+- The strip at the bottom is what was made last, by you or by Sapphire.
+
+A run keeps going if you leave the page, and the page picks it up when you come back. What the page makes is kept in `user/comfyui/outputs/` with Sapphire's clips; the panel's **Delete all** clears both. Ctrl+Enter in the prompt starts a run.
+
 ## Adding a Workflow
 
 Get the workflow working in ComfyUI first: load it, let ComfyUI download its models, and run it once. Then use one of three ways in.
@@ -26,7 +37,7 @@ ComfyUI's normal **Save** writes its editor format, which only ComfyUI's own pag
 
 Workflows are kept in `user/comfyui/workflows/`. You can also drop API-format `.json` files there by hand.
 
-Adding a workflow under a name that is already there asks before it replaces the old one. The description stays; a prompt node you picked does not, because node numbers belong to the old graph.
+Adding a workflow under a name that is already there asks before it replaces the old one. The description stays; a prompt node you picked and what you changed about its extras do not, because node numbers belong to the old graph.
 
 ## ComfyUI on Another Machine
 
@@ -53,29 +64,53 @@ A model that is the same file under another path is matched by itself: a Windows
 | The positive prompt | Found by following the main sampler's `positive` link back to where the text is typed, through guiders, ControlNet and image-to-video nodes, and string nodes. A negative prompt is never overwritten. A face detailer or tiled upscaler keeps its own prompt |
 | Every seed | A random seed, or the one she names. Also a seed typed in a number node and wired in |
 | The shape | Square, portrait or landscape (see below). Never a number of pixels: every size in the workflow keeps the pixel count you gave it |
-| A Load Image node | The picture she passes, for workflows that edit or animate one. A reference image (a ControlNet pose, an IPAdapter style, a mask) is left alone |
+| A Load Image node | The picture she passes, for workflows that edit or animate one. A reference image (a ControlNet pose, an IPAdapter style, a mask) is left alone. A workflow with room for several pictures (an edit model that takes a person and a piece of clothing) gets them in the order the model reads them (the first is the main picture). A slot nobody filled is unplugged, so the picture saved in the workflow file does not ride along; where a workflow can't run with that slot empty, the saved picture goes in and her result starts by saying so |
 
 ### The shape of the picture
 
 She does not choose pixels. The workflow keeps the pixel count you tuned it to, and only its shape changes:
 
-- **With an input image**, the result takes the shape of that image. A square portrait animated by a widescreen workflow would otherwise be cropped, and the face redrawn when it comes back into frame.
-- **She can name a shape instead**: `square`, `portrait` or `landscape`. A workflow that is already landscape keeps its own ratio, and `portrait` turns it on its side. A square workflow becomes 3:2 for a still and 16:9 for video.
+- **With an input image**, the result takes the shape of that image (the first one, when there are several), as near as the workflow can make it (a workflow that picks from a list of ratios gets the nearest one). A square portrait animated by a widescreen workflow would otherwise be cropped, and the face redrawn when it comes back into frame.
+- **She can name a shape instead**: `square`, `portrait` or `landscape` (it wins over the image's shape). A workflow that is already landscape keeps its own ratio, and `portrait` turns it on its side. A square workflow becomes 3:2 for a still and 16:9 for video.
 - **With neither**, the workflow runs as you saved it.
 
-The shape is set wherever the workflow sets its size: width and height typed on a node, typed in number nodes wired to it, or a ratio list such as ComfyUI's Resolution Selector (she gets the nearest ratio on the list). A workflow with a hires pass gets the shape on both passes.
+The shape is set wherever the workflow sets its size: width and height typed on a node, typed in number nodes wired to it, or a ratio list such as ComfyUI's Resolution Selector (she gets the nearest ratio on the list). A workflow with a hires pass gets the shape on both passes. A ControlNet picture is not reshaped: ComfyUI crops it to fit.
 
-A workflow with no size of its own shows **fixed shape** in the panel and in her list. If her picture does not fit it, the tool tells her so. Every result tells her the real size of what was made.
+A workflow with no size the tool can set shows **shape not settable** in the panel and in her list. Naming a shape for it is refused before anything runs. The tool measures what came out and tells her the truth about it: the real size, and whether her picture kept its shape or was cropped to the nearest the workflow makes. A clip can only be measured with `ffmpeg` on the Sapphire machine.
+
+The old `width` and `height` arguments are gone. A call that still passes them is answered with the shape word to use instead.
+
+### Extras: the workflow's own settings
+
+Most of the time she just names a workflow and it runs as you saved it. When she wants more (a longer clip, more steps), she passes **extras**: `extras={"Duration": 8}`. Her list of workflows shows what each one offers, the value it came with, and how far it goes:
+
+```
+ltx-video: video, takes an input image, landscape by default
+    extras: Frame Rate 24 (6 to 96), Duration 5 (1 to 20), Enable Prompt Enhance off
+```
+
+Extras are found in the workflow by themselves:
+
+- **A number or switch node you gave a title.** ComfyUI's own templates are built this way (Duration, Frame Rate, a text-to-video switch). To offer her a setting of your own, wire a titled Int, Float or Boolean node to it.
+- **The inputs every model has**, typed on a node: steps, CFG or guidance, frames, frame rate, how many images, and denoise on a workflow that edits a picture.
+
+Seeds, sizes and the prompt are never extras: the tool sets those itself. A face detailer or upscaler keeps its own steps. A CFG of 1 (a distilled model) and a full denoise are left alone. So are the steps of two samplers that share one run (a high-noise and a low-noise model handing over at a set step): changing them would move the hand-over.
+
+A number may go from a quarter to four times the value the workflow came with, and never past what the input itself can take (150 steps, 4 images). She is shown at most twelve extras per workflow. She can call one by the start of its name (`duration` for "Duration (seconds)") when only one starts that way. In the panel, each workflow lists its extras under **She can also set**: untick one to hide it from her, type another name, or set your own lowest and highest. A name she gets wrong or a value outside the range is answered before anything runs, with what she can set.
+
+The limits are per setting. Four times the duration at four times the frame rate is sixteen times the work, so narrow them on a heavy workflow.
 
 Only the part of the workflow that reaches a save or preview node counts. A leftover branch that ComfyUI would not run is ignored.
 
-When a workflow has no place for something she asked for, or two places would both fit, the tool says so in its answer instead of guessing in silence. The panel shows **Her prompt goes into** and **Her input image goes into** wherever there is a choice, and what you pick there wins.
+When a workflow has no place for something she asked for, or two places would both fit, the tool says so in its answer instead of guessing in silence. A workflow that takes an input picture, run without one, uses the picture it was saved with: her result starts by saying so. A workflow with a text-to-video switch takes no picture while that switch is on.
+
+ComfyUI sometimes runs a workflow without one of its viewer nodes (a compare or preview node it could not check). When nothing that is saved depends on that node, the run goes ahead and Sapphire's log notes it. The panel shows **Her prompt goes into** and **Her input image goes into** wherever there is a choice, and what you pick there wins.
 
 Give each workflow a description in the panel. She reads it when she chooses one.
 
 ## Video and Audio
 
-A workflow with a Save Video node works the same way. The clip is kept in `user/comfyui/outputs/` and plays in chat, with a download button. Sapphire is shown three frames of it (start, middle, end); this needs `ffmpeg` on the Sapphire machine. Without ffmpeg the clip still reaches you, and she is told she can't see it.
+A workflow with a Save Video node works the same way. The clip is kept in `user/comfyui/outputs/` and plays in chat, with a download button. Sapphire is shown three frames of it (start, middle, end); this needs `ffmpeg` on the Sapphire machine (with `ffmpeg` but no `ffprobe`, the first frame only). Without ffmpeg the clip still reaches you, and she is told she can't see it.
 
 Clips are never deleted by themselves. The panel shows how much space they take and has a **Delete all** button. Clips are plain files: unlike chat images, they are not stored inside a private chat's vault.
 
@@ -85,8 +120,8 @@ Video takes longer than an image, so it has its own wait.
 
 | Tool | What it does |
 |---|---|
-| `comfy_generate` | Run a workflow: `prompt`, and optionally `workflow`, `image`, `shape`, `seed` |
-| `comfy_list_workflows` | List the workflows: what each makes, its shape, whether it takes an input image, your description |
+| `comfy_generate` | Run a workflow: `prompt`, and optionally `workflow`, `image`, `shape`, `seed`, `extras` |
+| `comfy_list_workflows` | List the workflows: what each makes, its shape, whether it takes an input image, your description, its extras |
 
 ## Settings
 
@@ -94,10 +129,10 @@ Video takes longer than an image, so it has its own wait.
 |---|---|---|
 | ComfyUI address | `http://127.0.0.1:8188` | Where ComfyUI runs |
 | Default workflow | the first in the list | Used when she names none |
-| Image wait | 300 seconds | The longest to wait for an image |
-| Video wait | 1200 seconds | The longest to wait for video or audio |
+| Image wait | 300 seconds | The longest ComfyUI may work on an image |
+| Video wait | 1200 seconds | The longest ComfyUI may work on video or audio |
 
-When a wait runs out, Sapphire takes her job out of ComfyUI's queue, and stops it only when it is the one running. (A ComfyUI from before 2025 stops whatever is running.)
+The wait counts the time ComfyUI works on the job, not the time it waits its turn behind another one (her video, your still). When a wait runs out, Sapphire takes her job out of ComfyUI's queue, and stops it only when it is the one running. (A ComfyUI from before 2025 stops whatever is running.)
 
 Pressing Stop in the chat does not reach ComfyUI yet: the job runs to its end or to the wait.
 
@@ -117,6 +152,8 @@ Pressing Stop in the chat does not reach ComfyUI yet: the job runs to its end or
 **"it has no '...' node"** The workflow uses a custom node that ComfyUI does not have. Install it with ComfyUI Manager.
 
 **"Can't tell where the prompt goes"** Pick the prompt node for that workflow in the panel.
+
+**The video player's own menu has no Download.** On purpose: the browser's own download fails on Sapphire's self-signed certificate. Use the download button under the clip.
 
 **"takes no input image"** The workflow has no Load Image node, or its only one feeds a ControlNet or similar. If that one is meant for her picture, pick it under **Her input image goes into**.
 
