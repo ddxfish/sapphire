@@ -304,6 +304,21 @@ def test_her_compact_daily_waits_for_her_turn(sm, jobs):
     assert jobs[0]['target_tokens'] == 4000
 
 
+def test_her_refused_compact_says_why_without_naming_the_other_chat(sm, monkeypatch):
+    """The start is refused when another compact holds the slot. The person got
+    "AI could not start the daily compact" and no reason. The refusal's own
+    words name the other chat, which may be a private one: never those."""
+    told = []
+    monkeypatch.setattr('core.chat.compress.start_compress_job',
+                        lambda sm_, chat, **k: (False, "A compress job is already running (chat 'lawyer-notes')"))
+    monkeypatch.setattr('core.chat.compress.get_job_status', lambda: {'running': True, 'chat': 'lawyer-notes'})
+    monkeypatch.setattr(commands, '_tell', lambda chat, title, level='info': told.append((title, level)))
+    commands.run('/compact-daily', 'c', by='ai')
+    commands.finish_turn(sm, 'c')
+    assert told == [('AI could not start the daily compact: another compact was still running. '
+                     'Nothing was queued; run it again later.', 'error')]
+
+
 def test_her_stopped_turn_drops_the_compact(sm, jobs, monkeypatch):
     monkeypatch.setattr(commands, '_asking_streams', lambda chat: [SimpleNamespace(cancel_flag=False)])
     commands.run('/compact-daily', 'c', by='ai')

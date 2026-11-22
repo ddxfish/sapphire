@@ -314,6 +314,11 @@ async function showEntityModal(eid) {
                                 <span class="mind-mem-time">${escHtml(timeAgo(m.created))}</span>
                             </div>`).join('')}
                     </div>` : ''}
+                ${(data.days || []).length ? `
+                    <div class="palace-tier-section">
+                        <div class="palace-tier-title">\u{1F4C5} In ${data.days.length} day ${data.days.length === 1 ? 'summary' : 'summaries'}</div>
+                        <div>${data.days.map(d => `<button class="palace-pill palace-pill-dim pal-ent-day" data-day="${escAttr(d.day)}" data-scope="${escAttr(d.scope)}" title="Open this day in Mind > Daily (scope ${escAttr(d.scope)})" style="cursor:pointer">${escHtml(d.day)}</button>`).join(' ')}</div>
+                    </div>` : ''}
             </div>
             <div class="pr-modal-footer">
                 <button class="mind-btn palace-btn-danger" id="pal-ent-delete">Delete</button>
@@ -323,6 +328,13 @@ async function showEntityModal(eid) {
         </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector('.mind-modal-close').addEventListener('click', () => overlay.remove());
+    // A day opens in the Daily tab, searched to its date (daily.js reads the key).
+    overlay.querySelectorAll('.pal-ent-day').forEach(b => b.addEventListener('click', () => {
+        try { sessionStorage.setItem('pal-daily-q', b.dataset.day); } catch {}
+        rememberMindScope(b.dataset.scope);
+        overlay.remove();
+        location.hash = '#layer-daily';
+    }));
     overlay.querySelector('#pal-ent-cancel').addEventListener('click', () => overlay.remove());
     // A private person covers their description and facts: the fact
     // switches show covered and wait until the person is released.

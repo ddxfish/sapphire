@@ -5,6 +5,7 @@
 
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def _publish(scope, action):
 def list_days(query=None, **_):
     """GET days?scope&q&limit&offset: kept days, newest first. q matches the
     text or the date (2026-11, 2026-11-02)."""
+    from plugins.mindpalace.tools import temporal
     pt, daily = _pt(), _daily()
     if not pt._ensure_db():
         return {'error': 'mind database unavailable'}, 500
@@ -67,23 +69,22 @@ def list_days(query=None, **_):
                     'source': src, 'day': m.get('day') or src[4:14], 'chat': m.get('chat'),
                     'persona': m.get('persona'), 'messages': m.get('messages'), 'created': created,
                     'writer': pt.writer_dict(model, provider, False, origin), 'private': False,
-                    'pieces': [], 'dates': [], 'people': [], 'ids': []})
+                    'pieces': [], 'dates': [], 'dates_off': [], 'entities': [], 'ids': []})
+                if not d['pieces']:
+                    d['dates_off'] = _dates_off(m)
                 d['pieces'].append((content, daily._sep(m, idx or 0) if d['pieces'] else ''))
                 d['ids'].append(cid)
                 d['private'] = d['private'] or bool(private)
-                for when in m.get('event_dates') or []:
-                    if when not in d['dates'] and when != d['day']:
-                        d['dates'].append(when)
             by_id = {cid: d for d in days.values() for cid in d['ids']}
             ids = list(by_id)
             for at in range(0, len(ids), 400):
                 part = ids[at:at + 400]
-                for cid, name in cur.execute(
-                        "SELECT g.src_id, e.name FROM edges g JOIN entities e ON e.id = g.dst_id "
+                for cid, eid, name in cur.execute(
+                        "SELECT g.src_id, e.id, e.name FROM edges g JOIN entities e ON e.id = g.dst_id "
                         "WHERE g.src_type = 'chunk' AND g.dst_type = 'entity' "
-                        f"AND g.src_id IN ({','.join('?' * len(part))})", part):
-                    if name not in by_id[cid]['people']:
-                        by_id[cid]['people'].append(name)
+                        f"AND g.src_id IN ({','.join('?' * len(part))}) ORDER BY g.id", part):
+                    if not any(x['id'] == eid for x in by_id[cid]['entities']):
+                        by_id[cid]['entities'].append({'id': eid, 'name': name})
     out = []
     for src in sources:
         d = days.get(src)
@@ -93,9 +94,28 @@ def list_days(query=None, **_):
         d.pop('ids')
         d['parts'] = len(pieces)
         d['text'] = daily.join(pieces)
-        d['dates'].sort()
+        # Read from the text each time, not from what was stamped on the rows:
+        # the stamps on days recorded before 2026-11-21 hold guesses, and a
+        # recorded day is not rewritten to correct them.
+        d['dates'] = _dates(temporal, d['text'], d['created'], d['day'], d['dates_off'])
         out.append(d)
-    return {'days': out, 'total': total, 'limit': limit, 'offset': offset}
+    gap = daily.clock_gap()
+    return {'days': out, 'total': total, 'limit': limit, 'offset': offset,
+            'clock': dict(gap, words=daily.clock_words(gap)) if gap else None}
+
+
+def _dates_off(meta) -> list:
+    off = meta.get('dates_off')
+    return [w for w in off if isinstance(w, str)] if isinstance(off, list) else []
+
+
+def _dates(temporal, text, created, day, off) -> list:
+    """The dates a day's card shows: whole dates only (a clock time on a date
+    made a pill that could not be taken off, and the day's own date with a
+    time showed as a date named), without the day itself and the hidden ones,
+    twelve at most, counted after those are left out."""
+    named = dict.fromkeys(w[:10] for w in temporal.named(text, created, limit=60))
+    return sorted(w for w in named if w != day and w not in off)[:12]
 
 
 def _target(payload):
@@ -153,3 +173,95 @@ def set_day_private(body=None, **_):
         conn.commit()
     _publish(scope, 'update')
     return {'success': True, 'private': private}
+
+
+_ISO_DAY = re.compile(r'\d{4}-\d{2}-\d{2}')
+
+
+def tag_day(body=None, **_):
+    """POST days/tags {scope, source, action, ...}: the person's own corrections
+    to what a day is linked to and which dates its card shows. The day's text
+    is never touched.
+      unlink {entity: id}   the day no longer links to that entity
+      link {name}           link the day to an existing entity (scope, then global)
+      hide_date {date}      a date the text names is left off the card
+      show_dates            every hidden date is shown again
+    A link is only ever made at record time or here: nothing links a day again
+    after the person unlinked it (an export carries the links by name, and an
+    import makes exactly those). Linking and unlinking are written to the
+    ledger; what the card shows of dates is not."""
+    from plugins.mindpalace.tools import metadata as md
+    pt, daily = _pt(), _daily()
+    if not pt._ensure_db():
+        return {'error': 'mind database unavailable'}, 500
+    b = body or {}
+    scope, source = _target(b)
+    action = b.get('action')
+    if not scope or action not in ('unlink', 'link', 'hide_date', 'show_dates'):
+        return {'error': 'scope, source and an action (unlink, link, hide_date, show_dates) are required'}, 400
+    day = source[4:14]
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute("SELECT id, content, meta, wr_private, created FROM chunks WHERE layer = 'daily' "
+                           "AND scope = ? AND source = ? ORDER BY chunk_index, id", (scope, source)).fetchall()
+        if not rows:
+            return {'error': 'Not found'}, 404
+        ids, marks = [r[0] for r in rows], ','.join('?' * len(rows))
+        private = any(r[3] for r in rows)
+        if action == 'unlink':
+            try:
+                ent = cur.execute('SELECT id, name, wr_private FROM entities WHERE id = ?',
+                                  (int(b.get('entity')),)).fetchone()
+            except (TypeError, ValueError):
+                ent = None
+            if not ent:
+                return {'error': 'That entity was not found'}, 404
+            cur.execute("DELETE FROM edges WHERE src_type = 'chunk' AND dst_type = 'entity' AND dst_id = ? "
+                        f"AND src_id IN ({marks})", [ent[0]] + ids)
+            if not cur.rowcount:
+                return {'error': f'"{ent[1]}" is not linked to this day'}, 404
+            did, summary = 'unlinked', f'unlinked "{ent[1]}" from the day {day}'
+        elif action == 'link':
+            name = str(b.get('name') or '').strip()
+            # By the card's name or one of its nicknames, this scope before global.
+            hit = md.alias_map(md.entity_aliases(cur, scope)).get(name.lower())
+            ent = cur.execute('SELECT id, name, wr_private FROM entities WHERE id = ?', (hit[0],)).fetchone() if hit else None
+            if not ent:
+                return {'error': f'No entity is called "{name}" in this scope or in global. '
+                                 f'Make its card first (Mind > Entities).'}, 404
+            if cur.execute("SELECT 1 FROM edges WHERE src_type = 'chunk' AND dst_type = 'entity' AND dst_id = ? "
+                           f"AND src_id IN ({marks}) LIMIT 1", [ent[0]] + ids).fetchone():
+                return {'error': f'"{ent[1]}" is already linked to this day'}, 400
+            names = [alias for eid, _c, alias in md.entity_aliases(cur, scope) if eid == ent[0]] or [ent[1]]
+            at = next((r[0] for r in rows if daily.named(r[1], names)), ids[0])   # the piece that names them
+            cur.execute("INSERT INTO edges (src_type, src_id, dst_type, dst_id, kind, weight, created) "
+                        "VALUES ('chunk', ?, 'entity', ?, ?, ?, ?)",
+                        (at, ent[0], daily.EDGE_KIND, md.MENTION_EDGE_WEIGHT, pt._now()))
+            did, summary = 'linked', f'linked "{ent[1]}" to the day {day}'
+        else:
+            off = _dates_off(daily._meta(rows[0][2]))
+            if action == 'hide_date':
+                from plugins.mindpalace.tools import temporal
+                when = str(b.get('date') or '')
+                shown = _dates(temporal, ' '.join(r[1] for r in rows), rows[0][4], day, off)
+                if not _ISO_DAY.fullmatch(when) or when not in shown:
+                    return {'error': 'That date is not one this day\'s card shows'}, 400
+                off = sorted(set(off + [when]))
+            else:
+                off = []
+            # Only this one key is written: the rest of the piece's meta is as
+            # it stands now, not as it was read a moment ago (a chat made
+            # private in between has its name blanked there).
+            if off:
+                cur.execute("UPDATE chunks SET meta = json_set(COALESCE(meta, '{}'), '$.dates_off', json(?)) "
+                            "WHERE id = ?", (json.dumps(off), ids[0]))
+            else:
+                cur.execute("UPDATE chunks SET meta = json_remove(meta, '$.dates_off') WHERE id = ?", (ids[0],))
+            did = None      # what a card shows is not news for her wake sheet: no ledger line
+        if did:
+            # A private-model card's name stays out of the lines a cloud model reads.
+            pt._ledger(scope, 'user', did, layer='daily', cursor=cur, private=private or bool(ent[2]),
+                       summary=summary)
+        conn.commit()
+    _publish(scope, 'update')
+    return {'success': True}

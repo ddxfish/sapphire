@@ -14,6 +14,7 @@ from plugins.mindpalace.tools import palace_tools as pt
 from plugins.mindpalace.tools import daily, ledger, librarian, metadata as md
 
 LOCAL, CLOUD = 'qwen-box', 'claude'
+REAL_CLOCK_GAP = daily.clock_gap        # the fixture stills it; one test wants the real one
 S = 'sapph'
 TURN = {'provider': CLOUD, 'model': 'opus', 'chat': 'c'}
 
@@ -46,7 +47,9 @@ def palace(tmp_path, monkeypatch):
     monkeypatch.setattr(daily, 'enabled', lambda: True)
     monkeypatch.setattr(daily, '_stopping', False)
     monkeypatch.setattr(daily, '_today', lambda: date(2026, 11, 20))       # a Friday
+    monkeypatch.setattr(daily, 'clock_gap', lambda: None)                   # whatever this box's two clocks say
     from core.chat import compress                                         # never the install's own prompt files
+    monkeypatch.setattr(compress, '_user_zone', lambda: None)              # days on this machine's clock
     monkeypatch.setattr(compress, 'INSTRUCTIONS_PATH', tmp_path / 'compress_instructions.txt')
     monkeypatch.setattr(compress, 'DAILY_INSTRUCTIONS_PATH', tmp_path / 'compact_daily_instructions.txt')
     fm.tool_context.set(None)
@@ -183,9 +186,13 @@ def test_a_day_is_recorded_as_ordered_pieces_dated_on_its_day():
     assert (rows[0][9], rows[0][10], rows[0][8]) == ('opus', CLOUD, 0)
 
 
-def test_tomorrow_in_a_summary_counts_from_its_own_day():
-    daily.record_chat('main', SM(_pair('2026-11-02', 'Ada said tomorrow we start the daily layer.')))
-    assert json.loads(_rows()[0][7]).get('event_dates') == ['2026-11-03']
+def test_a_day_is_stamped_with_no_guessed_dates():
+    """The palace's date rules read a note written in the moment. On a
+    retelling they guessed, and the guesses were stored on the day."""
+    daily.record_chat('main', SM(_pair('2026-11-02', 'Ada said tomorrow at 4am we start, a month ago, on Jan 21 2027.')))
+    m = json.loads(_rows()[0][7])
+    assert not {'event_dates', 'event_date_src', 'recurring_dates', 'refers_to_time', 'when'} & set(m)
+    assert m['md_v'] == md.MD_VERSION and m['stats']['words'] == 14
 
 
 def test_one_ledger_line_for_the_run_and_none_for_a_run_that_adds_nothing():
@@ -494,6 +501,10 @@ def test_the_apps_per_memory_buttons_never_act_on_one_piece_of_a_day():
 def test_the_date_maintenance_buttons_leave_days_alone():
     from plugins.mindpalace.routes import browse
     daily.record_chat('main', SM(_pair('2026-11-02', 'Ada said tomorrow we start, on a plan for next Friday.')))
+    with pt._get_connection() as conn:      # a day recorded before 2026-11-21 carries stamped dates
+        conn.execute("UPDATE chunks SET meta = json_set(meta, '$.event_dates', json_array('2026-11-03'), "
+                     "'$.event_date_src', 'regex', '$.refers_to_time', json_array('tomorrow')) WHERE layer = 'daily'")
+        conn.commit()
     before = _rows()[0][7]
     for action in ('redate_regex', 'wipe_dates'):
         out = browse.maintenance(body={'action': action, 'scope': S, 'confirm': S})
@@ -813,10 +824,8 @@ def test_the_listeners_are_registered_once():
     daily.start(boot=False)
     daily.start(boot=False)
     assert bus._hooks.get(Events.CHAT_COMPRESSED, ()).count(daily._on_compressed) == 1
-    assert bus._hooks.get('chat_renamed', ()).count(daily._on_renamed) == 1
     daily.stop()
     assert daily._on_compressed not in bus._hooks.get(Events.CHAT_COMPRESSED, ())
-    assert daily._on_renamed not in bus._hooks.get('chat_renamed', ())
 
 
 # ─── A chat's name ───────────────────────────────────────────────────────────
@@ -831,26 +840,295 @@ def test_a_vaulted_chats_name_is_nowhere_in_its_days():
     assert 'secret-diary' not in dump
 
 
-def test_a_renamed_chats_memories_follow_the_new_name():
-    """Days show the chat's name to her, and the vault scrub matches the
-    CURRENT name: a chat renamed and then vaulted kept its old name for good."""
-    from plugins.mindpalace.hooks import chat_vaulted
+def test_a_memory_keeps_the_name_of_the_chat_it_was_made_in():
+    """Krem, 2026-11-21: the name of the chat at the time, never renamed after
+    the fact, even if that chat is gone. Nothing listens for a rename."""
+    from core.event_bus import get_event_bus
     daily.record_chat('lawyer-notes', SM(_pair('2026-11-02', 'an ordinary day')))
-    fm.tool_context.set({**TURN, 'chat': 'lawyer-notes'})
-    pt._save_memory('a memory saved in that chat', S)
-    fm.tool_context.set(None)
-    daily._on_renamed({'data': {'old': 'lawyer-notes', 'new': 'lawyer-notes'}})            # not a rename
-    daily._renamed('lawyer-notes', 'notes')
+    daily.start(boot=False)
+    try:
+        mine = [f for f in get_event_bus()._hooks.get('chat_renamed', ()) if getattr(f, '__module__', '') == daily.__name__]
+        assert mine == []
+    finally:
+        daily.stop()
     with pt._get_connection() as conn:
         names = {r[0] for r in conn.execute("SELECT json_extract(meta, '$.chat') FROM chunks")}
-    assert names == {'notes'} and "chat 'notes'" in daily.recent_text(S)
-    chat_vaulted.chat_vaulted(SimpleNamespace(metadata={'name': 'notes'}))
-    with pt._get_connection() as conn:
-        dump = json.dumps([list(map(str, r)) for r in conn.execute("SELECT * FROM chunks").fetchall()])
-    assert 'lawyer-notes' not in dump and "chat '" not in daily.recent_text(S)
+    assert names == {'lawyer-notes'} and "chat 'lawyer-notes'" in daily.recent_text(S)
+    assert not hasattr(daily, '_renamed') and not hasattr(daily, '_on_renamed')
 
 
 # ─── The app's side: whole days ──────────────────────────────────────────────
+
+def test_a_day_links_by_the_name_as_written_capitals_included():
+    """On the lab bench (2026-11-21) a card called Will linked to half of all
+    days through the word "will", "May 9" aside, and "a friend's dad" linked
+    the Dad card. A day's link needs the name with its own capitals."""
+    from plugins.mindpalace.routes import daily_routes
+    for name in ('Will', 'Rob', 'Dad', 'Bo', 'the angry tomato'):
+        _person(name)
+    daily.record_chat('main', SM(_pair(
+        '2026-11-18', "He will come back and nobody will rob us. Ada's dad lent a scope. The angry tomato lives. "
+                      'Bo paid half.')))
+    daily.record_chat('main', SM(_pair('2026-11-19', 'Will the plumber fixed the valve. Dad asked about the radio.')))
+    days = {d['day']: sorted(e['name'] for e in d['entities']) for d in daily_routes.list_days(query={'scope': S})['days']}
+    assert days == {'2026-11-18': ['Bo', 'the angry tomato'], '2026-11-19': ['Dad', 'Will']}
+    assert daily.named('rob Rob ROB, robbed', ['Rob']) == ['Rob'] and daily.named('nothing here', ['Rob', '']) == []
+    assert daily.named('Mira Okafor and Mira', ['Mira', 'Mira Okafor']) == ['Mira Okafor', 'Mira']
+
+
+def test_a_first_name_links_when_only_one_person_has_it_and_a_month_is_a_month():
+    """Krem, 2026-11-21: "Tomas" is Tomas Reyes when he is the only Tomas with
+    a card; with two Miras, "Mira" alone is neither. A card called May is not
+    linked by "May 9" or "in May"."""
+    from plugins.mindpalace.routes import daily_routes
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        for name, kind in (('Tomas Reyes', 'person'), ('Mira Okafor', 'person'), ('Mira Castellanos', 'person'),
+                           ('Harbor Street workshop', 'place'), ('Nell Quay', None), ('May', 'person'),
+                           ('Rob', 'person'), ('Rob Hale', 'person')):
+            pt.upsert_entity(cur, name, S, kind=kind)
+        conn.commit()
+    daily.record_chat('main', SM(
+        _pair('2026-11-17', 'Tomas paid half. Mira laughed. Harbor was busy and Nell came by. Rob wants the app.')
+        + _pair('2026-11-18', 'The trip is May 9 and flights are booked in May. We leave in early May 2027.')
+        + _pair('2026-11-19', 'May brought soup. Mira Castellanos does the accounts. Watering the plants for May.')))
+    days = {d['day']: sorted(e['name'] for e in d['entities']) for d in daily_routes.list_days(query={'scope': S})['days']}
+    assert days == {'2026-11-17': ['Rob', 'Tomas Reyes'],          # "Rob" is the card Rob, not Rob Hale's first name
+                    '2026-11-18': [],
+                    '2026-11-19': ['May', 'Mira Castellanos']}
+    assert daily.named('In May, May said the May 21st party is off; mid-May works', ['May']) == ['May']
+    assert daily.named('May 9. By May we know. May, 2027.', ['May']) == []
+
+
+# ─── The third hunt (2026-11-21, six scouts) ──────────────────────────────────
+
+def _card(name, kind='person', private=False, nicknames=None, scope=S):
+    with pt._get_connection() as conn:
+        eid = pt.upsert_entity(conn.cursor(), name, scope, kind=kind)
+        if private:
+            conn.execute('UPDATE entities SET wr_private = 1 WHERE id = ?', (eid,))
+        if nicknames:
+            conn.execute('UPDATE entities SET meta = ? WHERE id = ?',
+                         (json.dumps({'fields': {'nicknames': nicknames}}), eid))
+        conn.commit()
+    return eid
+
+
+def _linked(scope=S):
+    from plugins.mindpalace.routes import daily_routes
+    return {d['day']: sorted(e['name'] for e in d['entities'])
+            for d in daily_routes.list_days(query={'scope': scope})['days']}
+
+
+def test_a_first_word_is_a_first_name_only_when_it_looks_like_one():
+    """ "The Rock" gave the alias "The" and linked nearly every day; "Aunt Mary"
+    linked on "Aunt Linda", "Dr Farrow" on "Dr Patel". And the count runs over
+    every card: with two Miras, one of them a private-model card, a cloud
+    day's "Mira" still links to neither."""
+    for name in ('The Rock', 'Aunt Mary', 'Dr Farrow', 'Jean-Luc Picard', 'Mira Reyes', 'ada Lovelace', 'Ada Byron'):
+        _card(name)
+    _card('Mira Chen', private=True)
+    _card('Person Kind', kind='Person')                      # a kind from an import file, not lowercased
+    daily.record_chat('main', SM(_pair(
+        '2026-11-18', 'The sun rose. Aunt Linda came over and Dr Patel called. Jean-Luc made tea. Mira laughed. '
+                      'Ada wrote. Person said hello.')))
+    assert _linked() == {'2026-11-18': ['Jean-Luc Picard', 'Person Kind']}
+
+
+def test_a_lowercase_nickname_is_a_name_only_with_its_capital_and_short_months_are_months():
+    _card('Robert Hale', nicknames='dad, will')
+    _card('Jan Novak', nicknames='Jan')
+    _card('Jun', kind=None)
+    _card('iPad', kind='thing')
+    daily.record_chat('main', SM(
+        _pair('2026-11-18', "Ada's dad lent a scope and he will return it. We meet Jan 21 2027 and on Jun. 3. The iPad died.")
+        + _pair('2026-11-19', 'Dad called. Jan brought tea, and Jun came too.')))
+    assert _linked() == {'2026-11-18': ['iPad'], '2026-11-19': ['Jan Novak', 'Jun', 'Robert Hale']}
+
+
+def test_an_export_carries_a_days_links_and_an_import_makes_exactly_those():
+    """The export left a day's links out and the import matched the text again:
+    a link the person had taken off came back, and one made by hand was lost."""
+    from plugins.mindpalace.routes import daily_routes, transfer
+    dad = _card('Dad')
+    _card('Bo')
+    _card('Workshop', kind='place')
+    daily.record_chat('main', SM(_pair('2026-11-19', 'Dad called about the boat. Bo paid half.')))
+    src = daily_routes.list_days(query={'scope': S})['days'][0]['source']
+    send = lambda **b: daily_routes.tag_day(body={'scope': S, 'source': src, **b})
+    assert send(action='unlink', entity=dad) == {'success': True}
+    assert send(action='link', name='Workshop') == {'success': True}          # a name the text never says
+    data = transfer.export_data(query={'scope': S, 'layer': 'daily'})
+    assert sorted(n for c in data['chunks'] for n in c['retells']) == ['Bo', 'Workshop']
+    for name in ('Dad', 'Bo', 'Workshop'):
+        _card(name, scope='elsewhere')
+    assert transfer.import_data(body={'scope': 'elsewhere', 'expect_layer': 'daily', 'data': data})['imported']
+    assert _linked('elsewhere') == {'2026-11-19': ['Bo', 'Workshop']}
+
+    old = {**data, 'chunks': [{k: v for k, v in c.items() if k != 'retells'} for c in data['chunks']]}
+    for name in ('Dad', 'Bo'):
+        _card(name, scope='older')
+    assert transfer.import_data(body={'scope': 'older', 'expect_layer': 'daily', 'data': old})['imported']
+    assert _linked('older') == {'2026-11-19': ['Bo', 'Dad']}                  # a file from before: by the text
+
+
+def test_an_imported_cloud_day_does_not_link_a_private_model_card_and_a_partial_day_is_not_whole():
+    from plugins.mindpalace.routes import transfer
+    daily.record_chat('main', SM(_pair('2026-11-01', 'A quiet day.') + _pair('2026-11-02', LONG)))
+    data = transfer.export_data(query={'scope': S, 'layer': 'daily'})
+    _card('Ada', private=True, scope='elsewhere')
+    _card('Bo', scope='elsewhere')
+    long_day = [c for c in data['chunks'] if c['label'] == '2026-11-02']
+    file = {**data, 'chunks': [{k: v for k, v in c.items() if k != 'retells'} for c in long_day[:-1]]
+            + [{'content': 'a week date', 'source': 'day:2026-W47-1:x', 'label': {'not': 'text'}}]}
+    out = transfer.import_data(body={'scope': 'elsewhere', 'expect_layer': 'daily', 'data': file})
+    assert out['imported'] == len(long_day) - 1 and out['skipped'] == 1
+    assert _linked('elsewhere') == {'2026-11-02': ['Bo']}
+    metas = [json.loads(r[7]) for r in _rows("scope = 'elsewhere'")]
+    assert {m['parts'] for m in metas} == {len(long_day)} and len(metas) == len(long_day) - 1
+
+
+def test_a_hand_link_of_a_private_model_card_stays_out_of_what_a_cloud_model_reads():
+    """The ledger line carried the day's mark only: linking or unlinking a
+    private-model card on a public day put its name in every cloud wake."""
+    from plugins.mindpalace.routes import daily_routes
+    doc = _card('Anand', private=True)
+    _card('Robert Hale', nicknames='Pops')
+    daily.record_chat('main', SM(_pair('2026-11-19', 'A plain day with one date, Dec 3.')))
+    src = daily_routes.list_days(query={'scope': S})['days'][0]['source']
+    send = lambda **b: daily_routes.tag_day(body={'scope': S, 'source': src, **b})
+    assert send(action='link', name='anand') == {'success': True}
+    assert send(action='unlink', entity=doc) == {'success': True}
+    assert send(action='link', name='Pops') == {'success': True}              # by a nickname
+    assert send(action='link', name='Nobody')[1] == 404
+    assert send(action='hide_date', date='2026-12-03') == {'success': True}
+    assert send(action='show_dates') == {'success': True}
+    with pt._get_connection() as conn:
+        lines = conn.execute("SELECT summary, wr_private FROM ledger WHERE layer = 'daily' AND actor = 'user' "
+                             "ORDER BY id").fetchall()
+    assert [(('Anand' in s), p) for s, p in lines] == [(True, 1), (True, 1), (False, 0)]     # no line for the dates
+    assert 'Robert Hale' in lines[2][0] and _linked() == {'2026-11-19': ['Robert Hale']}
+
+
+def test_a_days_dates_are_whole_dates_and_only_shown_ones_can_be_taken_off():
+    from plugins.mindpalace.routes import daily_routes
+    many = ' '.join(f'On Jan {n} 2027 something.' for n in range(1, 16))
+    daily.record_chat('main', SM(_pair('2026-11-19', f'Deployed 2026-11-19 14:30. Review on 2026-11-25T10:00. {many}')))
+    day = lambda: daily_routes.list_days(query={'scope': S})['days'][0]
+    d = day()
+    assert d['dates'][0] == '2026-11-25' and len(d['dates']) == 12 and all(len(w) == 10 for w in d['dates'])
+    send = lambda **b: daily_routes.tag_day(body={'scope': S, 'source': d['source'], **b})
+    assert send(action='hide_date', date='2026-11-25') == {'success': True}
+    for bad in ('2026-13-45', '2031-01-01', '2026-11-19', '2026-11-25T10:00', ''):
+        assert send(action='hide_date', date=bad)[1] == 400
+    for n in (1, 2, 3):
+        assert send(action='hide_date', date=f'2027-01-0{n}') == {'success': True}
+    d = day()
+    assert len(d['dates']) == 12 and d['dates'][0] == '2027-01-04' and len(d['dates_off']) == 4   # hidden ones free their places
+    before = json.loads(_rows()[0][7])
+    assert before['dates_off'] == d['dates_off'] and before['chat'] == 'main'
+    assert send(action='show_dates') == {'success': True} and 'dates_off' not in json.loads(_rows()[0][7])
+
+
+def test_a_missing_day_in_a_recent_range_may_simply_not_be_summarized_yet():
+    daily.record_chat('main', SM(_pair('2026-11-02', 'An ordinary day.')))
+    recent = (date.today().replace(day=1)).isoformat() if date.today().day > 8 else None
+    text, ok = _ask('get_recent_memories', layer='daily', day='3 days ago')
+    assert ok and 'No days recorded in that range.' in text and 'not summarized yet is still in its chat' in text
+    text, ok = _ask('get_recent_memories', layer='daily', day='2025-01-01')
+    assert text == 'No days recorded in that range.'
+    text, ok = _ask('get_recent_memories', layer='daily')
+    assert '"I" is you and "you" is the person you were talking with' in text
+
+
+def test_an_unset_time_zone_on_a_box_off_utc_is_said_and_her_date_words_follow_the_compacts_day(monkeypatch):
+    """With a time zone set, days and her tasks both follow it. Left at the
+    "UTC" default on a computer whose clock is elsewhere, tasks run on UTC and
+    days are cut on the computer's clock: nobody could tell from the app
+    (Krem, 2026-11-21). The Daily tab's route and one notice say it."""
+    from datetime import datetime, timedelta, timezone
+    from core import notify
+    from core.chat import compress
+    from plugins.mindpalace.routes import daily_routes
+    monkeypatch.setattr(daily, 'clock_gap', REAL_CLOCK_GAP)
+    monkeypatch.setattr(daily, '_system_clock', lambda: (timedelta(hours=-5), 'EST'))
+    monkeypatch.setattr(compress, '_user_zone', lambda: timezone(timedelta(hours=9)))     # a zone is set: no gap
+    assert daily.clock_gap() is None and daily_routes.list_days(query={'scope': S})['clock'] is None
+    monkeypatch.setattr(compress, '_user_zone', lambda: None)                             # not set
+    monkeypatch.setattr(daily, '_system_clock', lambda: (timedelta(0), 'UTC'))
+    assert daily.clock_gap() is None                                                      # the box is on UTC too
+    monkeypatch.setattr(daily, '_system_clock', lambda: (timedelta(hours=-5), 'EST'))
+    gap = daily.clock_gap()
+    assert gap == {'system': 'EST', 'system_clock': 'UTC-05:00', 'hours': 5}
+    shown = daily_routes.list_days(query={'scope': S})['clock']
+    assert 'not set' in shown['words'] and 'EST (UTC-05:00)' in shown['words'] and 'profile' in shown['words']
+    told = []
+    monkeypatch.setattr(notify, 'notify', lambda title, **k: told.append((title, k)))
+    daily.record_chat('main', SM(_pair('2026-11-02', 'An ordinary day.')))
+    clock = [k for title, k in told if 'time zone' in title]
+    assert len(clock) == 1 and clock[0]['once'] and clock[0]['key'] == 'daily-clock:unset:UTC-05:00'
+
+    monkeypatch.setattr('config.DAY_START_HOUR', 4, raising=False)
+    assert daily.compact_today(datetime(2026, 11, 21, 1, 30)) == date(2026, 11, 20)       # 1 am is still yesterday's day
+    assert daily.compact_today(datetime(2026, 11, 21, 4, 0)) == date(2026, 11, 21)
+    monkeypatch.setattr(compress, '_user_zone', lambda: timezone(datetime.now().astimezone().utcoffset() + timedelta(hours=6)))
+    assert daily.compact_today(datetime(2026, 11, 21, 23, 30)) == date(2026, 11, 22)      # and it follows a set zone
+
+
+def test_the_person_corrects_a_days_links_and_dates_by_hand():
+    """A real day (2026-11-21) linked "a friend's dad" to the Dad card and had no
+    card yet for a man it named eight times. The person unlinks, links and
+    takes a date off the card; the day's text is never touched, and an
+    entity's card lists the days that retell it."""
+    from plugins.mindpalace.routes import daily_routes, browse
+    dad, bo = _person('Dad'), None
+    text = "Dad called about the boat. Bo owes for the software since Aug 18. We meet Jan 21 2027."
+    daily.record_chat('main', SM(_pair('2026-11-19', text)))
+    day = lambda: daily_routes.list_days(query={'scope': S})['days'][0]
+    d = day()
+    src, before = d['source'], [r[1] for r in _rows()]
+    assert [e['name'] for e in d['entities']] == ['Dad'] and d['dates'] == ['2026-08-18', '2027-01-21']
+    send = lambda **b: daily_routes.tag_day(body={'scope': S, 'source': src, **b})
+
+    assert send(action='unlink', entity=dad) == {'success': True}
+    assert day()['entities'] == [] and send(action='unlink', entity=dad)[1] == 404
+    assert send(action='link', name='Bo')[1] == 404                     # no card: nothing is created here
+    bo = _person('Bo')
+    assert send(action='link', name='bo') == {'success': True} and send(action='link', name='Bo')[1] == 400
+    assert [e['name'] for e in day()['entities']] == ['Bo']
+    with pt._get_connection() as conn:
+        assert conn.execute("SELECT kind FROM edges WHERE dst_id = ?", (bo,)).fetchall() == [('retells',)]
+    detail = browse.entity_detail(eid=bo)
+    assert detail['days'] == [{'day': '2026-11-19', 'source': src, 'scope': S}] and detail['mentioned_in'] == []
+    assert browse.entity_detail(eid=dad)['days'] == []
+
+    assert send(action='hide_date', date='Aug 18')[1] == 400
+    assert send(action='hide_date', date='2026-08-18') == {'success': True}
+    d = day()
+    assert d['dates'] == ['2027-01-21'] and d['dates_off'] == ['2026-08-18']
+    assert send(action='show_dates') == {'success': True} and day()['dates'] == ['2026-08-18', '2027-01-21']
+    assert [r[1] for r in _rows()] == before and day()['text'] == text      # the text is as she wrote it
+    assert send(action='rewrite')[1] == 400
+    assert daily_routes.tag_day(body={'scope': S, 'source': 'day:2020-01-01:x', 'action': 'show_dates'})[1] == 404
+    with pt._get_connection() as conn:
+        said = [r[0] for r in conn.execute("SELECT summary FROM ledger WHERE layer = 'daily' AND actor = 'user'")]
+    assert any('unlinked "Dad" from the day 2026-11-19' in x for x in said) and any('linked "Bo"' in x for x in said)
+
+
+def test_a_day_card_shows_only_the_dates_the_text_names_outright():
+    """A real day (2026-11-21) showed 15 dates: three clock times, a weekday
+    resolved forward, "over a month ago" as a day. Old rows keep their
+    stamps; the card reads the text."""
+    from plugins.mindpalace.routes import daily_routes
+    daily.record_chat('main', SM(_pair(
+        '2026-11-19', "At 4am the task ran. Wednesday's announcement ships Jan 21 2027. Ada decided over a month ago. "
+                      'The sun set around 5:30 and it was not July. Bo was adopted Aug 18. Today, 2026-11-19, was quiet.')))
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET meta = json_set(meta, '$.event_dates', json_array('2026-11-25', "
+                     "'2026-11-19T04:00')) WHERE layer = 'daily'")
+        conn.commit()
+    assert daily_routes.list_days(query={'scope': S})['days'][0]['dates'] == ['2026-08-18', '2027-01-21']
+
 
 def test_the_app_lists_whole_days_with_what_is_known_about_them():
     from plugins.mindpalace.routes import daily_routes, browse
@@ -859,13 +1137,13 @@ def test_the_app_lists_whole_days_with_what_is_known_about_them():
     out = daily_routes.list_days(query={'scope': S})
     assert out['total'] == 2 and [d['day'] for d in out['days']] == ['2026-11-02', '2026-11-01']
     d = out['days'][0]
-    assert d['text'] == LONG and d['parts'] > 3 and d['people'] == ['Ada'] and d['dates'] == ['2026-11-03']
+    assert d['text'] == LONG and d['parts'] > 3 and [e['name'] for e in d['entities']] == ['Ada'] and d['dates'] == []
     assert (d['chat'], d['persona'], d['messages'], d['private']) == ('main', 'sapphire', 12, False)
     assert d['writer'] == {'model': 'opus', 'provider': CLOUD, 'origin': 'Sapphire-Purple'}
     assert [x['day'] for x in daily_routes.list_days(query={'scope': S, 'q': 'quiet'})['days']] == ['2026-11-01']
     assert daily_routes.list_days(query={'scope': S, 'q': '2026-11-02'})['total'] == 1
     assert daily_routes.list_days(query={'scope': S, 'q': '100%'})['total'] == 0       # a typed % is a %
-    assert daily_routes.list_days(query={'scope': 'other'}) == {'days': [], 'total': 0, 'limit': 20, 'offset': 0}
+    assert daily_routes.list_days(query={'scope': 'other'}) == {'days': [], 'total': 0, 'limit': 20, 'offset': 0, 'clock': None}
     layers = browse.list_layers()['layers']
     assert layers[0]['key'] == 'daily' and layers[0]['view'] == 'daily'
 
@@ -956,7 +1234,7 @@ def test_days_travel_in_a_file_whole_or_not_at_all():
     assert out['success'] and out['imported'] == data['counts']['chunks']
     there = {d['day']: d for d in daily_routes.list_days(query={'scope': 'elsewhere'})['days']}
     assert there['2026-11-01']['text'] == twice and there['2026-11-02']['text'] == LONG
-    assert there['2026-11-01']['people'] == ['Ada'] and there['2026-11-02']['people'] == ['Ada']
+    assert [[e['name'] for e in there[k]['entities']] for k in ('2026-11-01', '2026-11-02')] == [['Ada'], ['Ada']]
     with pt._get_connection() as conn:
         kinds = conn.execute("SELECT g.kind, COUNT(*) FROM edges g JOIN chunks c ON c.id = g.src_id "
                              "WHERE c.scope = 'elsewhere' GROUP BY g.kind").fetchall()

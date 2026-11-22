@@ -1249,7 +1249,7 @@ async def list_chats(request: Request, type: str = None, kind: str = None,
         if slim:
             keep = ('mode', 'game_id', 'room', 'private_chat', 'archived', 'persona', 'prompt',
                     'llm_primary', 'llm_model', 'toolset', 'trim_color',
-                    'private_display_name')
+                    'private_display_name', 'memory_scope')
             # New dicts, never in-place: the store's entries are this
             # request's, but a projection that mutates its input is a trap
             # for the next caller who shares the list.
@@ -1623,6 +1623,48 @@ async def put_compress_instructions(request: Request, kind: str = '', _=Depends(
         raise HTTPException(status_code=400, detail=str(e))
     except OSError as e:
         raise HTTPException(status_code=503, detail=f"The instructions file could not be written ({e}). Try again.")
+
+
+@router.get("/api/chats/compress/preview")
+async def preview_day_choices(chat: str = '', _=Depends(require_login), system=Depends(get_system)):
+    """The days of a chat the day wording can be tried on (still raw turns,
+    today included), newest first. No model call."""
+    from core.chat import compress
+    try:
+        return {"days": await asyncio.to_thread(compress.preview_days, system.llm_chat.session_manager, chat)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/chats/compress/preview")
+async def preview_day_summary(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Try the day wording: what /compact-daily would write for one day of a
+    chat, with nothing written anywhere. Body: {chat, instructions?, day?}. One
+    real model call with the chat's own model (several for a long day)."""
+    from core import commands
+    from core.chat import compress
+    from core.personas import persona_manager
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="The body must be an object")
+    chat, text = data.get('chat'), data.get('instructions')
+    if not isinstance(chat, str) or not chat.strip() or (text is not None and not isinstance(text, str)):
+        raise HTTPException(status_code=400, detail="chat (a name) is required; instructions must be text")
+    sm = system.llm_chat.session_manager
+    settings = sm.read_chat_settings(chat)
+    if settings is None:
+        raise HTTPException(status_code=404, detail=f"Chat '{chat}' not found")
+    persona = settings.get('persona') or ''
+    if persona and not persona_manager.exists(persona):
+        persona = ''
+    try:
+        return await asyncio.to_thread(
+            compress.preview_day, sm, chat, settings.get('llm_primary') or 'auto',
+            settings.get('llm_model') or '', commands.DAILY_TOKENS, persona, text, data.get('day'))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise server_error("try the day summary", e)
 
 
 @router.post("/api/chats/{chat_name}/trim")

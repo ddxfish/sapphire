@@ -18,11 +18,13 @@ const DAILY_TEXT = '/api/chats/compress/instructions?kind=daily';
 // was typed across a repaint (it used to come back as the saved text, the
 // edit gone without a word).
 let dailyDraft = null;
+// Mind > Daily > Dry run edits the same text: a save there drops the unsaved copy kept here.
+window.addEventListener('daily-wording-saved', () => { dailyDraft = null; });
 
 function dailyTextHtml() {
     return `<div id="daily-instr" style="margin-top: 0.75rem;">
         <label for="daily-instr-text" style="display:block; font-weight:600; margin-bottom:0.25rem;">Day summary instructions</label>
-        <div class="setting-help" style="color: var(--text-muted); font-size: var(--font-sm); margin-bottom: 0.35rem;">How she writes each day and what she leaves out. /compact-daily also uses the compress instructions (Chat Manager, Compress, Advanced). Each day's summary is kept in memory too: Mind &rsaquo; Daily, with its switch under Mind &rsaquo; Settings &rsaquo; Memories. This box has its own Save.</div>
+        <div class="setting-help" style="color: var(--text-muted); font-size: var(--font-sm); margin-bottom: 0.35rem;">How she writes each day and what she leaves out. /compact-daily also uses the compress instructions (Chat Manager, Compress, Advanced). Each day's summary is kept in memory too: Mind &rsaquo; Daily, with its switch under Mind &rsaquo; Settings &rsaquo; Memories. This box has its own Save. To try a wording on a real day without changing anything: Mind &rsaquo; Daily &rsaquo; Dry run.</div>
         <textarea id="daily-instr-text" rows="4" spellcheck="true" disabled
             style="width:100%; box-sizing:border-box; height:6.5em; max-height:14em; overflow-y:auto; resize:vertical; font:inherit; padding:0.4rem 0.5rem;"></textarea>
         <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-top:0.35rem;">
@@ -69,7 +71,9 @@ async function bindDailyText(el) {
             }, 10000);
             saved = (r.instructions || '').trim();
             broken = '';
-            if (text.value === sent) { text.value = saved; dailyDraft = null; }   // typed on during the save: kept
+            window.dispatchEvent(new CustomEvent('daily-wording-saved'));
+            if (text.value === sent) text.value = saved;
+            else dailyDraft = text.value;                                  // typed on during the save: kept
             sync();
             showToast('Day summary instructions saved', 'success');
         } catch (e) { showToast(`Not saved: ${e.message}`, 'error'); }

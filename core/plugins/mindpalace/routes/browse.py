@@ -505,9 +505,15 @@ def entity_detail(eid=None, **_):
             f"SELECT c.id, c.layer, c.content, c.created, d.weight "
             f"FROM edges d JOIN chunks c ON c.id = d.src_id "
             f"WHERE d.dst_type = 'entity' AND d.dst_id = ? AND d.src_type = 'chunk' "
-            f"AND d.kind != 'retells' "      # a day that names them is not a memory of them (tools/daily.py)
+            f"AND d.kind != 'retells' AND c.layer != 'daily' "   # a day that names them is not a memory of them (tools/daily.py)
             f"{dark_and}"
             f"ORDER BY c.created DESC LIMIT 100", [eid, *dark_params]).fetchall()
+        # ...it is listed on its own: the days that retell this entity, newest first.
+        days = cur.execute(
+            "SELECT c.label, c.source, c.scope FROM edges d JOIN chunks c ON c.id = d.src_id "
+            "WHERE d.dst_type = 'entity' AND d.dst_id = ? AND d.src_type = 'chunk' "
+            "AND c.layer = 'daily' AND c.source IS NOT NULL "
+            "GROUP BY c.scope, c.source ORDER BY c.label DESC, c.source DESC LIMIT 400", (eid,)).fetchall()
     return {
         'entity': {'id': e[0], 'name': e[1], 'scope': e[2], 'kind': e[3],
                    'mentions': e[4], 'meta': _parse_meta(e[5]),
@@ -519,6 +525,7 @@ def entity_detail(eid=None, **_):
                     'writer': pt.writer_dict(c[8], c[9], c[10], c[11])} for c in chunks],
         'mentioned_in': [{'id': m[0], 'layer': m[1], 'content': m[2],
                           'created': m[3], 'weight': m[4]} for m in mentions],
+        'days': [{'day': d[0], 'source': d[1], 'scope': d[2]} for d in days],
     }
 
 

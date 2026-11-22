@@ -274,8 +274,34 @@ def parse_when(text, anchor=None):
                   f"'in 2 weeks'")
 
 
-def _resolve(text, anchor, plans_only=False):
+def named(content, anchor, limit=12):
+    """Only the dates the text names outright: an ISO date, or a month with
+    its day. No weekday, clock time, "ago" or holiday is read. For a
+    RETELLING (a day summary): there "Wednesday" is the one before, "at 4am"
+    is the day itself, and "over a month ago" is not a date (a real day,
+    2026-11-21: 5 of its 15 stamped dates came from those rules). Never raises."""
+    try:
+        return _resolve(content, _parse_anchor(anchor), named_only=True, limit=limit)
+    except Exception:
+        return []
+
+
+def _resolve(text, anchor, plans_only=False, named_only=False, limit=MAX_DATES):
     found = []          # (position, datetime, has_time, plan)
+
+    def emit():
+        found.sort(key=lambda f: f[0])
+        out, seen = [], set()
+        for _pos, dt, has_time, plan in found:
+            if plans_only and not plan:
+                continue
+            s = dt.strftime('%Y-%m-%dT%H:%M') if has_time else dt.strftime('%Y-%m-%d')
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+            if len(out) >= limit:
+                break
+        return out
 
     def add(pos, dt, has_time=False, plan=False):
         if dt and 1900 <= dt.year <= 2100:
@@ -341,6 +367,9 @@ def _resolve(text, anchor, plans_only=False):
                 if dt:
                     claim(m)
                     add(m.start(), dt)
+
+    if named_only:
+        return emit()
 
     for m in RX_RELDAY.finditer(text):
         word = m[1].lower()
@@ -431,18 +460,7 @@ def _resolve(text, anchor, plans_only=False):
             found.append((0, anchor.replace(hour=clock[0], minute=clock[1],
                                             second=0, microsecond=0), True, False))
 
-    found.sort(key=lambda f: f[0])
-    out, seen = [], set()
-    for _pos, dt, has_time, plan in found:
-        if plans_only and not plan:
-            continue
-        s = dt.strftime('%Y-%m-%dT%H:%M') if has_time else dt.strftime('%Y-%m-%d')
-        if s not in seen:
-            seen.add(s)
-            out.append(s)
-        if len(out) >= MAX_DATES:
-            break
-    return out
+    return emit()
 
 
 # ── Recurring dates (2026-07-19, Krem's B) ──────────────────────────────────

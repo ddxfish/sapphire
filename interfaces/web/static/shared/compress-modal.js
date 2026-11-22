@@ -84,6 +84,7 @@ export async function openCompressModal(name, chat = null) {
         <p class="cm-hint">Older history becomes AI-written summaries; the recent
         tail stays verbatim. Runs in the background — minutes on a local model.</p>
         <div class="cm-hint" style="font-weight:600">This chat: ${chat.message_count ?? '?'} messages · ${chat.turn_count ?? '?'} turns</div>
+        <div class="cm-hint" id="cm-c-days" hidden style="color:var(--warning, #d9a441)"></div>
         <div class="cm-form-row">
             <label><input type="radio" name="cm-cmode" value="whole" checked> One summary</label>
             <label><input type="radio" name="cm-cmode" value="chunked"> Timeline chunks (one summary pair per ~6k tokens)</label>
@@ -123,6 +124,20 @@ export async function openCompressModal(name, chat = null) {
             <button class="cm-btn" id="cm-c-cancel">Cancel</button>
             <button class="cm-btn cm-danger" id="cm-c-go">Compress</button>
         </div>`);
+
+    // A plain compact folds the day summaries /compact-daily wrote into its one
+    // summary, and the next daily compact then writes that block as one day
+    // (2026-11-21). The fix waits on the core list; until then, say so before
+    // it happens. Read apart from everything else: a failure here shows nothing.
+    fetch(`/api/chats/${encodeURIComponent(name)}/export`).then(r => r.ok ? r.json() : null).then(d => {
+        const days = new Set((d?.messages || []).map(m => m.compressed_day).filter(Boolean)).size;
+        const warn = overlay.querySelector('#cm-c-days');
+        if (!days || !warn) return;
+        warn.textContent = `This chat holds ${days} day ${days === 1 ? 'summary' : 'summaries'} from /compact-daily. `
+            + `Compressing here folds the ones outside the kept turns into this summary, and the next /compact-daily `
+            + `writes that block as part of one day. Their copies in Mind > Daily stay as they are.`;
+        warn.hidden = false;
+    }).catch(() => {});
 
     // Buttons bind BEFORE any data-dependent population — a populate failure
     // must never leave the modal with dead buttons (learned 2026-07-10:
@@ -198,7 +213,9 @@ function startCompressPoll() {
                 + 'The chat is untouched; re-run the compress.', 'error', 10000);
             return;
         }
-        if (s.ok) {
+        if (s.ok && (s.result || {}).nothing) {
+            showToast(s.result.nothing, 'info', 8000);      // done, with nothing to do: the chat is as it was
+        } else if (s.ok) {
             const r = s.result || {};
             showToast(`Compressed ${r.chat}: ${r.messages_before} → ${r.messages_after} messages `
                 + `(${r.summary_pairs} summary pair${r.summary_pairs === 1 ? '' : 's'})`, 'success', 8000);

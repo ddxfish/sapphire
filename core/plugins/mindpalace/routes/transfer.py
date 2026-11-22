@@ -60,9 +60,19 @@ def export_data(query=None, **_):
             (scope, layer)).fetchall()
         ids = [r[0] for r in rows]
         index_of = {cid: i for i, cid in enumerate(ids)}
-        mentions, derived = {}, {}
+        mentions, derived, retells = {}, {}, {}
         if ids:
             ph = ','.join('?' * len(ids))
+            if layer == 'daily':
+                # A day's own links (kind 'retells'), by name. Without them an
+                # import matched the text again: a link the person had taken
+                # off came back and one made by hand was lost.
+                for src, name in cur.execute(
+                        f"SELECT d.src_id, e.name FROM edges d JOIN entities e ON e.id = d.dst_id "
+                        f"WHERE d.src_type = 'chunk' AND d.dst_type = 'entity' AND d.src_id IN ({ph}) "
+                        f"ORDER BY d.id", ids).fetchall():
+                    if name not in retells.setdefault(src, []):
+                        retells[src].append(name)
             for src, name in cur.execute(
                     f"SELECT d.src_id, e.name FROM edges d "
                     f"JOIN entities e ON e.id = d.dst_id "
@@ -116,6 +126,8 @@ def export_data(query=None, **_):
             c['meta'] = m
         if cid in mentions:
             c['mentions'] = mentions[cid]
+        if layer == 'daily':
+            c['retells'] = retells.get(cid, [])     # present even when empty: "linked to nothing" is an answer
         if cid in derived:
             c['derived_from_idx'] = derived[cid]
         chunks.append(c)

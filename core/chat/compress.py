@@ -106,10 +106,15 @@ def _keyed_calls(msgs: List[Dict[str, Any]]) -> set:
     return ids
 
 
-def render_transcript(msgs: List[Dict[str, Any]], persona: str = "", room: bool = False) -> str:
+def render_transcript(msgs: List[Dict[str, Any]], persona: str = "", room: bool = False,
+                      results: bool = True) -> str:
     """Render messages as a plain transcript for the summarizer. The result of
     a tool call made with a private_key is withheld: her own words about what
-    she read stay, as ordinary chat text."""
+    she read stay, as ordinary chat text.
+    results=False (a day's summary): no tool result is shown at all, only the
+    "[called tools: ...]" stub on her line. A result is what a tool handed
+    back, not what was said that day: a real day (2026-11-21) retold the whole
+    self sheet her 4am task had read, with its nine dates and seven people."""
     from core.chat.llm_errors import is_error_row
     keyed = _keyed_calls(msgs)
     lines = []
@@ -123,6 +128,8 @@ def render_transcript(msgs: List[Dict[str, Any]], persona: str = "", room: bool 
                               for tc in m["tool_calls"] if isinstance(tc, dict))
             text = f"{text}\n[called tools: {names}]".strip()
         elif role == "tool":
+            if not results:
+                continue
             if m.get("tool_call_id") in keyed:
                 text = "[withheld: read with a private key]"
             text = f"({m.get('name', 'tool')} result) {text}"
@@ -130,15 +137,17 @@ def render_transcript(msgs: List[Dict[str, Any]], persona: str = "", room: bool 
     return "\n\n".join(lines)
 
 
-def chunk_by_turns(msgs: List[Dict[str, Any]],
-                   budget: int = CHUNK_INPUT_TOKENS) -> List[List[Dict[str, Any]]]:
+def chunk_by_turns(msgs: List[Dict[str, Any]], budget: int = CHUNK_INPUT_TOKENS,
+                   results: bool = True) -> List[List[Dict[str, Any]]]:
     """Group messages into chunks of <= ~budget input tokens, snapped to turn
     boundaries. A single turn over budget becomes its own chunk (never split
-    a tool chain)."""
+    a tool chain). results=False: tool results are not rendered
+    (render_transcript), so they do not count toward the budget either."""
     chunks, current, current_tokens = [], [], 0
     for start, end in turn_spans(msgs):
         turn = msgs[start:end]
-        turn_tokens = sum(count_message_tokens(m.get("content")) for m in turn)
+        turn_tokens = sum(count_message_tokens(m.get("content")) for m in turn
+                          if results or m.get("role") != "tool")
         if current and current_tokens + turn_tokens > budget:
             chunks.append(current)
             current, current_tokens = [], 0
@@ -242,19 +251,41 @@ _MERGE_FRAME = (
 _DAILY_CLAUSE = (
     " That size is a ceiling, not a goal: write only as much as the day needs, "
     "and a quiet day may take a few hundred tokens. Lines labelled SCHEDULED "
-    "TASK are automatic jobs, not the USER speaking."
+    "TASK are automatic jobs, not the USER speaking. What a tool returned is "
+    "not shown: \"[called tools: ...]\" only names the tools that ran, so do "
+    "not guess at what they returned."
 )
 
+# The wording that came out best of seven on twenty invented days, three runs
+# each (tmp/daily-lab.py, glm-5p3, 2026-11-21): the person's own layout and
+# his "keep one only for what was new in it", with the sentences that keep
+# the routine out ("without a word that they ran", the quiet-day sentence,
+# her reciting her own sheet named in the list). Against the wording before
+# the tuning, routine noise fell from 42 hits in 40 texts to 2 in 60. In this
+# prompt "you" is the USER, so the writer is "the ASSISTANT", never "you".
 DAILY_INSTRUCTIONS = (
-    "Write tight prose in the first person: whatever is kept, say it once, in "
-    "plain words, without padding, and never in shorthand or abbreviations. "
-    "Give each topic its own paragraph and name its people and things in it, "
-    "not \"he\" or \"that\": a paragraph may later be read on its own. Write "
-    "dates as dates (Saturday, November 21), not \"tomorrow\". Leave a "
-    "scheduled task that found or changed nothing out entirely, without a "
-    "word that it ran, and keep one only when something came of it. Do not "
-    "recount tool housekeeping either (that a memory was saved, searched or "
-    "read): keep what was learned or decided, not that it was stored."
+    "Write tight prose: whatever is kept, say it once, in plain words, "
+    "never in shorthand or abbreviations.\n"
+    "Write in the first person (I/me) as the ASSISTANT. The USER is always "
+    "\"you\", also where the transcript uses their name. Everyone else keeps "
+    "their name.\n\n"
+    "Give each topic its own paragraph, and name people and things in it, "
+    "not \"he\" or \"that\".\n\n"
+    "When a date matters and is certain, write it as a date (Saturday, "
+    "November 21). Turn \"today\", \"tomorrow\", \"yesterday\" and \"next week\" "
+    "into the date or week they mean (the week of November 23), counted "
+    "from this day. Do not guess a date that is uncertain.\n\n"
+    "Add nothing the transcript does not say.\n\n"
+    "A day summary is what was said, decided, learned, debated, discovered "
+    "or changed that day, and how it felt.\n"
+    "A day summary leaves out what happens every day: the night routine, "
+    "the ASSISTANT reading or reciting its own sheet or dashboard, "
+    "memories being saved or searched, wake-ups, light and scene changes, "
+    "heartbeats. Leave these out without a word that they ran. Keep one "
+    "only for what was new in it: news it brought, a failure, an answer "
+    "from the USER.\n\n"
+    "Length follows the day. If nothing else happened, the whole summary "
+    "is one short sentence saying it was a quiet day."
 )
 
 INSTRUCTIONS_PATH = Path(__file__).parent.parent.parent / "user" / "prompts" / "compress_instructions.txt"
@@ -386,7 +417,8 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
     testable with a mock provider. on_progress(str) narrates for job status.
     day (whole mode): the pair is that day's summary, written by the day
     wording (daily_instructions) on top of `instructions`."""
-    chunks = chunk_by_turns(head, CHUNK_INPUT_TOKENS)  # module global: patchable
+    results = day is None       # a day's summary is written from what was said, not from tool results
+    chunks = chunk_by_turns(head, CHUNK_INPUT_TOKENS, results)  # module global: patchable
     if not chunks:
         return []
     guide = _guide(instructions, persona)
@@ -400,7 +432,7 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
             if on_progress:
                 on_progress(f"chunk {i + 1}/{len(chunks)}")
             summary = _summarize(provider, _CHUNK_FRAME,
-                                 render_transcript(chunk, persona, room), per, guide)
+                                 render_transcript(chunk, persona, room, results), per, guide)
             pairs.extend(_summary_pair(summary, chunk, persona))
         return pairs
     # whole: map-reduce → one pair
@@ -408,14 +440,14 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
         if on_progress:
             on_progress("summarizing")
         summary = _summarize(provider, _CHUNK_FRAME,
-                             render_transcript(chunks[0], persona, room), target_tokens, guide)
+                             render_transcript(chunks[0], persona, room, results), target_tokens, guide)
     else:
         partials = []
         for i, c in enumerate(chunks):
             if on_progress:
                 on_progress(f"chunk {i + 1}/{len(chunks)}")
             partials.append(_summarize(provider, _CHUNK_FRAME,
-                                       render_transcript(c, persona, room),
+                                       render_transcript(c, persona, room, results),
                                        min(PARTIAL_SUMMARY_TOKENS, target_tokens), guide))
         summary = _merge_partials(provider, partials, target_tokens, on_progress, guide)
     return _summary_pair(summary, head, persona, day)
@@ -423,13 +455,38 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
 
 # ── daily: one labelled pair per day, the last N days ──────────────────────
 
+def _user_zone():
+    """The time zone a day is cut in: the person's (USER_TIMEZONE), or None for
+    this computer's own clock. "UTC" is the untouched default and reads as not
+    set, the rule the calendar already uses (core/plugins/calendar/api.py
+    tz_name): an install that never chose a zone keeps cutting days on its own
+    clock, exactly as before. So does one with no time zone database."""
+    try:
+        import config
+        name = (getattr(config, "USER_TIMEZONE", "") or "").strip()
+        if not name or name.upper() == "UTC":
+            return None
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name)
+    except Exception:
+        return None
+
+
 def day_of(ts, start_hour: int = 0) -> Optional[date]:
     """The day a timestamp belongs to when days begin at start_hour (a 2 am
-    turn is still last night). Unreadable → None."""
+    turn is still last night). Unreadable → None.
+    A row's stamp is this computer's wall time. Where the person chose another
+    zone (a server on UTC, a container pinned elsewhere), the day is cut in
+    theirs: her scheduled tasks already run on that zone, and on the
+    computer's clock a nightly /compact-daily could fire before the day had
+    ended (2026-11-21). With the same zone on both, nothing changes."""
     try:
         t = datetime.fromisoformat(str(ts))
-        if t.tzinfo:
-            t = t.astimezone().replace(tzinfo=None)     # pre-1970 raises OSError on Windows
+        zone = _user_zone()
+        if zone is not None:
+            t = t.astimezone(zone).replace(tzinfo=None)     # a naive stamp is read as this computer's time
+        elif t.tzinfo:
+            t = t.astimezone().replace(tzinfo=None)         # pre-1970 raises OSError on Windows
         return (t - timedelta(hours=start_hour)).date()
     except (TypeError, ValueError, OSError, OverflowError):
         return None
@@ -502,6 +559,11 @@ def daily_pairs(plan: Dict[str, Any], provider, target_tokens: int, on_progress=
 
 # ── the job ────────────────────────────────────────────────────────────────
 
+class NothingToCompress(ValueError):
+    """The job has nothing to do. Not a failure: a nightly /compact-daily on a
+    quiet chat ended as a red "Chat compression failed" row every morning."""
+
+
 def _write_backup(session_manager, chat_name: str, exported: Dict[str, Any]) -> str:
     exports_dir = Path(session_manager.history_dir) / "exports"
     exports_dir.mkdir(parents=True, exist_ok=True)
@@ -529,8 +591,8 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     spans = turn_spans(msgs)
     keep_last = max(1, int(keep_last_turns))
     if len(spans) <= keep_last:
-        raise ValueError("Nothing to compress — the whole chat fits inside "
-                         "the kept tail")
+        raise NothingToCompress("Nothing to compress — the whole chat fits inside "
+                                "the kept tail")
     cut = spans[len(spans) - keep_last][0]
     head, tail = msgs[:cut], msgs[cut:]
 
@@ -539,10 +601,17 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     # next lock (the vault scrub only cleans at lock time). Unreadable
     # settings fail closed.
     try:
-        chat_settings = session_manager.read_chat_settings(chat_name) or {}
-        _private = bool(chat_settings.get("private_chat"))
+        chat_settings = session_manager.read_chat_settings(chat_name)
     except Exception:
-        chat_settings, _private = {}, True
+        chat_settings = None
+    if chat_settings is None:
+        # read_chat_settings answers None on a locked database or a sealed row.
+        # "or {}" read that as "not private": a plaintext backup and any
+        # provider. Guessing "private" instead would skip the backup of a chat
+        # that is not. Nothing is written either way (hunt, 2026-11-21).
+        raise ValueError("The chat's settings could not be read just now, so nothing was "
+                         "compressed. Try again.")
+    _private = bool(chat_settings.get("private_chat"))
     room = chat_settings.get("mode") == "room"
     instructions = ROOM_INSTRUCTIONS if room else load_instructions()
     # Read here, with the other text: an unreadable file fails the job before
@@ -554,8 +623,8 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
         plan = daily_plan(head, _int_setting(config, "COMPACT_DAILY_DAYS", 5, 1, 365),
                           _int_setting(config, "DAY_START_HOUR", 4, 0, 23))
         if not plan["raw"] and not plan["dropped"]:
-            raise ValueError("Nothing new to compact since the last run "
-                             "(today stays as it is until it ends)")
+            raise NothingToCompress("Nothing new to compact since the last run "
+                                    "(today stays as it is until it ends)")
     if backup and _private:
         logger.info(f"[COMPRESS] Skipping plaintext backup for private chat '{chat_name}'")
     backup_path = _write_backup(session_manager, chat_name, exported) if (backup and not _private) else None
@@ -604,6 +673,78 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     }
 
 
+def _preview_days(session_manager, chat_name: str):
+    """(the chat's settings, {day: (rows, finished)}): the days of a chat that
+    are still raw turns, today's included. A private chat is refused."""
+    exported = session_manager.export_chat(chat_name)
+    if exported is None:
+        raise ValueError(f"Chat '{chat_name}' not found")
+    try:
+        chat_settings = session_manager.read_chat_settings(chat_name)
+    except Exception:
+        chat_settings = None
+    # Settings that cannot be read are a private chat's until shown otherwise:
+    # read_chat_settings answers None on a locked database or a sealed row, and
+    # "or {}" read that as not private (hunt, 2026-11-21).
+    if chat_settings is None or chat_settings.get("private_chat"):
+        raise ValueError("A private chat is not previewed")
+    if chat_settings.get("mode") in ("room", "game"):
+        raise ValueError("A room's or a game's chat is not compacted by day, so there is nothing to try on it")
+    import config
+    plan = daily_plan(exported["messages"], _int_setting(config, "COMPACT_DAILY_DAYS", 5, 1, 365),
+                      _int_setting(config, "DAY_START_HOUR", 4, 0, 23))
+    days = {day: (rows, True) for day, (_, rows) in plan["raw"].items()}
+    for day, _, turn in plan["today"]:
+        days.setdefault(day, ([], False))[0].extend(turn)
+    return chat_settings, days
+
+
+def preview_days(session_manager, chat_name: str) -> List[Dict[str, Any]]:
+    """The days preview_day can be tried on, newest first. No model call."""
+    _, days = _preview_days(session_manager, chat_name)
+    return [{"day": d.isoformat(), "label": day_label(d), "finished": fin, "messages": len(rows)}
+            for d, (rows, fin) in sorted(days.items(), reverse=True)]
+
+
+def preview_day(session_manager, chat_name: str, provider_key: str, model: str,
+                target_tokens: int, persona: str = "",
+                daily_instructions: Optional[str] = None,
+                day: Optional[str] = None) -> Dict[str, Any]:
+    """What /compact-daily would write for ONE day of this chat, with nothing
+    written: no backup, no change to the chat, no event (so nothing is kept in
+    memory either). For tuning the day wording: every real run costs a night
+    and a day that cannot be summarized again. day: an ISO date from
+    preview_days; None = the newest finished day still raw, else today so far.
+    daily_instructions: the text to try (the box's, saved or not); None = the
+    wording in force. One real model call, or several for a long day."""
+    chat_settings, days = _preview_days(session_manager, chat_name)
+    room = chat_settings.get("mode") == "room"
+    wording = (daily_instructions or "").strip()
+    if len(wording) > MAX_INSTRUCTIONS_CHARS:           # the box's text only: a saved file is the job's to judge
+        raise ValueError(f"Instructions are capped at {MAX_INSTRUCTIONS_CHARS} characters")
+    wording = wording or load_instructions(daily=True)
+    if not days:
+        raise NothingToCompress("Nothing to try it on: every turn in this chat is already a day summary")
+    if day:
+        try:
+            day = date.fromisoformat(str(day))
+        except ValueError:
+            day = None
+        if day not in days:
+            raise ValueError("That day has no raw turns in this chat")
+    else:
+        day = max((d for d, (_, fin) in days.items() if fin), default=None) or max(days)
+    rows, finished = days[day]
+    provider = make_provider(provider_key, model, conversation=chat_name)
+    pair = compress_messages(rows, "whole", provider, int(target_tokens),
+                             instructions=ROOM_INSTRUCTIONS if room else load_instructions(),
+                             persona="" if room else persona, room=room, day=day,
+                             daily_instructions=wording)
+    text = _text_of(pair[1].get("content"))
+    return {"chat": chat_name, "day": day.isoformat(), "label": day_label(day), "finished": finished,
+            "messages": len(rows), "text": text, "tokens_est": count_tokens(text)}
+
+
 def get_job_status() -> Dict[str, Any]:
     with _job_lock:
         return dict(_job)
@@ -625,7 +766,8 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
     # words are kept generic for one.
     from core import notify as _notify
     try:
-        _priv = bool((session_manager.read_chat_settings(chat_name) or {}).get("private_chat"))
+        _read = session_manager.read_chat_settings(chat_name)
+        _priv = _read is None or bool(_read.get("private_chat"))    # unreadable: a private chat's until shown otherwise
     except Exception:
         _priv = True
     nid = _notify.begin(f"Compressing a chat ({mode})", key='compress', go={'view': 'chat-manage'})
@@ -650,6 +792,15 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
                                       f"{report.get('messages_after')} messages")
             publish(Events.CHAT_COMPRESSED, {"chat_name": chat_name,
                                              "report": report})
+        except NothingToCompress as e:
+            # Done, with nothing written and nothing published. The words name
+            # no chat, so a private chat's row may carry them.
+            logger.info(f"Compress '{chat_name}': {e}")
+            _notify.finish(nid, title=str(e))
+            with _job_lock:
+                _job.update({"running": False, "done": True, "ok": True,
+                             "result": {"chat": chat_name, "mode": mode, "nothing": str(e)},
+                             "finished": datetime.now().isoformat()})
         except Exception as e:
             logger.exception(f"Compress '{chat_name}' failed")
             _notify.finish(nid, failed=True, title='Chat compression failed',

@@ -3,7 +3,7 @@
   "tool_expires": "never",
   "short_display_name": "Mind Palace",
   "short_name": "Mind Palace",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Mind Palace, Sapphire's memory engine: memories, people, knowledge and goals in layers behind one tool surface, tended by a librarian. One of two engines with Memory (legacy); only one runs at a time. The palace's Import tab copies the old data and never changes it.",
   "author": "sapphire",
   "icon": "🏛️",
@@ -300,7 +300,7 @@
         "type": "boolean",
         "label": "Keep each day's summary",
         "default": true,
-        "help": "When a chat is compacted by day (/compact-daily), each finished day's summary is also kept in memory, in that chat's memory scope, so a day that rolls off the chat is still found by search and by date. See them in Mind > Daily. A day summary covers that day's whole conversation, and it is kept per memory scope: every chat on the same scope, and any model that reads it, can find it. Give a chat its own scope (or scope none) if its days should not be shared. Private chats, chat rooms, game chats and chats with memory off are never recorded. Making a chat private later, or deleting it, does not remove days already kept: delete those in Mind > Daily. Off: nothing new is recorded and days already kept stay; turning it back on records the days still sitting in your chats. How a day is written: Settings > Tools > Daily Compact.",
+        "help": "When a chat is compacted by day (/compact-daily), each finished day's summary is also kept in memory, in that chat's memory scope, so a day that rolls off the chat is still found by search and by date. See them in Mind > Daily. A day summary covers that day's whole conversation, and it is kept per memory scope: every chat on the same scope, and any model that reads it, can find it. Give a chat its own scope (or scope none) if its days should not be shared. Private chats, chat rooms, game chats and chats whose memory scope is none or global are never recorded. Making a chat private later, or deleting it, does not remove days already kept: delete those in Mind > Daily. Off: nothing new is recorded and days already kept stay; turning it back on records the days still sitting in your chats. How a day is written: Settings > Tools > Daily Compact.",
         "tab": "Memories"
       },
       {
@@ -393,6 +393,11 @@
         "method": "POST",
         "path": "days/private",
         "handler": "routes/daily_routes.py:set_day_private"
+      },
+      {
+        "method": "POST",
+        "path": "days/tags",
+        "handler": "routes/daily_routes.py:tag_day"
       },
       {
         "method": "GET",

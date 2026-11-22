@@ -258,7 +258,12 @@ def _compact_daily(chat, args, by):
         ok, err = _start()
         logger.info(f"[COMMANDS] AI /compact-daily: {'started' if ok else err}")
         if not ok:
-            _tell(chat, 'AI could not start the daily compact', 'error')
+            # The one refusal there is: another compact holds the slot. Its own
+            # words name that chat, which may be a private one, so not those.
+            busy = compress.get_job_status().get('running')
+            _tell(chat, 'AI could not start the daily compact: ' + (
+                'another compact was still running. Nothing was queued; run it again later.' if busy
+                else 'see the log.'), 'error')
 
     defer(chat, _apply)
     return {'ok': True, 'say': f'When this turn ends, the chat will be compacted into one summary '

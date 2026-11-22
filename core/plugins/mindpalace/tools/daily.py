@@ -14,8 +14,8 @@
 # chars, sharing `source` = day:<date>:<compressed_at>, ordered by
 # chunk_index, `created` = that day, `label` = the ISO date. meta.sep holds
 # the exact text that stood before each piece, so the pieces give the summary
-# back to the character. The chat's name is in meta.chat only: the vault
-# scrub and the rename listener keep that one place true.
+# back to the character. The chat's name is in meta.chat only, as it was when
+# the day was recorded: nothing renames it later, and the vault scrub blanks it.
 #
 # Rules: private chats, rooms, games and a memory scope of none write nothing.
 # A day is recorded once, in one scope. She cannot save, edit or delete here
@@ -305,8 +305,7 @@ def _record(pt, sm, scope, chat, settings, pairs):
         try:
             # A cloud model's day does not link to a private-model person.
             with pt.as_reader(pt._provider_private(writer[0])):
-                arows = md.entity_aliases(cur, scope)
-            amap, aliases = md.alias_map(arows), [a for _, _, a in arows]
+                amap, aliases = link_names(cur, md, scope)
         except Exception as e:
             logger.warning(f"[DAILY] entity names unavailable, days recorded unlinked: {e}")
             amap, aliases = {}, []
@@ -347,6 +346,7 @@ def _record(pt, sm, scope, chat, settings, pairs):
     _tell_cap(scope, held, full)
     if new:
         _tell_first()
+        _tell_clock()
     return new, (WHY_FULL if full and not new else '')
 
 
@@ -388,15 +388,12 @@ def _write_day(cur, pt, scope, chat, pair, src, pieces, writer, now, md):
     """One day's rows: (their ids in order, are they private-model rows)."""
     created, ids, private = _created(pair['day']), [], False
     for i, (content, sep) in enumerate(pieces):
-        try:
-            # anchor: "tomorrow" in a summary counts from ITS day. No noun
-            # harvest (link_text=''): nothing here feeds the link pass.
-            meta = md.derivable_meta(content, anchor=created, link_text='')
-        except Exception as e:
-            logger.warning(f"[DAILY] metadata skipped for a piece: {e}")
-            meta = {'md_v': md.MD_VERSION}
-        meta.pop('when', None)              # a retelling is never a plan
-        meta.pop('when_src', None)
+        # No dates, plans or name candidates are stamped. The palace's date
+        # rules read a note written in the moment, and on a retelling they
+        # guessed: "Wednesday" forward, "at 4am" as a date, "over a month
+        # ago" to the day (a real day, 2026-11-21). The Daily tab reads the
+        # dates a day names from its text (temporal.named).
+        meta = {'md_v': md.MD_VERSION, 'stats': md.content_stats(content)}
         meta.update({'added_by': 'ai', 'day': pair['day'], 'chat': chat, 'part': i,
                      'parts': len(pieces), 'compressed_at': pair['at']})
         if i and sep != ' ':
@@ -417,6 +414,81 @@ def _write_day(cur, pt, scope, chat, pair, src, pieces, writer, now, md):
     return ids, private
 
 
+def named(content: str, aliases) -> list:
+    """The card names and nicknames this text names, with their own capitals.
+    The palace's matcher (metadata.match_entities) takes any case, and on a
+    day's long text that linked a card called Will to half of all days through
+    the word "will", and "Mira's dad" to the Dad card (lab bench, 2026-11-21).
+    A name at the start of a sentence may carry a capital its card does not.
+    Whole words, the longest name winning where two overlap."""
+    forms = {}
+    for name in sorted({a for a in aliases if a and a.strip()}, key=len, reverse=True):
+        cap = name[0].upper() + name[1:]
+        # One lowercase word (a nickname typed "dad", "will") is a name only with
+        # its capital: as stored it is the ordinary word again (hunt, 2026-11-21).
+        if not (name == name.lower() and len(name.split()) == 1 and cap != name):
+            forms.setdefault(name, name)
+        forms.setdefault(cap, name)
+    if not forms:
+        return []
+    out = []
+    for m in re.finditer(r'\b(?:' + '|'.join(re.escape(f) for f in sorted(forms, key=len, reverse=True)) + r')\b',
+                         content):
+        # A card called May or Jan, and "May 9", "Jan 21" or "in May": the month, not the person.
+        if m.group(0).lower() in _MONTH_WORDS and (_DATE_AFTER.match(content, m.end())
+                                                   or _DATE_BEFORE.search(content[max(0, m.start() - 12):m.start()])):
+            continue
+        out.append(forms[m.group(0)])
+    return list(dict.fromkeys(out))
+
+
+_MONTHS = ('january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september',
+           'october', 'november', 'december')
+_MONTH_WORDS = set(_MONTHS) | {m[:3] for m in _MONTHS} | {'sept'}
+_DATE_AFTER = re.compile(r'\.?,?\s+(?:\d{1,2}(?:st|nd|rd|th)?\b|(?:19|20)\d{2}\b)')
+_DATE_BEFORE = re.compile(r'\b(?:in|of|since|until|till|by|during|through|before|after|early|late|next|last|'
+                          r'this|every|each)\s+$|\bmid-?\s*$', re.IGNORECASE)
+
+
+def link_names(cur, md, scope):
+    """(amap, aliases) a day's links are made from: every card's name and
+    nicknames (metadata.entity_aliases), and a person's first name where only
+    one person card has it. A day that says "Tomas" then links to the card
+    "Tomas Reyes"; with two Miras, "Mira" alone links to neither (Krem,
+    2026-11-21). A first name another card already answers to is left alone."""
+    arows = md.entity_aliases(cur, scope)               # for a cloud reader: without private-model cards
+    ids = {eid for eid, _, _ in arows}
+    taken = {alias.lower() for _, _, alias in arows}
+    firsts = {}
+    # Counted over EVERY card, also the ones this reader is not given: with two
+    # Miras, one of them a private-model card, a cloud-written day's "Mira" still
+    # links to neither, and the count tells that reader nothing.
+    for eid, name, kind in cur.execute("SELECT id, name, kind FROM entities WHERE scope IN (?, 'global')",
+                                       (scope,)).fetchall():
+        taken.add((name or '').strip().lower())
+        parts = (name or '').split()
+        if (kind or '').lower() == 'person' and len(parts) > 1:
+            firsts.setdefault(parts[0].lower(), []).append((eid, name, parts[0]))
+    for key, owners in firsts.items():
+        if len(owners) == 1 and key not in taken and key not in _NOT_FIRST_NAMES \
+                and owners[0][0] in ids and _FIRST_NAME.fullmatch(owners[0][2]):
+            arows.append(owners[0])
+    return md.alias_map(arows), [a for _, _, a in arows]
+
+
+# A person card's first word is a first name only when it looks like one. "The
+# Rock" gave the alias "The" and linked nearly every day; "Aunt Mary" linked
+# on "Aunt Linda", "Dr Farrow" on "Dr Patel" (hunt, 2026-11-21).
+_FIRST_NAME = re.compile(r"[A-Z\u00C0-\u00DE][^\W\d_][\w'\u2019-]*")
+_NOT_FIRST_NAMES = {
+    'the', 'an', 'my', 'our', 'your', 'his', 'her', 'dr', 'mr', 'mrs', 'ms', 'miss', 'sir', 'lady', 'lord',
+    'uncle', 'aunt', 'auntie', 'grandma', 'grandpa', 'granny', 'grandad', 'granddad', 'cousin', 'mom', 'mum',
+    'dad', 'big', 'little', 'old', 'young', 'saint', 'st', 'san', 'de', 'la', 'el', 'le', 'van', 'von',
+    'captain', 'professor', 'prof', 'doctor', 'mister', 'madam', 'king', 'queen', 'father', 'mother',
+    'brother', 'sister', 'coach', 'chef', 'officer', 'judge', 'nurse',
+}
+
+
 def _link_day(cur, md, ids, contents, amap, aliases, now):
     """One edge per person per day, from the first piece that names them, of
     the day's own kind: a walk can leave a day for its people, and a day is
@@ -424,7 +496,7 @@ def _link_day(cur, md, ids, contents, amap, aliases, now):
     linked = set()
     for cid, content in zip(ids, contents):
         try:
-            for hit in md.match_entities(content, aliases):
+            for hit in named(content, aliases):
                 ent = amap.get(hit.lower())
                 if ent and ent[0] not in linked:
                     linked.add(ent[0])
@@ -456,16 +528,25 @@ def import_days(pt, cur, scope, chunks, src_scope, now) -> dict:
             skipped += 1
             continue
         try:
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', src[4:14]):       # not a week date: fromisoformat takes those
+                raise ValueError(src)
             date.fromisoformat(src[4:14])   # the identity names its day: a file is untrusted
         except ValueError:
             skipped += 1
             continue
         days.setdefault(src, []).append(c)
-    try:
-        arows = md.entity_aliases(cur, scope)
-        amap, aliases = md.alias_map(arows), [a for _, _, a in arows]
-    except Exception:
-        amap, aliases = {}, []
+    views = {}
+
+    def names_for(private):
+        """(amap, aliases) as the day's own writer may see them: a day written
+        on a cloud model does not link to a private-model card (as in _record)."""
+        if private not in views:
+            try:
+                with pt.as_reader(private):
+                    views[private] = link_names(cur, md, scope)
+            except Exception:
+                views[private] = ({}, [])
+        return views[private]
     held = cur.execute("SELECT COUNT(*) FROM chunks WHERE scope = ? AND layer = 'daily'",
                        (scope,)).fetchone()[0]
     imported = n_days = 0
@@ -482,18 +563,40 @@ def import_days(pt, cur, scope, chunks, src_scope, now) -> dict:
                       'pruned_reason', 'section'):     # keys that would hide the row from every read
                 meta.pop(k, None)
             meta['import_src'] = src_scope
-            meta['part'], meta['parts'] = i, len(rows)
-            created = c.get('created') or _created(src[4:14])
+            # A file missing a piece keeps the count it was written with: the
+            # day then reads as an excerpt, not as whole.
+            said = meta.get('parts')
+            meta['part'], meta['parts'] = i, said if isinstance(said, int) and said >= len(rows) else len(rows)
+            if not isinstance(meta.get('dates_off'), list):
+                meta.pop('dates_off', None)
+            text = lambda v, fallback: v if isinstance(v, str) and v.strip() else fallback
+            created = text(c.get('created'), _created(src[4:14]))
             cur.execute(
                 'INSERT INTO chunks (layer, scope, content, label, favorite, meta, created, updated, '
                 "chunk_index, source) VALUES ('daily', ?, ?, ?, 0, ?, ?, ?, ?, ?)",
-                (scope, c['content'], c.get('label') or src[4:14],
-                 json.dumps(meta, ensure_ascii=False), created, c.get('updated') or created, i, src))
+                (scope, c['content'], src[4:14],
+                 json.dumps(meta, ensure_ascii=False), created, text(c.get('updated'), created), i, src))
             cid = cur.lastrowid
             pt._stamp_writer(cur, cid, imported=True)
             pt._apply_writer(cur, cid, c.get('writer'))
             ids.append(cid)
-        _link_day(cur, md, ids, [c['content'] for c in rows], amap, aliases, now)
+        writer = rows[0].get('writer') if isinstance(rows[0].get('writer'), dict) else {}
+        amap, aliases = names_for(bool(writer.get('private')))
+        if any(isinstance(c.get('retells'), list) for c in rows):
+            # The file says what each piece was linked to: exactly those, so a
+            # link the person took off stays off and one made by hand comes
+            # along. Matching the text again undid both (hunt, 2026-11-21).
+            linked = set()
+            for cid, c in zip(ids, rows):
+                for name in c.get('retells') if isinstance(c.get('retells'), list) else []:
+                    ent = amap.get(name.strip().lower()) if isinstance(name, str) else None
+                    if ent and ent[0] not in linked:
+                        linked.add(ent[0])
+                        cur.execute("INSERT INTO edges (src_type, src_id, dst_type, dst_id, kind, weight, created) "
+                                    "VALUES ('chunk', ?, 'entity', ?, ?, ?, ?)",
+                                    (cid, ent[0], EDGE_KIND, md.MENTION_EDGE_WEIGHT, now))
+        else:
+            _link_day(cur, md, ids, [c['content'] for c in rows], amap, aliases, now)
         held += len(rows)
         imported += len(rows)
         n_days += 1
@@ -569,6 +672,10 @@ def _boot():
         return
     try:
         out = sweep(None, sm)
+        with _pt()._get_connection() as conn:
+            kept = conn.execute("SELECT 1 FROM chunks WHERE layer = 'daily' LIMIT 1").fetchone()
+        if kept:
+            _tell_clock()                   # days are kept here: the two clocks matter
         if out['days']:
             logger.info(f"[DAILY] start-up pass recorded {out['days']} day(s)")
     except Exception:
@@ -586,40 +693,18 @@ def _on_compressed(event):
         logger.warning(f"[DAILY] compact event ignored: {e}")
 
 
-def _renamed(old, new):
-    """A chat's memories follow its name. meta.chat is the one place a chat is
-    named, the vault scrub matches the CURRENT name, and days show the name to
-    her: a rename left the old one behind for good (scout hunt 2026-11-20)."""
-    try:
-        pt = _pt()
-        with pt._get_connection() as conn:
-            for table in ('chunks', 'entities'):
-                conn.execute(f"UPDATE {table} SET meta = json_set(meta, '$.chat', ?) "
-                             f"WHERE json_extract(meta, '$.chat') = ?", (new, old))
-            conn.commit()
-    except Exception as e:
-        logger.warning(f"[DAILY] a renamed chat's memories keep its old name: {e}")
-
-
-def _on_renamed(event):
-    try:
-        data = (event or {}).get('data') or {}
-        old, new = data.get('old'), data.get('new')
-        if isinstance(old, str) and isinstance(new, str) and old and new and old != new:
-            threading.Thread(target=_renamed, args=(old, new), daemon=True, name='palace-renamed').start()
-    except Exception as e:
-        logger.warning(f"[DAILY] rename event ignored: {e}")
-
-
+# No listener for a renamed chat (Krem, 2026-11-21): a memory keeps the name of
+# the chat it was made in, even after that chat is renamed or gone. Nothing
+# rewrites it later. Known cost: the vault scrub (hooks/chat_vaulted.py) finds
+# rows by the chat's current name, so a chat renamed and then made private
+# leaves its earlier name on the memories saved under it.
 def start(boot=True):
     global _stopping
     from core.event_bus import Events, get_event_bus
     bus = get_event_bus()
     _stopping = False
     bus.off([Events.CHAT_COMPRESSED], _on_compressed)       # a reused module: never two listeners
-    bus.off(['chat_renamed'], _on_renamed)
     bus.on([Events.CHAT_COMPRESSED], _on_compressed)
-    bus.on(['chat_renamed'], _on_renamed)
     if boot and 'pytest' not in sys.modules:
         threading.Thread(target=_boot, daemon=True, name='palace-daily-boot').start()
 
@@ -633,7 +718,6 @@ def stop():
         from core.event_bus import Events, get_event_bus
         bus = get_event_bus()
         bus.off([Events.CHAT_COMPRESSED], _on_compressed)
-        bus.off(['chat_renamed'], _on_renamed)
     except Exception as e:
         logger.debug(f"[DAILY] listener not removed: {e}")
     if _lock.acquire(timeout=10):
@@ -644,8 +728,6 @@ def stop():
 
 _ISO = r'\d{4}-\d{2}-\d{2}'
 _DAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
-_MONTHS = ('january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september',
-           'october', 'november', 'december')
 SPAN_FORMS = ("a date (2026-11-02 or Nov 2), a range (2026-11-02..2026-11-09), a month (2026-11 or "
               "November), a year (2026), a weekday (Monday = the last one), or today, yesterday, "
               "3 days ago, this week, last week, past week, this month, last month, last N days. "
@@ -653,7 +735,76 @@ SPAN_FORMS = ("a date (2026-11-02 or Nov 2), a range (2026-11-02..2026-11-09), a
 
 
 def _today() -> date:
-    return datetime.now(_user_tz()).date()
+    return compact_today()
+
+
+def compact_today(now=None) -> date:
+    """Today as the daily compact counts it (core/chat/compress.py, day_of and
+    daily_plan): the person's time zone when one is set, else this computer's
+    clock, with a day that begins at DAY_START_HOUR. A day's label is cut that
+    way, so "yesterday" is counted the same way: counted on its own clock it
+    missed by a day wherever the two differed, and at 1 am "yesterday" named
+    the day still running (hunt, 2026-11-21)."""
+    try:
+        import config
+        from core.chat.compress import _int_setting, day_of
+        now = now or datetime.now()
+        return day_of(now.isoformat(), _int_setting(config, 'DAY_START_HOUR', 4, 0, 23)) or now.date()
+    except Exception:
+        return (now or datetime.now()).date()
+
+
+def _system_clock():
+    """(this computer's offset from UTC, its zone's short name)."""
+    here = datetime.now().astimezone()
+    return here.utcoffset() or timedelta(0), here.tzname() or ''
+
+
+def clock_gap():
+    """None, or what is apart. With a time zone set, a day is cut in it
+    (core/chat/compress.py day_of) and her scheduled tasks run on it: the
+    computer's clock no longer matters. Left unset (the "UTC" default), tasks
+    run on UTC while days are cut on the computer's clock. On a computer that
+    is not on UTC a nightly /compact-daily then fires hours away from the
+    day's end, and nobody could see that from the app (Krem, 2026-11-21): the
+    Daily tab and one notice say it, and the fix is one setting."""
+    try:
+        from core.chat import compress
+        if compress._user_zone() is not None:
+            return None
+        off, name = _system_clock()
+        if not off:
+            return None
+        minutes = int(off.total_seconds() // 60)
+        apart = abs(minutes) / 60
+        return {'system': name, 'system_clock': f"UTC{'+' if minutes >= 0 else '-'}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}",
+                'hours': int(apart) if apart == int(apart) else round(apart, 2)}
+    except Exception as e:
+        logger.debug(f"[DAILY] clocks not compared: {e}")
+        return None
+
+
+def clock_words(gap) -> str:
+    here = f"{gap['system']} ({gap['system_clock']})" if gap['system'] else gap['system_clock']
+    return (f"Your time zone is not set: it still says UTC, and this computer's clock is on {here}, "
+            f"{gap['hours']} hours from it. Scheduled tasks run on UTC while day summaries are cut on the "
+            f"computer's clock, so a nightly /compact-daily can run hours before or after the day ends. Set your "
+            f"time zone under your profile: tasks and days then both follow it. (If UTC is what you want, set "
+            f"this computer's clock to UTC.)")
+
+
+def _tell_clock():
+    """Said once (per clock the computer is on), when days are being kept."""
+    gap = clock_gap()
+    if not gap:
+        return
+    try:
+        from core import notify
+        notify.notify('Your time zone is not set', level='warning', source='mindpalace',
+                      key=f"daily-clock:unset:{gap['system_clock']}", once=True,
+                      go={'view': 'layer-daily'}, body=clock_words(gap))
+    except Exception as e:
+        logger.debug(f"[DAILY] clock notice skipped: {e}")
 
 
 def _month_day(t, today):
@@ -927,7 +1078,22 @@ def shape(cur, pt, hit_ids, scope, private_key, days, chars, span=None):
     return lines, seeds
 
 
-DOOR = "A whole day in order: get_recent_memories(layer='daily', day='YYYY-MM-DD')."
+# A day is written as "I" (her) to "you" (the person in that chat). Read in
+# another chat of the same scope, "you" is not whoever she is talking to now.
+DOOR = ("In a day's text \"I\" is you and \"you\" is the person you were talking with in that chat. "
+        "A whole day in order: get_recent_memories(layer='daily', day='YYYY-MM-DD').")
+
+
+# "No days recorded in that range" read as "nothing happened". A day missing
+# here may simply not be summarized yet (a missed night, the hours before the
+# day-start hour, a chat never compacted).
+NOT_YET = ' A day is kept only once /compact-daily has summarized it: one not summarized yet is still in its chat.'
+
+
+def _not_yet(span) -> str:
+    """Said only for a range that reaches the last week: older than that, a
+    missing day is not one still waiting to be summarized."""
+    return NOT_YET if span and span[3] >= (_today() - timedelta(days=7)).isoformat() else ''
 
 
 def door(lines=()) -> str:
@@ -1018,7 +1184,7 @@ def search_text(query, scope, limit=10, private_key=None, labels=(), span=None, 
             kept = _kept_from(pt, conn.cursor(), scope, private_key, span)
         if not kept and not has_days(scope, pt):
             return 'No days are kept in this memory yet.'
-        return f"No days found for '{query}'" + (' in that range.' if span else '.') + kept
+        return f"No days found for '{query}'" + (' in that range.' + _not_yet(span) if span else '.') + kept
     out = f"Found {len(lines)} day{'s' if len(lines) != 1 else ''}:\n" + "\n".join(lines) + "\n" + door(lines)
     if depth and seeds:
         block = pt._spider_block(query, scope, private_key, seeds, depth)
@@ -1050,7 +1216,7 @@ def recent_text(scope, count=10, private_key=None, span=None, pt=None) -> str:
         full = _pieces(cur, pt, scope, private_key, [s for s, _ in found]) if found else {}
     found = [s for s, _ in found if full.get(s)]
     if not found:
-        note = ''
+        note = _not_yet(span)
         if span and span[3] >= _today().isoformat():
             note = ' A day is summarized after it ends: today is still in the chat.'
         return ('No days recorded' + (' in that range.' if span else ' yet.')) + note + kept

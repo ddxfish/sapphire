@@ -11,7 +11,7 @@ a rail:
 | 2 | `entities` | People / places / things / events-as-nouns, with tiered chunks (1 = headline, 2 = facts, 3 = trivia) and per-kind template fields |
 | 3 | `knowledge` | Big reference data, sub-chunked |
 | 4 | `goals` | What she's working toward: goals + subtasks + progress journal, woven into the graph |
-| 5 | `daily` | One summary per finished day, recorded after a daily compact and at every start (`tools/daily.py`). Read-only for her; never tended by the librarian; out of the spider's frontier (`retells` edges lead from a day to its people only) |
+| 5 | `daily` | One summary per finished day, recorded after a daily compact and at every start (`tools/daily.py`). Read-only for her; never tended by the librarian; out of the spider's frontier (`retells` edges lead from a day to its entities only; the person corrects them on the card, `POST days/tags`) |
 
 Mutually exclusive with the classic Memory plugin (same tool names — enable
 one, not both). `import_v2` copies the old stores in; the old DBs are opened
