@@ -1720,6 +1720,7 @@
     "tests/test_vad.py": "354c772fdd05cd87289fb3467c4c625c9edd246820cf0589fc860acb2df2440a",
     "tests/test_vault_bughunt.py": "e0a850e8e83020af6e5da59dc4847c704fbd21dbc07fd5b63a540becb4c7b442",
     "tests/test_vault_delete.py": "0ab01639f5ee8e86e6aabfbb125b2cf013329d9751d30b9f6445e645915bcb63",
+    "tests/test_vault_isolation_hunt.py": "8a94b4a0d7f3f2cc4d5e7f1ef6eaa5f6ed4b1c15ac3f69717cb4608d882e2d54",
     "tests/test_vault_lock_flush.py": "6c926e1e45e251b7cb7d1d8942b6da98a34d23645112511955142de953245453",
     "tests/test_vault_move_batch.py": "3ce3b3f12bdfc6c74aafe3043c43d3a28b1657fe03c21039138523a18211382b",
     "tests/test_vault_move_batch_integration.py": "169b81757ebcb046e4c91b185144ec479abe9087734094e8892655d58839ed43",
