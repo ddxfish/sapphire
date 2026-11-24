@@ -2,6 +2,8 @@
 - using /compact-daily adds yesterday's compact to forever memory
 - forever memory can be spidered via entities and dates
 - uses RAG to search directly in chunks
+- Make a chat you never reset, schedule a task in there, tell your AI to run /compact-daily
+- ComfyUI plugin now supports video, has Apps page, can import workflow from generated PNG
 # 2.16.6 - Per Sapphire ID
 - Each sapphire has its own unique id for later memory sync
 - Mind palace records sapphire ID and model used at write
