@@ -250,14 +250,32 @@ def test_the_dashboard_is_served_the_saved_copy_and_nothing_else_is(client, spot
     got = c.get("/api/store/plugins/list", params={"featured": "true", "per_page": 50}).json()
     assert [i["slug"] for i in got["items"]] == ["a"] and live == []          # the widget's own question: the copy
     assert "installed_state" in got["items"][0]                               # still marked installed or not, fresh each time
-    for other in ({"featured": "true", "per_page": 20}, {"per_page": 50}, {"featured": "true", "per_page": 50, "page": 2},
-                  {"featured": "true", "per_page": 50, "category": "tools"}):
+    for other in ({"per_page": 50}, {"featured": "true", "per_page": 50, "page": 2},
+                  {"featured": "true", "per_page": 50, "category": "tools"}, {"featured": "true", "per_page": 5, "sort": "votes"}):
         assert c.get("/api/store/plugins/list", params=other).json()["items"][0]["slug"] == "live"
     assert len(live) == 4
     # a copy nobody refreshed for two days is not trusted: the live path answers
     old = {**s._spotlight_load(), "fetched_at": __import__("time").time() - 2 * s.SPOTLIGHT_EVERY - 5}
     s._spotlight_path().write_text(__import__("json").dumps(old))
     assert c.get("/api/store/plugins/list", params={"featured": "true", "per_page": 50}).json()["items"][0]["slug"] == "live"
+
+
+def test_the_settings_page_spotlight_is_cut_from_the_same_copy(client, spotlight, monkeypatch):
+    # it asks for the top 5, the dashboard widget for all 50: one saved list answers both (found by clicking, 2026-11-24)
+    s, asked, box = spotlight
+    c, _ = client
+    box["answer"] = _Answer(200, {"items": [{"slug": f"p{i}"} for i in range(7)], "total": 7, "page": 1, "per_page": 50, "pages": 1}, 'W/"v2"')
+    assert s._spotlight_tick()
+
+    async def _never(*a, **k):
+        raise AssertionError("the spotlight went to the store by itself")
+    monkeypatch.setattr(s, "_proxy_get", _never)
+    monkeypatch.setattr(s, "_build_install_index", lambda: {})
+    five = c.get("/api/store/plugins/list", params={"featured": "true", "per_page": 5}).json()
+    assert [i["slug"] for i in five["items"]] == ["p0", "p1", "p2", "p3", "p4"]
+    assert (five["total"], five["per_page"], five["pages"], five["page"]) == (7, 5, 2, 1)
+    assert len(c.get("/api/store/plugins/list", params={"featured": "true", "per_page": 50}).json()["items"]) == 7
+    assert len(asked) == 1                                           # one request to the store served both
 
 
 def test_no_test_reads_the_real_copy_or_starts_the_thread():

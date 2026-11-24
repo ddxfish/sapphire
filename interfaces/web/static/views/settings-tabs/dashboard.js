@@ -165,6 +165,11 @@ export default {
         checkForUpdate(el);
         loadComponentStatus(el);
         loadPluginSpotlight(el);
+        // an open page follows the daily refresh: ask again each hour, and stop once this page is gone
+        if (!el._spotTimer) el._spotTimer = setInterval(() => {
+            if (el.isConnected) loadPluginSpotlight(el);
+            else { clearInterval(el._spotTimer); el._spotTimer = null; }
+        }, 60 * 60_000);
         loadMetrics(el, ctx);
         loadMissingDeps(el, ctx);
         checkLastUpdateResult();

@@ -294,7 +294,7 @@ async def _proxy_get_bytes(path: str, namespace: Optional[str] = None) -> Option
 # server's event loop and is not shared with another thread.
 SPOTLIGHT_FILE = PLUGIN_STATE_DIR / "store_spotlight.json"
 SPOTLIGHT_EVERY = 86400
-SPOTLIGHT_PARAMS = {"page": 1, "per_page": 50, "featured": "true"}     # exactly what the widget asks for
+SPOTLIGHT_PARAMS = {"page": 1, "per_page": 50, "featured": "true"}     # the whole featured list: every spotlight is cut from it
 _spotlight_file = None        # tests point this at a tmp file
 
 
@@ -318,6 +318,17 @@ def _spotlight_age(saved: Optional[dict]) -> float:
         return time.time() - float(saved["fetched_at"])
     except (TypeError, KeyError, ValueError):
         return float("inf")
+
+
+def _spotlight_page(payload: dict, per_page: int) -> dict:
+    """The first `per_page` of the saved featured list, shaped as the store answers for that
+    size: the Settings page shows 5, the dashboard widget picks from all of them."""
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    try:
+        total = int(payload.get("total"))
+    except (TypeError, ValueError):
+        total = len(items)
+    return {**payload, "items": items[:per_page], "page": 1, "per_page": per_page, "pages": max(1, -(-total // per_page))}
 
 
 def _spotlight_refresh(saved: Optional[dict] = None) -> bool:
@@ -416,9 +427,11 @@ async def _items_query(q, category, featured, sort, page, per_page,
         if featured is True:
             params["featured"] = "true"
 
-    saved = _spotlight_load() if (namespace is None and path == "/items" and params == SPOTLIGHT_PARAMS) else None
+    # the first page of the featured list, any size: cut from the background copy
+    spot = namespace is None and path == "/items" and {**params, "per_page": 50} == SPOTLIGHT_PARAMS
+    saved = _spotlight_load() if spot else None
     if saved and 0 <= _spotlight_age(saved) < 2 * SPOTLIGHT_EVERY:
-        data = dict(saved["payload"])       # the background copy: a day old at most, two when the store was out of reach
+        data = _spotlight_page(saved["payload"], per_page)      # a day old at most, two when the store was out of reach
     else:
         data = await _proxy_get(path, params, namespace=namespace)
     if annotate and "items" in data and isinstance(data["items"], list):
