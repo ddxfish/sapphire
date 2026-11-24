@@ -110,9 +110,9 @@ Independent of the proxy, Sapphire holds a set of quiet-egress guarantees:
 | Hugging Face telemetry | Disabled unconditionally at boot. |
 | Silero VAD | Model pinned to an exact upstream commit URL — no floating "latest" fetch. |
 | Plugin signing keys | Disk-cached allowlist is authoritative for a day — a boot with a warm cache makes no GitHub call. |
-| Update check | A once-daily GitHub check for new releases — the **only recurring unprompted outbound call the core app makes**. Turn off `UPDATE_CHECK_ENABLED` to stop it (takes effect within a day; restart applies immediately). |
+| Update check | A once-daily GitHub check for new releases — one of the **two recurring unprompted outbound calls the core app makes** (the other is the Store row below). Turn off `UPDATE_CHECK_ENABLED` to stop it (takes effect within a day; restart applies immediately). |
 | Dashboard font | One fetch from Google Fonts on first boot (the Dancing Script name font, saved to `user/fonts/`); never again once the file exists. Set `DASHBOARD_FONTS_AUTOFETCH` to `false` in `user/settings.json` to skip it — the dashboard falls back to a system font. |
-| Store | Contacted only when you open System > Store; answers cached in memory (`STORE_CACHE_TTL_SECONDS`, default 1 h). |
+| Store | Contacted when you open System > Store (answers cached in memory, `STORE_CACHE_TTL_SECONDS`, default 1 h), and **about once a day in the background** for the dashboard's Plugin Spotlight: one request for the featured list, which the store answers with no body when nothing changed. Every store request says `Sapphire/<version>` as its user agent and carries no install id; the store sees your IP address, as with any request. Turn off `STORE_ENABLED` and Sapphire never contacts the store at all. |
 | Video guide | System > Videos fetches public YouTube channel pages and feeds only when opened with a stale cache (12 h, `VIDEO_GUIDE_CACHE_TTL_SECONDS`); hide channels with `VIDEO_GUIDE_CHANNELS_DISABLED`. |
 | Cookies | API traffic accepts no cookies at all; only the web-tools browser session keeps a bounded cookie jar. |
 | Images in chat / store / video guide | Rendered with `no-referrer` policy — remote image hosts don't learn your Sapphire URL. |
@@ -189,8 +189,9 @@ EGRESS INVARIANTS (independent of proxy):
 - HF_HUB_DISABLE_TELEMETRY=1 unconditionally.
 - HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE honored, never set or cleared by Sapphire; a download they block is named as such (core/hf_words.py why() -> notify.progress words=, kokoro.log, TTS Test).
 - Plugin-key allowlist: disk cache authoritative 24h — warm-cache boot makes no GitHub call.
-- UPDATE_CHECK_ENABLED: daily GitHub release check = only RECURRING unprompted core outbound call; toggle checked per-iteration (effective within a day, restart = immediate).
+- UPDATE_CHECK_ENABLED: daily GitHub release check = one of TWO recurring unprompted core outbound calls (the other: the store spotlight, next line); toggle checked per-iteration (effective within a day, restart = immediate).
 - One-time: first boot fetches the dashboard font (Dancing Script) from Google Fonts into user/fonts/ unless DASHBOARD_FONTS_AUTOFETCH=false (JSON only); skipped once the file exists (core/font_bootstrap.py).
-- On demand only: Store (STORE_URL, opening System > Store; cache STORE_CACHE_TTL_SECONDS 3600), Video guide (YouTube channel pages/feeds on opening System > Videos with a stale 12 h cache; VIDEO_GUIDE_CACHE_TTL_SECONDS, VIDEO_GUIDE_CHANNELS_DISABLED).
+- Store spotlight: about once a day (core/routes/store.py start_spotlight_refresher, a daemon thread waking at random 30-90 min, asks when its copy in user/plugin_state/store_spotlight.json is 24 h old; conditional GET, 304 = no body); STORE_ENABLED=false = no store request of any kind.
+- On demand only: Store pages (STORE_URL, opening System > Store; cache STORE_CACHE_TTL_SECONDS 3600), Video guide (YouTube channel pages/feeds on opening System > Videos with a stale 12 h cache; VIDEO_GUIDE_CACHE_TTL_SECONDS, VIDEO_GUIDE_CHANNELS_DISABLED).
 - Cookies: API sessions block all Set-Cookie; browser-profile web-tools session keeps a capped jar.
 - Chat/store/video images: referrerpolicy=no-referrer.

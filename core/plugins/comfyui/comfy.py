@@ -1604,6 +1604,21 @@ def kept(name):
     return p if p.is_file() else None
 
 
+def backed_up(settings):
+    """Whether the kept files go into Sapphire's backups: the plugin's own switch, off unless
+    someone turned it on (core/backup.py reads the same setting; one clip can outweigh the rest
+    of a backup)."""
+    return bool((settings or {}).get('backup_outputs'))
+
+
+def backup_words(settings):
+    """One line for her about a file that was just kept: is it in the backups or not."""
+    if backed_up(settings):
+        return "It is kept in user/comfyui/outputs and goes into Sapphire's backups."
+    return ("It is kept in user/comfyui/outputs on this computer only: ComfyUI's files are left out of "
+            f"Sapphire's backups, and a restore does not bring them back. The user can change that in {PANEL}.")
+
+
 def _clips():
     """The kept files; a dot-file is one still being written."""
     return [p for p in OUTPUT_DIR.iterdir() if p.is_file() and not p.name.startswith('.')] if OUTPUT_DIR.is_dir() else []

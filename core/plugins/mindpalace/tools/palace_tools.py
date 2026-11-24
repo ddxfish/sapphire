@@ -36,7 +36,7 @@ import time
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timezone
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
@@ -863,6 +863,9 @@ def _ensure_db():
 
         except Exception as e:
             logger.error(f"[MINDPALACE] Failed to initialize mind database: {e}")
+            with suppress(Exception):       # undo the half-done open and let go of her memory's write lock
+                conn.rollback()
+                conn.close()
             return False
 
 

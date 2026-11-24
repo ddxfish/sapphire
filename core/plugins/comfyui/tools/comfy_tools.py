@@ -268,7 +268,7 @@ def _generate(args, settings):
         raise cf.ComfyError("ComfyUI finished but handed back no file. The workflow needs a Save Image or Save Video "
                             "node" + ("" if cf.seed_inputs(graph) else
                                       ", and with no seed input ComfyUI skips a run it has already made") + ".")
-    return _deliver(comfy, name, items, seed, prompt, notes, shaped)
+    return _deliver(comfy, name, items, seed, prompt, notes, shaped, cf.backup_words(settings))
 
 
 def _shape(raw):
@@ -301,7 +301,7 @@ def _size(raw):
         return None
 
 
-def _deliver(comfy, name, items, seed, prompt, notes, shaped=None):
+def _deliver(comfy, name, items, seed, prompt, notes, shaped=None, kept_words=''):
     """Fetch what the run made and shape the tool result: stills go to the chat's image
     store, clips are kept on disk and played from this plugin's file route. A result names
     its real size wherever it can be measured. `shaped` is (the shape she named, her input
@@ -363,6 +363,8 @@ def _deliver(comfy, name, items, seed, prompt, notes, shaped=None):
     said = cf.shape_note(*shaped, sizes[0]) if shaped else None    # sizes[0]: the main thing made, never a preview beside it
     for extra in notes + ([said] if said else []) + lines:
         text += "\n" + extra
+    if links and kept_words:
+        text += "\n" + kept_words
     if links:
         text += "\n" + attachments.marker(f"ComfyUI: {name}", links)
     return ci.result(text, shown) if shown else text

@@ -68,9 +68,10 @@ def _take(data, name, replace):
 
 
 # GET workflows
-def list_workflows(**_):
+def list_workflows(settings=None, **_):
     count, size = cf.saved()
-    return {'workflows': [_row(n, p) for n, p in cf.workflows().items()], 'outputs': {'count': count, 'bytes': size}}
+    return {'workflows': [_row(n, p) for n, p in cf.workflows().items()],
+            'outputs': {'count': count, 'bytes': size, 'backed_up': cf.backed_up(settings)}}
 
 
 # POST workflows   (multipart: file, name?, replace?)
@@ -354,6 +355,8 @@ def run_stop(job=None, **_):
 
 
 # GET outputs   (the newest things made, for the Apps page's strip)
-def outputs(**_):
-    return {'files': [{**f, 'url': f"/api/plugin/comfyui/file/{f['name']}"} for f in cf.recent()]}
+def outputs(settings=None, **_):
+    count, size = cf.saved()
+    return {'files': [{**f, 'url': f"/api/plugin/comfyui/file/{f['name']}"} for f in cf.recent()],
+            'count': count, 'bytes': size, 'backed_up': cf.backed_up(settings)}
 

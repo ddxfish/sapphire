@@ -105,6 +105,9 @@ FALLBACK_POOL = [
 class Brain:
     def __init__(self):
         self._q = queue.Queue()
+        # one object for on() and off(): the bus removes by identity, and
+        # self._listen is a new bound method every time it is read
+        self._heard = self._listen
         self._lock = threading.Lock()
         self._thread = None
         self._stop = threading.Event()
@@ -271,14 +274,14 @@ class Brain:
             self._stop.clear()
             self._write(6, self._base(), "loop")
             self._arm()
-            get_event_bus().on(list(AI) + list(USER), self._listen)
+            get_event_bus().on(list(AI) + list(USER), self._heard)
             self._thread = threading.Thread(target=self._run, name="avatar-brain", daemon=True)
             self._thread.start()
         self._publish()
 
     def stop(self):
         with self._lock:
-            get_event_bus().off(list(AI) + list(USER), self._listen)
+            get_event_bus().off(list(AI) + list(USER), self._heard)
             self._stop.set()
             self._q.put(None)
             t, self._thread = self._thread, None

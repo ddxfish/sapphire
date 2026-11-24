@@ -132,3 +132,28 @@ def test_an_unwritable_backup_folder_falls_back(tmp_path, monkeypatch):
         chosen = b.backup_dir
     assert chosen == tmp_path / "user_backups"
     assert "unusable" in b.backup_dir_error
+
+
+def test_a_real_archive_leaves_comfyui_media_out_until_its_switch_is_on(mgr, monkeypatch):
+    """The whole path, not the rule alone: what ComfyUI made is not in the tar, its
+    workflows are, and the plugin's switch brings the media back (2026-11-24)."""
+    from core.plugin_loader import plugin_loader
+    said = {}
+    monkeypatch.setattr(plugin_loader, 'get_plugin_settings', lambda name: dict(said) if name == 'comfyui' else {})
+    (mgr.user_dir / "comfyui" / "outputs").mkdir(parents=True)
+    (mgr.user_dir / "comfyui" / "workflows").mkdir(parents=True)
+    (mgr.user_dir / "comfyui" / "outputs" / "wave.mp4").write_bytes(b"v" * 64)
+    (mgr.user_dir / "comfyui" / "workflows" / "wave.json").write_text("{}")
+    (mgr.user_dir / "keep.txt").write_text("hi")
+
+    def names():
+        fn = mgr.create_backup("manual")
+        assert fn
+        with tarfile.open(mgr.backup_dir / fn) as t:
+            return set(t.getnames())
+    got = names()
+    assert "user/keep.txt" in got and "user/comfyui/workflows/wave.json" in got
+    assert not any(n.startswith("user/comfyui/outputs") for n in got)
+    said['backup_outputs'] = True
+    time.sleep(1.1)                                  # archive names carry the second
+    assert "user/comfyui/outputs/wave.mp4" in names()

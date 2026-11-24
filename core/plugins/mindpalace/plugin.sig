@@ -48,6 +48,7 @@
     "tests/test_mindpalace_spider.py": "sha256:cefb232eee5f5299e0de065250a68b81ed87c2c19703d5e7de1465e49a05cb05",
     "tests/test_mindpalace_templates.py": "sha256:3feb501e85e16b5b784803dde6a7d729ad7bbe29076091c1911db9ac3fbd62e1",
     "tests/test_mindpalace_transfer.py": "sha256:c9817dab064d886aa08c34f52378e2f6ff1773c4a941eb496d16328f99cbd94f",
+    "tests/test_mindpalace_upgrade.py": "sha256:8a5e2b4f799c6afc5d2823fc7ee9f8e89aefa45d7d76c4a2b216a25fa28fd089",
     "tests/test_private_model.py": "sha256:45eb8e6695d98e4d143015454228ca2cdddb30eaa78d54d800c69f70ba58d0f9",
     "tests/test_prompt_audit.py": "sha256:69656b18b23f83bf181bdc7dbb8949edde1eab3f6e9fc2acb56e9bbcfa8abaad",
     "tests/test_recurring_dates.py": "sha256:46f502aecefec10fdf33d7a3931986620d935d4ab2aa23e2767347fb3199870f",
@@ -71,7 +72,7 @@
     "tools/library.py": "sha256:b764b1827812163da3974b251be8ccc8bf21dc75f0025085dc30d68a7955738c",
     "tools/library_tools.py": "sha256:512d6767f0230885903091f933c597c8300db2b22c44cf1c616a7201b7fd1a8b",
     "tools/metadata.py": "sha256:357e88459b5ef59bb2333b087fd68a2006ff5ac61b0a9cb885c6469f776e9972",
-    "tools/palace_tools.py": "sha256:c7d959cea9a065c413d4b0ee2eadb1bbc3b502d99b54283676ef5cfb2cd95b29",
+    "tools/palace_tools.py": "sha256:0a8701ecbc43f0baa392812b29102024eb4b42030454488f390ca2510da41989",
     "tools/prompt_audit.py": "sha256:2576970f0a653a5ff8487dc897fcae6d7c6abad19f261f0058b3358072a82a09",
     "tools/self_tools.py": "sha256:3faa5ef58f2a852fee32bc6025abe2917a759c76683e8b219ccbd6b077dfdd42",
     "tools/spider.py": "sha256:28a770e9611fa8874a6fd24f0f0d751330b74db0a0d58ebe2cc4a1ad6922ed2b",
@@ -79,5 +80,5 @@
     "tools/temporal.py": "sha256:4c89314cda5e3419f4ac7925d0d9fa7353198473c79d7e7afc226246c101ab13",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "0v62ZX27JCEIoILY9CxRLMnfnh0cfbqza6tehilM57GsVAmmwpCla9vTCjW94r5rDvOytNJ83YyC8hk1fY2ACg=="
+  "signature": "WwzDmqi3ZkQWtKHUEKQOSY3vsgvi8v9JCBHQAhLhmjcoMAIrCsgPTpSWjtw0+R6k5EQPQD52kpGn0bgFe3hBDA=="
 }

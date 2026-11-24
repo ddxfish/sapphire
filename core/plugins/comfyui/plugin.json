@@ -1,7 +1,7 @@
 {
   "name": "comfyui",
   "short_display_name": "ComfyUI",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "ComfyUI: generate images and video with your own workflows, on this machine or another one",
   "author": "sapphire",
   "icon": "🎨",
@@ -59,7 +59,8 @@
         "label": "Video wait (seconds)",
         "default": 1200,
         "help": "The longest to wait for a video or audio workflow."
-      }
+      },
+      {"key": "backup_outputs", "type": "boolean", "label": "Include what ComfyUI makes in backups", "default": false, "help": "Off: the pictures and videos in user/comfyui/outputs stay on this computer and are left out of every backup. On: all of them go into every backup. One video can be larger than the rest of a Sapphire backup."}
     ]
   }
 }

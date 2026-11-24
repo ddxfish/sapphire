@@ -36,6 +36,15 @@ def test_each_data_directory_is_its_own_sapphire(store, tmp_path):
     assert a != b and instance.instance_id(tmp_path / 'user') == a
 
 
+def test_a_drive_letter_in_another_case_is_the_same_sapphire(store, tmp_path, monkeypatch):
+    # Windows: the launcher starts her from C:\..., a terminal from c:\...
+    monkeypatch.setattr(instance.os.path, 'normcase', lambda p: p.lower().replace('/', '\\'))
+    a = instance.instance_id(tmp_path / 'Sapphire' / 'user')
+    monkeypatch.setattr(instance, '_cache', {})          # a new process
+    assert instance.instance_id(tmp_path / 'sapphire' / 'user') == a
+    assert len(list(store.glob('*.json'))) == 1
+
+
 def test_an_unreadable_file_is_left_alone_and_no_id_is_invented(store, monkeypatch):
     a = instance.instance_id()
     f = next(store.glob('*.json'))

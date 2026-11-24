@@ -167,3 +167,24 @@ def test_db_walks_skip_the_privacy_floor(tmp_path, monkeypatch):
     (user / "browser" / "sapphire" / "Default" / "heavy_ad_intervention_opt_out.db").write_bytes(b"")
     monkeypatch.setattr(backup_manager, "user_dir", user)
     assert [p.name for p in backup_manager._user_dbs()] == ["chat.db"]
+
+
+def test_comfyui_media_is_out_unless_its_plugin_says_in(monkeypatch):
+    """What ComfyUI made is left out of every backup (one clip can outweigh the rest of
+    user/); the plugin's own switch brings it back. Its workflows are always in."""
+    from core.plugin_loader import plugin_loader
+    said = {}
+    monkeypatch.setattr(plugin_loader, 'get_plugin_settings', lambda name: dict(said) if name == 'comfyui' else {})
+    assert _is_excluded("comfyui/outputs", [])
+    assert _is_excluded("comfyui/outputs/wave-20261124-101010-ab12cd34.mp4", [])
+    assert not _is_excluded("comfyui/workflows/wave.json", [])
+    assert not _is_excluded("comfyui/outputs-old/x.mp4", [])        # no false prefix match
+    said['backup_outputs'] = True
+    assert not _is_excluded("comfyui/outputs/wave-20261124-101010-ab12cd34.mp4", [])
+    assert _is_excluded("comfyui/outputs/x.mp4", ["comfyui"])       # the person's own pattern still decides
+
+    def boom(name):
+        raise OSError('settings unreadable')
+    monkeypatch.setattr(plugin_loader, 'get_plugin_settings', boom)
+    assert _is_excluded("comfyui/outputs/x.mp4", [])                # cannot tell: as shipped, out
+    assert not _is_excluded("memory/library.db", [])                # and nothing else is touched

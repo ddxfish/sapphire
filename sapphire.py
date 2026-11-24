@@ -1652,6 +1652,13 @@ def run():
         from core.updater import updater as app_updater
         app_updater.start_background_checker()
 
+        # Plugin Spotlight: the store's featured list, checked about once a day (never with the store off)
+        try:
+            from core.routes.store import start_spotlight_refresher
+            start_spotlight_refresher()
+        except Exception as e:
+            logger.warning(f"spotlight refresher not started: {e}")
+
         # Scheduled backups (daily at 3am)
         from core.backup import backup_manager
         backup_manager.start_scheduler()

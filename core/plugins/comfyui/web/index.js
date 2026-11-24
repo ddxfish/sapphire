@@ -13,7 +13,7 @@ import { showConfirm, showPrompt } from '/static/shared/modal.js';
 import { saveUrl } from '/static/shared/download.js';
 
 const API = '/api/plugin/comfyui';
-const DEFAULTS = { comfy_url: 'http://127.0.0.1:8188', default_workflow: '', timeout: 300, video_timeout: 1200 };
+const DEFAULTS = { comfy_url: 'http://127.0.0.1:8188', default_workflow: '', timeout: 300, video_timeout: 1200, backup_outputs: false };
 const panels = new WeakMap();        // container -> { rows: Map(name -> { el, sig }), token }
 
 async function call(path, opts = {}, timeout = 120000) {
@@ -323,7 +323,13 @@ function render(container, settings) {
       el('div', { id: 'cfy-flows', class: 'cfy-group' })),
     el('div', { class: 'cfy-section' },
       el('div', { class: 'cfy-title', text: 'Kept clips' }),
-      el('div', { class: 'cfy-line' }, el('div', { id: 'cfy-clips', class: 'cfy-say' }), clear))));
+      el('div', { class: 'cfy-line' }, el('div', { id: 'cfy-clips', class: 'cfy-say' }), clear),
+      el('label', { class: 'cfy-line', htmlFor: 'cfy-backup' },
+        el('input', { type: 'checkbox', id: 'cfy-backup', checked: !!s.backup_outputs }),
+        el('span', { text: 'Include these in backups' })),
+      el('div', { class: 'cfy-hint', text: 'Off: what ComfyUI makes stays on this computer and is left out of every backup, so a restore '
+        + 'does not bring it back (copy user/comfyui/outputs yourself to keep it safe). On: all of it goes into every backup. '
+        + 'One video can be larger than the rest of a Sapphire backup. Your workflows are always backed up.' }))));
   refresh(container);
 }
 
@@ -336,6 +342,8 @@ function getSettings(container) {
   const pick = container.querySelector('#cfy-default');
   if (url && url.value.trim()) out.comfy_url = url.value.trim();
   if (pick) out.default_workflow = pick.value || '';
+  const keep = container.querySelector('#cfy-backup');
+  if (keep) out.backup_outputs = keep.checked;
   for (const [key, id] of [['timeout', '#cfy-timeout'], ['video_timeout', '#cfy-video-timeout']]) {
     const field = container.querySelector(id);
     const v = field ? parseInt(field.value, 10) : NaN;

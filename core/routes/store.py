@@ -12,6 +12,10 @@
 import asyncio
 import json
 import logging
+import random
+import re
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -45,6 +49,24 @@ def _cache_ttl() -> float:
         return float(config.STORE_CACHE_TTL_SECONDS or 3600)
     except AttributeError:
         return 3600.0
+
+
+def _user_agent() -> dict:
+    """Who is asking: Sapphire and her version (Sapphire/2.16.7), so the store can tell its own
+    apps from strangers and see which versions are out there. Nothing about the install."""
+    try:
+        version = re.sub(r"[^0-9A-Za-z.+-]", "", (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8"))[:20]
+    except OSError:
+        version = ""
+    return {"User-Agent": f"Sapphire/{version}" if version else "Sapphire"}
+
+
+def _tag_to_send(etag):
+    """The tag for If-None-Match. The web server marks it weak (W/"...") whenever it
+    compresses the answer, which is every answer we get, and the store only knows the
+    plain form back: sent as given it never matched, and "unchanged" was a full
+    download every time (found 2026-11-24)."""
+    return etag[2:] if isinstance(etag, str) and etag.startswith("W/") else etag
 
 
 def _cache_key(path: str, params: dict, namespace: Optional[str] = None) -> tuple:
@@ -210,11 +232,11 @@ async def _proxy_get(path: str, params: Optional[dict] = None,
 
     headers = {}
     if entry and entry.get("etag"):
-        headers["If-None-Match"] = entry["etag"]
+        headers["If-None-Match"] = _tag_to_send(entry["etag"])
 
     url = f"{_store_base(namespace)}{path}"
     try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=_user_agent()) as client:
             resp = await client.get(
                 url,
                 params={k: v for k, v in params.items() if v is not None},
@@ -251,7 +273,7 @@ async def _proxy_get_bytes(path: str, namespace: Optional[str] = None) -> Option
     — installs are rare and the payload is large. Returns None on failure."""
     url = f"{_store_base(namespace)}{path}"
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=_user_agent()) as client:
             resp = await client.get(url)
         if resp.status_code != 200:
             logger.warning(f"[store] binary {path} returned {resp.status_code}")
@@ -260,6 +282,93 @@ async def _proxy_get_bytes(path: str, namespace: Optional[str] = None) -> Option
     except httpx.HTTPError as e:
         logger.warning(f"[store] binary fetch failed: {path} — {e}")
         return None
+
+
+# ── The spotlight's own copy ─────────────────────────────────────────
+# The dashboard's Plugin Spotlight shows the store's featured list. One copy
+# is kept on disk and refreshed about once a day by a background thread, with
+# the page open or not (Krem 2026-11-24). The store answers an unchanged list
+# with a 304 and no body, so a day's check is a few hundred bytes. A plain
+# thread, not a scheduler task: it is nobody's trigger. With STORE_ENABLED off
+# no request is made. Its own copy on purpose: the cache above belongs to the
+# server's event loop and is not shared with another thread.
+SPOTLIGHT_FILE = PLUGIN_STATE_DIR / "store_spotlight.json"
+SPOTLIGHT_EVERY = 86400
+SPOTLIGHT_PARAMS = {"page": 1, "per_page": 50, "featured": "true"}     # exactly what the widget asks for
+_spotlight_file = None        # tests point this at a tmp file
+
+
+def _spotlight_path() -> Optional[Path]:
+    if _spotlight_file is not None:
+        return Path(_spotlight_file)
+    return None if 'pytest' in sys.modules else SPOTLIGHT_FILE          # a test never reads or writes the real one
+
+
+def _spotlight_load() -> Optional[dict]:
+    try:
+        d = json.loads(_spotlight_path().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) and isinstance(d.get("payload"), dict) else None
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _spotlight_age(saved: Optional[dict]) -> float:
+    """Seconds since the copy was checked against the store; negative after the clock was set back."""
+    try:
+        return time.time() - float(saved["fetched_at"])
+    except (TypeError, KeyError, ValueError):
+        return float("inf")
+
+
+def _spotlight_refresh(saved: Optional[dict] = None) -> bool:
+    """One conditional GET of the featured list. True when the copy on disk is current now."""
+    path = _spotlight_path()
+    if path is None:
+        return False
+    headers = {"If-None-Match": _tag_to_send(saved["etag"])} if saved and saved.get("etag") else {}
+    with httpx.Client(timeout=8.0, follow_redirects=True, headers=_user_agent()) as client:
+        resp = client.get(f"{_store_base()}/items", params=SPOTLIGHT_PARAMS, headers=headers)
+    if resp.status_code == 304 and saved:
+        new = {**saved, "fetched_at": time.time()}                      # unchanged: nothing was downloaded
+    elif resp.status_code == 200 and isinstance(resp.json(), dict):
+        new = {"fetched_at": time.time(), "etag": resp.headers.get("ETag"), "payload": resp.json()}
+    else:
+        logger.warning(f"[store] spotlight refresh: HTTP {resp.status_code}")
+        return False
+    from core.fs_utils import replace_with_retry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(new), encoding="utf-8")
+    replace_with_retry(tmp, path)
+    return True
+
+
+def _spotlight_tick() -> bool:
+    """Ask the store when the copy is a day old (or the clock went back). False = nothing was asked."""
+    saved = _spotlight_load()
+    if not _store_enabled() or 0 <= _spotlight_age(saved) < SPOTLIGHT_EVERY:
+        return False
+    return _spotlight_refresh(saved)
+
+
+def start_spotlight_refresher():
+    """The daily refresh, on its own daemon thread. Every Sapphire wakes at its own random
+    minutes, so they never ask the store together; a wake only looks at the copy's age."""
+    if 'pytest' in sys.modules:
+        return None
+
+    def loop():
+        time.sleep(random.uniform(60, 900))             # not at boot
+        while True:
+            try:
+                _spotlight_tick()
+            except Exception as e:
+                logger.warning(f"[store] spotlight refresh failed: {e}")
+            time.sleep(random.uniform(1800, 5400))      # look again in 30 to 90 minutes
+    t = threading.Thread(target=loop, daemon=True, name="store-spotlight")
+    t.start()
+    logger.info("[store] spotlight refresher started (asks the store about once a day)")
+    return t
 
 
 def _graceful_empty(path: str, params: dict) -> dict:
@@ -307,7 +416,11 @@ async def _items_query(q, category, featured, sort, page, per_page,
         if featured is True:
             params["featured"] = "true"
 
-    data = await _proxy_get(path, params, namespace=namespace)
+    saved = _spotlight_load() if (namespace is None and path == "/items" and params == SPOTLIGHT_PARAMS) else None
+    if saved and 0 <= _spotlight_age(saved) < 2 * SPOTLIGHT_EVERY:
+        data = dict(saved["payload"])       # the background copy: a day old at most, two when the store was out of reach
+    else:
+        data = await _proxy_get(path, params, namespace=namespace)
     if annotate and "items" in data and isinstance(data["items"], list):
         index = _build_install_index()
         data["items"] = [_annotate_item(dict(it), index) for it in data["items"]]

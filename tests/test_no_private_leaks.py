@@ -1,8 +1,8 @@
 """Pre-push megashark sweep — no developer-environment leaks in shipped code.
 
 The beacon pattern: you can't watch for every private string, so ping the
-ones the development environment itself defines — the current username and
-home directory. A hit in a shippable file means a shark's been near (an
+ones the development environment itself defines — the current username,
+home directory and network interface names. A hit in a shippable file means a shark's been near (an
 absolute path, a hardcoded handle, a pasted terminal line). Everything is
 derived at runtime, so the test carries no personal string itself and works
 for ANY developer's checkout. Gitignored top-level dirs (user/, tmp/,
@@ -27,6 +27,8 @@ GENERIC_PATH_PLACEHOLDERS = {'you', 'yourname', 'your-name', 'your_name', 'usern
                              'me', 'pi', 'example', 'someone', 'owner', 'operator', 'dev', 'krem',
                              'yourusername', 'your-username', 'your_username', 'myuser', 'myname'}
 MAX_BYTES = 2_000_000
+# Interface names every machine has, which code and docs may name freely.
+STOCK_IFACES = re.compile(r'(lo\d*|en\d+|eth\d+|wlan\d+|docker\d+|virbr\d+|wg\d+|tun\d+|tap\d+|utun\d+|tailscale\d+)$')
 
 
 def _gitignored_dirs(base=None):
@@ -120,6 +122,36 @@ def _owner_needles():
     return _parse_needles(path.read_text(encoding='utf-8', errors='ignore'))
 
 
+def _iface_needles(names=None):
+    """This box's own network interface names: a pasted `ip addr` or psutil
+    table is the shark (a VPN's tunnel and a docker bridge went out in a test
+    fixture, found 2026-11-24). A generated name (br-<id>, veth<id>) is matched
+    on its first four id characters, since a paste is often cut short."""
+    if names is None:
+        import socket
+        try:
+            names = [n for _, n in socket.if_nameindex()]
+        except (AttributeError, OSError):
+            return []
+    out = []
+    for name in names:
+        if STOCK_IFACES.match(name):
+            continue
+        cut = re.match(r'(br-|veth)[0-9a-f]{4}', name)
+        pat = re.escape(cut.group(0)) if cut else re.escape(name) + r'(?![A-Za-z0-9_-])'
+        out.append((name, "this box's network interface name", re.compile(rf'(?<![A-Za-z0-9_-]){pat}')))
+    return out
+
+
+def test_interface_needles_skip_stock_names_and_catch_a_cut_bridge_id():
+    needles = _iface_needles(['lo', 'eth0', 'docker0', 'wg0', 'enp9s0', 'br-12ab34cd56ef', 'wg0-zebravpn'])
+    assert [n[0] for n in needles] == ['enp9s0', 'br-12ab34cd56ef', 'wg0-zebravpn']
+    nic, bridge, vpn = (n[2] for n in needles)
+    assert nic.search("'enp9s0': [") and not nic.search('enp9s01')
+    assert bridge.search("'br-12ab': [") and not bridge.search('br-12cd')
+    assert vpn.search('on wg0-zebravpn,') and not vpn.search('wg0')
+
+
 def test_owner_needles_parse_plain_and_regex_lines():
     """Plain lines: whole words, any case. "re:" lines: the regex as written,
     so a shape (a phone number) or a capitalized-only name can be a beacon
@@ -146,6 +178,7 @@ def test_no_developer_environment_leaks():
                         re.compile(rf'(?<![A-Za-z0-9_]){re.escape(user)}'
                                    rf'(?![A-Za-z0-9_])')))
     needles.extend(_owner_needles())
+    needles.extend(_iface_needles())
     # Generic home-path literals (D7, 2026-09-13): the beacon above only sees
     # THIS box's home. A path from any developer's machine is the same shark.
     generic = '|'.join(sorted(GENERIC_USERS | GENERIC_PATH_PLACEHOLDERS))

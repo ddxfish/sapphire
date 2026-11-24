@@ -82,7 +82,8 @@ def instance_id(data_dir=None):
     anyone asks. None when it can be neither read nor stored. A caller then
     leaves its rows unstamped and asks again later; nobody invents one, and
     a file that is there but unreadable is never replaced."""
-    key = str(Path(data_dir).absolute() if data_dir else DATA_DIR)
+    # normcase: on Windows C:\ and c:\ are one folder and must be one Sapphire (no-op elsewhere)
+    key = os.path.normcase(str(Path(data_dir).absolute() if data_dir else DATA_DIR))
     with _lock:
         if key in _cache:
             return _cache[key]

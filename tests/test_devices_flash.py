@@ -575,7 +575,7 @@ def test_the_user_may_say_where_sapphire_is(rig):
     """The guess can be wrong (a VPN's tunnel address, 2026-10-07): what the
     user typed wins, but it has to be in the house."""
     cfg = types.SimpleNamespace(WEB_UI_SSL_ADHOC=True, WEB_UI_PORT=8073)
-    with patch.dict(sys.modules, {'config': cfg}), patch('core.net.local_ips', lambda: ['10.131.93.212']), \
+    with patch.dict(sys.modules, {'config': cfg}), patch('core.net.local_ips', lambda: ['10.64.0.2']), \
          patch('core.ssl_utils.cert_pem', lambda: ''):
         out = routes.provision_device({'label': 'pocket', 'driver': 'board', 'sapphire': '192.168.1.69:8073/'})
         assert out['sapphire'] == 'https://192.168.1.69:8073'
@@ -590,18 +590,18 @@ def test_the_user_may_say_where_sapphire_is(rig):
 
 
 def test_local_ips_skips_tunnels_bridges_and_loopback():
-    """psutil's picture of Krem's box on 2026-10-07: the Mullvad tunnel was
-    the route out and a board was sent there."""
+    """A box with a VPN up (2026-10-07): the tunnel was the route out and a
+    board was sent there."""
     import socket
     from core import net
     A = lambda ip, mask: types.SimpleNamespace(family=socket.AF_INET, address=ip, netmask=mask)
     six = types.SimpleNamespace(family=socket.AF_INET6, address='fe80::1', netmask=None)
-    table = {'lo': [A('127.0.0.1', '255.0.0.0')], 'eno1': [A('192.168.1.69', '255.255.255.0'), six],
+    table = {'lo': [A('127.0.0.1', '255.0.0.0')], 'eth0': [A('192.168.1.69', '255.255.255.0'), six],
              'virbr0': [A('192.168.122.1', '255.255.255.0')], 'docker0': [A('172.17.0.1', '255.255.0.0')],
-             'br-4357': [A('172.19.0.1', '255.255.0.0')], 'wg0-mullvad': [A('10.131.93.212', '255.255.255.255')],
+             'br-abcd': [A('172.19.0.1', '255.255.0.0')], 'wg0': [A('10.64.0.2', '255.255.255.255')],
              'eth1': [A('10.1.2.3', '255.255.0.0')], 'wlan0': [A('8.8.8.8', '255.255.255.0')]}
     fake = types.SimpleNamespace(net_if_addrs=lambda: table)
-    with patch.dict(sys.modules, {'psutil': fake}), patch.object(net, '_route_out', lambda: '10.131.93.212'):
+    with patch.dict(sys.modules, {'psutil': fake}), patch.object(net, '_route_out', lambda: '10.64.0.2'):
         assert net.local_ips() == ['192.168.1.69', '10.1.2.3']
         assert net.local_ip() == '192.168.1.69'
     # no VPN: the route out is the house, and it comes first
@@ -609,8 +609,8 @@ def test_local_ips_skips_tunnels_bridges_and_loopback():
         assert net.local_ips() == ['10.1.2.3', '192.168.1.69']
     # no interfaces known: the route out, if it is private at all
     with patch.dict(sys.modules, {'psutil': types.SimpleNamespace(net_if_addrs=lambda: {})}), \
-         patch.object(net, '_route_out', lambda: '10.131.93.212'):
-        assert net.local_ips() == ['10.131.93.212']
+         patch.object(net, '_route_out', lambda: '10.64.0.2'):
+        assert net.local_ips() == ['10.64.0.2']
     with patch.dict(sys.modules, {'psutil': types.SimpleNamespace(net_if_addrs=lambda: {})}), \
          patch.object(net, '_route_out', lambda: '8.8.4.4'):
         assert net.local_ips() == []

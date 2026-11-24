@@ -209,6 +209,12 @@ async function strip() {
   if (!row) return;
   let got;
   try { got = await call('/outputs'); } catch { return; }
+  const kept = $('#cfa-kept');
+  if (kept) {
+    kept.textContent = !got.count ? '' : `${got.count} file${got.count === 1 ? '' : 's'}, ${(got.bytes / 1048576).toFixed(1)} MB kept on this computer. `
+      + (got.backed_up ? 'In backups: one video can be larger than the rest of a Sapphire backup.'
+        : 'Not in backups: a restore does not bring them back.') + ' Change it in Settings > Plugins > ComfyUI.';
+  }
   row.replaceChildren(...(got.files || []).map(file => {
     const tile = el('button', { type: 'button', class: 'cfa-tile', title: file.name, cfaName: file.name, onclick: () => show(file) });
     if (file.kind === 'image') tile.append(el('img', { src: file.url, alt: '', loading: 'lazy' }));
@@ -358,7 +364,8 @@ export function render(container) {
       el('div', { id: 'cfa-stage', class: 'cfa-stage' }),
       el('div', { id: 'cfa-notes', class: 'cfa-notes' }),
       el('div', { id: 'cfa-under', class: 'cfa-line' }),
-      el('div', { id: 'cfa-strip', class: 'cfa-strip' }))));
+      el('div', { id: 'cfa-strip', class: 'cfa-strip' }),
+      el('div', { id: 'cfa-kept', class: 'cfa-notes' }))));
   $('#cfa-shape').value = st.shape;
   showPicture();
   show(st.shown, st.shown && st.last?.files?.[0]?.name === st.shown.name ? st.last.notes || [] : [],

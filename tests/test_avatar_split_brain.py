@@ -229,3 +229,18 @@ def test_quiet_hours_send_her_to_bed_and_a_turn_gets_her_up(brain):
         brain._tick("variety")
         assert brain.place["spot"] != "bed"
     assert brain.went("go_bed") is None and brain.place["spot"] == "bed"    # her own tag still can
+
+
+def test_stop_takes_her_listener_off_the_bus(brain):
+    """off() removes by identity, and a bound method read twice is two
+    objects: the old Brain stayed on the bus after every toggle, its queue
+    filling with nobody reading (scout 2026-11-24)."""
+    from core.event_bus import get_event_bus
+    bus = get_event_bus()
+    mine = lambda: [f for fns in bus._hooks.values() for f in fns if getattr(f, '__self__', None) is brain]
+    brain.start()
+    try:
+        assert mine()
+    finally:
+        brain.stop()
+    assert mine() == []

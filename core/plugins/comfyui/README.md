@@ -131,10 +131,17 @@ Video takes longer than an image, so it has its own wait.
 | Default workflow | the first in the list | Used when she names none |
 | Image wait | 300 seconds | The longest ComfyUI may work on an image |
 | Video wait | 1200 seconds | The longest ComfyUI may work on video or audio |
+| Include these in backups | off | Whether what ComfyUI made goes into Sapphire's backups |
 
 The wait counts the time ComfyUI works on the job, not the time it waits its turn behind another one (her video, your still). When a wait runs out, Sapphire takes her job out of ComfyUI's queue, and stops it only when it is the one running. (A ComfyUI from before 2025 stops whatever is running.)
 
 Pressing Stop in the chat does not reach ComfyUI yet: the job runs to its end or to the wait.
+
+### Backups
+
+What ComfyUI makes (`user/comfyui/outputs/`) is **left out of Sapphire's backups** unless you switch on **Include these in backups**. One video can be larger than the rest of a Sapphire backup, and every nightly backup would carry all of them.
+
+While they are left out, a restore does not bring them back, and the chats that showed them have empty players. To keep them safe, copy `user/comfyui/outputs/` somewhere yourself. The settings panel and the ComfyUI page both show how many files are kept, their size, and whether they are in backups. Sapphire is told the same when she makes a clip. Your workflows are always backed up.
 
 ## Privacy
 

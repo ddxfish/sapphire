@@ -327,6 +327,28 @@ def test_a_switched_off_task_starts_from_now_when_it_comes_back(daemon):
     assert m.events == []
 
 
+def test_a_restored_backup_does_not_answer_the_same_mail_twice(daemon):
+    """A restore rolls the high-water mark and the claim table back together
+    (one state file holds both). The unread mail fires again; the server's own
+    Answered flag, read fresh by the reply handler, stops the second answer."""
+    import copy
+    m = daemon
+    m.d._check_account('work', dict(m.creds))                           # first sight: watch from here
+    last_night = copy.deepcopy(m.state.data)
+    uid = m.imap.add('INBOX', m.raw(frm='Bot <bot@helpdesk.io>', subject='Hello'))
+    event = {'uid': f'inbox:{uid}', 'account': 'work'}
+    m.d._check_account('work', dict(m.creds))
+    assert len(m.events) == 1
+    m.d._reply_handler(_task(), event, 'Hi')
+    assert m.smtp.send_message.call_count == 1
+    m.state.data.clear()
+    m.state.data.update(last_night)                                     # the backup, restored
+    m.d._check_account('work', dict(m.creds))
+    assert len(m.events) == 2                                           # she is shown it again
+    m.d._reply_handler(_task(), event, 'Hi again')
+    assert m.smtp.send_message.call_count == 1                          # and it is not answered again
+
+
 def test_auto_reply_goes_to_one_address_once_and_stops_at_the_cap(daemon, monkeypatch):
     m = daemon
     uid = m.imap.add('INBOX', m.raw(frm='Bot <bot@helpdesk.io>', subject='Ticket updated',

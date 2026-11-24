@@ -531,6 +531,31 @@ def test_a_video_is_kept_and_played_never_sent_as_an_image(comfy, tool, server, 
     assert [i['media_type'] for i in result['images']] == ['image/jpeg']          # the frames, not the mp4
 
 
+def test_she_is_told_whether_a_kept_file_is_in_the_backups(comfy, tool, server, api, monkeypatch):
+    cf.write('clip', video_graph())
+    server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}], 'animated': [True]}}
+    server.files['c.mp4'] = b'mp4'
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))
+    off = run(tool, prompt='x')[0]
+    assert 'left out of' in off and 'a restore does not bring them back' in off and cf.PANEL in off
+    on = run(tool, prompt='x', _settings={'backup_outputs': True})[0]
+    assert "goes into Sapphire's backups" in on and 'left out of' not in on
+    # the panel and the page read the same answer, and off is what ships
+    assert api.list_workflows()['outputs'] == {'count': 2, 'bytes': 6, 'backed_up': False}
+    got = api.outputs(settings={'backup_outputs': True})
+    assert (got['count'], got['bytes'], got['backed_up']) == (2, 6, True) and len(got['files']) == 2
+    manifest = json.loads((Path(cf.__file__).parent / 'plugin.json').read_text(encoding='utf-8'))
+    assert [f['default'] for f in manifest['capabilities']['settings'] if f['key'] == 'backup_outputs'] == [False]
+
+
+def test_a_picture_she_makes_says_nothing_about_backups(comfy, tool, server):
+    cf.write('still', sd_graph())                    # a still goes to the chat's own picture store, which is backed up
+    server.outputs = {'9': {'images': [{'filename': 'a.png', 'type': 'output'}]}}
+    server.files['a.png'] = png()
+    result, ok = run(tool, prompt='a cat')
+    assert ok and 'backups' not in (result['text'] if isinstance(result, dict) else result)
+
+
 def test_a_video_without_ffmpeg_still_reaches_the_user(comfy, tool, server, monkeypatch):
     cf.write('clip', video_graph())
     server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}], 'animated': [True]}}
@@ -684,7 +709,7 @@ def test_clips_are_served_by_name_only_and_can_be_cleared(comfy, api, tmp_path):
     for bad in ('../secret.mp4', '..', '.hidden', 'a/b.mp4', '', None, str(tmp_path / 'secret.mp4')):
         assert cf.kept(bad) is None
     assert api.file(name='../secret.mp4')[1] == 404 and api.file(name=dest.name).path == str(dest)
-    assert api.list_workflows()['outputs'] == {'count': 1, 'bytes': 4}
+    assert api.list_workflows()['outputs'] == {'count': 1, 'bytes': 4, 'backed_up': False}
     assert api.clear_outputs() == {'deleted': 1, 'left': 0} and cf.saved() == (0, 0)
 
 
@@ -1510,7 +1535,8 @@ def test_the_page_runs_a_workflow_as_a_job_and_keeps_what_it_made(comfy, api, se
     cf.write('still', sd_graph())
     cf.write('clip', video_graph())
     job = _run(api, workflow='still', prompt='a red apple', shape='landscape', seed='77', extras={'steps': 30})
-    assert job['state'] == 'running' and job['seed'] == 77 and job['workflow'] == 'still'
+    # the job's own thread may finish before the answer is written (the fake ComfyUI is instant): either is true
+    assert job['state'] in ('running', 'done') and job['seed'] == 77 and job['workflow'] == 'still'
     done = _finished(api, job)
     sent = server.graphs[0]
     assert done['state'] == 'done' and sent['7']['inputs']['text'] == 'a red apple' and sent['3']['inputs']['seed'] == 77

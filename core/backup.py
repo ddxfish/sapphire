@@ -111,6 +111,26 @@ def _cache_excluded(rel: str) -> bool:
     return any(rel == d or rel.startswith(d + '/') for d in _CACHE_FLOOR)
 
 
+# Plugin media: out unless its owner says otherwise. `user/comfyui/outputs/` is
+# what ComfyUI made, for her and on its Apps page. One clip may be 4 GB, more
+# than the rest of user/ together, and every archive would carry all of them
+# (scout 2026-11-24). The ComfyUI plugin's "Include in backups" switch (its
+# setting `backup_outputs`) brings the folder back in. The workflows beside it
+# are small and hand-made: always backed up.
+_COMFY_MEDIA = 'comfyui/outputs'
+
+
+def _plugin_media_excluded(rel: str) -> bool:
+    if not (rel == _COMFY_MEDIA or rel.startswith(_COMFY_MEDIA + '/')):
+        return False
+    try:
+        from core.plugin_loader import plugin_loader
+        return not plugin_loader.get_plugin_settings('comfyui').get('backup_outputs')
+    except Exception as e:
+        logger.warning(f"[BACKUP] ComfyUI's backup switch could not be read ({e}): its files are left out")
+        return True
+
+
 def _exclude_patterns_setting():
     """User-defined exclude globs from settings (tolerates list OR newline string)."""
     raw = getattr(config, 'BACKUPS_EXCLUDE_PATTERNS', None) or []
@@ -127,6 +147,8 @@ def _is_excluded(rel: str, user_patterns=None) -> bool:
     if _privacy_excluded(rel):
         return True
     if _cache_excluded(rel):
+        return True
+    if _plugin_media_excluded(rel):
         return True
     for pat in (user_patterns or []):
         if not pat:

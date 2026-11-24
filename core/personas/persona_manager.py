@@ -480,7 +480,9 @@ class PersonaManager:
 
         The four store scopes are pinned whether or not their plugin loaded
         this boot: her memory must not ride on one bad boot. Account scopes
-        are pinned for the plugins that are on; one enabled later starts off.
+        are pinned for the plugins that are on, loaded this boot or not, and
+        for one that replaces a plugin that was on (_on_plugin_scope_keys);
+        one enabled later starts off.
         The file itself carries the flag, so an old backup restored later is
         pinned again. Call after plugins registered their scopes. Backs up
         personas.json first. Returns {persona: [keys]} written, or None when
@@ -488,7 +490,12 @@ class PersonaManager:
         if self._scopes_stated or not self._personas:
             return None     # nothing loaded: writing an empty file would stop the next boot's seed
         from core.chat.function_manager import scope_setting_keys
-        keys = sorted(set(scope_setting_keys()) | {f"{k}_scope" for k in self._STORE_SCOPES})
+        try:
+            on_keys = self._on_plugin_scope_keys()
+        except Exception as e:      # her memory scopes must not wait on a plugin's odd manifest
+            logger.warning(f"[PERSONAS] plugin manifests not read for the scope pin ({e!r}): loaded plugins only")
+            on_keys = set()
+        keys = sorted(set(scope_setting_keys()) | {f"{k}_scope" for k in self._STORE_SCOPES} | on_keys)
         changed = {}
         with self._lock:
             for name, p in self._personas.items():
@@ -593,6 +600,29 @@ class PersonaManager:
             for d in caps.get("scopes") or []:
                 if isinstance(d, dict) and d.get("implicit_default") and d.get("key"):
                     out.add(d["key"])
+        return out
+
+    @staticmethod
+    def _on_plugin_scope_keys() -> set:
+        """Setting keys of the account scopes of every plugin the user has on,
+        read from the manifests: the live registry only knows what loaded this
+        boot. A plugin that is on but did not load (a missing package, a
+        failed load) keeps its scope, and so does one that replaces a plugin
+        that was on: Calendar is off on the first boot after it took
+        google-calendar's place, and her personas lost it for good (scout
+        2026-11-24)."""
+        from core.plugin_loader import plugin_loader
+        on, off = set(plugin_loader._get_enabled_list()), set(plugin_loader._get_disabled_list())
+        out = set()
+        for name, info in list(plugin_loader._plugins.items()):
+            m = (info or {}).get("manifest") or {}
+            if not ((info or {}).get("enabled") or name in on
+                    or (m.get("default_enabled") and name not in off)
+                    or on & set(m.get("replaces") or [])):
+                continue
+            for d in (m.get("capabilities") or {}).get("scopes") or []:
+                if isinstance(d, dict) and str(d.get("key") or "").isidentifier():
+                    out.add(f"{d['key']}_scope")
         return out
 
     # === Avatar ===

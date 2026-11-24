@@ -311,6 +311,8 @@ def test_card_new_persona_installs_prompt_then_pieces(importer, piece_store, mgr
 def two_scopes(monkeypatch):
     import core.chat.function_manager as fm
     monkeypatch.setattr(fm, 'scope_setting_keys', lambda: ['memory_scope', 'email_scope'])
+    from core.personas.persona_manager import PersonaManager
+    monkeypatch.setattr(PersonaManager, '_on_plugin_scope_keys', staticmethod(lambda: set()))
 
 
 def test_new_from_chat_drops_chat_scopes(mgr, two_scopes):
@@ -555,6 +557,43 @@ def test_pin_writes_down_what_a_missing_scope_used_to_mean(mgr, two_scopes):
     assert mgr.pin_absent_scopes() is None and 'memory_scope' not in z
 
 
+def test_pin_keeps_the_scopes_of_plugins_that_are_on_but_did_not_load(mgr, monkeypatch):
+    # the first boot after an update: Calendar is off (it replaced a plugin that
+    # was on), Email is on but its new package is missing, so neither registered
+    import core.chat.function_manager as fm
+    from core.plugin_loader import plugin_loader
+    scope = lambda key: {'capabilities': {'scopes': [{'key': key}]}}
+    monkeypatch.setattr(fm, 'scope_setting_keys', lambda: [])
+    monkeypatch.setattr(plugin_loader, '_plugins', {
+        'calendar': {'enabled': False, 'manifest': {**scope('gcal'), 'replaces': ['google-calendar']}},
+        'email': {'enabled': False, 'manifest': {**scope('email'), 'default_enabled': True}},
+        'missing-dep': {'enabled': True, 'manifest': scope('social')},
+        'bitcoin': {'enabled': False, 'manifest': scope('bitcoin')},                    # never on: starts off
+        'discord': {'enabled': False, 'manifest': {**scope('discord'), 'default_enabled': True}},   # switched off
+        'odd': {'enabled': True, 'manifest': {'capabilities': {'scopes': [{'key': 'not a key'}, 'junk']}}},
+    })
+    monkeypatch.setattr(plugin_loader, '_get_enabled_list', lambda: ['google-calendar'])
+    monkeypatch.setattr(plugin_loader, '_get_disabled_list', lambda: ['discord'])
+    assert mgr._on_plugin_scope_keys() == {'gcal_scope', 'email_scope', 'social_scope'}
+    mgr._personas['zed']['settings']['email_scope'] = 'none'                             # a choice: kept
+    changed = mgr.pin_absent_scopes()
+    assert 'gcal_scope' in changed['zed'] and 'bitcoin_scope' not in changed['zed']
+    z = mgr._personas['zed']['settings']
+    assert z['gcal_scope'] == 'default' and z['social_scope'] == 'default' and z['email_scope'] == 'none'
+    assert 'bitcoin_scope' not in z and 'discord_scope' not in z
+
+
+def test_pin_still_runs_when_the_plugin_manifests_cannot_be_read(mgr, monkeypatch):
+    import core.chat.function_manager as fm
+    from core.personas.persona_manager import PersonaManager
+    monkeypatch.setattr(fm, 'scope_setting_keys', lambda: [])
+    def boom():
+        raise TypeError('odd manifest')
+    monkeypatch.setattr(PersonaManager, '_on_plugin_scope_keys', staticmethod(boom))
+    assert mgr.pin_absent_scopes()['zed'] == ['goal_scope', 'knowledge_scope', 'memory_scope', 'people_scope']
+    assert mgr._scopes_stated is True
+
+
 def test_pin_runs_again_for_a_restored_old_file(mgr, two_scopes):
     from core.personas.persona_manager import PersonaManager
     assert mgr.pin_absent_scopes()
@@ -662,3 +701,35 @@ def test_duplicate_fork_stays_in_its_sources_store(mgr, presets, piece_store, mo
     assert mgr.duplicate('zed', 'Nyx')
     assert ('prompt', 'vault') in seen
     assert mgr._personas['nyx']['settings']['prompt'] == 'ronnie'      # refused: the pointer is kept
+
+
+def test_a_scope_pinned_for_a_plugin_that_did_not_load_survives_the_phantom_release(mgr, monkeypatch):
+    # the pin clears the release's marker, so the release runs right after it: a scope
+    # nobody could list on this boot (its plugin is not loaded) must not be judged empty
+    import core.chat.function_manager as fm
+    from core.plugin_loader import plugin_loader
+    monkeypatch.setattr(fm, 'scope_setting_keys', lambda: ['email_scope'])
+    monkeypatch.setattr(plugin_loader, '_plugins', {
+        'calendar': {'enabled': False, 'manifest': {'replaces': ['google-calendar'], 'capabilities': {
+            'scopes': [{'key': 'gcal', 'implicit_default': True}]}}},
+        'social': {'enabled': True, 'manifest': {'capabilities': {'scopes': [{'key': 'social'}]}}},   # on, did not load
+    })
+    monkeypatch.setattr(plugin_loader, '_get_enabled_list', lambda: ['google-calendar', 'social'])
+    monkeypatch.setattr(plugin_loader, '_get_disabled_list', lambda: [])
+    assert mgr.pin_absent_scopes()
+    assert not (mgr.USER_DIR / mgr.PHANTOM_MARKER).exists()
+    # email loaded and has one account, not called 'default': that pin is a phantom and goes
+    assert mgr.release_phantom_scopes({'email': ['work']}) == {'zed': ['email_scope'], 'amy': ['email_scope']}
+    for name in ('zed', 'amy'):
+        st = mgr._personas[name]['settings']
+        assert st['gcal_scope'] == 'default' and st['social_scope'] == 'default' and st['email_scope'] == 'none'
+
+
+def test_the_calendar_plugin_still_says_what_it_replaced():
+    # the scope pin finds Calendar through this line on the first boot after the update;
+    # without it a persona that had Google Calendar gets the calendar off for good
+    from pathlib import Path
+    manifest = json.loads((Path(__file__).resolve().parent.parent / 'core' / 'plugins' / 'calendar' / 'plugin.json')
+                          .read_text(encoding='utf-8'))
+    assert 'google-calendar' in manifest.get('replaces', [])
+    assert [s['key'] for s in manifest['capabilities']['scopes']] == ['gcal']     # the setting key personas hold is gcal_scope

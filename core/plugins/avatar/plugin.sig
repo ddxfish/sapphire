@@ -4,7 +4,7 @@
   "files": {
     "README.md": "sha256:73f35b6a26b80727d543fd25bf1270817abbcc519167a882e2d3ee66b8fd608f",
     "bone_mapper.py": "sha256:57aa0dc284effd5cc50d771550c8977aa81532ef1d5d0745ac9c7809f211784d",
-    "brain.py": "sha256:9192850a2b1b7e6427213a0985d97ac9ee29d99763dd82819205fcf7e0db3358",
+    "brain.py": "sha256:29d28e65e2c85229be32ea26573ac8f56d7f446e398e3a2da0c2c3f124ae7e30",
     "build_avatar.py": "sha256:c6f55d60cc1095575794197dac9f1bd892cb556fd558f8baee279919ba98cc38",
     "build_avatar_sapphire.py": "sha256:01c2a964ed5da5078e085ee93f4a9dbadeb95854ec9e1db25be1343c773bc961",
     "daemon.py": "sha256:3d2ec0bd9a40fa35c4edb7f5f75210c918315d2fc4d2b9e4701a4b14925c9e0d",
@@ -34,5 +34,5 @@
     "web/stage.js": "sha256:de93699cf7830219bfbad287670ce468e78484cf1632de54f061a6b7fdc246ba",
     "web/visemes.json": "sha256:d59fd0d349b1b2fec3d70597da36d56931956e89dc8c1675af83a1a704e086ac"
   },
-  "signature": "CM8YhkHgJewJkbKCMT7WagamzdD3iXylA0cnXrholF4Ci5V9NY+rO34X+6tD0UeLB97n44H5wjOgKrAG5j/DAg=="
+  "signature": "2wibKrYiVcgncgjAb1FoLhyNFI2oNBKP0jey2QV9iZHkpSRJ2x2b63v0UHl48OPI6GbqKK2SACHh8dYIcfv3Bg=="
 }

@@ -67,6 +67,8 @@ export async function render(container, ctx) {
     }
 
     refresh();
+    // an open tab follows the daily refresh: ask this Sapphire again each hour (she asks the store once a day)
+    const again = setInterval(() => { _cache = null; refresh(); }, 60 * 60_000);
 
     return {
         title: '🛍️ Spotlight',
@@ -82,6 +84,6 @@ export async function render(container, ctx) {
                 },
             },
         ],
-        cleanup: () => { aborted = true; },
+        cleanup: () => { aborted = true; clearInterval(again); },
     };
 }
