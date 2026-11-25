@@ -108,6 +108,8 @@ Independent of the proxy, Sapphire holds a set of quiet-egress guarantees:
 | Kokoro TTS | Resolves model and voice files from the local Hugging Face cache (no network when cached); a file not yet cached is downloaded once, on first use. `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` in the environment are honored, never set or cleared: a download they block is named as such (notification center, kokoro.log, the Test button), not as the hub's "check your Internet connection". |
 | tiktoken | BPE file cached persistently under `user/cache/tiktoken` — no re-download per reboot. |
 | Hugging Face telemetry | Disabled unconditionally at boot. |
+| Hugging Face download path | A missing model comes down over Hugging Face's classic path (plain HTTPS from its CDN), set at boot with `HF_HUB_DISABLE_XET=1`; your own value in the environment wins. The newer transfer talks to a second server and can hang for minutes when that server is unreachable. The models you wait on (Whisper, Kokoro, embeddings) try the newer path second when the first stops moving for 20 seconds. |
+| Stalled-download check | Runs only when a model download has stopped moving or failed, never on a healthy one. Sapphire looks the download host up with this computer's DNS, tries each address, and asks one public DNS server (Cloudflare `1.1.1.1`, over HTTPS) for that one hostname, to tell out-of-date DNS from an outage or a dead connection. Nothing else is sent. With SOCKS on, or any system proxy set, the check does not run at all: no lookup, no connection. |
 | Silero VAD | Model pinned to an exact upstream commit URL — no floating "latest" fetch. |
 | Plugin signing keys | Disk-cached allowlist is authoritative for a day — a boot with a warm cache makes no GitHub call. |
 | Update check | A once-daily GitHub check for new releases — one of the **two recurring unprompted outbound calls the core app makes** (the other is the Store row below). Turn off `UPDATE_CHECK_ENABLED` to stop it (takes effect within a day; restart applies immediately). |
@@ -169,6 +171,8 @@ MECHANISM:
 - LAN NEVER proxied: loopback, RFC1918, link-local, localhost, *.local/*.lan/*.home.arpa, single-label hostnames, registered direct hosts, SOCKS_NO_PROXY_EXTRA entries. core/net.py classify() decides per request; never resolves DNS; unknown -> 'wan' (safe default); decodes dotless/hex/octal/zero-padded IP disguises.
 - LAN lane: trust_env=False, redirects refused by default (3xx returned, not followed). WAN lane honors env.
 - NOT carried at all: Discord/Telegram (own libs), voice calls (UDP), email (IMAP/SMTP). Browser->server web UI is inbound, unaffected.
+- HF downloads: HF_HUB_DISABLE_XET=1 by default (sapphire.py env block, setdefault). core/hf_fetch.py = the door for Whisper/Kokoro/embedding models: child process (core/hf_fetch_worker.py), classic path first, xet second, a path silent for 20 s is killed. Log: user/logs/hf_fetch.log.
+- Stall check: core/net_check.py, only on a stalled/failed download. Local DNS + per-address TLS + one DoH question to 1.1.1.1 for the download host. Verdicts: stale-dns, no-dns, offline, cut-off, host-down, clock, ok. Stands down entirely when SOCKS_ENABLED or any proxy env/system proxy is set (no lookup).
 - FAIL-CLOSED: dead proxy = loud errors, never silent direct fallback.
 
 KNOBS:

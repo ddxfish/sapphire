@@ -68,7 +68,9 @@ def _first_word(model):
 
 def _load(size, **kwargs):
     """Local-first: a warm cache loads with zero network. A model genuinely
-    missing is fetched by the parent, whose download shows in the bell."""
+    missing is fetched by the parent, whose download shows in the bell, and
+    ONLY by the parent: this process never downloads (local_files_only both
+    times), so a download that failed there is not silently tried again here."""
     from faster_whisper import WhisperModel
     try:
         return WhisperModel(size, local_files_only=True, **kwargs)
@@ -79,7 +81,7 @@ def _load(size, **kwargs):
             raise
     from faster_whisper import utils
     _send(need=size if '/' in size else utils._MODELS.get(size), size=size)
-    return WhisperModel(_inbox.get().get('path') or size, **kwargs)
+    return WhisperModel(_inbox.get().get('path') or size, local_files_only=True, **kwargs)
 
 
 def _on_card(cfg):

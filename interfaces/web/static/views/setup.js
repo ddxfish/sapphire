@@ -131,15 +131,13 @@ function buildSteps(ids) {
 const seen = new Map();     // row id -> 0 while active, else when it stopped
 
 function dlRow(r) {
-    const p = r.progress;
-    const active = r.state === 'active';
-    const indeterminate = active && (!p || p.indeterminate || p.percent == null);
+    const v = notify.view(r);
     const glyph = r.state === 'done' ? '✓' : r.state === 'failed' ? '✗' : '';
     return `
-        <div class="setup-dl-row ${esc(r.state)}">
+        <div class="setup-dl-row ${esc(r.state)}${v.phase ? ` ${v.phase}` : ''}">
             <div class="setup-dl-head"><span class="setup-dl-title">${esc(r.title)}</span>
-                <span class="setup-dl-pct">${glyph || (indeterminate ? '' : `${p.percent}%`)}</span></div>
-            ${active ? `<div class="nc-bar-track"><div class="nc-bar-fill${indeterminate ? ' indeterminate' : ''}" style="width:${indeterminate ? 100 : p.percent}%"></div></div>` : ''}
+                <span class="setup-dl-pct">${glyph || (v.phase ? v.word : v.indeterminate ? '' : `${v.percent}%`)}</span></div>
+            ${notify.barHtml(r)}
             ${r.body ? `<div class="setup-dl-body">${esc(r.body)}</div>` : ''}
         </div>`;
 }

@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 
 import numpy as np
 import requests
@@ -57,9 +58,14 @@ class LocalEmbedder:
     # ("embeddings disabled because onnxruntime is missing" vs "because the
     # model download failed"). Cleared on successful load.
     load_error: str | None = None
+    # A load that failed is not tried again before this (time.monotonic()):
+    # every embed() used to walk into the same dead download, one stalled
+    # memory save after another. A new embedder (a provider re-pick) starts at 0.
+    RETRY_S = 300
+    _retry_at = 0.0
 
     def _load(self):
-        if self.session is not None:
+        if self.session is not None or time.monotonic() < self._retry_at:
             return
         # Import deps first so a missing native lib (e.g. onnxruntime DLL on
         # Windows without VC++ redist) surfaces distinctly from a model fetch
@@ -110,19 +116,22 @@ class LocalEmbedder:
                     + (f" @ revision {rev}" if rev else "")
                 )
                 # One progress row in the notification center (core/notify.py);
-                # the tokenizer is small and rides transformers' own fetch.
-                from core.notify import progress, tqdm_for
+                # the tokenizer is small and rides transformers' own fetch. The
+                # model comes through the download door (core/hf_fetch.py): the
+                # same repo, file and revision, so the same file in the same
+                # cache, but a path that stops moving is ended, the other one
+                # tried, and a failure says why.
+                from core import hf_fetch
+                from core.notify import progress
                 with progress(f"Downloading the embedding model ({EMBEDDING_MODEL})", source='core',
                               go={'view': 'settings', 'tab': 'embedding'}, key='embedding-model',
-                              done_title='Embedding model ready') as p:
-                    rep = tqdm_for(p)
+                              done_title='Embedding model ready',
+                              failed_title='Embedding model download failed') as p:
                     self.tokenizer = AutoTokenizer.from_pretrained(
                         EMBEDDING_MODEL, trust_remote_code=True, revision=rev,
                     )
-                    model_path = hf_hub_download(
-                        EMBEDDING_MODEL, EMBEDDING_ONNX_FILE, revision=rev,
-                        **({'tqdm_class': rep} if rep else {}),
-                    )
+                    model_path = hf_fetch.fetch(EMBEDDING_MODEL, files=[EMBEDDING_ONNX_FILE],
+                                                revision=rev, handle=p)[0]
 
             self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
             self.input_names = [i.name for i in self.session.get_inputs()]
@@ -133,6 +142,7 @@ class LocalEmbedder:
             self.load_error = f"Model fetch/load failed: {e}"
             logger.error(f"Embedding load: {self.load_error}")
             self.session = None
+            self._retry_at = time.monotonic() + self.RETRY_S
 
     def embed(self, texts, prefix='search_document'):
         self._load()

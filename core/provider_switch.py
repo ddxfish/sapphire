@@ -203,9 +203,13 @@ def start(items, persist=True, wake=False, _resumed=False):
             if cur:
                 jobs[key] = cur['rid']          # the same switch: join it
                 continue
+            # One switch runs at a time (_LOCK): a row behind another says so, and
+            # what it is behind, instead of "in progress" for work not yet begun.
+            ahead = _WHAT.get(fresh[-1][0], 'the wake word') if fresh else 'another switch' if _LOCK.locked() else ''
+            waiting = {'phase': 'waiting', 'body': f"Waiting for {ahead} to finish."} if ahead else {}
             rid = notify.begin(_active_title(key, value), source='core',
-                               go={'view': 'settings', 'tab': _TAB[key]}, key=_ROW_KEY[key])
-            _inflight[key] = {'value': value, 'rid': rid, 'thread': None}
+                               go={'view': 'settings', 'tab': _TAB[key]}, key=_ROW_KEY[key], **waiting)
+            _inflight[key] = {'value': value, 'rid': rid, 'thread': None, 'waiting': bool(ahead)}
             jobs[key] = rid
             fresh.append((key, value, rid))
         if fresh:
@@ -249,6 +253,8 @@ def busy(key):
 def _run(fresh, persist, wake=False):
     for key, value, rid in fresh:
         with _LOCK:
+            if (_inflight.get(key) or {}).get('waiting'):
+                notify.tick(rid, phase=None, text='')     # its turn: no longer waiting
             try:
                 _run_one(key, value, rid, persist, wake)
             except Exception as e:                # the job's own bug: the row must still end
@@ -457,6 +463,9 @@ def _tts_ready(system, value, rid=None):
     deadline = time.monotonic() + TTS_READY_S
     told = False
     while True:
+        left_off = getattr(system, 'kokoro_why', None) if value == 'kokoro' else None
+        if isinstance(left_off, str) and left_off:      # its model never arrived, so nothing was started: no 20-minute wait
+            return False, left_off
         try:
             if prov.is_available():
                 return True, ''
@@ -540,6 +549,19 @@ def _words(e):
         return why(e)
     except Exception:
         return str(e) or type(e).__name__
+
+
+def _retry(arg):
+    """'Try again' on a failed download's row (notify.progress retry='switch:KEY=value'):
+    the same switch, from the top, installing what it needs."""
+    key, _, raw = str(arg or '').partition('=')
+    if key not in KEYS or not raw:
+        raise ValueError(f"not a switch: {arg}")
+    start([(key, {'True': True, 'False': False}.get(raw, raw))], wake=True)
+    return "Trying again."
+
+
+notify.register_repair('switch', _retry)
 
 
 # ── seams ──────────────────────────────────────────────────────────────────

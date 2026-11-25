@@ -35,25 +35,33 @@ class _Dead(Exception):
 
 
 def _download_with_progress(repo_id, size):
-    """faster_whisper hardcodes a silent tqdm in its download_model. Fetch the
-    same files ourselves through huggingface_hub with a progress row in the
-    notification center (core/notify.py) and hand the worker the directory,
-    which skips its download. None = let faster_whisper fetch it."""
-    try:
-        from huggingface_hub import snapshot_download
-        from core.notify import progress, tqdm_for
-        if not repo_id:
-            return None
-        with progress(f"Downloading the Whisper model ({size})", source='core',
-                      go={'view': 'settings', 'tab': 'stt'}, key='whisper-model',
-                      done_title=f"Whisper model ready ({size})") as p:
-            rep = tqdm_for(p)
-            return snapshot_download(repo_id, allow_patterns=["config.json", "preprocessor_config.json",
-                                                              "model.bin", "tokenizer.json", "vocabulary.*"],
-                                     **({'tqdm_class': rep} if rep else {}))
-    except Exception as e:
-        logger.warning(f"[STT] progress download failed ({e}); letting faster_whisper fetch it")
+    """The model's folder, fetched HERE and only here: through the download
+    door (core/hf_fetch.py), under a progress row in the notification center.
+    faster_whisper's own download is silent, and letting the worker repeat a
+    download that had just failed made one dead server three tries and 19
+    minutes of nothing (2026-11-24). A download that fails raises with the
+    reason in words; the worker never fetches. None = no repo to fetch from
+    (a size the engine does not know: the worker says so)."""
+    if not repo_id:
         return None
+    from core import hf_fetch
+    from core.notify import progress
+    with progress(f"Downloading the Whisper model ({size})", source='core',
+                  go={'view': 'settings', 'tab': 'stt'}, key='whisper-model',
+                  done_title=f"Whisper model ready ({size})",
+                  failed_title=f"Whisper model download failed ({size})",
+                  retry='switch:STT_PROVIDER=faster_whisper') as p:
+        return hf_fetch.fetch(repo_id, patterns=["config.json", "preprocessor_config.json", "model.bin",
+                                                 "tokenizer.json", "vocabulary.*"], handle=p)
+
+
+def _has_card():
+    """Whether the boot probe found an NVIDIA card: only then is a death 'on the card'."""
+    try:
+        from core import gpu_status
+        return bool(gpu_status.peek().get('gpu'))
+    except Exception:
+        return False
 
 
 def _safe_unlink(path, retries=3, delay=0.2):
@@ -117,9 +125,13 @@ class FasterWhisperProvider(BaseSTTProvider):
             raise RuntimeError("Faster Whisper not installed: No module named 'faster_whisper'")
         try:
             self._start()
-        except _Dead as e:      # a crash on the card: the CPU may still load
-            logger.warning(f"[STT] Whisper worker died loading on the card ({e}), trying the CPU")
-            self._cpu_only, self.why, self.kind = True, f"the worker crashed loading on the card ({e})", 'other'
+        except _Dead as e:      # a crash on the card, or probing for one: the CPU alone may still load
+            if self._settings()['device'] == 'cpu':
+                self._kill()
+                raise RuntimeError(f"Failed to initialize STT model: the worker died ({e}), see user/logs/whisper.log")
+            where = "loading on the card" if _has_card() else "loading"
+            logger.warning(f"[STT] Whisper worker died {where} ({e}), trying the CPU alone")
+            self._cpu_only, self.why, self.kind = True, f"the worker crashed {where} ({e})", 'other'
             try:
                 self._start()
             except _Dead as e2:
@@ -149,7 +161,12 @@ class FasterWhisperProvider(BaseSTTProvider):
         while True:
             msg = self._next(LOAD_WAIT)
             if 'need' in msg:
-                self._send({'path': _download_with_progress(msg['need'], msg.get('size'))})
+                try:
+                    path = _download_with_progress(msg['need'], msg.get('size'))
+                except Exception as e:      # the reason is on the download's row; no second try, here or in the worker
+                    self._kill()
+                    raise RuntimeError(f"Failed to initialize STT model: {e}")
+                self._send({'path': path})
                 continue
             if not msg.get('ready'):
                 self._kill()

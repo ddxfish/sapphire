@@ -50,23 +50,20 @@ function pick() {
     return notify.rows().filter(r => r.state === 'active' || shown.has(r.id) || (!r.read && LEVELS_HERE.has(r.level)));
 }
 
-const indeterminate = r => !r.progress || r.progress.indeterminate || r.progress.percent == null;
-
-function bar(r) {
-    return `<div class="nc-bar-track"><div class="nc-bar-fill${indeterminate(r) ? ' indeterminate' : ''}" data-bar="${esc(r.id)}" style="width:${indeterminate(r) ? 100 : r.progress.percent}%"></div></div>`;
-}
+const bar = r => notify.barHtml(r, ` data-bar="${esc(r.id)}"`);
 
 function rowHtml(r) {
-    const active = r.state === 'active';
+    const v = notify.view(r);
+    const active = v.active;
     return `
-        <div class="sb-notify-row sb-${active ? 'active' : r.level}">
+        <div class="sb-notify-row sb-${active ? 'active' : r.level}${v.phase ? ` sb-${v.phase}` : ''}">
             <span class="sb-notify-dot"></span>
             <div class="sb-notify-main">
                 <div class="sb-notify-title">${esc(r.title)}</div>
                 ${r.body ? `<div class="nc-body" data-body="${esc(r.id)}">${esc(r.body)}</div>` : ''}
                 ${active ? bar(r) : ''}
                 <div class="sb-notify-meta">
-                    <span class="nc-meta">${esc(r.source)} · ${active ? 'in progress' : notify.ago(r.updated)}</span>
+                    <span class="nc-meta">${esc(r.source)} · ${active ? v.word : notify.ago(r.updated)}</span>
                     ${notify.repairButtonHtml(r, 'nc-repair')}
                     ${r.go ? `<button type="button" class="sb-notify-open" data-go="${esc(r.id)}">Open →</button>` : ''}
                 </div>
@@ -80,7 +77,7 @@ function shape(rows, red, yellow) {
     return JSON.stringify([open, red, yellow, rows.map(r => {
         const active = r.state === 'active';
         return [r.id, r.state, r.level, r.title, r.source, !!r.go, active ? !!r.body : r.body, active ? 0 : r.updated,
-                notify.repairButtonHtml(r)];
+                notify.repairButtonHtml(r), active ? (r.phase || '') : ''];
     })]);
 }
 
@@ -88,9 +85,10 @@ function moveBars(rows) {
     for (const r of rows) {
         if (r.state !== 'active') continue;
         const id = CSS.escape(r.id);
+        const v = notify.view(r);
         el.querySelectorAll(`[data-bar="${id}"]`).forEach(b => {
-            b.classList.toggle('indeterminate', indeterminate(r));
-            b.style.width = `${indeterminate(r) ? 100 : r.progress.percent}%`;
+            b.classList.toggle('indeterminate', v.indeterminate);
+            b.style.width = `${v.indeterminate ? 100 : v.percent}%`;
         });
         const words = el.querySelector(`[data-body="${id}"]`);
         if (words) words.textContent = r.body;
@@ -135,7 +133,7 @@ function render() {
         </button>
         <div class="sb-notify-list">${rows.map(rowHtml).join('')}</div>
         <button type="button" class="sb-notify-more" data-more="1">All notifications</button>` : `
-        <button type="button" class="sb-notify-head sb-${head.state === 'active' ? 'active' : head.level}" data-head="${esc(head.id)}" aria-expanded="false" title="${esc(head.body || head.title)}">
+        <button type="button" class="sb-notify-head sb-${head.state === 'active' ? 'active' : head.level}${notify.view(head).phase ? ` sb-${notify.view(head).phase}` : ''}" data-head="${esc(head.id)}" aria-expanded="false" title="${esc(head.body || head.title)}">
             <span class="sb-notify-bell">\u{1F514}</span>
             <span class="sb-notify-title">${esc(head.title)}</span>
             ${counts}

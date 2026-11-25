@@ -40,6 +40,8 @@ STATES = ('open', 'active', 'done', 'failed')
 RING = 500
 TITLE_MAX, BODY_MAX, KEY_MAX = 200, 1000, 128
 TICK_S = 0.1                      # progress ticks on the bus: at most this often per row
+PHASES = (None, 'waiting', 'stalled')   # what an active row is doing besides moving: in line, or not moving
+SWEEP_S = 2.0                     # how often watched rows are checked for a stall
 PROJECT_ROOT = Path(__file__).absolute().parent.parent
 STORE = PROJECT_ROOT / 'user' / 'notifications.json'
 
@@ -47,6 +49,10 @@ _lock = threading.RLock()
 _rows: dict = {}                  # id -> row; insertion order = creation, or the last re-fire
 _once: list = []                  # keys ever posted with once=True, oldest first (the ledger file)
 _last_tick: dict = {}             # id -> time of the last tick that went out
+_moved: dict = {}                 # id -> time its producer last ticked it (a throttled tick counts)
+_watch: dict = {}                 # id -> {'after', 'hosts', 'why'}: rows the stall watch looks at
+_dog = None                       # the stall watch thread, started by the first watch()
+_KEEP = object()
 _loaded = False
 _hooked = False
 
@@ -112,7 +118,7 @@ def _load():
                          updated=time.time(), read=False)
             elif r.get('state') == 'active':         # work the last process never finished
                 r.update(state='failed', level='warning', body='Interrupted by a restart.',
-                         updated=time.time(), read=False)
+                         updated=time.time(), read=False, phase=None)
                 swept += 1
             _rows[r['id']] = r
         if swept:
@@ -158,7 +164,8 @@ def _prune_locked():
 
 
 def notify(title, level='info', body='', source='core', go=None, key=None,
-           private=False, origin=None, state='open', progress=None, once=False, action=None):
+           private=False, origin=None, state='open', progress=None, once=False, action=None,
+           phase=None):
     """A row, and the toast its level earns. Returns the row id, or None for a
     flash (private=True). A key makes the row re-fire instead of piling up:
     the row with that key is updated, marked unread and moved to the front.
@@ -167,8 +174,11 @@ def notify(title, level='info', body='', source='core', go=None, key=None,
     after the ring, a dismiss or Clear all took the row (a boot result that
     must say itself once, not once per boot its row is missing).
     action: a one-click fix the row wears as a button - a name given to
-    register_repair(), or {repair, label}. See repair()."""
+    register_repair(), or {repair, label}. See repair().
+    phase: 'waiting' for an active row whose work has not started (it is in
+    line behind another); the stall watch sets 'stalled' (watch())."""
     level = level if level in LEVELS else 'info'
+    phase = phase if phase in PHASES and state == 'active' else None
     title = _text(title, TITLE_MAX).strip() or 'Notification'
     body = _text(body, BODY_MAX)
     if private:
@@ -192,7 +202,7 @@ def notify(title, level='info', body='', source='core', go=None, key=None,
         if row is not None:
             _rows.pop(row['id'], None)
             row.update(title=title, body=body, level=level, updated=now, read=False,
-                       state=state if state in STATES else 'open', progress=progress,
+                       state=state if state in STATES else 'open', progress=progress, phase=phase,
                        source=_text(source or row.get('source') or 'core', 64))
             if go is not None:
                 row['go'] = _clean_go(go)
@@ -203,7 +213,7 @@ def notify(title, level='info', body='', source='core', go=None, key=None,
                    'title': title, 'body': body, 'source': _text(source or 'core', 64),
                    'state': state if state in STATES else 'open', 'progress': progress,
                    'go': _clean_go(go), 'key': key or None, 'read': False,
-                   'action': _clean_action(action)}
+                   'action': _clean_action(action), 'phase': phase}
         _rows[row['id']] = row
         _prune_locked()
         _save_locked()
@@ -222,19 +232,30 @@ def flash(message, level='info', seconds=None, origin=None):
 
 # ── progress rows ──────────────────────────────────────────────────────────
 
-def begin(title, source='core', go=None, key=None, body=''):
+def begin(title, source='core', go=None, key=None, body='', phase=None):
     """Start an active row. Returns its id; move it with tick(), end it with finish()."""
-    return notify(title, 'info', body, source, go, key, state='active',
+    return notify(title, 'info', body, source, go, key, state='active', phase=phase,
                   progress={'done': 0, 'total': 0, 'percent': None, 'indeterminate': True})
 
 
-def tick(rid, done=None, total=None, percent=None, text=None):
+def tick(rid, done=None, total=None, percent=None, text=None, phase=_KEEP):
     """Move an active row along. Bus only, never the file; at most one tick per
-    TICK_S per row (finish() always lands)."""
+    TICK_S per row (finish() always lands, and so does a change of phase).
+    A tick is movement: one that names no phase takes a stalled row out of it,
+    so a producer that means to keep saying 'stalled' passes it each time."""
     with _lock:
         row = _rows.get(rid)
         if not row or row['state'] != 'active':
             return
+        turned = False
+        if phase is _KEEP and row.get('phase') == 'stalled':
+            phase = None
+            if text is None:
+                row['body'] = ''                # the watch's words, not the producer's
+            if rid in _watch:
+                _watch[rid]['why'] = ''
+        if phase is not _KEEP and phase in PHASES and phase != row.get('phase'):
+            row['phase'], turned = phase, True
         p = dict(row.get('progress') or {})
         if done is not None:
             p['done'] = int(done)
@@ -249,18 +270,20 @@ def tick(rid, done=None, total=None, percent=None, text=None):
         if text is not None:
             row['body'] = _text(text, BODY_MAX)
         now = time.time()
-        if now - _last_tick.get(rid, 0) < TICK_S:
+        _moved[rid] = now
+        if not turned and now - _last_tick.get(rid, 0) < TICK_S:
             return
         _last_tick[rid] = now
         row['updated'] = now
-        out = {'id': rid, 'progress': dict(p), 'body': row['body'], 'updated': now}
+        out = {'id': rid, 'progress': dict(p), 'body': row['body'], 'updated': now, 'phase': row.get('phase')}
     _publish('notification_progress', out)
 
 
-def finish(rid, failed=False, body=None, title=None, origin=None):
+def finish(rid, failed=False, body=None, title=None, origin=None, action=None):
     """End an active row: done (success) or failed (error). Unread again, so
     the end toasts and a failure counts red. origin: the tab whose click did
-    the work skips the echo (it flashed its own words)."""
+    the work skips the echo (it flashed its own words). action: the button a
+    failed row wears (a retry, see repair()); a row that ended well wears none."""
     with _lock:
         row = _rows.get(rid)
         if not row or row['state'] != 'active':
@@ -270,16 +293,116 @@ def finish(rid, failed=False, body=None, title=None, origin=None):
         if not failed:
             p.update(percent=100, indeterminate=False)
         row.update(state='failed' if failed else 'done', level='error' if failed else 'success',
-                   updated=time.time(), read=False, progress=p)
+                   updated=time.time(), read=False, progress=p, phase=None,
+                   action=_clean_action(action) if failed else None)
         if body is not None:
             row['body'] = _text(body, BODY_MAX)
         if title is not None:
             row['title'] = _text(title, TITLE_MAX)
         _rows[rid] = row
-        _last_tick.pop(rid, None)
+        for d in (_last_tick, _moved, _watch):
+            d.pop(rid, None)
         _save_locked()
         out = dict(row)
     _publish('notification', dict(out, origin=origin))
+
+
+# ── the stall watch ────────────────────────────────────────────────────────
+# A download that stops moving used to sit at its last percent saying "in
+# progress" (a first Whisper fetch: 19 minutes, 2026-11-24). A producer that
+# knows its row should keep moving says so with watch(); a row quiet for that
+# long turns 'stalled', says for how long, and, given the hosts it pulls from,
+# says what core/net_check.py makes of them. Its next tick ends the stall.
+
+def watch(rid, after=30, hosts=()):
+    """Call this active row stalled once it has not ticked for `after` seconds.
+    hosts: the servers it downloads from, checked when it stalls so the row
+    can say why."""
+    global _dog
+    with _lock:
+        if rid not in _rows:
+            return
+        _watch[rid] = {'after': float(after), 'hosts': tuple(hosts or ()), 'why': ''}
+        _moved[rid] = time.time()
+        if _dog is None or not _dog.is_alive():
+            _dog = threading.Thread(target=_sweep_forever, name='notify-stall-watch', daemon=True)
+            _dog.start()
+
+
+def _sweep_forever():
+    while True:
+        time.sleep(SWEEP_S)
+        try:
+            _sweep()
+        except Exception as e:
+            logger.warning(f"[NOTIFY] stall watch: {e}")
+
+
+def span_words(seconds):
+    s = int(seconds)
+    return f"{s} s" if s < 120 else f"{s // 60} min"
+
+
+def _sweep(now=None):
+    """One look at the watched rows. Returns the ids that turned stalled just now."""
+    now = time.time() if now is None else now
+    out, fresh = [], []
+    with _lock:
+        for rid, w in list(_watch.items()):
+            row = _rows.get(rid)
+            if not row or row['state'] != 'active':
+                _watch.pop(rid, None)
+                continue
+            idle = now - _moved.get(rid, now)
+            if idle < w['after']:
+                continue
+            if row.get('phase') != 'stalled':
+                row['phase'], w['why'] = 'stalled', ''
+                fresh.append((rid, w['hosts']))
+            why = w['why'] or ('Checking the connection.' if w['hosts'] else '')
+            row['body'] = _text(f"No movement for {span_words(idle)}. {why}".strip(), BODY_MAX)
+            row['updated'] = now
+            out.append({'id': rid, 'progress': dict(row.get('progress') or {}), 'body': row['body'],
+                        'updated': now, 'phase': 'stalled'})
+    for o in out:
+        _publish('notification_progress', o)
+    for rid, hosts in fresh:
+        if hosts:
+            threading.Thread(target=_say_why, args=(rid, hosts), name='notify-stall-why', daemon=True).start()
+    return [rid for rid, _ in fresh]
+
+
+def _say_why(rid, hosts):
+    try:
+        from core import net_check
+        why = net_check.why(hosts)
+    except Exception as e:
+        logger.debug(f"[NOTIFY] stall check failed: {e}")
+        return
+    with _lock:
+        if rid in _watch and (_rows.get(rid) or {}).get('phase') == 'stalled':
+            _watch[rid]['why'] = why            # the next sweep puts it in the row
+
+
+def size_words(n):
+    n = max(0, int(n or 0))
+    if n < 1000 * 1000:
+        return f"{max(1, n // 1000)} KB" if n else "0 KB"
+    mb = n / 1e6
+    if mb < 10:
+        return f"{mb:.1f} MB"
+    return f"{mb:.0f} MB" if mb < 1000 else f"{mb / 1000:.1f} GB"
+
+
+def bytes_words(done, total=None, rate=None):
+    """'44 MB of 141 MB, 6.0 MB/s, about 16 s left'. rate in bytes a second."""
+    out = [f"{size_words(done)} of {size_words(total)}" if total else f"{size_words(done)} so far"]
+    if rate and rate > 0:
+        out.append(f"{size_words(rate)}/s")
+        if total and total > done:
+            left = (total - done) / rate
+            out.append(f"about {span_words(left) if left >= 1 else '1 s'} left")
+    return ', '.join(out)
 
 
 class _Handle:
@@ -289,6 +412,8 @@ class _Handle:
     def __init__(self, rid=None, born=None):
         self.id = rid
         self._born = born            # () -> rid, when lazy
+        self._name = ''
+        self._marks = []             # (monotonic time, bytes) over the last few seconds: the speed
 
     def _ensure(self):
         if self.id is None and self._born is not None:
@@ -307,23 +432,46 @@ class _Handle:
         if self._ensure():
             tick(self.id, text=body)
 
+    def name(self, what):
+        """What is coming down now (a file): bytes() leads its words with it."""
+        self._name = str(what or '')
+        self._marks = []
+        self.text(self._name)
+
+    def bytes(self, done, total=None):
+        """Bytes so far, said as size, speed and time left."""
+        now = time.monotonic()
+        self._marks = [m for m in self._marks if now - m[0] <= 5 and m[1] <= done] + [(now, done)]
+        t0, d0 = self._marks[0]
+        rate = (done - d0) / (now - t0) if now - t0 >= 1 else None
+        words = bytes_words(done, total, rate)
+        self.update(done, total, text=f"{self._name}: {words}" if self._name else words)
+
 
 @contextmanager
 def progress(title, source='core', go=None, key=None, body='', done_title=None, failed_title=None, lazy=False,
-             words=str):
+             words=str, stall=None, hosts=(), retry=None):
     """with progress("Downloading voice Amy", source="piper") as p: p.update(done, total)
     Leaves done (done_title names the finished thing); an exception leaves
     failed with its words (failed_title names that) and is re-raised. words:
     the exception to those words, when a library's own mislead (core/hf_words.py
     for the Hugging Face hub). lazy: no row until the first tick, for work
-    that is often already done."""
-    born = lambda: begin(title, source, go, key, body)
+    that is often already done. stall: seconds without a tick before the row
+    says it is not moving (watch()); hosts: where it downloads from, so it can
+    say why. retry: the repair a failed row offers as "Try again" (a name
+    given to register_repair(), with its argument: 'switch:STT_PROVIDER=x')."""
+    def born():
+        rid = begin(title, source, go, key, body)
+        if stall:
+            watch(rid, stall, hosts)
+        return rid
     h = _Handle(None if lazy else born(), born if lazy else None)
     try:
         yield h
     except BaseException as e:
         if h.id is not None:
-            finish(h.id, failed=True, body=words(e) or e.__class__.__name__, title=failed_title)
+            finish(h.id, failed=True, body=words(e) or e.__class__.__name__, title=failed_title,
+                   action={'repair': retry, 'label': 'Try again'} if retry else None)
         raise
     else:
         if h.id is not None:
@@ -358,7 +506,7 @@ def tqdm_for(handle):
                 self.n = (self.n or 0) + (n or 0)
                 done, total = self.n, self.total
             if self._unit in ('B', 'iB') and total:
-                handle.update(int(done), int(total))
+                handle.bytes(int(done), int(total))
 
         def close(self):
             pass
@@ -489,7 +637,9 @@ _repairing: set = set()           # names running now: a double click runs once
 
 
 def register_repair(name, fn):
-    """fn() -> words for what it did; raise to fail with the reason."""
+    """fn() -> words for what it did; raise to fail with the reason. A row may
+    name a fix with an argument after a colon ('switch:STT_PROVIDER=kokoro'):
+    the fix registered as 'switch' is then called with that argument."""
     _repairs[str(name)] = fn
 
 
@@ -501,7 +651,10 @@ def repair(rid, origin=None):
     if not action:
         raise LookupError('no such notification, or it has nothing to repair')
     name = action['repair']
-    fn = _repairs.get(name)
+    fn, arg = _repairs.get(name), None
+    if fn is None and ':' in name:
+        base, arg = name.split(':', 1)
+        fn = _repairs.get(base)
     if fn is None:
         raise LookupError(f"nothing can run the '{name}' repair right now")
     with _lock:
@@ -509,7 +662,7 @@ def repair(rid, origin=None):
             raise RuntimeError('already repairing')
         _repairing.add(name)
     try:
-        words = str(fn() or 'Repaired.')
+        words = str((fn() if arg is None else fn(arg)) or 'Repaired.')
         ok = True
     except Exception as e:
         logger.warning(f"[NOTIFY] repair '{name}' failed: {e}")
@@ -519,7 +672,9 @@ def repair(rid, origin=None):
             _repairing.discard(name)
     with _lock:
         r = _rows.get(rid)
-        if r is not None:
+        if r is not None and r['state'] == 'active':
+            out = None                  # the fix put this row back to work (a retry): it is that work's row now
+        elif r is not None:
             if ok:
                 r.update(level='success', state='done', body=_text(words, BODY_MAX), action=None,
                          title='Repaired')

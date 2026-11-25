@@ -339,7 +339,8 @@ def _ensure_model_downloaded() -> Path:
         resp.raise_for_status()
         total = int(resp.headers.get('Content-Length') or 0)
         with progress("Downloading the Silero voice detector", source='core', key='silero-vad',
-                      go={'view': 'settings', 'tab': 'stt'}, done_title='Silero voice detector ready') as p, \
+                      go={'view': 'settings', 'tab': 'stt'}, done_title='Silero voice detector ready',
+                      stall=30, hosts=('github.com', 'raw.githubusercontent.com')) as p, \
                 open(tmp_path, 'wb') as f:
             done = 0
             for chunk in resp.iter_content(65536):

@@ -289,6 +289,13 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - Linux / macOS: look for `export HF_HUB_OFFLINE=1` in `~/.bashrc`, `~/.profile`, `~/.zshrc` or the service unit that starts Sapphire; remove it and restart.
 - The same words appear in `user/logs/kokoro.log` and under the TTS tab's Test button. The variable is read once at start, so a restart is needed either way.
 
+**A model download says "not moving", or fails and names your DNS**
+- A download with no bytes for 20-30 seconds turns yellow and says so. For Whisper, Kokoro and the embedding model Sapphire then tries Hugging Face's other download path by itself; if both fail the row says why and offers **Try again**.
+- "This network's DNS is giving out-of-date addresses": your router (or whatever answers DNS on your network) is handing out old addresses for the download server. Restart the router, or set this computer's DNS to a public one such as `1.1.1.1` or `9.9.9.9`, then press Try again.
+- "not answering from any address": the trouble is on their side; try again later.
+- "This computer's date or time looks wrong": fix the clock (a virtual machine set to the wrong time zone does this), then Try again.
+- The detail of each attempt is in `user/logs/hf_fetch.log`. What this check contacts, and when it stays silent, is in NETWORK.md under "What never phones home".
+
 **Phone call problems** — see PHONE-CALLS.md's Quick Troubleshooting (403 on register, one-way audio, hangup issues).
 
 ## Prompt issues

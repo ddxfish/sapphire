@@ -21,7 +21,7 @@ let gearOpen = false;
 const TABS = [{ id: 'notifications', label: 'Notifications', icon: '\u{1F514}' }];
 const CHIPS = [['all', 'All'], ['active', 'Active'], ['critical', 'Critical'], ['error', 'Error'],
                ['warning', 'Warning'], ['success', 'Success'], ['info', 'Info']];
-const ICON = { info: 'ℹ', success: '✓', warning: '⚠', error: '✖', critical: '‼', active: '↻' };
+const ICON = { info: 'ℹ', success: '✓', warning: '⚠', error: '✖', critical: '‼', active: '↻', waiting: '⏸', stalled: '⚠' };
 const TOAST_LEVELS = ['success', 'warning', 'error', 'critical'];
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -152,15 +152,13 @@ function update() {
 }
 
 function rowHtml(r) {
-    const lvl = r.state === 'active' ? 'active' : r.level;
-    const p = r.progress;
-    const indeterminate = r.state === 'active' && (!p || p.indeterminate || p.percent == null);
-    const bar = r.state === 'active'
-        ? `<div class="nc-bar-track"><div class="nc-bar-fill${indeterminate ? ' indeterminate' : ''}" style="width:${indeterminate ? 100 : p.percent}%"></div></div>` : '';
-    const pct = r.state === 'active' && !indeterminate ? `<span class="nc-pct">${p.percent}%</span>` : '';
-    const tail = r.state === 'failed' ? ' · failed' : r.state === 'done' ? ' · done' : r.state === 'active' ? ' · in progress' : '';
-    return `<div class="nc-row nc-${lvl}${fresh.has(r.id) ? ' nc-new' : ''}${r.go ? ' nc-link' : ''}" data-id="${esc(r.id)}"${r.go ? ' title="Open"' : ''}>
-        <span class="nc-icon" aria-hidden="true">${ICON[lvl] || ''}</span>
+    const v = notify.view(r);
+    const lvl = v.active ? 'active' : r.level;
+    const bar = notify.barHtml(r);
+    const pct = v.active && !v.indeterminate ? `<span class="nc-pct">${v.percent}%</span>` : '';
+    const tail = r.state === 'failed' ? ' · failed' : r.state === 'done' ? ' · done' : v.active ? ` · ${v.word}` : '';
+    return `<div class="nc-row nc-${lvl}${v.phase ? ` nc-${v.phase}` : ''}${fresh.has(r.id) ? ' nc-new' : ''}${r.go ? ' nc-link' : ''}" data-id="${esc(r.id)}"${r.go ? ' title="Open"' : ''}>
+        <span class="nc-icon" aria-hidden="true">${ICON[v.phase || lvl] || ''}</span>
         <div class="nc-main">
             <div class="nc-title">${esc(r.title)}${pct}</div>
             ${r.body ? `<div class="nc-body">${esc(r.body)}</div>` : ''}

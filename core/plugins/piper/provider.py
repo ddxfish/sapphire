@@ -287,7 +287,8 @@ class PiperTTSProvider(BaseTTSProvider):
         try:
             with progress(f"Downloading voice: {label}", source="piper", lazy=True,
                           go={"view": "settings", "tab": "plugins"}, key=f"piper-voice:{name}",
-                          done_title=f"Voice ready: {label}", failed_title=f"Voice download failed: {label}") as p:
+                          done_title=f"Voice ready: {label}", failed_title=f"Voice download failed: {label}",
+                          stall=30, hosts=("huggingface.co",)) as p:
                 self._download_voice(name, handle=p)
         except Exception as e:
             logger.error(f"[piper] warm download failed for '{name}': {e!r}")

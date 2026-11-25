@@ -253,6 +253,27 @@ export function ago(ts) {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/** How a row reads while it is active: the one answer for every list that
+ *  paints rows (sidebar, Notifications page, setup's Downloads). phase
+ *  'waiting' = in line behind other work, nothing to show moving; 'stalled' =
+ *  the server's stall watch (core/notify.py watch) says it stopped moving. */
+export function view(r) {
+    const active = r.state === 'active';
+    const phase = active ? (r.phase || '') : '';
+    const p = r.progress;
+    const indeterminate = active && (!p || p.indeterminate || p.percent == null);
+    return { active, phase, indeterminate, percent: active && !indeterminate ? p.percent : null,   // a row that ended may have no progress at all
+             word: !active ? '' : phase === 'waiting' ? 'waiting' : phase === 'stalled' ? 'not moving' : 'in progress' };
+}
+
+/** An active row's bar, '' when it has none (done, failed, or waiting its turn). attrs: extra attributes for the fill. */
+export function barHtml(r, attrs = '') {
+    const v = view(r);
+    if (!v.active || v.phase === 'waiting') return '';
+    const cls = `nc-bar-fill${v.indeterminate ? ' indeterminate' : ''}${v.phase === 'stalled' ? ' stalled' : ''}`;
+    return `<div class="nc-bar-track"><div class="${cls}"${attrs} style="width:${v.indeterminate ? 100 : v.percent}%"></div></div>`;
+}
+
 export async function refresh() {
     try {
         const res = await fetchWithTimeout('/api/notifications?limit=500', {}, 15000);
@@ -393,6 +414,7 @@ export function init(initData) {
         if (!r) return;
         r.progress = d.progress;
         if (d.body !== undefined) r.body = d.body;
+        if (d.phase !== undefined) r.phase = d.phase;
         r.updated = d.updated;
         _emit();
     });

@@ -176,3 +176,97 @@ def test_settings_reach_the_worker(monkeypatch):
     p._cpu_only = True
     assert p._settings()['device'] == 'cpu'
     assert json.dumps(p._settings())
+
+
+# --- the model download has ONE owner (2026-11-24: one dead server, three tries, 19 minutes) ---
+
+def _boot(monkeypatch, device, card, deaths=1):
+    """A real __init__ over a fake _start: dies `deaths` times, then answers on the CPU."""
+    starts = []
+    monkeypatch.setattr(fw.importlib.util, 'find_spec', lambda name: object())
+    monkeypatch.setattr(fw.config, 'FASTER_WHISPER_DEVICE', device, raising=False)
+    monkeypatch.setattr(fw, '_has_card', lambda: card)
+    monkeypatch.setattr(fw.FasterWhisperProvider, '_kill', lambda self: None)
+
+    def _start(self):
+        starts.append(self._cpu_only)
+        if len(starts) <= deaths:
+            raise fw._Dead('no answer in 300 s')
+        self.device, self.compute = 'cpu', 'int8'
+    monkeypatch.setattr(fw.FasterWhisperProvider, '_start', _start)
+    return starts
+
+
+def test_a_death_with_no_card_never_blames_a_card(monkeypatch, rows):
+    starts = _boot(monkeypatch, 'cuda', card=False)
+    p = fw.FasterWhisperProvider(model_size='tiny')
+    assert starts == [False, True] and p.why == "the worker crashed loading (no answer in 300 s)"
+
+
+def test_a_death_with_a_card_says_so(monkeypatch, rows):
+    _boot(monkeypatch, 'cuda', card=True)
+    assert "loading on the card" in fw.FasterWhisperProvider(model_size='tiny').why
+
+
+def test_a_death_already_on_the_cpu_is_not_tried_again_the_same_way(monkeypatch, rows):
+    starts = _boot(monkeypatch, 'cpu', card=False)
+    with pytest.raises(RuntimeError, match="the worker died"):
+        fw.FasterWhisperProvider(model_size='tiny')
+    assert starts == [False]
+
+
+def _starting(monkeypatch, p, answers):
+    """_start() up to its message loop, over a fake process."""
+    sent, killed = [], []
+    monkeypatch.setattr(fw.subprocess, 'Popen', lambda *a, **k: SimpleNamespace(stdout=[]))
+    monkeypatch.setattr(fw, '_open_log', lambda: open(fw.os.devnull, 'w'))
+    monkeypatch.setattr(p, '_send', sent.append)
+    monkeypatch.setattr(p, '_kill', lambda: killed.append(1))
+    answers = iter(answers)
+    monkeypatch.setattr(p, '_next', lambda wait: next(answers))
+    return sent, killed
+
+
+def test_a_failed_download_ends_the_start_with_its_reason_and_nothing_goes_to_the_worker(monkeypatch):
+    p = _client(_proc=None)
+    sent, killed = _starting(monkeypatch, p, [{'need': 'Systran/faster-whisper-tiny', 'size': 'tiny'}])
+    monkeypatch.setattr(fw, '_download_with_progress',
+                        lambda repo, size: (_ for _ in ()).throw(RuntimeError("This network's DNS is out of date.")))
+    with pytest.raises(RuntimeError) as e:
+        p._start()
+    assert str(e.value) == "Failed to initialize STT model: This network's DNS is out of date."
+    assert sent == [] and len(killed) == 2      # once on the way in, once for the worker left waiting
+
+
+def test_a_download_that_lands_hands_the_worker_its_folder(monkeypatch):
+    p = _client(_proc=None)
+    sent, _ = _starting(monkeypatch, p, [{'need': 'Systran/faster-whisper-tiny', 'size': 'tiny'},
+                                         {'ready': True, 'device': 'cpu', 'compute': 'int8'}])
+    monkeypatch.setattr(fw, '_download_with_progress', lambda repo, size: f"/cache/{repo}")
+    p._start()
+    assert sent == [{'path': '/cache/Systran/faster-whisper-tiny'}] and p.device == 'cpu'
+
+
+def test_the_download_goes_through_the_door_under_its_own_row(monkeypatch):
+    from contextlib import contextmanager
+    from core import hf_fetch, notify
+    rows_, calls = [], []
+
+    @contextmanager
+    def progress(title, **kw):
+        rows_.append((title, kw.get('key'), kw.get('failed_title')))
+        yield 'the-handle'
+    monkeypatch.setattr(notify, 'progress', progress)
+    monkeypatch.setattr(hf_fetch, 'fetch', lambda repo, **kw: calls.append((repo, kw)) or '/cache/snap')
+    assert fw._download_with_progress('Systran/faster-whisper-base.en', 'base.en') == '/cache/snap'
+    assert rows_ == [("Downloading the Whisper model (base.en)", 'whisper-model', "Whisper model download failed (base.en)")]
+    assert calls[0][0] == 'Systran/faster-whisper-base.en' and calls[0][1]['handle'] == 'the-handle'
+    assert 'model.bin' in calls[0][1]['patterns']
+    assert fw._download_with_progress(None, 'nonsense') is None and len(calls) == 1
+
+
+def test_the_worker_never_downloads():
+    """Both of its loads are local only: a model the parent could not fetch is not fetched behind its back."""
+    src = (fw.ROOT / 'core' / 'stt' / 'whisper_worker.py').read_text(encoding='utf-8')
+    load = src[src.index('def _load('):src.index('def _on_card(')]
+    assert load.count('WhisperModel(') == 2 and load.count('local_files_only=True') == 2

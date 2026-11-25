@@ -29,6 +29,14 @@ if sys.platform == 'win32':
 os.environ.setdefault("TIKTOKEN_CACHE_DIR",
                       str(Path(__file__).parent / "user" / "cache" / "tiktoken"))
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+# Hugging Face serves a large file two ways. The newer one (xet) talks to a
+# second server and, when that server cannot be reached, hangs for minutes
+# with no timeout of ours (a first Whisper download: 19 minutes at 0%,
+# 2026-11-24). The classic path times out in seconds and is plenty fast for a
+# model fetched once, so it is the default for every hub call in this process
+# and its children. The downloads a person waits on go through core/hf_fetch.py,
+# which still tries xet second. setdefault: a user's own choice wins.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 # Windows MAX_PATH safety: HuggingFace's cache nests ~120 chars deep under the
 # profile dir and overflows 260 with a long username. Must be set HERE, before
 # the TTS server spawns with a copy of this env — it used to live in
@@ -941,6 +949,13 @@ class VoiceChatSystem:
             old, self.whisper_client = self.whisper_client, get_stt_provider(provider_name)
             self._close_stt(old)
             self.stt_why = None
+            if isinstance(self.whisper_client, NullWhisperClient):
+                # The registry fell back to the null client (the reason is its
+                # last_error, which the caller says): nothing was switched to, so
+                # no microphone is opened and no hook hears of a provider that
+                # never came up. The log used to say "switched" here (2026-11-24).
+                logger.warning(f"STT provider {provider_name} did not start; speech-to-text stays off")
+                return True
             # Ensure real recorder if switching from disabled (not needed for router)
             from core.stt.stt_null import NullAudioRecorder
             if provider_name == 'sapphire_router':
@@ -1042,6 +1057,7 @@ class VoiceChatSystem:
 
     def _start_kokoro_server(self, base_dir):
         """Start Kokoro TTS subprocess if not already running."""
+        self.kokoro_why = None      # why it was left off this time (a failed model download), for the switch that waits
         if self.tts_server_manager:
             if self.tts_server_manager.is_running():
                 return
@@ -1124,10 +1140,17 @@ class VoiceChatSystem:
             gen = self._kokoro_gen
 
         def _fetch_then_spawn():
-            kokoro_files.fetch(need)
+            ok = kokoro_files.fetch(need)
             with self._kokoro_lock:
                 if gen != self._kokoro_gen:
                     logger.info("Kokoro start abandoned: the provider changed during the model download")
+                    return
+                if not ok:
+                    # No worker: it would fetch the same files itself, with no row,
+                    # restarted forever by its monitor. The reason is said once, on
+                    # the download's row, and to whoever waits on the switch.
+                    self.kokoro_why = kokoro_files.last_error or "its voice model could not be downloaded"
+                    logger.warning("Kokoro not started: its files did not download")
                     return
                 _spawn()
 

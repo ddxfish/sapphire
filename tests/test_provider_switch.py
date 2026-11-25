@@ -16,7 +16,7 @@ class _Rows:
         self.born, self.ended, self.ticks = [], [], []
         self._n = 0
 
-    def begin(self, title, source='core', go=None, key=None, body=''):
+    def begin(self, title, source='core', go=None, key=None, body='', phase=None):
         self._n += 1
         rid = f"row{self._n}"
         self.born.append((rid, title, key, go))
@@ -311,3 +311,44 @@ def test_a_job_the_exit_cut_short_changes_nothing_and_stays_owed(wizard):
     assert h.settings.get(ps.PENDING) == {'items': {'TTS_PROVIDER': 'kokoro'}, 'tries': 0}
     assert h.settings.get('TTS_PROVIDER') == 'piper' and h.sys.switch_tts_provider.call_count == 1      # no recover, nothing saved
     assert h.rows.ended == [] and h.events == []
+
+
+# --- waiting rows, the fast Kokoro failure, Try again (the 19-minute queue, 2026-11-24) ---
+
+def test_a_switch_behind_another_is_born_waiting_and_says_for_what(harness, monkeypatch):
+    born, ticks = [], []
+    monkeypatch.setattr(ps.notify, 'begin', lambda title, **kw: born.append((title, kw.get('phase'), kw.get('body'))) or f"row{len(born)}")
+    monkeypatch.setattr(ps.notify, 'tick', lambda rid, **kw: ticks.append((rid, kw)))
+    harness.settings.set('STT_PROVIDER', 'none', persist=False, _skip_callbacks=True)
+    ps.start([('TTS_PROVIDER', 'none'), ('STT_PROVIDER', 'none'), ('WAKE_WORD_ENABLED', False)])
+    ps.wait(timeout=5)
+    assert [(b[1], b[2]) for b in born] == [(None, None), ('waiting', "Waiting for speech-to-text to finish."),
+                                           ('waiting', "Waiting for voice to finish.")]
+    # each waiting row is told when its turn comes; the first never waited
+    assert [t for t in ticks if t[1] == {'phase': None, 'text': ''}] == [('row2', {'phase': None, 'text': ''}),
+                                                                        ('row3', {'phase': None, 'text': ''})]
+
+
+def test_kokoro_left_off_fails_the_switch_at_once_with_the_download_reason(harness, monkeypatch):
+    h = harness
+    monkeypatch.setattr(ps, 'TTS_READY_S', 600)             # the old wait: this must not be it
+    h.settings.set('TTS_PROVIDER', 'none', persist=False, _skip_callbacks=True)
+    h.sys.tts._provider = SimpleNamespace(is_available=lambda: False, _health_why='not reachable')
+    h.sys.kokoro_why = "This network's DNS is giving out-of-date addresses."
+    ps.start([('TTS_PROVIDER', 'kokoro')])
+    ps.wait(timeout=5)
+    assert h.settings.get('TTS_PROVIDER') == 'none'
+    assert "out-of-date addresses" in h.rows.ended[0][3] and h.rows.ended[0][1] is True
+
+
+def test_try_again_starts_the_same_switch_and_refuses_nonsense(harness, monkeypatch):
+    started = []
+    monkeypatch.setattr(ps, 'start', lambda items, **kw: started.append((items, kw)))
+    assert ps._retry('STT_PROVIDER=faster_whisper') == "Trying again."
+    assert ps._retry('WAKE_WORD_ENABLED=True') == "Trying again."
+    assert started == [([('STT_PROVIDER', 'faster_whisper')], {'wake': True}),
+                       ([('WAKE_WORD_ENABLED', True)], {'wake': True})]
+    for bad in ('NOT_A_KEY=x', 'STT_PROVIDER', '', None):
+        with pytest.raises(ValueError):
+            ps._retry(bad)
+    assert ps.notify._repairs['switch'].__name__ == '_retry'      # registered at import, as the button's name

@@ -40,24 +40,31 @@ def missing(voices=(DEFAULT_VOICE,)):
     return out
 
 
+last_error = None       # why the last fetch() failed, in words; None when it worked
+
+
 def fetch(files):
-    """Download `files` under one progress row in the notification center.
-    True when they all landed; False (logged, the row failed with the cause in
-    words, core/hf_words.py) when they did not: the worker then tries itself."""
+    """Download `files` through the download door (core/hf_fetch.py), under one
+    progress row in the notification center. True when they all landed; False
+    (logged, last_error and the row carry the cause in words) when they did
+    not. The caller then leaves the worker OFF: started anyway it tried the
+    same download itself with no row, and its monitor restarted it to try
+    again for as long as Sapphire ran."""
+    global last_error
+    last_error = None
     if not files:
         return True
-    from huggingface_hub import hf_hub_download
-    from core.notify import progress, tqdm_for
+    from core import hf_fetch
+    from core.notify import progress
     try:
         with progress("Downloading the Kokoro voice model", source='core',
                       go={'view': 'settings', 'tab': 'tts'}, key='kokoro-model',
                       done_title='Kokoro voice model ready',
-                      failed_title='Kokoro voice model download failed', words=why) as p:
-            rep = tqdm_for(p)
-            for f in files:
-                p.text(f)
-                hf_hub_download(REPO_ID, f, **({'tqdm_class': rep} if rep else {}))
+                      failed_title='Kokoro voice model download failed', words=why,
+                      retry='switch:TTS_PROVIDER=kokoro') as p:
+            hf_fetch.fetch(REPO_ID, files=files, handle=p)
         return True
     except Exception as e:
-        logger.warning(f"[TTS] Kokoro files not fetched ({type(e).__name__}: {why(e)}); the worker will try itself")
+        last_error = why(e)
+        logger.warning(f"[TTS] Kokoro files not fetched ({type(e).__name__}: {last_error}); the worker stays off")
         return False

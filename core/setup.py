@@ -317,7 +317,8 @@ def ensure_wakeword_models() -> bool:
             from openwakeword import utils as oww_utils
             with progress("Downloading wake word models", source='core', lazy=True,
                           go={'view': 'settings', 'tab': 'wakeword'}, key='wakeword-models',
-                          done_title='Wake word models ready') as p:
+                          done_title='Wake word models ready',
+                          stall=30, hosts=('github.com', 'objects.githubusercontent.com')) as p:
                 rep = tqdm_for(p)
                 real = oww_utils.tqdm
                 if rep:

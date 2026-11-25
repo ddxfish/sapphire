@@ -17,52 +17,57 @@ def test_missing_lists_uncached_files_in_download_order(monkeypatch):
     assert kf.missing(('af_heart', 'am_adam')) == []
 
 
-def test_fetch_is_one_row_that_ends_ready(monkeypatch):
-    import huggingface_hub
+def test_fetch_is_one_row_through_the_door_that_ends_ready(monkeypatch):
+    from core import hf_fetch
     got = []
 
-    def fake_download(repo, fn, tqdm_class=None):
+    def fake_fetch(repo, files=(), handle=None, **kw):
         assert repo == kf.REPO_ID
-        bar = tqdm_class(total=100, unit='B')
-        bar.update(60)
-        bar.update(40)
-        got.append(fn)
-        return f'/dl/{fn}'
+        for f in files:
+            handle.name(f)
+            handle.bytes(60, 100)
+            handle.bytes(100, 100)
+            got.append(f)
+        return [f'/dl/{f}' for f in files]
 
-    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', fake_download)
-    assert kf.fetch([kf.MODEL_FILE, kf.voice_file('af_heart')]) is True
+    monkeypatch.setattr(hf_fetch, 'fetch', fake_fetch)
+    assert kf.fetch([kf.MODEL_FILE, kf.voice_file('af_heart')]) is True and kf.last_error is None
     assert got == [kf.MODEL_FILE, 'voices/af_heart.pt']
     rows = [r for r in notify.rows() if r.get('key') == 'kokoro-model']
     assert len(rows) == 1
     r = rows[0]
     assert r['state'] == 'done' and r['level'] == 'success' and r['title'] == 'Kokoro voice model ready'
-    assert r['progress']['percent'] == 100 and r['go']['tab'] == 'tts'
+    assert r['progress']['percent'] == 100 and r['go']['tab'] == 'tts' and r['action'] is None
 
 
-def test_fetch_failure_is_a_failed_row_and_false(monkeypatch):
-    import huggingface_hub
+def test_fetch_failure_is_a_failed_row_with_a_retry_and_false(monkeypatch):
+    from core import hf_fetch
 
-    def boom(repo, fn, tqdm_class=None):
-        raise ConnectionError('hub unreachable')
+    def boom(repo, **kw):
+        raise hf_fetch.FetchError("This network's DNS is giving out-of-date addresses.", 'stale-dns')
 
-    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', boom)
+    monkeypatch.setattr(hf_fetch, 'fetch', boom)
     assert kf.fetch([kf.MODEL_FILE]) is False
+    assert kf.last_error == "This network's DNS is giving out-of-date addresses."
     r = next(r for r in notify.rows() if r.get('key') == 'kokoro-model')
     assert r['state'] == 'failed' and r['level'] == 'error'
-    assert r['title'] == 'Kokoro voice model download failed' and 'hub unreachable' in r['body']
+    assert r['title'] == 'Kokoro voice model download failed' and 'out-of-date addresses' in r['body']
+    assert r['action'] == {'repair': 'switch:TTS_PROVIDER=kokoro', 'label': 'Try again'}
 
 
-def test_fetch_in_offline_mode_names_the_variable(monkeypatch):
-    """The hub wraps its own offline mode in "check your Internet connection";
-    the row says what is actually on and what to do (user report 2026-10-21)."""
-    import huggingface_hub
+def test_offline_mode_words_from_the_child_reach_the_row(monkeypatch):
+    """The download runs in a child now, so the hub's exception chain never
+    crosses over: the child turns it into words (core/hf_words.py, the user
+    report of 2026-10-21) and they arrive whole."""
+    from core import hf_fetch
+    from core.hf_words import why
     from huggingface_hub.errors import LocalEntryNotFoundError, OfflineModeIsEnabled
     monkeypatch.setenv('HF_HUB_OFFLINE', '1')
-
-    def boom(repo, fn, tqdm_class=None):
+    try:
         raise LocalEntryNotFoundError('... make sure your Internet connection is on.') from OfflineModeIsEnabled('Cannot reach')
-
-    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', boom)
+    except LocalEntryNotFoundError as e:
+        words = why(e)                      # what core/hf_fetch_worker.py sends
+    monkeypatch.setattr(hf_fetch, 'fetch', lambda repo, **kw: (_ for _ in ()).throw(hf_fetch.FetchError(words)))
     assert kf.fetch([kf.voice_file('af_heart')]) is False
     r = next(r for r in notify.rows() if r.get('key') == 'kokoro-model')
     assert r['state'] == 'failed' and 'HF_HUB_OFFLINE' in r['body'] and 'offline mode is on' in r['body']
@@ -86,4 +91,6 @@ def test_parent_fetches_off_the_boot_thread_with_a_generation_guard():
     src = inspect.getsource(sapphire.VoiceChatSystem._start_kokoro_server)
     assert 'kokoro_files.missing(' in src and 'kokoro_files.fetch(' in src
     assert 'threading.Thread' in src and '_kokoro_gen' in src
+    # a failed fetch leaves the worker off and says why to the switch that waits
+    assert 'if not ok:' in src and 'kokoro_why' in src and src.index('if not ok:') < src.rindex('_spawn()')
     assert '_kokoro_gen' in inspect.getsource(sapphire.VoiceChatSystem._stop_kokoro_server)

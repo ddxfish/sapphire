@@ -31,6 +31,12 @@ def n(tmp_path, monkeypatch, bus):
     monkeypatch.setattr(notify, '_rows', {})
     monkeypatch.setattr(notify, '_once', [])
     monkeypatch.setattr(notify, '_last_tick', {})
+    monkeypatch.setattr(notify, '_moved', {})
+    monkeypatch.setattr(notify, '_watch', {})
+    monkeypatch.setattr(notify, '_dog', None)
+    monkeypatch.setattr(notify, '_repairs', {})      # a test's repair must not replace the app's (the 'switch' retry)
+    monkeypatch.setattr(notify, '_repairing', set())
+    monkeypatch.setattr(notify, '_sweep_forever', lambda: None)   # tests call _sweep() themselves
     monkeypatch.setattr(notify, '_loaded', False)
     monkeypatch.setattr(notify, '_hooked', False)
     monkeypatch.setattr(notify, '_boot_results', lambda: None)   # the dev box has real result files
@@ -330,3 +336,125 @@ class TestWave5:
         assert n.rows() == []
         bus.publish('sapphire_health_alert', {'type': 'backup_ship_refused', 'reason': 'no targets'})
         assert n.rows()[0]['level'] == 'error'
+
+
+class TestPhases:
+    """Waiting (in line) and stalled (not moving): what an active row says
+    besides 'in progress' (the 19-minute silent Whisper download, 2026-11-24)."""
+
+    def test_a_row_can_be_born_waiting_and_a_tick_starts_it(self, n, seen):
+        rid = n.begin("Switching voice to piper", phase='waiting', body="waiting for speech-to-text")
+        assert n.get(rid)['phase'] == 'waiting'
+        n.tick(rid, phase=None, text='')
+        assert n.get(rid)['phase'] is None
+        assert seen[-1]['data']['phase'] is None and seen[-1]['data']['body'] == ''
+
+    def test_only_an_active_row_has_a_phase(self, n):
+        assert n.get(n.notify("done thing", phase='waiting'))['phase'] is None
+        rid = n.begin("x", phase='nonsense')
+        assert n.get(rid)['phase'] is None
+
+    def test_a_quiet_watched_row_turns_stalled_and_says_how_long(self, n, seen, monkeypatch):
+        monkeypatch.setattr(n.time, 'time', lambda: 1000.0)
+        rid = n.begin("Downloading the model")
+        n.watch(rid, after=30)
+        assert n._sweep(now=1029.0) == [] and n.get(rid)['phase'] is None
+        assert n._sweep(now=1045.0) == [rid]
+        row = n.get(rid)
+        assert row['phase'] == 'stalled' and row['body'] == "No movement for 45 s."
+        assert seen[-1]['type'] == 'notification_progress' and seen[-1]['data']['phase'] == 'stalled'
+        assert n._sweep(now=1200.0) == []                       # still stalled: not fresh again
+        assert n.get(rid)['body'] == "No movement for 3 min."
+
+    def test_an_unwatched_row_never_stalls(self, n):
+        rid = n.begin("Switching speech-to-text")
+        assert n._sweep(now=n.time.time() + 9999) == [] and n.get(rid)['phase'] is None
+
+    def test_movement_ends_the_stall_and_clears_the_watch_words(self, n, monkeypatch):
+        monkeypatch.setattr(n.time, 'time', lambda: 1000.0)
+        rid = n.begin("Downloading the model")
+        n.watch(rid, after=30)
+        n._sweep(now=1040.0)
+        n.tick(rid, done=5, total=10)
+        row = n.get(rid)
+        assert row['phase'] is None and row['body'] == '' and row['progress']['percent'] == 50
+
+    def test_a_producer_can_hold_the_stall_while_it_talks(self, n):
+        rid = n.begin("Downloading the model")
+        n.tick(rid, phase='stalled', text="Trying the other path.")
+        n.tick(rid, phase='stalled', text="Still trying.")
+        assert n.get(rid)['phase'] == 'stalled'
+
+    def test_the_stalled_row_says_why_once_the_check_answers(self, n, monkeypatch):
+        import sys, types
+        fake = types.SimpleNamespace(why=lambda hosts: f"{hosts[0]} does not answer.")
+        monkeypatch.setitem(sys.modules, 'core.net_check', fake)
+        import core
+        monkeypatch.setattr(core, 'net_check', fake, raising=False)
+        monkeypatch.setattr(n.time, 'time', lambda: 1000.0)
+        rid = n.begin("Downloading the model")
+        n.watch(rid, after=30, hosts=('example.invalid',))
+        n._sweep(now=1040.0)
+        assert "Checking the connection." in n.get(rid)['body']
+        n._say_why(rid, ('example.invalid',))                   # what the thread does
+        n._sweep(now=1042.0)
+        assert n.get(rid)['body'] == "No movement for 42 s. example.invalid does not answer."
+
+    def test_finish_ends_the_watch(self, n):
+        rid = n.begin("Downloading the model")
+        n.watch(rid, after=30)
+        n.finish(rid)
+        assert rid not in n._watch and rid not in n._moved and n.get(rid)['phase'] is None
+
+    def test_progress_takes_a_stall_and_watches_its_row(self, n):
+        with n.progress("Downloading", stall=20, hosts=('a.example',)) as p:
+            assert n._watch[p.id] == {'after': 20.0, 'hosts': ('a.example',), 'why': ''}
+
+    def test_byte_words(self, n):
+        assert n.bytes_words(44_000_000, 141_000_000, 6_000_000) == "44 MB of 141 MB, 6.0 MB/s, about 16 s left"
+        assert n.bytes_words(2_500_000) == "2.5 MB so far"
+        assert n.bytes_words(1_200_000_000, 3_100_000_000) == "1.2 GB of 3.1 GB"
+        assert n.bytes_words(0, 500_000) == "0 KB of 500 KB"
+
+    def test_a_handle_says_bytes_with_the_file_name_in_front(self, n):
+        with n.progress("Downloading the Kokoro voice model") as p:
+            p.name("kokoro-v1_0.pth")
+            p.bytes(1_000_000, 4_000_000)
+            assert n.get(p.id)['body'] == "kokoro-v1_0.pth: 1.0 MB of 4.0 MB"
+
+
+
+class TestRetry:
+    """A failed download's row offers Try again: a repair named with its argument."""
+
+    def test_a_failed_progress_row_wears_its_retry_and_a_good_one_wears_nothing(self, n):
+        with pytest.raises(RuntimeError):
+            with n.progress("Downloading", key='dl', retry='switch:STT_PROVIDER=faster_whisper'):
+                raise RuntimeError("dead DNS")
+        row = n.rows()[0]
+        assert row['action'] == {'repair': 'switch:STT_PROVIDER=faster_whisper', 'label': 'Try again'}
+        with n.progress("Downloading", key='dl', retry='switch:STT_PROVIDER=faster_whisper'):
+            pass                                            # the same row, re-fired, ends well
+        assert n.rows()[0]['id'] == row['id'] and n.rows()[0]['action'] is None
+
+    def test_a_repair_name_can_carry_its_argument(self, n):
+        got = []
+        n.register_repair('switch', lambda arg: got.append(arg) or "Trying again.")
+        rid = n.notify("Download failed", 'error', action='switch:TTS_PROVIDER=kokoro')
+        assert n.repair(rid) == (True, "Trying again.") and got == ['TTS_PROVIDER=kokoro']
+        assert n.get(rid)['title'] == 'Repaired'
+
+    def test_a_fix_that_put_the_row_back_to_work_keeps_the_row_working(self, n):
+        """Try again re-fires the row as an active download before it returns:
+        the repair must not stamp 'Repaired, done' over work in flight."""
+        def retry(arg):
+            n.begin("Downloading", key='dl')                # what the retried download does
+            return "Trying again."
+        n.register_repair('switch', retry)
+        with pytest.raises(RuntimeError):
+            with n.progress("Downloading", key='dl', retry='switch:X=y'):
+                raise RuntimeError("dead DNS")
+        rid = n.rows()[0]['id']
+        assert n.repair(rid) == (True, "Trying again.")
+        row = n.get(rid)
+        assert row['state'] == 'active' and row['title'] == "Downloading"
