@@ -58,11 +58,19 @@ class _Quiet:
     def bytes(self, done, total=None): pass
 
 
+def _has_xet():
+    return importlib.util.find_spec('hf_xet') is not None
+
+
 def _routes():
-    """(name, HF_HUB_DISABLE_XET for the child), the first tried first."""
+    """(name, HF_HUB_DISABLE_XET for the child), the first tried first. Behind a
+    proxy there is the classic path only: it is the one known to ride the proxy
+    the environment names, and SOCKS mode promises nothing goes around it."""
     out = [('classic', '1')]
-    if importlib.util.find_spec('hf_xet') is not None:
-        out.append(('xet', '0'))
+    if _has_xet():
+        from core import net_check
+        if not net_check._proxied():
+            out.append(('xet', '0'))
     return out
 
 
@@ -140,7 +148,10 @@ def fetch(repo, files=(), patterns=(), revision=None, handle=None, stall=STALL_S
     returns its folder. files: those files, returns their paths in order.
     Raises FetchError with the reason in words."""
     handle = handle or _Quiet()
-    job = {'repo': repo, 'files': list(files), 'patterns': list(patterns), 'revision': revision}
+    # clean: where the xet path exists, a partial file may be its work, and the classic
+    # path would resume it as if it were its own (hf_fetch_worker._start_clean)
+    job = {'repo': repo, 'files': list(files), 'patterns': list(patterns), 'revision': revision,
+           'clean': _has_xet()}
     with _guard:
         lock = _locks.setdefault(repo, threading.Lock())
     with lock:

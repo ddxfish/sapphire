@@ -346,9 +346,31 @@ def test_try_again_starts_the_same_switch_and_refuses_nonsense(harness, monkeypa
     monkeypatch.setattr(ps, 'start', lambda items, **kw: started.append((items, kw)))
     assert ps._retry('STT_PROVIDER=faster_whisper') == "Trying again."
     assert ps._retry('WAKE_WORD_ENABLED=True') == "Trying again."
-    assert started == [([('STT_PROVIDER', 'faster_whisper')], {'wake': True}),
-                       ([('WAKE_WORD_ENABLED', True)], {'wake': True})]
+    assert started == [([('STT_PROVIDER', 'faster_whisper')], {'wake': True, 'keep': True}),
+                       ([('WAKE_WORD_ENABLED', True)], {'wake': True, 'keep': True})]
     for bad in ('NOT_A_KEY=x', 'STT_PROVIDER', '', None):
         with pytest.raises(ValueError):
             ps._retry(bad)
     assert ps.notify._repairs['switch'].__name__ == '_retry'      # registered at import, as the button's name
+
+
+def test_a_try_again_that_fails_leaves_the_saved_pick_alone(harness):
+    """Pressed while the network is still down: the download fails a second time. The
+    person picked this provider; saving it off would mean a restart no longer heals it."""
+    from core.stt.stt_null import NullWhisperClient
+    h = harness
+    h.settings.set('STT_PROVIDER', 'faster_whisper', persist=False, _skip_callbacks=True)
+    h.sys.whisper_client = NullWhisperClient()
+    ps.start([('STT_PROVIDER', 'faster_whisper')], wake=False, keep=True)
+    ps.wait(timeout=5)
+    assert h.settings.get('STT_PROVIDER') == 'faster_whisper'
+    assert h.rows.ended[0][1] is True and h.rows.ended[0][3].endswith('Still off.')
+    assert h.events[-1][:3] == ('STT_PROVIDER', 'faster_whisper', False)
+    assert h.sys.switch_stt_provider.call_args_list[-1].args == ('none',)     # the live side is off all the same
+
+    # the same failure from a plain switch still saves what runs now
+    ps.start([('STT_PROVIDER', 'faster_whisper')])
+    ps.wait(timeout=5)
+    assert h.settings.get('STT_PROVIDER') == 'none'
+    assert h.rows.ended[1][3].endswith('Kept off.')
+

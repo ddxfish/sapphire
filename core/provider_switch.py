@@ -183,11 +183,13 @@ def _toggle_target(provider_key, enabled, default):
     return cur if cur and cur != 'none' else default
 
 
-def start(items, persist=True, wake=False, _resumed=False):
+def start(items, persist=True, wake=False, _resumed=False, keep=False):
     """Queue the switches. Returns {key: row_id}. Raises SwitchInProgress when a key is
     already switching to a different value (nothing is queued then). `wake`: install
     and turn on what the provider needs first (the header); those picks are also
-    written down, so a restart mid-job runs them again at boot (resume)."""
+    written down, so a restart mid-job runs them again at boot (resume). `keep`:
+    a failure leaves the saved pick as it is (Try again: the person chose this
+    provider already, and a second failed download is no reason to save it off)."""
     items = [(k, v) for k, v in items if k in KEYS]
     # Voice after ears (Easy setup, hunt 2026-11-15): the jobs run one at a time,
     # and a first voice download held the lock for minutes while she could have
@@ -213,7 +215,7 @@ def start(items, persist=True, wake=False, _resumed=False):
             jobs[key] = rid
             fresh.append((key, value, rid))
         if fresh:
-            t = threading.Thread(target=_run, args=(fresh, persist, wake), name='provider-switch', daemon=True)
+            t = threading.Thread(target=_run, args=(fresh, persist, wake, keep), name='provider-switch', daemon=True)
             for key, _, _ in fresh:
                 _inflight[key]['thread'] = t
     if fresh:
@@ -250,13 +252,13 @@ def busy(key):
 
 # ── the thread ─────────────────────────────────────────────────────────────
 
-def _run(fresh, persist, wake=False):
+def _run(fresh, persist, wake=False, keep=False):
     for key, value, rid in fresh:
         with _LOCK:
             if (_inflight.get(key) or {}).get('waiting'):
                 notify.tick(rid, phase=None, text='')     # its turn: no longer waiting
             try:
-                _run_one(key, value, rid, persist, wake)
+                _run_one(key, value, rid, persist, wake, keep)
             except Exception as e:                # the job's own bug: the row must still end
                 logger.exception(f"[SWITCH] {key} -> {value!r} crashed")
                 notify.finish(rid, failed=True, title=f"{_active_title(key, value)} failed", body=str(e))
@@ -267,7 +269,7 @@ def _run(fresh, persist, wake=False):
                     _forget(key)
 
 
-def _run_one(key, value, rid, persist, wake=False):
+def _run_one(key, value, rid, persist, wake=False, keep=False):
     from core.settings_manager import settings
     system = _system()
     prev = settings.get(key)
@@ -298,13 +300,14 @@ def _run_one(key, value, rid, persist, wake=False):
     # runs now is untouched. Re-making it was a risk for nothing (a re-make that
     # failed saved 'none' over a working provider; hunt 2026-11-15).
     live = _recover(system, key, prev, value) if touched else prev
-    if settings.get(key) != live:
+    if settings.get(key) != live and not keep:
         settings.set(key, live, persist=True, _skip_callbacks=True)
     kept = 'off' if live in ('none', False, None) else _label(key, live)
-    logger.error(f"[SWITCH] {key} -> {value!r} failed: {why}; kept {kept}")
+    logger.error(f"[SWITCH] {key} -> {value!r} failed: {why}; kept {kept}"
+                 + (f", the saved pick stays {prev!r}" if keep and live != prev else ''))
     notify.finish(rid, failed=True, title=f"{_active_title(key, value)} failed",
-                  body=f"{str(why).rstrip('.')}. Kept {kept}.")
-    _publish(key, live, tier, False, why)
+                  body=f"{str(why).rstrip('.')}. " + ("Still off." if keep and live != prev else f"Kept {kept}."))
+    _publish(key, prev if keep else live, tier, False, why)
 
 
 # A core engine's package set (core/extras.py), by the switch that needs it.
@@ -557,7 +560,7 @@ def _retry(arg):
     key, _, raw = str(arg or '').partition('=')
     if key not in KEYS or not raw:
         raise ValueError(f"not a switch: {arg}")
-    start([(key, {'True': True, 'False': False}.get(raw, raw))], wake=True)
+    start([(key, {'True': True, 'False': False}.get(raw, raw))], wake=True, keep=True)
     return "Trying again."
 
 

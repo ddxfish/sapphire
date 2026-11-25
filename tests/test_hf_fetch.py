@@ -110,6 +110,74 @@ def test_without_xet_installed_there_is_one_path(monkeypatch):
     assert hf_fetch._routes() == [('classic', '1')]
 
 
+def test_behind_a_proxy_there_is_the_classic_path_only(monkeypatch):
+    """SOCKS mode promises nothing goes around the proxy; the xet client is not known to ride it."""
+    from core import net_check
+    monkeypatch.setattr(hf_fetch.importlib.util, 'find_spec', lambda name: object())
+    monkeypatch.setattr(net_check, '_proxied', lambda: True)
+    assert hf_fetch._routes() == [('classic', '1')]
+    monkeypatch.setattr(net_check, '_proxied', lambda: False)
+    assert hf_fetch._routes() == [('classic', '1'), ('xet', '0')]
+
+
+@pytest.mark.parametrize('has_xet', [True, False])
+def test_a_job_starts_clean_exactly_where_the_xet_path_exists(door, monkeypatch, has_xet):
+    jobs = []
+    monkeypatch.setattr(hf_fetch, '_has_xet', lambda: has_xet)
+    monkeypatch.setattr(hf_fetch, '_run', lambda job, *a: (jobs.append(job), ('ok', '/cache'))[1])
+    door.fetch('some/repo', files=['model.onnx'])
+    assert jobs[0]['clean'] is has_xet
+
+
+def _play(job, env=None):
+    """The real worker, one job, every line it says up to its verdict."""
+    import json, os, subprocess
+    proc = subprocess.Popen([sys.executable, str(hf_fetch.ROOT / 'core' / 'hf_fetch_worker.py'), json.dumps(job)],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                            cwd=str(hf_fetch.ROOT), env=dict(os.environ, **(env or {})))
+    try:
+        lines = [json.loads(proc.stdout.readline())]
+        while 'error' not in lines[-1] and 'ok' not in lines[-1]:
+            lines.append(json.loads(proc.stdout.readline()))
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+        proc.stdin.close(), proc.stdout.close()
+    return lines
+
+
+@pytest.mark.parametrize('clean', [True, False])
+def test_a_clean_start_removes_that_repos_partial_files_and_nothing_else(tmp_path, clean):
+    """A partial file left by the xet path is not the start of the file; the classic path
+    would resume it by its size. No files asked for: the worker never reaches the network."""
+    mine = tmp_path / 'hub' / 'models--some--repo' / 'blobs'
+    other = tmp_path / 'hub' / 'models--other--repo' / 'blobs'
+    for d in (mine, other):
+        d.mkdir(parents=True)
+        (d / 'abc123.incomplete').write_bytes(b'part')
+    (mine / 'def456').write_bytes(b'a finished file')
+    lines = _play({'repo': 'some/repo', 'files': [], 'patterns': [], 'clean': clean},
+                  env={'HF_HOME': str(tmp_path), 'HF_HUB_CACHE': str(tmp_path / 'hub'), 'HF_HUB_OFFLINE': '1'})
+    assert lines == [{'hello': True}, {'ok': []}]
+    assert (mine / 'abc123.incomplete').exists() is (not clean)
+    assert (mine / 'def456').exists() and (other / 'abc123.incomplete').exists()
+
+
+def test_the_worker_counts_bytes_in_small_chunks_and_the_hub_still_reads_that_setting():
+    """The hub counts a chunk when it is whole, and its own chunk is 10 MB: on a slow line
+    that is longer than STALL_S between two counts, and a moving download was ended as
+    stalled. The worker sets a small one. This also pins what that leans on: the hub
+    reading the constant at download time (it is not pinned in requirements.txt)."""
+    import inspect, re
+    from huggingface_hub import constants, file_download
+    src = (hf_fetch.ROOT / 'core' / 'hf_fetch_worker.py').read_text(encoding='utf-8')
+    chunk = eval(re.search(r'^CHUNK = (.+)$', src, re.M).group(1))
+    assert 'constants.DOWNLOAD_CHUNK_SIZE = CHUNK' in src
+    assert chunk * 8 / hf_fetch.STALL_S < 64_000            # only a line slower than 64 kbit/s goes quiet that long
+    assert constants.DOWNLOAD_CHUNK_SIZE > chunk            # the library's own is the large one
+    assert 'constants.DOWNLOAD_CHUNK_SIZE' in inspect.getsource(file_download.http_get)
+
+
 def test_the_real_worker_is_a_script_this_python_can_start():
     """The protocol's first line needs no network: a bad job fails in words, not a traceback."""
     import json, subprocess

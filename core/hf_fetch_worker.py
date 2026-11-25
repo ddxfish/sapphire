@@ -7,9 +7,11 @@ process of its own the parent can end it and try another way.
 One JSON line per message on stdout, no port: hello, host (where the bytes
 come from), file (the one starting), n/total (bytes of the current bar), then
 ok (the path or paths) or error. stdin closing means the parent is gone.
+A job marked clean starts from nothing: its partial files go first.
 Whether the newer xet transfer is used is the parent's choice, made in this
 process's environment (HF_HUB_DISABLE_XET) before the hub is imported.
 """
+import glob
 import json
 import os
 import sys
@@ -22,6 +24,10 @@ os.dup2(2, 1)       # a library that prints must not write into the protocol
 sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))    # the project, not core/
 
 XET_HOST = 'cas-server.xethub.hf.co'
+# The hub counts bytes one whole chunk at a time, and its chunk is 10 MB: below
+# about 4 Mbit/s that is more than STALL_S between two counts, and the parent
+# would end a download that is moving. At this size only a dead line is silent.
+CHUNK = 64 * 1024
 FATAL = ('OfflineModeIsEnabled', 'RepositoryNotFoundError', 'RevisionNotFoundError', 'GatedRepoError',
          'RemoteEntryNotFoundError')      # the same on any path: no point trying another
 
@@ -70,6 +76,21 @@ def _bar():
     return Bar
 
 
+def _start_clean(repo):
+    """Remove this repo's partial files. The xet path writes a file in pieces,
+    out of order; the classic path resumes any partial file it finds, by its
+    size alone. One after the other can make a model of the right size and the
+    wrong bytes, which the cache then keeps for good."""
+    from huggingface_hub import constants
+    from huggingface_hub.file_download import repo_folder_name
+    blobs = os.path.join(constants.HF_HUB_CACHE, repo_folder_name(repo_id=repo, repo_type='model'), 'blobs')
+    for f in glob.glob(os.path.join(glob.escape(blobs), '*.incomplete')):
+        try:
+            os.remove(f)
+        except OSError as e:
+            print(f"could not remove the partial file {f}: {e}", file=sys.stderr)
+
+
 def _say_host(job, names):
     """Where the bytes will come from, so a stall can be looked into. Never fatal."""
     probe = next((n for n in names if '*' not in n and n.endswith(('.bin', '.pth', '.onnx', '.safetensors'))), None)
@@ -87,13 +108,16 @@ def _say_host(job, names):
 
 
 def main():
-    job = json.loads(sys.argv[1])       # {repo, files, patterns, revision}
+    job = json.loads(sys.argv[1])       # {repo, files, patterns, revision, clean}
     threading.Thread(target=_exit_with_parent, daemon=True).start()
     try:
-        from huggingface_hub import hf_hub_download, snapshot_download
+        from huggingface_hub import constants, hf_hub_download, snapshot_download
+        constants.DOWNLOAD_CHUNK_SIZE = CHUNK
         bar = _bar()
         bars = {'tqdm_class': bar} if bar else {}
         _send(hello=True)
+        if job.get('clean'):
+            _start_clean(job['repo'])
         files, patterns, rev = job.get('files') or [], job.get('patterns') or [], job.get('revision')
         _say_host(job, files or patterns)
         if patterns:
