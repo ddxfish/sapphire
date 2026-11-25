@@ -4,6 +4,9 @@
 - uses RAG to search directly in chunks
 - Make a chat you never reset, schedule a task in there, tell your AI to run /compact-daily
 - ComfyUI plugin now supports video, has Apps page, can import workflow from generated PNG
+- Full docs rework for this version
+- HF unified downloader with better noti center status
+- Sapphire Store cache set to 24 hours
 # 2.16.6 - Per Sapphire ID
 - Each sapphire has its own unique id for later memory sync
 - Mind palace records sapphire ID and model used at write

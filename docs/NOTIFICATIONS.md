@@ -27,6 +27,17 @@ The chat sidebar shows the latest rows and the unread counts under the chat drop
 
 The gear on the page sets **Toast seconds** (`NOTIFY_TOAST_SECONDS`, 4) and **Toast from level** (`NOTIFY_TOAST_MIN_LEVEL`, success): the lowest level that pops up.
 
+### Rows that are still working
+
+A download or a switch shows as a running row with a bar and plain words ("44 MB of 141 MB, 6.0 MB/s, about 16 s left"). Two more states say what it is doing when it is not moving:
+
+- **waiting**: it is in line behind other work and has not started. No bar yet.
+- **not moving**: nothing has arrived for a while. The row says for how long ("No movement for 30 s.") and, for a download, what the connection check made of it (your DNS, their server, this computer's clock). The next byte clears it.
+
+### One-click fixes
+
+A failed row can carry a button that does the fix: **Try again** on a failed model download (it keeps the voice or ears you picked), **Repair** on a toolset that has drifted from its plugin. The row turns to "Repaired" when it worked, and says "The repair failed: …" and keeps the button when it did not.
+
 ### What's kept
 
 The last 500 rows, in `user/notifications.json`; running rows are never pruned. A repeat of the same event updates its row instead of stacking a new one. Rows never carry the name of a private chat, and anything that comes from a private chat shows as a brief toast only.
@@ -62,4 +73,5 @@ Errors from the rest of the app read the same way: "Sapphire couldn't *do the th
 
 NOTIFICATION CENTER (core/notify.py; System → Notifications): rows in user/notifications.json (ring of 500, active rows never pruned; once-keys ledger user/notifications-once.json). Levels info (log only) / success (toast) / warning (yellow count) / error (red) / critical (sticky toast). States open/active/done/failed; progress rows (begin/tick/finish, progress(), tqdm_for). Same key = same row updated. private=True → flash only; rows never name a chat. Settings NOTIFY_TOAST_SECONDS 4, NOTIFY_TOAST_MIN_LEVEL success. Routes /api/notifications (API.md).
 
-FIX IT: a failed turn's row carries metadata.error from core/chat/llm_errors.explain → {text, go, detail}; UI shows the words, a Fix it button (go = settings target, e.g. Settings > LLM, CONTEXT_LIMIT, LLM_REQUEST_TIMEOUT, provider:<key>) and folded Details. A reply that hit max_tokens gets metadata.cutoff: amber note + Fix it → Max Tokens. Route errors use core/http_words ("Sapphire couldn't …"). When the user reports an error, the Fix it target is usually the answer: name it.
+FIX IT: a failed turn's CHAT row (not a notification) holds explain()'s words as its text and metadata.error = {detail, go}; UI shows the words, a Fix it button (go = settings target, e.g. Settings > LLM, CONTEXT_LIMIT, LLM_REQUEST_TIMEOUT, provider:<key>) and folded Details. A reply that hit max_tokens gets metadata.cutoff: amber note + Fix it → Max Tokens. Route errors use core/http_words ("Sapphire couldn't …"). When the user reports an error, the Fix it target is usually the answer: name it.
+ACTIVE ROWS: progress words carry bytes ("44 MB of 141 MB, 6.0 MB/s, about 16 s left"); phase waiting = in line, not started (no bar); phase stalled = shown as "not moving", body "No movement for N s." + the network reason for a download. ONE-CLICK FIX: a failed row may carry Try again (a failed model download; keeps the pick) or Repair (toolset drift): POST /api/notifications/{id}/repair → "Repaired" or "The repair failed: …" (button kept).

@@ -2,7 +2,7 @@
   "plugin": "email",
   "version": "2.8.0",
   "files": {
-    "README.md": "sha256:1a6d3a62ae02572767011d7a53876507fa09e398ad375395c4c44b67027b63e8",
+    "README.md": "sha256:f41d5eb6a11d82865e9c4766bd79e41356f3c3e24609ac858e412e3c37223fce",
     "__init__.py": "sha256:7e49816192d31b2d312b823bd9b8c47e243669ed42afa2d5b75421689fb0e48a",
     "accounts.py": "sha256:9b5599d62dd95103b309e44ffe569ebdaca21667052023f890f6d9a6790c3351",
     "app/email.css": "sha256:a5a728d99aad489470cc74551e196b5c513bc44cd7058f87dff48edccdc5e5cc",
@@ -31,5 +31,5 @@
     "unattended.py": "sha256:98a38acf7c55fba2c38749b451369c022765b2d1e2b165e21c54d0b9089a147f",
     "web/index.js": "sha256:a1746977db3e6d1fc8017c5168b36c95d7f9a47fcbfbad0e49d46f901d8a27e3"
   },
-  "signature": "EDFrCSUF5JXM7TfgZ5Hv6N17KsccaAYA5WK6zWtAyoHd9/FuXrvNx3SaECJUDiDOaSAtB9HOYSttZkEqOV/YCw=="
+  "signature": "70NbN56J1hNvIgzvjq0B6L53dDPYv36GL2ZzPAgkYnfR7Ik4U+NBRibSffqh9sPGVMkRIzBqfGTWmfQ2MI2CCw=="
 }

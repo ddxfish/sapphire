@@ -246,12 +246,14 @@ services conda env
 agents kinds
 requires_plugins add-ons
 ### Hooks
-post_stt pre_chat post_chat
+stt_audio post_stt
+pre_chat post_chat
 prompt_inject ghost_inject post_llm
 tools_filter pre_execute post_execute
 pre_tts post_tts on_wake
 tts_stream_start tts_stream_end
 tts_chunk_text tts_chunk_audio
+tts_stop
 chat_renamed chat_deleted chat_cleared
 chat_vaulted provider_switched plugins_ready
 vault_locked vault_unlocked
@@ -272,10 +274,8 @@ Store publishing
 ## Reference for AI
 
 Sapphire: self-hosted AI companion app, the system you run in. Local-first, private, voice-first, plugin-extensible. github.com/ddxfish/sapphire
-Has: chat, LLMs, TTS, STT, wakeword, phone, memory, tools, triggers, agents, devices, plugins.
-Feature list: search_help_docs(doc_name='self', full=true)
-Search docs: search_help_docs(query='tts')
-Read doc: search_help_docs(doc_name='voice')
-One part: add section='<heading>'
-Plugin README: doc_name='plugin/<name>'
+search_help_docs — Search: query='plain words'. Read: doc_name='voice'; + section='<heading>' = one part, full=true = the human doc.
+Doc map: doc_name='mastery-guide'. Features: doc_name='self', full=true. Plugin README: doc_name='plugin/<folder>'.
+Fixing: section='Quick Troubleshooting' on the topic's doc, else doc_name='troubleshooting'.
+What's new: doc_name='changelog', full=true.
 Build: toolmaker (tools), plugin-author/ai-reference (plugins)

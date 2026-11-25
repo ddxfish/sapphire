@@ -54,7 +54,7 @@ Time-based tasks are half the picture: Sapphire can also react to outside events
 | **Private** | Force this task onto local providers only. Auto-checked when the pinned prompt requires privacy. |
 | **Chat Name** | Blank = invisible background run, no chat saved. Filled = run in that chat and keep history. |
 | **Initial Message** | What gets sent to the AI when the task triggers. "Good morning!" or "Continue the story." |
-| **Inject datetime** | Add current date/time to the system prompt so the AI knows when it is. |
+| **Inject datetime** | Tell the AI the current date and time on each run, so it knows when it is. |
 
 **Voice**
 
@@ -91,7 +91,7 @@ Use `*` for "any value". Use `*/N` for "every N". Use `1-5` for ranges (1=Monday
 
 ## The UI
 
-**Triggers** in the sidebar is a group of five views:
+**Triggers** on the nav rail is a group of five views:
 
 | View | What lives there |
 |------|------------------|
@@ -136,10 +136,11 @@ TASK CREATION (UI):
 - Idle Heartbeat = a heartbeat with `idle_minutes` > 0: fires once the person has been quiet that long app-wide (core/idle.py, person=True); `idle_backoff` (default on) = 1x/2x/4x then rest until they speak (a long quiet at the first look jumps to its rung: one beat); `{quiet}` in the message = the quiet in words
 - IDLE_NOTICE_MINUTES (Settings > LLM > General, default 60, 0 = never): a message after that much quiet in a chat tells her "Quiet here: X since the last message in this chat." in the ghost message — not a heartbeat, no turn of her own
 - Set schedule (cron or simple time picker), initial message, prompt, toolset; picking a Persona auto-fills prompt/voice/toolset/model/scopes
-- Accordions: AI, Chat, Voice, Mind (scopes), Execution Limits
 
 SELF-SCHEDULING (tool):
-- schedule_task(description, time) — time like '5pm'/'17:00' = one-shot that auto-deletes after firing; a 5-field cron string = recurring. AI-scheduled tasks are capped and appear in the Scheduled view's "Sapphire scheduled" column.
+- schedule_task(description, time): '5pm'/'17:00'/'1700' = ONCE, at the next such time (today, else tomorrow), then the task deletes itself. No dates: "next Tuesday at 5" cannot be a one-shot (a weekday needs cron, and cron repeats). A 5-field cron = recurring, at least 5 minutes apart. Errors: "Could not parse time…", "…too frequent for a recurring task", "Invalid cron expression".
+- It fires in a blank background chat, NOT this one (no memory of this conversation: put everything needed in description), spoken on the server's speakers, with the date and time given. Made in a private chat = a private task (local models only).
+- Max 10 of yours ("Maximum AI-scheduled tasks reached (10)"). You have no tool to list, edit or delete them: the user does that in Triggers > Scheduled, "Sapphire scheduled" column.
 
 KEY FIELDS:
 - type: task | heartbeat | daemon | webhook. Realtime rules are daemon tasks whose event source is realtime — they gate live sessions instead of firing; see DAEMONS-WEBHOOKS.md
@@ -149,9 +150,8 @@ KEY FIELDS:
 - chat_target: blank = ephemeral background, named = persistent chat history (never switches the UI); '__locked__' = display mask for a private chat sealed in the locked vault (saving keeps the real target)
 - persona: persona name; resolved at run time to fill prompt/voice/toolset/model/scopes
 - initial_message: what the AI receives when the task fires
-- inject_datetime: true = date+time stamp in the system prompt; the string 'date' = day-only stamp (prompt-cache-friendly for multi-run sessions)
-- tts_enabled: server speakers; browser_tts: route audio to an open browser tab instead
-- voice / pitch / speed: TTS overrides; pitch/speed 0.5-2.0, null = current default
+- inject_datetime: true = the date and time ride the per-turn ghost note in front of the task's message (never the system prompt, so a cached prompt stays cached); the old value 'date' means the same as true
+- tts_enabled: server speakers; browser_tts: an open browser tab instead; voice / pitch / speed: overrides (0.5-2.0, null = current default)
 - privacy_required: local providers only; auto-set when the pinned prompt requires privacy
 - context_limit: whole-request token budget (system + tools + history + reply), 0 = CONTEXT_LIMIT; max_parallel_tools / max_tool_rounds: per-task execution limits, 0 = app default
 - max_runs: auto-disable after N runs (0 = unlimited); delete_after_run: delete the task once its runs finish
@@ -163,7 +163,6 @@ MANUAL TRIGGER:
 CANCEL A RUN:
 - ⏹ on a running card → POST /api/continuity/tasks/{id}/cancel; toggling the task off cancels implicitly, as does deleting it
 - Lands at the next cancel point (each round, and between an LLM reply and its tool batch) — a blocking LLM call in flight completes its round first; queued fires behind the run are dropped; the task stays enabled
-- Activity log: `cancel_requested` → `cancelled`
 
 TROUBLESHOOTING:
 - Task not running: check enabled toggle, cron syntax, active-hours window

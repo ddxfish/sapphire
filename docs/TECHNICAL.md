@@ -33,7 +33,7 @@ main.py (runner with restart loop)
     └── Watchdogs → core/loop_watch.py (event-loop stalls), core/watchdog.py (wedged shutdown: stacks + exit at 60 s)
 ```
 
-**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). It takes the instance lock first (a second runner on the same `user/` exits 43) and never restarts exits 43 (another instance or the web port held) or 44 (bad web host, port or certificate). Before each spawn it applies a pending update, restore, or GPU torch install — the one moment nothing holds files open. `sapphire.py` spawns the Kokoro TTS server as a subprocess via `ProcessManager` when that provider is selected, and faster-whisper runs in its own worker process (`core/stt/whisper_worker.py`, JSON lines over stdin/stdout, no port) so a native crash can't take Sapphire down. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE, MCP) on a single port bound in the main thread. Everything else runs in the main process.
+**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). It takes the instance lock first (a second runner on the same `user/` exits 43) and never restarts exits 43 (another instance or the web port held) or 44 (bad web host, port or certificate). Before each spawn it applies a pending update, restore, or GPU torch install — the one moment nothing holds files open. `sapphire.py` spawns the Kokoro TTS server as a subprocess via `ProcessManager` when that provider is selected, and faster-whisper runs in its own worker process (`core/stt/whisper_worker.py`, JSON lines over stdin/stdout, no port) so a native crash can't take Sapphire down. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE, MCP) on a single port bound in the main thread. Every Hugging Face model download runs in a short-lived child too (`core/hf_fetch_worker.py`, so a hung download can be ended and tried another way), and a plugin may declare services of its own that run as `ProcessManager` children (the avatar's render server; logs in `user/logs/<plugin>-<service>.log`). Everything else runs in the main process.
 
 ---
 
@@ -57,7 +57,7 @@ Scopes isolate data per-chat via ContextVars. Only `rag` and `private` are hardc
 
 **Global overlay:** The palace's memory and people scopes see both their own data AND entries in the read-only "global" scope. RAG is strict — only the chat's own documents. (The retired legacy `memory` plugin also registered `goal` and `knowledge` scopes; the default Mind Palace engine has neither.)
 
-**Setting scopes:** Per-chat in Chat Settings sidebar → Mind Scopes. Set to "none" to disable a system for that chat.
+**Setting scopes:** Per-chat, in the chat sidebar's 🧠 Mind accordion. Set to "none" to disable a system for that chat.
 
 **ContextVars:** Thread/async-safe isolation. Core scopes use `set_rag_scope()` / `set_private_chat()`; all scopes (including plugin-registered ones) are applied per execution context via `apply_scopes_from_settings()`.
 
@@ -92,13 +92,16 @@ user/
 ├── history/
 │   └── sapphire_history.db # Chat sessions (SQLite WAL)
 ├── memory/
-│   └── mind.db             # Mind Palace: memories, Library, people, goals (SQLite)
+│   ├── mind.db             # Mind Palace: memories, entities/people, goals (SQLite)
+│   └── library.db          # Mind Palace: the Library (documents, their chunks and vectors)
 ├── public/
 │   └── avatars/            # User/assistant avatars
 ├── wakeword/models/        # Your wake word models (Settings > Wakeword > Library)
 ├── notifications.json      # Notification center rows
 ├── ssl/                    # Self-signed cert (10yr, persistent)
-└── logs/                   # sapphire.log, kokoro.log, whisper.log, gpu-install.log
+├── metrics/token_usage.db  # Token metrics
+├── backgrounds/, fonts/    # Scene library, downloaded fonts
+└── logs/                   # sapphire.log, kokoro.log, whisper.log, hf_fetch.log (model downloads), gpu-install.log, startup_errors.log, <plugin>-<service>.log; a process log's previous run is kept as .prev
 ```
 
 **Bootstrap:** On first run, `core/setup.py` copies factory defaults from `core/prompt_defaults/` to `user/`.
@@ -187,11 +190,11 @@ Core providers (claude, openai, gemini) live in `LLM_PROVIDERS`. Custom/user-add
 ### Claude-Friendly Settings
 
 **For prompt caching (up to 90% cost savings on cached input):**
-- Enable caching: Settings → LLM → Claude → Enable prompt caching (default ON since 2.6.4)
+- Enable caching: Settings → LLM → Claude → Prompt Caching (default ON since 2.6.4)
 - Sapphire automatically caches system prompt + tools + full conversation history
 - Per-turn variations (spice, datetime) ride the **ghost-message rail** outside the cached prefix — they don't break cache and don't need to be disabled
 
-**The only thing that disables system-prompt caching:** plugins registering a `prompt_inject` hook (RAG/context injectors, Vanta-class plugins). Most plugins use the safer `ghost_inject` hook (see `core/ghost_messages.py`) which has zero caching impact.
+**What disables system-prompt caching:** any loaded plugin that registers a `prompt_inject` hook (RAG/context injectors, Vanta-class plugins). The check is whether such a hook exists, not whether it added anything this turn. **Two plugins that ship enabled register one, Game Room (the costume) and Discord, so on a default install the system-prompt breakpoint is skipped** (the log says so). The cost is smaller than it sounds: tools still cache, and once a chat has history the history breakpoint caches the whole prefix, system prompt included. What you lose is the first turn or two of each chat. Turning those two plugins off brings the breakpoint back; making the check per turn is on our list. Most plugins use the safer `ghost_inject` hook (see `core/ghost_messages.py`) which has zero caching impact.
 
 Cache TTL can be 5m (default) or 1h for longer sessions with idle gaps.
 
@@ -207,15 +210,15 @@ This is the rail that keeps spice/datetime/plugin context cache-friendly. Plugin
 
 | Provider | Feature | How It Works |
 |----------|---------|--------------|
-| **Claude** | Extended Thinking | Structured thinking blocks with budget, `thinking` API param |
+| **Claude** | Adaptive Thinking | Thinking blocks, the model decides how much; an Effort level steers it |
 | **GPT-5.x** | Reasoning Summaries | Responses API, `reasoning_summary` param |
-| **Gemini** | Reasoning Effort | Gemini 2.5 Flash/Pro use `reasoning_effort` param |
+| **Gemini** | Reasoning Effort | The `reasoning_effort` setting is sent as Gemini's own thinking config |
 
-**Claude:** Enable in LLM settings → Claude → Extended Thinking. Budget default: 10,000 tokens. Auto-disables for continue mode and tool cycles without thinking. Thinking blocks preserved across tool calls.
+**Claude:** LLM settings → Claude → **Adaptive Thinking** (on by default) with an **Effort** picker (default High). Only Haiku is sent a token budget, worked out from the effort (about 2,000 / 6,000 / 12,000). A custom Anthropic-compatible provider uses `thinking_budget` (default 10,000). Auto-disables for continue mode and tool cycles without thinking. Thinking blocks preserved across tool calls.
 
 **GPT-5.x:** Uses Responses API. Configure `reasoning_effort` (low/medium/high) and `reasoning_summary` (auto/detailed).
 
-**Gemini:** Models like Gemini 2.5 Flash support thinking via `reasoning_effort` parameter (low/medium/high).
+**Gemini:** The `reasoning_effort` setting (low/medium/high) is translated into Gemini's thinking config: a thinking level on the 3.x models, a thinking budget on 2.5. The 3.x models and 2.5 Pro cannot fully stop thinking.
 
 **Cross-provider:** Thinking blocks are stripped from history when switching to non-Claude providers.
 
@@ -324,6 +327,7 @@ Default is `false` — only `official` and `verified_author` plugins load; unsig
 |---------|------|---------|
 | FastAPI Server | 8073 | `0.0.0.0` (all interfaces, HTTPS) |
 | TTS Server | 5012 | `127.0.0.1` (configurable) |
+| TTS share door | 5013 | `0.0.0.0`, TLS and a key per client. Open only when `TTS_SHARE_ENABLED` is on (off by default): it lets another computer use this one's Kokoro |
 | LM Studio (default) | 1234 | External |
 
 ---
@@ -483,7 +487,7 @@ Each chat carries per-chat settings (prompt, voice, toolset, LLM, spice, scopes)
 | `core/gpu_install.py` | In-app GPU torch install, run by the runner before boot |
 | `core/mcp_server.py` + `core/routes/mcp.py` | MCP server door ([MCP.md](MCP.md)) |
 | `core/stt/whisper_worker.py` | faster-whisper worker process |
-| `core/plugins/mindpalace/` | Mind Palace memory engine (`user/memory/mind.db`, [MEMORY.md](MEMORY.md)) |
+| `core/plugins/mindpalace/` | Mind Palace memory engine (`user/memory/mind.db` and `library.db`, [MEMORY.md](MEMORY.md)) |
 
 ---
 
@@ -527,10 +531,10 @@ PRIVACY (see docs/PRIVACY.md):
 - Private chat at rest: message rows, settings, tool images, plugin_chat_data as '@enc1:' values; names stay plaintext
 - Sealed vault: private chats absent from list/search/settings/messages/export/rename/delete; active one evicted at lock and boot
 - Plugin hooks withheld unless the manifest declares privacy_aware: true
-- Routes: POST /api/vault/setup|unlock|lock|rekey|move; no /api/privacy (removed 2.8.4)
+- Routes: POST /api/vault/setup|unlock|lock|rekey|move|move-batch|delete (delete needs confirm "I UNDERSTAND"); no /api/privacy (removed 2.8.4)
 
 CREDENTIALS:
-- ~/.config/sapphire/secret_key: Password/API key hash
+- ~/.config/sapphire/secret_key: the login password's bcrypt hash only (never an API key); api_tokens.json beside it: the named API tokens (Bearer)
 - ~/.config/sapphire/credentials.json: LLM, SOCKS, email, bitcoin, SSH, HA
 - Not in user/ directory, not in backups
 - Sensitive fields Fernet-encrypted (machine identity key)
@@ -560,7 +564,7 @@ API: See docs/API.md for the full endpoint list
 
 DATABASES:
 - user/history/sapphire_history.db: chats (settings + storage_format blob|rows), chat_messages (one row per message), chat_messages_quarantine, plugin_chat_data, tool_images
-- user/memory/mind.db: Mind Palace (memories, Library, entities/people, goals)
+- user/memory/mind.db: Mind Palace (memories, entities/people, goals); user/memory/library.db: the Library (documents, chunks, vectors); user/metrics/token_usage.db: token metrics
 - user/notifications.json: notification center rows (ring of 500)
 
 LOGS:

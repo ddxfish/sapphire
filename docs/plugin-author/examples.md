@@ -100,7 +100,7 @@ def prompt_inject(event):
     event.context_parts.append("The user's favorite color is blue.")
 ```
 
-Hook points: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `on_wake`, `provider_switched`, `chat_renamed`, `chat_deleted`, `chat_cleared`, `chat_vaulted`, `plugins_ready`, `vault_unlocked`, `vault_locked` — plus the streaming TTS hooks. Full table with fields and semantics: [hooks.md](hooks.md)
+Hook points: `stt_audio`, `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `on_wake`, `provider_switched`, `chat_renamed`, `chat_deleted`, `chat_cleared`, `chat_vaulted`, `plugins_ready`, `vault_unlocked`, `vault_locked` — plus the streaming TTS hooks and `tts_stop`. Full table with fields and semantics: [hooks.md](hooks.md)
 
 In a private chat your hooks are withheld unless the manifest declares top-level `"privacy_aware": true` — see [Private chats](hooks.md#private-chats--privacy_aware).
 
@@ -438,7 +438,7 @@ def run(event):
 
 ## Reference for AI
 
-- Tool file exports: `ENABLED` (bool), `EMOJI` (str), `AVAILABLE_FUNCTIONS` (list), `TOOLS` (OpenAI-style schemas), `execute(function_name, arguments, config[, plugin_settings[, credentials]])` → `(message: str, success: bool)`.
+- Tool file exports: `ENABLED` (bool), `EMOJI` (str), `AVAILABLE_FUNCTIONS` (list; a FILTER: a tool in TOOLS not named here is silently not registered), `TOOLS` (OpenAI-style schemas), `execute(function_name, arguments, config[, plugin_settings[, credentials]])` → `(message: str, success: bool)`.
 - Hooks: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`. Full hook list, mutable fields, and system-access table: hooks.md.
 - Voice commands: `capabilities.voice_commands` = `[{triggers, match: exact|starts_with|contains|regex, bypass_llm, handler}]`; handler is a `pre_chat` function.
 - Providers: `capabilities.providers.{tts|stt|embedding|llm}` = `{key, display_name, entry, class_name, requires_api_key, is_local?}` (absent is_local = cloud, private chats refuse it). TTS `generate()` returns audio bytes or None; WAV at a standard rate, 24000 Hz preferred (resample with `core.audio.resample_audio`; no `audioop`, gone in 3.13); `list_voices()` returns `[{voice_id, name}]` where `voice_id` is the engine's real identifier.

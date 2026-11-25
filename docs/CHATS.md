@@ -134,7 +134,7 @@ With rows selected, the bulk bar offers:
 - **🧹 Clear** — wipe the histories; the chats and their settings survive. Hidden on the Game Room tab (clearing a story strands its journal) and the Archive tab.
 - **🗑️ Delete** — delete the chats.
 
-Bulk results are per-chat: a refused chat (a live phone call owns it, agents attached) surfaces as its own toast and never blocks the rest.
+Bulk results are per-chat: a refused chat (a live phone call owns it; for a rename, agents attached too) surfaces as its own toast and never blocks the rest.
 
 #### Row actions
 
@@ -194,6 +194,8 @@ There is no Chats section on the Settings page — per-chat settings *are* the s
 - **Send refused (409)** → the chat is private and the vault is sealed, or its inbox is full → unlock the vault, or wait.
 - **Can't switch chats** → a reply is generating → Stop first; switching is blocked mid-generation.
 - **Reply seemed to die when my phone locked** → it didn't — the turn runs on the server → wake the tab and it reconnects itself; if it can't, the finished reply is in the chat after a reload.
+- **An amber note: "This reply hit its length limit and was cut off"** → the reply reached Max Tokens → press Continue (where the provider can continue), or raise **Max Tokens** for that model in Settings › LLM. "…used its whole reply budget thinking" is the same limit, spent before any words came.
+- **"<Provider> can't continue a reply in place. Ask it to go on in a new message instead."** → Continue was refused before anything was sent: hosted OpenAI-style APIs can't pick up a half-written reply, and a local server that answers fresh when asked to continue is refused the same way. Claude and most local servers can.
 - **"Nothing to add — this provider doesn't continue a reply in place"** → that provider ignores a half-written reply (OpenAI, Fireworks, GLM/Z.AI behave this way) → the message is untouched; ask her to carry on in a new message, or switch that chat to a provider that accepts one.
 - **No ▶️ Continue button on a message** → it's only offered on the chat's *last* reply, and it follows the last reply as new messages land.
 - **"Nothing to continue — that reply ended in a tool call"** → there's no half-written sentence to pick up → send a normal message instead.
@@ -201,7 +203,7 @@ There is no Chats section on the Settings page — per-chat settings *are* the s
 - **Private chats vanished everywhere** → the vault is sealed → unlock via the sidebar 🔒 padlock; sealed means hidden, not gone.
 - **⚠ degraded badge / "read-only until repaired"** → some rows are unreadable → use the row's 🔧 Repair; if the dialog says most rows can't be decrypted, restore the matching vault backup instead.
 - **Trim/Compress buttons missing on a row** → it's a game or story chat → those transcripts are load-bearing (journals anchor into them); trim/compress stay off by design.
-- **Rename or delete refused** → a live phone call owns the chat, or agents are attached → hang up / dismiss the agents, then retry.
+- **Rename or delete refused** → a live phone call owns the chat → hang up, then retry. A rename is also refused while agents are attached (dismiss them first); a delete dismisses them for you.
 - **Bulk export toast says private chats were skipped** → intended — private chats don't ride bulk zips → export each privately-flagged chat with its own row ⬇️ button while the vault is open.
 - **Compress toast never arrived** → the job vanishes if the server restarts mid-job → the chat is untouched (write-last); just re-run the compress.
 - **Import didn't add to my chat** → import replaces the current chat's history → create a fresh chat and import there.
@@ -222,7 +224,6 @@ Chats are the unit of configuration: each chat stores prompt, toolset, spice_set
 
 CHAT MANAGER:
 - Access: nav rail Chat → flyout → 🗂️ Manage, or sidebar chat picker → See more
-- Frontend: views/chat-manage.js; routes: core/routes/chat.py
 - Tabs: 💬 Chats / 🗝 Private / 🎲 Game Room / 🪑 Chat Rooms (rooms + seat chats) / 📚 Librarian / 📦 Archive; one chat one tab; archived trumps all; Private tab hidden when empty or vault sealed
 - Columns sortable: Name, Msgs (stored messages incl. tool results), Turns (user msg + full reply incl. tool work), Size, Last active, Created
 - Search: typing = live name filter; Enter/🔍 = deep content search (GET /api/chats/search)
@@ -232,8 +233,8 @@ CHAT MANAGER:
 ROW ACTIONS:
 - Private toggle 🗝/🔓 (PUT settings private_chat; vault must be open), archive 📦/📂, rename ✏️, repair 🔧 (degraded only), export ⬇️ (full raw JSON {name, settings, messages}), trim ✂️, compress 🗜️, delete 🗑️
 - Trim/compress/clear withheld on game/story chats (journals anchor into transcripts)
-- Rename carries rows, tool images, RAG scope, active pointer; refused on live-call chats or attached agents
-- Delete cleans RAG docs, dismisses agents, fires chat_deleted hook (plugin chat data dies with chat)
+- Rename carries rows, tool images, RAG scope, active pointer; refused on a live-call chat or with agents attached
+- Delete is refused only on a live-call chat; it cleans RAG docs, dismisses attached agents, fires chat_deleted (plugin chat data dies with the chat)
 
 TRIM (POST /api/chats/{name}/trim):
 - Turn-snapped middle cut: keep first A + last B turns, delete between; keep_last min 1; preview:true = report only; no-op when turns <= A+B
@@ -259,18 +260,15 @@ DOCUMENTS (per chat, core/documents.py):
 - Scanned PDF = pages as pictures (vision model, else the image describer); not encrypted in private chats; not in chat export
 - Not the Library (KNOWLEDGE.md)
 
-SERVER-OWNED TURNS (core/chat/turn.py, 2026-09-15):
-- The engine runs on its own server thread; every HTTP body is a VIEWER of it. A viewer leaving (phone lock, tab sleep, proxy timeout) never ends the turn — only POST /api/cancel does
-- Every SSE line carries `seq`. The stream's first line is the turn's `ticket`; a send on a busy chat gets `queued` and the body CLOSES (no socket is held while a turn waits — six held sockets hit the browser's per-host cap). The bus says `inbox_ticket {ticket, state: started|merged|dropped}` and the owning tab follows by ticket. POST /api/chat/attach {ticket, since?, audio?} replays the turn's ring exact-once after `since`, then follows live on the same wire format (first line `attached {audio}`); 202 = still queued, 204 = it ran and is gone (refresh history), 404 unknown ticket (a restart), 409 sealed chat. By chat alone: 204 = no live turn, 404 unknown chat
-- Ring holds ~256KB of text; past it the viewer gets a `resync` event and repaints from history before streaming the remainder
-- A reattached feed hears her only if nothing has been spoken yet on the turn (`attached: audio=true`); otherwise it is text-only and the client speaks the finished reply once if TTS is on. Every live wire heartbeats (`: keepalive`, 15 s); a reader silent for 45 s cancels itself and the owner follows its ticket (iOS keeps a dead fetch pending forever)
-- Client: handlers/send-handlers.js — one owner per send (`pending` by ticket, `follow()` with backoff 1s→15s), api.js attachTurn
+TURNS LIVE ON THE SERVER: a closed tab, a locked phone or a dropped connection never stops a reply; only Stop (POST /api/cancel) does. The tab rejoins the reply on its own; if it can't, the finished reply is in the chat after a reload. (Wire details: API.md, Chat.)
+
+YOUR TOOL: reset_chat(reason, chat_name?) wipes a chat's messages (its settings stay) and cannot be undone: only when the user asks. No chat_name = the chat you are in. A background task has no chat, so it must name one, and may never name the chat the user has open. Refused for a chat on a live phone call.
 
 MESSAGE ACTIONS (per-message toolbar):
 - 🗑️ delete-from-here, 🔄 regenerate, ▶️ continue (last assistant row only), ✏️ edit, 🔊 replay TTS
 - Edit swaps one bubble (ui.replaceMessage, no full transcript rebuild); editor is prose-only so stored thinking and the turn's tool half survive; Esc cancels, Ctrl/Cmd+Enter saves
 - Continue = POST /api/chat/stream {continue_from: <assistant timestamp>}: no user row sent or saved, engine resumes from the tail row as prefill, edits that row in place on success, leaves it untouched on Stop; refused unless it's the chat's last prose row
-- Providers that ignore a trailing assistant message (OpenAI, Fireworks, GLM/Z.AI) yield a `notice` event and the row is left alone — honest no-op, never a silent one
+- Refused before anything is sent when the provider can't pick up a half-written reply (hosted OpenAI-style APIs; a local server that answers fresh): "<Provider> can't continue a reply in place. Ask it to go on in a new message instead." Otherwise a provider that ignores the half reply gives "Nothing to add…" and the row is left alone — never a silent no-op
 
 OTHER:
 - Archive = UI shade not freeze: hidden from sidebar picker, daemons/cron still reach it, Manager lists it, reversible (POST /api/chats/{name}/archive)
@@ -279,3 +277,5 @@ OTHER:
 - Game/story chats never appear in the sidebar picker; Chat Manager lists everything
 - New chat names sanitized server-side (lowercase, underscores); create echoes sanitized name
 - Sidebar = chat settings, composer mic flyout = device settings, Settings page = global
+
+FIXES: "⧖ N queued" = she is mid-reply, it runs next (× drops one) · "…can't continue a reply in place" / "Nothing to add…" = this provider can't continue: ask in a new message · "Nothing to continue — that reply ended in a tool call" · "This reply hit its length limit and was cut off" = press Continue, or raise Max Tokens for that model in Settings › LLM · a chat missing from the picker = it is archived, a game/story chat, or private with the vault locked (Chat Manager lists all but sealed ones) · ⚠ degraded, saves refused = the row's 🔧 Repair · more: section='Quick Troubleshooting'.

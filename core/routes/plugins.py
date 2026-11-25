@@ -2381,35 +2381,52 @@ async def list_bitcoin_wallets(request: Request, _=Depends(require_login)):
 
 @router.put("/api/bitcoin/wallets/{scope}")
 async def set_bitcoin_wallet(scope: str, request: Request, _=Depends(require_login)):
-    """Create or import a bitcoin wallet for a scope."""
+    """Make a bitcoin wallet for a scope, or rename one. A key already there is
+    never replaced here: a replaced key is money gone for good, and this route
+    cannot ask which key it is replacing. The Bitcoin plugin's own route can
+    (/api/plugin/bitcoin/wallet/{scope}, core/plugins/bitcoin/wallets.py)."""
     from core.credentials_manager import credentials
     data = await request.json() or {}
-    wif = data.get('wif', '').strip()
-    label = data.get('label', '').strip()
+    wif = str(data.get('wif') or '').strip()
+    label = str(data.get('label') or '').strip()
     generate = data.get('generate', False)
 
+    stored = credentials.get_bitcoin_wallet(scope).get('wif', '')
+    # listed with no readable key: the key is in the file, this machine cannot decrypt it
+    exists = bool(stored) or any(w.get('scope') == scope for w in credentials.list_bitcoin_wallets())
+
     if generate:
+        if exists:
+            raise HTTPException(status_code=409, detail=f"A wallet named '{scope}' already exists. "
+                                                        "Generate never replaces a key.")
         try:
             from bit import Key
-            key = Key()
-            wif = key.to_wif()
+            wif = Key().to_wif()
         except ImportError:
             raise HTTPException(status_code=500, detail="bit library not installed")
 
     # If no new WIF provided, keep existing (label-only update)
-    if not wif:
-        existing = credentials.get_bitcoin_wallet(scope)
-        wif = existing.get('wif', '')
+    wif = wif or stored
     if not wif:
         raise HTTPException(status_code=400, detail="WIF key is required (or set generate=true)")
 
-    # Validate the WIF
     try:
         from bit import Key
-        key = Key(wif)
-        address = key.address
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid WIF key: {e}")
+        address = Key(wif).address
+    except ImportError:
+        raise HTTPException(status_code=500, detail="bit library not installed")
+    except Exception:
+        # no detail: bit's error quotes what was typed, and that may be most of a real key
+        raise HTTPException(status_code=400, detail="That is not a valid private key (WIF).")
+
+    if exists and wif != stored:
+        try:
+            same = bool(stored) and Key(stored).address == address
+        except Exception:
+            same = False
+        if not same:
+            raise HTTPException(status_code=409, detail=f"The wallet '{scope}' already has a key, and this route "
+                                                        "never replaces one. Replace it in Settings > Plugins > Bitcoin.")
 
     if credentials.set_bitcoin_wallet(scope, wif, label):
         from core.event_bus import publish, Events

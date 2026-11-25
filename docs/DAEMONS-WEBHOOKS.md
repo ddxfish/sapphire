@@ -28,7 +28,7 @@ Daemons are background listeners that react to events from connected platforms. 
 ### Setting Up a Daemon Task
 
 **Trigger section:**
-- **Source** — which event to listen for (e.g. "Discord Message", "New Email")
+- **Source** — which event to listen for (e.g. "Discord: Chat", "New Email")
 - **Filter** — JSON object to narrow which events fire the task
 - **Source Settings** — plugin-specific options (e.g. auto-reply toggle)
 - **Active hours** — optional window (your timezone, overnight allowed). Outside it, incoming events are skipped; a Discord bot with Presence on shows away there
@@ -140,13 +140,14 @@ Auto-reply: On
 | `subject_contains` | Substring in subject line |
 | `snippet_contains` | Substring in email body |
 | `account` | Which email account scope |
+| `bulk` | Automated or bulk mail (newsletters, notifications): `true` or `false` |
 
 ### Source Settings
 
 | Setting | Description |
 |---------|-------------|
 | Email Account | Which email account this daemon monitors (required — only that account is polled) |
-| Auto-reply to sender | Send the AI's response as an email reply. Off = the AI still runs on incoming mail, but no reply goes out |
+| Auto-reply to sender | Send the AI's response as an email reply. Off = the AI still runs on incoming mail, but no reply goes out. **A reply goes only to people in your contacts with Allow email ticked**, unless you turn on *Auto-reply to anyone* in Settings → Plugins → Email; a stranger gets no reply. The AI can also decline: `<<PASS>>` in her answer sends nothing |
 
 ### Example: Auto-Reply to Support Emails
 
@@ -178,7 +179,7 @@ Knowledge scope: finances
 |--------|----------------|
 | `chat_id` | Telegram chat ID |
 | `username` | Sender's username |
-| `chat_type` | "private", "group", or "supergroup" |
+| `chat_type` | "private", "group", "supergroup", or "channel" |
 
 ### Source Settings
 
@@ -206,7 +207,7 @@ Realtime rules are the live lane. Where a daemon task fires once per event ("a m
 
 Realtime rules live in **Triggers → Realtime**. Under the hood they're stored as daemon tasks whose event source declares itself realtime, so the same account routing and filter matching applies — but the UI keeps the two lanes apart, and realtime rules only appear in the Realtime view.
 
-The **Twilio Voice** plugin ships the first realtime source: **Answer Phone Calls** on a Twilio number. Per-rule config lives on the rule itself:
+Two realtime sources ship: the **Twilio Voice** plugin's **Answer Phone Calls** on a Twilio number, and the **Discord** plugin's **Discord: Voice channel**. (Daemon sources that ship: Discord: Chat, Discord: Greetings, New Email, Telegram Message, and Phone Call Ended.) Per-rule config lives on the rule itself:
 
 | Setting | Description |
 |---------|-------------|
@@ -241,7 +242,9 @@ Webhooks let external services trigger Sapphire via HTTP. Any service that can s
 - **Path** — the URL path (e.g. `deploy` → `/api/events/webhook/deploy`)
 - **Method** — GET, POST, or PUT
 
-**Webhook security:** Every webhook task gets an auto-generated secret. Callers must include the secret in the `x-webhook-secret` header, or use GitHub-style HMAC signatures (`x-hub-signature-256`). The secret is shown in the task's trigger config after creation. For additional security, use unique/random paths (e.g. `github-abc123` instead of `github`).
+**Webhook specifies chat name.** With this box ticked on a webhook task, the request's JSON body picks the chat: `{"chat_target": "work", ...}` lands in the chat `work`, which answers with its own persona, tools and memory (the task's own AI settings are not used). Anyone who can call the webhook can then write into any chat they can name, so keep a secret on it.
+
+**Webhook security:** A new webhook task gets an auto-generated secret. While a secret is set, callers must include it in the `x-webhook-secret` header, or use GitHub-style HMAC signatures (`x-hub-signature-256`); a call without it is refused. The secret is shown in the task's trigger config after creation. **The secret is optional: clear the field in the editor and the webhook answers anyone who knows its path.** Keep one set unless the path itself is private. For additional security, use unique/random paths (e.g. `github-abc123` instead of `github`).
 
 ### Payload Handling
 
@@ -395,7 +398,7 @@ Event-driven triggers. UI: **Triggers** nav group — the Daemons, Realtime, and
 
 TYPES:
 - daemon: plugin event listener (Discord/email/Telegram). trigger_config: source, account, filter (JSON object), plus plugin-declared task fields (auto_reply, reply_format, ...)
-- webhook: HTTP trigger at /api/events/webhook/{path}. trigger_config: path, method (GET/POST/PUT), secret (auto-generated on create)
+- webhook: HTTP trigger at /api/events/webhook/{path}. trigger_config: path, method (GET/POST/PUT), secret (auto-generated on create; optional, and an empty secret = no auth at all on that path)
 - realtime: a daemon task whose event source declares realtime:true (e.g. Twilio incoming_call). It GATES a live inbound session instead of firing a one-shot task — enabling the rule lets the daemon answer; per-rule config (endpoint/account, caller allowlist, saved vs ephemeral per-caller chat, greeting, phone context, public-line rails, toolset-elevation passphrase) lives on the rule. Rule selection is most-specific-wins (matching filter beats catch-all; no match = decline). Shown in the Realtime view, not Daemons. See PHONE-CALLS.md.
 
 FILTERS (trigger_config.filter):

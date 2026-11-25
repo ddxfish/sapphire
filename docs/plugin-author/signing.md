@@ -32,7 +32,7 @@ Each signed plugin has a `plugin.sig` file containing:
 
 On scan (and rescan), the loader verifies:
 1. Every file's hash matches the manifest
-2. No unrecognized signable files were added after signing
+2. No unrecognized signable files were added after signing, and no compiled code is inside (`.pyc`, `.pyo`, `.so`, `.pyd`, `.dll`, `.dylib`: any of them fails the plugin; `__pycache__` is cleared on a pass, so never ship one)
 3. The signature verifies against the baked-in official key first, then against each authorized third-party key
 
 ### Where trusted keys come from

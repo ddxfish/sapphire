@@ -12,8 +12,11 @@ machines. Benchmark + charts: `tmp/piper-benchmark/`.
 - Default: **en_US-hfc_female-medium**. Curated dropdown spans medium (quality:
   hfc_female, kristin, lessac, ljspeech, amy) and low (fast, 16 kHz, data-light:
   amy, kathleen, lessac).
-- Voices download on first use into `user/piper-voices/` via Piper's own
-  downloader (wrapped in retry — the upstream one has none).
+- A voice downloads when you pick it (its progress shows in the notification
+  center), or at first use, into `user/piper-voices/`: the plugin's own fetch of
+  Piper's files, four tries, put in place only when whole.
+- Licences differ per voice and the picker says which: HFC Female and Lessac are
+  for non-commercial use.
 - ~20 en_US voices + many languages exist on `rhasspy/piper-voices`; the dropdown
   is a curated subset. Add more by extending `provider.py::list_voices` + the
   manifest `voice` options.

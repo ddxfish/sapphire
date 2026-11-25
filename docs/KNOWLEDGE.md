@@ -28,7 +28,7 @@ Long documents are split into sections and embedded for meaning-based search. Im
 
 ## Reading
 
-Open a document for the reader. **⬇ original** downloads the file byte-for-byte, **⬇ text** the extracted text. Pictures open in a lightbox with annotations, and **⬇ annotated** saves them with the marks drawn on.
+Open a document for the reader. **⬇ original** downloads the file byte-for-byte, **⬇ text** the extracted text. Pictures open in a lightbox with annotations, and **⬇ annotated** saves the original picture with your annotations (description, people, notes) written into the file's metadata; the pixels are not changed.
 
 ## Moving a library
 

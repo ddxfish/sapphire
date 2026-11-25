@@ -19,7 +19,11 @@ A working widget in five minutes:
 ```bash
 # 1. Copy the reference plugin to your own
 cp -r core/plugins/sample-widgets user/plugins/my-widget
+# 2. Delete the signature that came along with the copy
+rm user/plugins/my-widget/plugin.sig
 ```
+
+Do not skip the second line. The copy carries the sample's signature; the moment you edit a file it no longer matches, the plugin reads as **Tampered**, and a tampered plugin is always blocked, whatever the unsigned-plugins switch says. With no `plugin.sig` it is simply unsigned.
 
 Edit `user/plugins/my-widget/plugin.json` — change at minimum the `name`,
 keep the `widgets` array shape, point `render` at your file under
@@ -170,9 +174,9 @@ You own its content. Don't touch its parent — that's the host's chrome.
 |-------|------|-------------|
 | `ctx.plugin` | string | Your plugin's name |
 | `ctx.widget_id` | string | The widget's id from your manifest |
-| `ctx.instance_id` | string | UUID for this specific placement (different for each `+ Add`) |
+| `ctx.instance_id` | string | A short id for this specific placement (12 hex characters, different for each `+ Add`) |
 | `ctx.size` | string | Current size: `"1x1"` / `"1x2"` / `"1x3"` / `"1x4"` |
-| `ctx.settings` | object | Merged user settings + your schema defaults |
+| `ctx.settings` | object | Only what the user has saved: `{}` on a fresh widget, until they save the settings modal. Your schema defaults are NOT merged in; apply them yourself (`ctx.settings.color ?? 'blue'`) |
 | `ctx.pluginWebPath` | string | `/plugin-web/{plugin}/` — base path for your other web assets |
 | `ctx.api` | object | See below |
 
@@ -181,7 +185,7 @@ You own its content. Don't touch its parent — that's the host's chrome.
 | Method | Description |
 |--------|-------------|
 | `api.fetch(url, init?)` | Wrapper around `window.fetch`. Same-origin requests carry the user's session cookie. |
-| `api.toast(msg, kind?)` | Show a transient notification. `kind` ∈ `'success' \| 'error' \| 'info'`. |
+| `api.toast(msg, kind?)` | Show a toast. `kind` ∈ `'success' \| 'error' \| 'info'`. `'error'` (and `'warning'`) also leaves a row in the notification center; success and info only flash. |
 | `api.listStorePlugins(opts?)` | Convenience wrapper around the Store catalog API. |
 | `api.pollForRestart()` | Watches `/api/health` and reloads when Sapphire is back. Use after restart-triggering actions. |
 | `api.navigateSettingsTab(name)` | Programmatically switch Settings tabs (e.g. `'backup'`). |
@@ -208,11 +212,10 @@ local state, call your refresh function, etc.
 - User removes the widget via the delete `×` in edit mode
 - User resizes the widget (re-renders with new size)
 - User changes settings (re-renders with new settings)
-- Dashboard tab leaves
-- Plugin is uninstalled
 
-If you return without a cleanup function, the host warns in the
-console. Always return one, even if it's empty.
+It runs when the dashboard next paints its panels, which those three cause at once. It does NOT run at the moment the user leaves the Dashboard tab or the plugin is turned off: your timers and connections keep running until the dashboard is opened again. For anything long-lived, check `container.isConnected` in your own loop and stop when it is false.
+
+Nothing warns you about a missing cleanup: it just leaks. Always return one, even if it's empty.
 
 ---
 
@@ -244,9 +247,10 @@ You access it via `ctx.settings`.
 ]
 ```
 
-When the widget is added, `ctx.settings` is `{ text: "Type your note...", color: "blue" }`
-(defaults filled in). After the user opens `⚙ Settings...` and saves,
-the host re-renders with the new values.
+When the widget is added, `ctx.settings` is `{}`: the defaults in your schema only prefill the
+settings modal. Read every value with its fallback (`ctx.settings.color ?? 'blue'`), or math on
+a missing number gives `NaN`. After the user opens `⚙ Settings...` and saves, the host
+re-renders with the saved values.
 
 ### Field types
 
@@ -431,11 +435,12 @@ response, returning before setting required fields on the result.
 - Widget removed via the delete `×`
 - Widget resized (re-render with new `ctx.size`)
 - Widget settings saved (re-render with new `ctx.settings`)
-- Dashboard tab leaves and is later re-entered
-- Plugin disabled, uninstalled, or reloaded
+- The Dashboard tab is entered again after being left (not at the moment it is left)
+
+Leaving the tab, or turning the plugin off, does not call it by itself: guard long-running work with `container.isConnected`.
 
 The host wraps your `cleanup()` in a try/catch — a throwing cleanup
-won't break the dashboard, but it logs a warning with your plugin name.
+won't break the dashboard, but it logs a warning with the panel's instance id.
 
 ### Hot reload
 
@@ -468,7 +473,7 @@ Sapphire plugin distribution flow. See
 
 Tl;dr: push your `user/plugins/{name}/` directory to a GitHub repo. Users
 install via the in-app Store or by pasting your repo URL into
-**Settings > Plugins > Install from URL**. Featured plugins (curated by
+**Settings > Plugins > + Install Plugin** (it takes a GitHub URL or a zip). Featured plugins (curated by
 the project maintainer) appear in the Plugin Spotlight widget on every
 dashboard.
 
@@ -493,7 +498,7 @@ Copy either as your starting point. Have fun.
 DASHBOARD WIDGETS:
 - Manifest: `capabilities.widgets` = [{id (required, [a-z0-9_-]{1,64}, unique in plugin), name?, description?, icon?, render? (default widgets/{id}.js, path relative to plugin `web/`), sizes? (subset of 1x1|1x2|1x3|1x4, default ["1x1"]), default_size?, multi_instance? (default false), settings_schema? ([]), api_version? (1)}].
 - Render contract: `export async function render(container, ctx)` -> `{ title, actions?, cleanup }`. container = the panel body div (mutate innerHTML; host owns surrounding chrome). cleanup is REQUIRED and must cancel every timer/listener/EventSource started.
-- ctx: {plugin, widget_id, instance_id (UUID per placement), size, settings (merged defaults+user), pluginWebPath (/plugin-web/{plugin}/), api}.
+- ctx: {plugin, widget_id, instance_id (a 12-char hex id per placement), size, settings (ONLY what the user saved, {} on a fresh widget; schema defaults are not merged, apply them yourself), pluginWebPath (/plugin-web/{plugin}/), api}.
 - ctx.api: fetch(url, init?) (session cookie on same-origin), toast(msg, kind: success|error|info), listStorePlugins(opts?), pollForRestart(), navigateSettingsTab(name), openWidgetSettings(instance_id), registerCleanup(fn) — register cleanups BEFORE any await that might throw; registered + returned cleanups all run.
 - actions: [{icon, label, onClick, kind?: 'danger'}] rendered in the Actions dropdown; a ⚙ Settings action is auto-appended when settings_schema is non-empty.
 - settings_schema field types: text, textarea (rows), number (min/max/step), select (options [{value,label}] required), boolean, color; all take key (required), label, default, help. ctx.settings is a snapshot — mutating it persists nothing; saving goes through the settings modal only (V1).
@@ -502,3 +507,4 @@ DASHBOARD WIDGETS:
 - Sizes are horizontal spans only (height is content-driven); mobile <=768px collapses to one column. api_version 1 promises: ctx only grows, api method signatures stable, render contract stable.
 - Hot-reload limitation: after POST /api/plugins/{name}/reload, already-rendered widgets keep running OLD code until the dashboard tab is reloaded.
 - Reference plugin: `core/plugins/sample-widgets/` (hello.js minimal, note.js full). Your own widget plugin goes in `user/plugins/{name}/`. Signing: third-party = no plugin.sig + unsigned plugins allowed (Settings > Plugins banner); keyholders re-sign after edits (signing.md).
+- Widget ids ([a-z0-9_-]) and sizes (1x1 to 1x4) are NOT checked when the plugin loads: a bad one shows in the picker and then fails when the user adds or resizes it (400 "invalid widget_id").

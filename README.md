@@ -50,7 +50,7 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - **Discord** - Bot messaging, channel monitoring, auto-reply via daemons.
 - **Telegram** - Bot and client accounts, read chats, send messages, daemon auto-response.
 - **Email** - Multi-account inbox, privacy-first sending, daemon auto-reply.
-- **Google Calendar** - View schedule, add/delete events via OAuth2.
+- **Calendar** - A calendar kept on this machine with its own page; sync Google, iCloud, Fastmail, Nextcloud or any CalDAV account.
 - **Home Assistant** - Lights, scenes, thermostats, switches, phone notifications.
 - **SSH** - Remote command execution with safety blacklists.
 - **Bitcoin** - Balance, send, transaction history, multi-wallet.
@@ -88,7 +88,7 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - **Plugins** - [PLUGINS.md](docs/PLUGINS.md) ([signing](docs/SIGNING.md)) Hooks, tools, voice commands, providers, daemons, apps, themes — install from GitHub in one click. Swap TTS, STT, LLM, prompts, embeddings model etc in plugins.
 - **Desktop/Mobile/Voice** - Run on your local browser, open the same chat to your phone, then finish it on your mic.
 - **Tools** - [TOOLS.md](docs/TOOLS.md) Web search, Wikipedia, notes, and more. Mix and match via [TOOLSETS.md](docs/TOOLSETS.md).
-- **Backup and Restore** - Can back up from in the app and restore from in the app. All data in user/
+- **Backup and Restore** - Can back up from in the app and restore from in the app. All data in user/ (your API keys and passwords live in the OS config folder and are never in a backup)
 
 **Ecosystem**
 - **Plugin Store** - Browse and one-click install community plugins. Featured plugins highlighted, trust levels indicated. [sapphireblue.dev/plugins](https://sapphireblue.dev/plugins/)
@@ -156,11 +156,11 @@ python main.py
 
 Web UI: https://localhost:8073
 
-The setup wizard walks you through LLM configuration on first run.
+On first run the setup wizard offers Easy (one page, picked for your computer) or Advanced (step by step).
 
 ## Docker Quick Start (Alternative)
 
-No conda, no pip, no dependencies. Web UI only — no wake word. Benefit is isolation, the AI can't reach your host system.
+No conda, no pip, no dependencies. Web UI only — no wake word. Benefit is isolation: the AI can't touch your host's files or programs. It can still reach your network and the services on it.
 
 **Linux / Mac:**
 ```bash

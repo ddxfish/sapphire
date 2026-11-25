@@ -1,6 +1,6 @@
 # SSH
 
-Run commands on remote servers through Sapphire. Uses SSH key authentication — no passwords stored.
+Run commands on remote servers through Sapphire. The server list uses SSH keys only. An SSH device (Settings > Devices) may use a key or a password; a password is stored scrambled with the other credentials.
 
 ## Setup
 
@@ -78,6 +78,16 @@ For running commands on the **local** machine (where Sapphire runs), use the **C
 - **Output truncated** — Increase `output_limit` in settings if you need more
 - **Timeout** — Increase timeout or check if the command hangs
 
+## Power
+
+An SSH device has a Power tab with a **Restart command** and a **Shutdown
+command**. The usual ones are `sudo -n shutdown -r +1` and
+`sudo -n shutdown -h +1`. Change them for another system, or clear one to
+take that action away. They are your words, so they skip the blacklist.
+
+Sapphire may not use power on an SSH device until you turn on **Sapphire may
+use this** on that tab. Your own buttons there always work.
+
 ## Reference for AI
 
 SSH integration for remote server command execution.
@@ -97,7 +107,6 @@ SAFETY:
 - Output truncated at output_limit chars (default 6000)
 
 LOCAL SHELL:
-- Command Line plugin for local commands (same blacklist system)
 - run_command(command, timeout?) - local subprocess execution
 
 TROUBLESHOOTING:
@@ -106,21 +115,13 @@ TROUBLESHOOTING:
 - Blocked: check blacklist patterns in settings
 
 DEVICES (Settings > Devices):
-- This plugin also provides the "SSH machine" device type for Settings > Devices
+- This plugin also provides the "SSH connection" device type for Settings > Devices
 - A device has its own login (auto, key file, pasted key, password) and its own premade commands
+- A device can hold Sapphire's backups: its Backup tab has the folder on that machine and how many daily / weekly / monthly copies to keep there (7 / 4 / 3). Copies sent to it are always encrypted
 - Sapphire uses it with device_action(device, "ssh", command_name, value?)
 - Premade commands are the user's own words and skip the blacklist
 - Free-form "run" exists only while "Allow any command" is checked, and always passes the blacklist
 - Pasted keys and passwords are stored scrambled outside user/ and are never shown again
 - The servers list above and the ssh_* tools are unchanged and separate from devices
 - See docs/DEVICES.md
-
-## Power
-
-An SSH device has a Power tab with a **Restart command** and a **Shutdown
-command**. The usual ones are `sudo -n shutdown -r +1` and
-`sudo -n shutdown -h +1`. Change them for another system, or clear one to
-take that action away. They are your words, so they skip the blacklist.
-
-Sapphire may not use power on an SSH device until you turn on **Sapphire may
-use this** on that tab. Your own buttons there always work.
+- Power: an SSH device's Power tab holds a Restart command and a Shutdown command (the user's own words, so they skip the blacklist). You may use power on that device only after the user turns on "Sapphire may use this" there.

@@ -4,8 +4,7 @@ Free text-to-speech using Google Translate's TTS endpoint. No API key, no accoun
 
 ## Setup
 
-1. Install: `pip install gTTS`
-2. Enable the plugin in **Settings > Plugins**
+1. Enable the plugin in **Settings > Plugins**. Its `gTTS` package installs with it (the card's **Install** button if it shows as missing)
 3. Select "Google Translate (Free)" in **Settings > TTS**
 4. Test TTS
 

@@ -2,7 +2,7 @@
   "plugin": "bitcoin",
   "version": "1.2.0",
   "files": {
-    "README.md": "sha256:3e270b4a420652f56044046fa2274e8a44b14d8fc6229dcccd865240a4972621",
+    "README.md": "sha256:38dfecdcbc9335a0491022a37661570d07aa833b0c16944ffd26832fbd3e764a",
     "__init__.py": "sha256:af134484cead94659b8875d7358c83249251656c954e9f0c508debc9495ef763",
     "plugin.json": "sha256:746f01e543751f31310e34b544c1a0b118e70e10105eb50982d4553e58ecfeaf",
     "qr.py": "sha256:350de4c1468f12d15db8fed0639e409ed36ffc427462498cbbb791265ecf287c",
@@ -16,5 +16,5 @@
     "wallets.py": "sha256:ecd4f6be6472370a49018208b7573634307d6d6e888483e7e6e52fae780ed265",
     "web/index.js": "sha256:6194aa2c89dc570191d2f754cf9356a1d8441317aea9a0c71a94e9f0054b60a5"
   },
-  "signature": "EVRTkmD4qTRZrQ5ZkVPUujSyaDZ+9VJNbaYILhP1pSFi2a++FbZu2es+4sejPUE9iXuBfuGNYl9R3Bo2ASeyCQ=="
+  "signature": "rXOviG3veJ0tZxXaPMYnyA6bT1uBATpIq8rEj2tKrLqujaDaKatwSSuhkxQ06DRnVSlrK1wj8Yd9m+oG8creDw=="
 }

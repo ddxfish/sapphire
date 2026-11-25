@@ -25,7 +25,7 @@ The panel row under the hero is yours to arrange. Each widget is a small card wi
 | Widget | What it does |
 |--------|--------------|
 | **System** | Disk usage, memory, restart and shutdown |
-| **Updates** | Sapphire version status and plugin updates |
+| **Updates** | Sapphire version status, and update badges for the featured store plugins |
 | **Backups** | Backup count, size, schedule, quick actions |
 | **Maintenance** | Uptime, app status, cleanup tools |
 | **Plugin Spotlight** | Rotating featured plugins from the store |
@@ -45,23 +45,23 @@ Your layout is saved per-install in `user/webui/dashboard.json`. If a plugin is 
 Sapphire checks GitHub for new versions automatically (every 24 hours, starting 30 seconds after boot).
 
 - Shows your current version vs latest available
-- One-click **Update** button: preflight checks + automatic pre-update backup, then a *deferred* `git pull` + `pip install -r requirements.txt` applied by the runner on restart
+- The widget's **Actions** menu has **Check now** and **Force pull (git)**. Force pull is the update: preflight checks + automatic pre-update backup, then a *deferred* `git pull` + `pip install -r requirements.txt` applied by the runner on restart
 - After updating, Sapphire restarts itself
 
 ### How Updates Work
 
 1. Reads your local `VERSION` file
 2. Checks the same file on GitHub for your current branch
-3. Compares versions — if remote is newer, shows the update button
+3. Compares versions — if remote is newer, the version pill says "vX available" (no button appears: use Actions → Force pull)
 4. On update: preflight + backup → writes a pending-update marker and restarts → the runner (`main.py`) applies `git pull` + `pip install` *before* relaunching Sapphire
 
 ### Special Cases
 
 | Scenario | What happens |
 |----------|-------------|
-| **Docker** | Shows `docker compose pull && docker compose up -d` instructions instead |
-| **Fork** | Links to upstream releases on GitHub |
-| **No .git** | Links to GitHub releases for manual download |
+| **Docker** | Force pull is refused with a note to update with `docker compose pull && docker compose up -d` |
+| **Fork** | Force pull is refused: "pull from upstream manually" |
+| **No .git** | Force pull is refused: download a release from GitHub |
 
 ## Token Metrics
 
@@ -98,7 +98,7 @@ If any installed plugin is missing Python dependencies, a **Missing Dependencies
 ## Troubleshooting
 
 - **Metrics not showing** — Check the toggle is enabled. Data only appears after LLM calls are made
-- **Update button missing** — You might be on Docker, a fork, missing .git, or on a branch other than `main`
+- **Force pull says it can't** — Docker, a managed install, a fork, no .git, or a branch other than `main`: the note names which, and what to do instead
 - **Update failed** — Usually means you have local changes that conflict with upstream. Check git status
 
 ## Reference for AI

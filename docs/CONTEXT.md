@@ -9,7 +9,7 @@ Every model has a context window: how much text (counted in tokens) it can read 
 Before every request (chat turns and task turns alike) one budgeter fits the request to the window.
 
 - **The window** is the smaller of the **context window budget** (`CONTEXT_LIMIT`, default 65535, **Settings → LLM → General**; 0 = no limit of its own) and the size a local server says it's holding (LM Studio, llama.cpp, Ollama).
-- **The reply always keeps its room**: its Max Tokens, at least 1,024.
+- **The reply always keeps its room**: up to its Max Tokens, with at most a quarter of the window held back for it and never less than 1,024. On a small window a large Max Tokens is therefore not all kept.
 - **When history doesn't fit**, the oldest whole turns go out of view, and the cut takes the request down to about 65% so it isn't redone every turn. She's told: *"[Earlier in this chat: the first N turns are out of your view...]"*. The chat itself is untouched; only the copy sent to the model is shortened.
 - **When even an empty history doesn't fit** (a huge prompt, too many tools), nothing is sent and you get plain words saying so.
 
@@ -62,7 +62,7 @@ See [COSTS.md](COSTS.md) for what this means for a cloud bill.
 
 ## Reference for AI
 
-BUDGET (core/chat/budget.py): fit() runs before every provider call (chat + task lanes). Window = min(CONTEXT_LIMIT default 65535, local server's loaded size). Reply keeps max_tokens (≥1024). Overflow: oldest whole turns go out of view, cut to ~65%, held behind a watermark; you get "[Earlier in this chat: the first N turns are out of your view...]"; stored history unchanged. No room even with no history = ContextFull, nothing sent. Counts system, tool schemas, history, tool args, thinking, pictures (per provider family); ratio learned from usage; one heavier retry after a too-long refusal. Task "Context window" 0 = CONTEXT_LIMIT.
+BUDGET (core/chat/budget.py): fit() runs before every provider call (chat + task lanes). Window = min(CONTEXT_LIMIT default 65535, local server's loaded size). Reply keeps min(max_tokens, max(1024, window/4)). Overflow: oldest whole turns go out of view, cut to ~65%, held behind a watermark; you get "[Earlier in this chat: the first N turns are out of your view...]"; stored history unchanged. No room even with no history = ContextFull, nothing sent. Counts system, tool schemas, history, tool args, thinking, pictures (per provider family); ratio learned from usage; one heavier retry after a too-long refusal. Task "Context window" 0 = CONTEXT_LIMIT.
 
 TOOL DECAY: per-tool expires > file TOOL_EXPIRES > manifest tool_expires > TOOL_EXPIRES_AFTER (0 = keep). Values 'never', N user turns, or superseded-by-group. Stub = first line (200 chars) + size + how to rerun; its pictures go too. By turns after, never by fullness. Shipped: web + documents 3, notepad/memory never, browser views superseded. Warm cache: new stubs wait while the cache is warm. If you need a decayed result, run the tool again.
 

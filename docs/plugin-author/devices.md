@@ -162,7 +162,7 @@ restart is needed.
 | `icon` | no | Emoji |
 | `module` | yes | Plugin-relative path to a `.py` file. It may not leave the plugin folder |
 | `capabilities` | yes | 1 to 16 slugs. Each becomes a tab in the device window and the second argument of `device_action` |
-| `config_schema` | no | Per-device fields, in the [settings field shape](settings.md#field-schema). Up to 40 |
+| `config_schema` | no | Per-device fields, in the [settings field shape](settings.md#field-schema). Up to 64. Two keys only device fields have: `was` (the field's old key, so a renamed field carries its saved value over) and `default_unless` (`{"takes": "<capability>", "value": ...}`: a different default for a board that has that capability) |
 | `locked_by_default` | no | Capabilities Sapphire may not use until the user allows it. See Power below |
 | `presence` | no | `true`: its things come and go, and the driver is kept told. See Things that come and go |
 | `learns_address` | no | `true`: the device calls Sapphire with its own key, and the address it calls from becomes its `url` (see SATELLITE-PROTOCOL.md, "Its own address is learned") |
@@ -407,7 +407,7 @@ plays = {"type": "audio/wav", "rate": 16000, "channels": 1}     # as the board s
 audio, kind = voice.fit(audio, kind, plays)     # (bytes, "audio/wav") or (None, reason)
 ```
 
-`audio/wav` is always 16 bit PCM. It is the only type today. `rate` is 8000 to
+`audio/wav` is 16 bit PCM unless the board asks for `codec: ima_adpcm`. It is the only type today. `rate` is 8000 to
 48000, `channels` is 1 or 2.
 
 **A microphone.** Declare a capability named `mic`, and these config fields:
@@ -441,7 +441,7 @@ She reads one line above what was heard, naming the device and its location:
 [Voice from device "kitchen" (Kitchen Pi). Location: Kitchen. Your reply is spoken aloud there by itself: just answer, never call say on that device for it.]
 ```
 
-A chat that is mid-turn is waited for, up to 20 seconds. One device may have
+A chat that is mid-turn is waited for: the question takes its turn and is never dropped. One device may have
 3 questions waiting. More are refused with `busy: true`.
 
 **A light.** The device may hold one stream open to learn what its light
@@ -657,6 +657,6 @@ These work in any plugin's settings schema.
 - Self-report: `status()` may answer `has: [capability]`. `engine._learn` keeps it on the row as `parts[].has` (written only on a change, names outside the manifest dropped with one warning). `engine.capabilities(part, spec)` is the manifest list held to it; `describe`, `public`, `run` and `voice._voice_part` all use it. `public` hides schema fields whose `capability` the device lacks. No key = never said = everything.
 - Sound format: `voice.fit(audio, kind, plays)` and `voice.wanted(plays)`. numpy and soundfile only. Going down in rate it low-pass filters first.
 - After a save: `engine.tell(row)` calls each part's `apply` and returns problems in words; the routes put them in the save's `warning`. `voice.clock()` = `{now, tz}` (POSIX zone from `/etc/localtime`'s footer) rides on the events stream's `connected` line.
-- Routes (`core/routes/devices.py`; a login session or a Bearer API token, which runs as the owner): `GET|POST /api/devices`, `GET|PUT|DELETE /api/devices/{id}`, `POST /api/devices/{id}/test`, `POST /api/devices/{id}/run`, `GET /api/devices/found/{driver}?device=`, `POST /api/devices/{id}/connections`, `DELETE /api/devices/{id}/connections/{driver}`, `POST /api/devices/provision`, `GET /api/devices/here`, `/api/devices/flash/*`, `GET /api/devices/firmware[/{board}/{part}]`, `PUT /api/devices/firmware/sources`, `POST /api/devices/firmware/own`, `GET|DELETE /api/devices/{id}/screen/stream`, `POST /api/devices/{id}/screen/frame`; the IR library `/api/ir/*` (`core/routes/ir.py`); with the device's own key: `/api/devices/{id}/voice|wake|room|text|press|ask|chats|chat|history|events`. Scheduled Device tasks run as the owner too (locks and owner-only actions pass; `danger` actions cannot be scheduled). Limits: 240 reads and 60 writes a minute. `PUT` takes `locked` as a map `{capability: bool}` that changes only what it names (a list replaces the whole set). `found` is a reserved device name.
+- Routes (`core/routes/devices.py`; a login session or a Bearer API token, which runs as the owner): `GET|POST /api/devices`, `GET|PUT|DELETE /api/devices/{id}`, `POST /api/devices/{id}/test`, `POST /api/devices/{id}/run`, `GET /api/devices/found/{driver}?device=`, `POST /api/devices/{id}/connections`, `DELETE /api/devices/{id}/connections/{driver}`, `POST /api/devices/provision`, `GET /api/devices/here`, `/api/devices/flash/*`, `GET /api/devices/firmware[/{board}/{part}]`, `PUT /api/devices/firmware/sources`, `POST /api/devices/firmware/own`, `GET /api/devices/face-feed`, `PUT /api/devices/face-feed/source` (which avatar is her face on screens; 422 unknown), `GET|DELETE /api/devices/{id}/screen/stream`, `POST /api/devices/{id}/screen/frame`; the IR library `/api/ir/*` (`core/routes/ir.py`); with the device's own key: `/api/devices/{id}/voice|wake|room|text|press|ask|chats|chat|history|events`. Scheduled Device tasks run as the owner too (locks and owner-only actions pass; `danger` actions cannot be scheduled). Limits: 240 reads and 60 writes a minute. `PUT` takes `locked` as a map `{capability: bool}` that changes only what it names (a list replaces the whole set). `found` is a reserved device name.
 - Presence: `core/devices/presence.py`, started after the plugin scan (`sapphire.py`), stopped before plugin services. Manifest `"presence": true` plus optional module functions `discover(config) -> [{id, name, kind}]`, `watch(changed, stopped)`, `tend(device, config, secrets, present, leaving)`. `tend` is level triggered: called on a poke (watcher, device saved, plugin loaded), on the 15 s heartbeat, and once with `leaving=True, present=[]` when the device is disabled or removed, the plugin unloads (`presence.release(plugin)`, called by the loader before it unregisters the drivers) or the app stops. One keeper thread, one watcher thread per driver with an enabled device, tends on a pool of 4, never two at once for one device. Pokes are gathered for 0.3 s.
 - Filter: a `config_schema` field of `"type": "found"` (one per driver). Stored in the part's config as `{all: bool, only: [{id, name}]}`. `engine.found(driver, config)` cleans what `discover` returns (64 at most; a thing may carry `note` and `actions: [{do, label}]`). `engine.passing(spec, config, things)` applies the filter. `"many": false` keeps one. `engine.setup_found(driver, thing_id, action, config)` runs the module's `setup()` for a thing's button: `POST /api/devices/found/{driver}/do` `{id, do, config?}`.

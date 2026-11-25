@@ -2,7 +2,7 @@
   "plugin": "mcp_client",
   "version": "1.0.0",
   "files": {
-    "README.md": "sha256:c02a972a3270f7dac58d427d25727876547fefd4e4edd435da6ddf0dfa257691",
+    "README.md": "sha256:23623dbb4e2deace77160e0bb935fe060de97fc53c06b3b995569e4ec826316d",
     "daemon.py": "sha256:df74a562f1f435fc1c8243ebbdb13731537527e311f6d8bcac22053bdb215923",
     "mcp_bridge.py": "sha256:0331cd5e714cd2bac8446b6fd60137f09c1fe7278a7c0bc1f2bd56aca1ed0497",
     "plugin.json": "sha256:35dfbd20923efd9b0fa8e5f9b325dc8140ca777d00b759aa44b04962dfad9b32",
@@ -11,5 +11,5 @@
     "tools/mcp_tools.py": "sha256:e326b1d021e297ac06640764a0614459f4c351021be634696742727eddcb1bb2",
     "web/index.js": "sha256:7fba19f3ad2cff62d5042f55cfab60fb4fec421d764368368d8aa25ed7eb6e81"
   },
-  "signature": "6MaerYHMnAZ9bCyJBC2azEgu1aeh3Q1lAiJ2M/Ezjiu83foxD5VojfpuBglG7QE+RbC/JxFMkCgxh+nCSrMQBQ=="
+  "signature": "jmMJPABHfvb28vpFkY7pZkc5+mPSP0EQq7ZllLkbNfs28WgsTpY3mTca5kER4XZi00GjjLRdO/r66zX4GnXtAA=="
 }

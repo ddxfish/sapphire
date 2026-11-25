@@ -37,8 +37,8 @@ Knowledge search cascades: filename match, full-text AND, full-text OR with pref
 LEGACY engine (plugin `memory`). Only applies when this plugin is active instead of Mind Palace; the default engine is in docs MEMORY.md.
 
 TOOLS:
-- save_memory(content, label?, private_key?) — 512 cap (aim 450), over-cap trimmed; receipt "Skip a re-save unless it's critical". search_memory(query, label?, private_key?), get_recent_memories(count?, label?, private_key?), delete_memory(memory_id, private_key?). No update_memory.
-- save_person(name, id?, relationship?, phone?, email?, address?, notes?) — upsert by name (or id) per scope.
+- save_memory(content, label?, private_key?) — 512 cap (aim 450), over-cap trimmed; receipt "Skip a re-save unless it's critical". search_memory(query, label?, limit?, private_key?) (limit default 10, max 50), get_recent_memories(count?, label?, private_key?), delete_memory(memory_id, private_key?). No update_memory.
+- save_person(name, id?, relationship?, phone?, email?, address?, notes?, append_notes?) — upsert by name (or id) per scope.
 - save_knowledge(category, content, description?), search_knowledge(query?, category?, id?, limit?) — people + knowledge; delete_knowledge(id?, category?) — AI-made tabs only, never people.
 - create_goal(title, description?, priority?, parent_id?, permanent?), list_goals(goal_id?, status?), update_goal(goal_id, …, progress_note?), delete_goal(goal_id, cascade?).
 

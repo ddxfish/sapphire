@@ -13,12 +13,12 @@ No core change, no double voice.
 |----------|------|-------|---------|
 | The reply text, once | `post_llm` | after the LLM, before save | `response` |
 | The spoken text, cleaned the way she'd say it | `pre_tts` | before whole-blob speech: the speakers, satellites, Telegram voice notes | `tts_text` |
-| Sentence-sized text as it is made | `tts_chunk_text` | streaming TTS, per chunk, before synth | `tts_text` |
-| **Her audio**, sentence by sentence | `tts_chunk_audio` | streaming TTS, per chunk, after synth | `metadata['audio']['audio_bytes']`, `['content_type']`, `metadata['chunk_text']`, `metadata['plays_here']` |
-| Turn boundaries | `tts_stream_start`, `tts_stream_end` | once per streaming turn | `metadata['stream_id']` |
+| Sentence-sized text as it is made | `tts_chunk_text` | every chat reply, per chunk, before synth | `tts_text` |
+| **Her audio**, sentence by sentence | `tts_chunk_audio` | every chat reply, once per audio segment (a long chunk comes in several), after synth | `metadata['audio']['audio_bytes']`, `['content_type']`, `metadata['chunk_text']`, `metadata['chunk_index']`, `metadata['segment']`, `metadata['plays_here']` |
+| Turn boundaries | `tts_stream_start`, `tts_stream_end` | once per chat reply | `metadata['stream_id']` |
 | Stopped | `tts_stop` | the user stopped her voice | `metadata['stream_id']` (or None + `chat_wide`) |
 
-Audio exists only on the streaming lane (Kokoro or Piper, Settings > TTS > Streaming on). Say so in your plugin's README. If your avatar does its own TTS from text, `post_llm` alone is enough and you never touch the TTS hooks. Full hook reference: [Hooks](hooks.md#streaming-tts-hooks).
+Every chat reply reaches these hooks, with any voice. With Stream speech off, or a voice that can't stream (ElevenLabs, gTTS), the reply is made whole first and then released through the same hooks, so the audio arrives later, not differently. One chunk can arrive as several audio segments: key what you store on (`stream_id`, `chunk_index`, `segment`), or a long sentence overwrites itself. If your avatar does its own TTS from text, `post_llm` alone is enough and you never touch the TTS hooks. Full hook reference: [Hooks](hooks.md#streaming-tts-hooks).
 
 ## The switch: Play speech here
 
@@ -95,7 +95,7 @@ Want a toggle of your own? Declare it in your `plugin.json` settings ([Settings]
 
 VOICE ROUTING (send her voice to an avatar, robot or bot):
 - Text: `post_llm` (`response`, once per reply); `pre_tts` (`tts_text`, whole-blob lanes: speakers, satellites, Telegram voice notes).
-- Every chat reply (streamed, or held and voiced whole when TTS_STREAMING_ENABLED is off or the provider can't stream): `tts_stream_start` (metadata stream_id, voice, speed, plays_here) -> `tts_chunk_text` (tts_text, before synth) -> `tts_chunk_audio` (metadata audio.audio_bytes, audio.content_type, chunk_text, chunk_index, plays_here, stream_id) -> `tts_stream_end` (chunk_count, total_chars, interrupted). `tts_stream_end` = the reply is MADE, not heard: a player of your own (a face that plays her voice) also listens to `tts_stop` to flush, since a reply made whole ends before its first word plays.
+- Every chat reply (streamed, or held and voiced whole when TTS_STREAMING_ENABLED is off or the provider can't stream): `tts_stream_start` (metadata stream_id, voice, speed, plays_here) -> `tts_chunk_text` (tts_text, before synth) -> `tts_chunk_audio` (once per audio SEGMENT, several per chunk on long text; metadata audio.audio_bytes, audio.content_type, chunk_text, chunk_index, segment, plays_here, stream_id) -> `tts_stream_end` (chunk_count, total_chars, interrupted). `tts_stream_end` = the reply is MADE, not heard: a player of your own (a face that plays her voice) also listens to `tts_stop` to flush, since a reply made whole ends before its first word plays.
 - skip_tts: pre_tts = cancel whole-blob speech; tts_stream_start = cancel the turn before synth; tts_chunk_audio = chunk CONSUMED (not played here, counted voiced, no drop notice). Nulling audio_bytes = dropped (notice). Take a chunk only when plays_here is true (false = going to a satellite or phone).
 - User switch: TTS_LOCAL_PLAYBACK, Settings > TTS > "Play speech here", default on, hot. Off = hooks fire, nothing plays here. Not governed: satellites, phone, Discord, Telegram voice notes, voice preview, chime. Plugins never read it.
 - Engine: core/tts/stream_pump.py (plays_here), core/tts/tts_client.py (render; QUIET_REASONS -> 204).

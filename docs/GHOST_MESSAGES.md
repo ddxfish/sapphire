@@ -3,7 +3,7 @@
 Ghost messages are Sapphire's **per-turn ephemeral context rail**. They deliver
 short, turn-only notes to the assistant — the current time, the active spice, an
 operator's per-chat note, or a plugin's ambient context — as **labeled operator
-metadata that the user never sees and that is never saved to history**.
+metadata that is never part of the transcript and never saved to history**. (You can look at it: the chat sidebar's System Prompt accordion shows **Last Ghost Sent**, what the last turn really carried. It is held in memory only, and never for a private chat.)
 
 The rail exists for one architectural reason: keep the system prompt (and the
 whole history prefix) **cache-stable**. Rotating per-turn content used to be baked
@@ -145,7 +145,7 @@ def ghost_inject(event):
   turn).
 - **2 KB cap per plugin** — longer contributions are truncated with `…`.
 - The hook fires on a **fresh** `HookEvent` (not the `pre_chat` one). Only
-  `input` and `metadata["system"]` are populated. `event.config` is **None** for
+  `input`, `metadata["system"]`, `chat_name` (the chat this turn is FOR, which may not be the open one) and `surface` are populated. `event.config` is **None** for
   this hook — import the `config` module directly if you need settings.
 - User-band plugins fire after system-band contributors (the user priority band).
 
@@ -191,8 +191,8 @@ ghost rail is encouraged.
   documented belt-and-suspenders guard but is currently not wired into any save
   path — the separation of the payload from the persistence call is what protects
   history.)
-- **Invisible to the user.** It's a labeled operator-metadata message the frontend
-  never renders in the transcript.
+- **Never in the transcript.** It's a labeled operator-metadata message the frontend
+  never renders among the messages; the sidebar's Last Ghost Sent shows the latest one.
 - **Cache-safe on Claude.** The ghost sits *outside* the marked cache prefix, so its
   per-turn content never invalidates system/tools/history caching
   (`_apply_history_cache_control` in the Claude provider). Non-Claude providers still get the

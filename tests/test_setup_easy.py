@@ -749,7 +749,7 @@ def test_a_failed_install_leaves_the_running_provider_alone(monkeypatch, wake):
 
 def test_ears_are_set_up_before_the_voice_and_the_wake_word_last(monkeypatch):
     ran = []
-    monkeypatch.setattr(provider_switch, '_run', lambda fresh, persist, wake=False: ran.extend(k for k, _, _ in fresh))
+    monkeypatch.setattr(provider_switch, '_run', lambda fresh, *a: ran.extend(k for k, _, _ in fresh))
     monkeypatch.setattr(provider_switch.notify, 'begin', lambda *a, **k: 'row')
     monkeypatch.setattr(provider_switch, '_inflight', {})
     provider_switch.start([('TTS_PROVIDER', 'kokoro'), ('WAKE_WORD_ENABLED', True), ('STT_PROVIDER', 'faster_whisper')])

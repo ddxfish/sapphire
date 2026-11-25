@@ -121,7 +121,7 @@ Images you paste into the composer get the same treatment: they're kept in the c
 - **Safe search** (`WEB_IMAGES_SAFESEARCH`) — the filter applied to `web_view_images` searches (off by default).
 - **Max upload width** (`IMAGE_UPLOAD_MAX_WIDTH`, default 1920) — wider uploads are resized and stored as JPEG 85; 0 keeps originals.
 
-Pixels only reach the model if the provider is known to accept them — tick the **👁 vision** checkbox on the provider in Settings › LLM. Without it the image stays home and she's told `[image not sent: this model has no vision]`, so she knows why she's working blind instead of guessing.
+Pixels only reach the model if the provider is known to accept them — tick **Vision model — can see images** on the provider in Settings › LLM (an added provider's form; 👁 is the badge a vision model then shows). Without it the image stays home and she's told `[image not sent: this model has no vision]`, so she knows why she's working blind instead of guessing.
 
 ### Self-Modification
 
@@ -290,9 +290,9 @@ Tools: `tool_save`, `tool_read`, `tool_load`
 
 For the full Tool Maker guide (format, settings, examples): see [TOOLMAKER.md](TOOLMAKER.md).
 
-**Validation strictness** (configurable in Settings > Tool Maker):
+**Validation strictness** (configurable in Settings → Plugins → ⚙ on Toolmaker; the plugin is off by default):
 - `strict` — Only allowlisted imports (json, re, datetime, math, requests, etc.)
-- `moderate` — Blocks dangerous operations (subprocess, shutil, eval, os.system, etc.)
+- `moderate` — Allows `subprocess` and any import not on the danger list. Still blocked: the imports shutil, ctypes, multiprocessing, socket, signal, importlib, and the calls eval, exec, open, getattr, os.system and their kin
 - `system_killer` — Syntax check only (legacy alias: `trust`)
 
 AI-created tools appear as plugins and can be enabled/disabled like any plugin.
@@ -326,9 +326,9 @@ TOOL MODULES:
 - browser plugin: browser_open, browser_look, browser_act, browser_tabs, browser_console, browser_js
 - mindpalace library_tools.py: library, read_document, memory_view_image(query? + count? | document_id | image_id=img:<id>, private_key?), local_view_images(paths? | folder?, page?, count?), memory_save_image(source, topic, caption?, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
 - webcam: capture_webcam. screenshot: get_screenshot. sd-server: generate_image. comfyui: comfy_generate, comfy_list_workflows
-- Image settings (Settings › Images): IMAGE_MEMORY_TURNS (default 3 — turns an image stays in the model's view after it arrived; 0 = arrival turn only), WEB_IMAGES_SAFESEARCH (default off), IMAGE_UPLOAD_MAX_WIDTH (default 1920, JPEG 85; 0 = keep originals). IMAGE_DESCRIBE_ENGINE (default clip) — who describes an image to a model with no vision: CLIP's local atmospheric read, or any of your enabled model lines for a literal caption (each stored image is described once; the caption is kept on the image's row and deleted with it; pasted images and vision-window replays are covered too) (core/image_describe.py; a private turn only accepts a provider marked local, any failure falls back to CLIP; the description is kept in chat history with the image marker, so later turns still know what the image was). Image blocks ride to the model only when the provider's vision flag is on; otherwise '[image not sent: this model has no vision]'
-- meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text) [monolith mode], prompt_create(name, content), prompt_pieces(action=list|view|set|remove|create|edit|delete, component?, key?, value?, minutes?) [assembled mode], set_voice(name?, speed?, pitch?), reset_chat(reason), change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools > AI Self-Management]
-- switch_model roster: AI_MODEL_SWITCH_ROSTER (top = least private); AI_MODEL_SWITCH_RATCHET (off) = only switches DOWN the list; 'auto' or an off-roster model counts as the top rung
+- Images: IMAGE_MEMORY_TURNS (default 3: turns an image stays in view; 0 = arrival turn only); a model with no vision gets a caption (Settings › Images, IMAGE_DESCRIBE_ENGINE: clip, or one of the user's models); '[image not sent: this model has no vision]' = that provider's vision flag is off. WEB_IMAGES_SAFESEARCH (off), IMAGE_UPLOAD_MAX_WIDTH (1920).
+- meta.py: prompt_view(name?), prompt_switch(name?), prompt_edit(old_text, new_text, reason?) [monolith mode], prompt_create(name, content, reason?), prompt_pieces(action=list|view|set|remove|create|edit|delete, component?, key?, value?, minutes?, reason?) [assembled mode] (reason = recorded in your memory ledger), set_voice(name?, speed?, pitch?), reset_chat(reason, chat_name?) [wipes a chat's messages, no undo: only when asked; a background task must name the chat], change_username(name), list_tools(scope?), set_motion(name?), switch_model(name?) + switch_toolset(name?) [hidden unless AI_MODEL_SWITCH_ENABLED / AI_TOOLSET_SWITCH_ENABLED on in Settings > Tools > AI Self-Management]
+- switch_model roster and ratchet (AI_MODEL_SWITCH_ROSTER / _RATCHET): PRIVACY doc
 - "What model am I on?": get_self_info (status plugin) — time, model, services, plugins, memory stats, diagnostics
 - slash_command.py: slash_command — /remove N and /compact-daily on this chat; ships in the personality toolset; refused in agent runs (see SLASH-COMMANDS doc)
 - scene.py: set_scene(name) — chat scene background, 'none' clears
@@ -356,9 +356,9 @@ TOOL MODULES:
 - network.py: get_external_ip, check_internet, website_status
 - notepad.py: notepad_read, notepad_append_lines, notepad_delete_lines, notepad_insert_line
 - docs.py: search_help_docs
-- ask_user.py (core): ask_user(questions=[{question, header?, options:[{label, description?}], multi_select?}]) — a question card with buttons + a type-your-own box; 1-4 questions (tabs), 2-6 options each. The user's picks arrive as their NEXT message: the `[Question card <id> (ask_user) — what the user clicked; not typed by the user]` line, then one `Question? → Answer` line each. Ask in your words, call it, END your turn; never wait or re-ask. They may dismiss it or just type. On voice say the options aloud. Refused (no card can be seen) inside an agent's run, a chatless background turn, or a turn that came in over MCP — ask in your text there
+- ask_user.py (core): ask_user(questions=[{question, header?, options:[{label, description?}], multi_select?}]) — a card with buttons and a type-your-own box; 1-4 questions, 2-6 options each. The picks arrive as the user's NEXT message (a "[Question card … not typed by the user]" line, then one "Question? → Answer" line each): ask, call it, END your turn; never wait or re-ask. On voice say the options aloud. Refused where no card can be seen: an agent's run, a chatless background turn, an MCP turn.
 
-TOOL DECAY: an old tool result is shortened (first line + size + rerun hint) in what the model is sent after N user turns; stored rows never change. Precedence: tool `expires` → file TOOL_EXPIRES → manifest tool_expires → global TOOL_EXPIRES_AFTER (Settings > LLM > General, default 0 = keep). Shipped: web + documents 3; notepad, mindpalace, memory, remembrance never; browser views superseded, browser_console/browser_js 3. A shortened result = call the tool again. See CONTEXT doc.
+TOOL DECAY: an old tool result is shortened (first line + size + a rerun hint) in what the model is sent after N user turns; the stored row never changes. A shortened result = call the tool again. Which tools decay and when: CONTEXT doc.
 
 TOOL CREATION: Use tool_save + tool_load. For format and rules, see TOOLMAKER doc.
 

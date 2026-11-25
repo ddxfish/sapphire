@@ -2,7 +2,7 @@
   "plugin": "social",
   "version": "1.0.0",
   "files": {
-    "README.md": "sha256:a6bcf217a9326ddb983da660dc503cd13fb574487ffea7a84f1a2421f123a916",
+    "README.md": "sha256:34a02e26659a7e6cb4f0a37ec64829de6c841425b1a30706249aac1a54c6092b",
     "__init__.py": "sha256:84355aa4c56a063575c1ac9381d630c56d7bf693dd94523b8e5b02fedcfd1547",
     "app/index.js": "sha256:698ee5bc22df008a4cae9566fd802ab7baa874de12401e75e110aedf06f27742",
     "drop.py": "sha256:bc95b9d7142dad501f64ba8430c2d3923a1b065f16ab1817d273203263a8ee51",
@@ -28,5 +28,5 @@
     "tools/social.py": "sha256:095d6a9a40bf6f06f8c7db7c4eadc0e2b5a6f644a0fec63800a6bcf418aa64a3",
     "web/index.js": "sha256:34e923bd21b77d34a8bca1fe0038a486db2faed5fbec209e70a94b98261a08c5"
   },
-  "signature": "ifTIZ2KWeeKF+odeUd8CcwGMIMhE14wneJdMExqxhtrtgg7NBxKsUyj9Jb8aSw/2irPNumBcGpJtYSPgiSV0Bg=="
+  "signature": "vrE48NBDqBMX4AISitG4ujdUZgyBif3+7dHABKLadFF/wb5GaoI01ygJQxbCLOYUloEe7s6+Kk2K/0XgmfHICg=="
 }

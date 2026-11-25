@@ -7,8 +7,8 @@ private chat refuses it and asks for a local TTS provider.
 ## Setup
 
 1. Get a key at elevenlabs.io (Settings > API Keys).
-2. Enable the plugin in **Settings > Plugins** and put the key in its settings.
-3. Pick **ElevenLabs (Cloud)** in **Settings > TTS**.
+2. Enable the plugin in **Settings > Plugins**.
+3. Pick **ElevenLabs (Cloud)** in **Settings > TTS**. Its API key, model and voice id appear on that tab once it is picked (the plugin has no settings page of its own).
 
 ## Settings
 

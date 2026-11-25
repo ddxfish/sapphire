@@ -6,19 +6,46 @@
 
 Once an avatar is selected, it animates on its own in two ways:
 
-**1. Automatic reactions to Sapphire's state.** The avatar reacts in real time to what's happening — `listening` while you speak (STT), `processing` while she thinks, `speaking` during TTS, `toolcall` while a tool runs, `wakeword` on detection, `user_typing` while you type, plus `agent` and `cron` states for background activity. This is wired to the event bus; you don't configure it.
+**1. Automatic reactions to Sapphire's state.** The avatar reacts in real time to what's happening — `listening` while you speak (STT), `processing` while your speech is being transcribed, `typing` while she writes her reply, `speaking` during TTS, `toolcall` while a tool runs, `wakeword` on detection, `user_typing` while you type, plus `agent` and `cron` states for background activity. This is wired to the event bus; you don't configure it.
 
 **2. Deliberate animations the AI triggers.** Sapphire can play a specific track by emitting an inline tag in her reply:
 
 - `<<avatar: wave>>` — plays the track **once**, then returns to normal behavior
 - `<<avatar: sleep loop>>` — **holds** the pose until she emits another `<<avatar: ...>>` tag (good for sustained moods: sleep, dance, meditate)
-- `<<avatar: nod 2.5s>>` — plays for a set **duration**
+- `<<avatar: nod 2.5s>>` — a duration is accepted, but today it plays like a one-shot: once through, then back to normal
 
-She only uses track names that exist in your model — the plugin injects the available list into her prompt so she can't invent one. The tags show in the chat as part of her expression.
+She only uses track names that exist in your model — the plugin injects the available list into her prompt so she can't invent one. The tags show in the chat as part of her expression. Two switches in the plugin's settings change that: **Hide animation tags from chat** takes them out of what you read, and **Let my typed tags trigger animations** lets a tag you type move her too.
 
 **Priority rails.** Competing animation requests resolve through a priority stack rather than fighting: a deliberate AI `loop` tag and a passing one-shot reaction sit on different rails, so an intentional pose isn't stomped by a routine state change, and when a higher rail clears, the avatar falls back to the rail below it (down to idle).
 
 **Idle behavior.** With nothing else happening, the avatar plays from a weighted **idle pool** and occasionally overlays a "variety" animation for liveliness. Idle is **time-of-day aware** — buckets (e.g. day/night) can use different resting poses, and a bucket can be marked **quiet** to suppress variety overlays (calmer at night). All of this is configurable in **Settings → Avatar**.
+
+## In the Chat Window: the Stage
+
+The 💬 button on the avatar (**Step into the chat**) takes her out of the sidebar and stands her in the chat window itself, in front of the messages. She goes see-through where she crosses one. A small panel in the sidebar then holds her controls: a close-up of her face, **Size**, **Ghost** (how see-through she is over text), which seats are out (**Chair**, **Couch** on the left, **Desk** on the right, **Bed**), buttons to send her somewhere yourself, and **To sidebar** to put her back.
+
+While she is on the stage she is told so, and she can move herself with the same kind of tag she uses for animations:
+
+- `<<avatar: go_left>>`, `<<avatar: go_right>>`, `<<avatar: go_center>>`, or `<<avatar: go_0>>` to `<<avatar: go_100>>` (how far across, 0 is the far left)
+- `<<avatar: go_back>>` walks deeper into the scene, `<<avatar: go_front>>` comes back up close
+- `<<avatar: go_couch>>`, `<<avatar: go_desk>>`, `<<avatar: go_chair>>`, `<<avatar: go_bed>>`, for the seats you put out. Seated, she still talks and gestures from the waist up.
+
+She also moves on her own: a stroll to an edge or a seat now and then, to her desk when she starts real work (a tool, an agent, a scheduled task), and to bed in her quiet hours if there is one. The middle of the window is over the text, so she treats it as a visit and steps back to an edge after a moment.
+
+## On Device Screens
+
+Her 3D avatar can be her face on a satellite's screen, mouth moving with her voice.
+
+1. **System > Devices > Settings > Her face on screens > Her face comes from**: pick this avatar. One avatar at a time is her face; if another plugin (FlashHead) holds that seat, this one waits.
+2. On each screen's own **Avatar** tab (Devices page), **Her face here**: Off, While she talks, or Always.
+
+Drawing for a screen happens outside the browser, in a small render service that belongs to this plugin. It needs its own Python environment (Python 3.12 with `pygfx`, `wgpu`, `rendercanvas`, `gltflib`, `imageio`, `numpy`, `pillow`): the plugin card offers to build it. The service draws only while a screen has her open, so it costs nothing the rest of the time.
+
+## Extras
+
+- **Missile Command**, a small arcade game in the chat sidebar: protect her from incoming missiles.
+- **Scenes** for the expanded view: cabin, garden, starfield, void.
+- A **walk-around mode** in the expanded view: move through the scene yourself, first person, with WASD and the mouse.
 
 ## Building Your Avatar
 
@@ -109,12 +136,12 @@ Your original FBX files are never modified. To add more animations later, just d
 
 ## Auto-Mapping Animation Names
 
-Animation tracks are automatically mapped to avatar states by their filename. Name your FBX files to match these keywords and they'll wire up automatically:
+Animation tracks are automatically mapped to avatar states by their name. A track whose name **is** one of these words (any capitals) wires up automatically; a name that only contains the word ("Thinking_Pose") does not, and is assigned by hand in the settings:
 
-| Avatar State | Keywords (filename contains) |
+| Avatar State | Track names that map |
 |---|---|
 | idle | idle, stand, standing, rest, default, breathe, breathing |
-| processing (thinking) | thinking, think, ponder, concentrate, focus, plotting |
+| processing (your speech being transcribed) | thinking, think, ponder, concentrate, focus, plotting |
 | typing | typing, type, keyboard, defaultanim, compose, writing, texting |
 | listening | listening, listen, hear, attentive, look, lookaround, listening_nod |
 | speaking | speaking, speak, talk, talking, say, attention |
@@ -127,7 +154,7 @@ Animation tracks are automatically mapped to avatar states by their filename. Na
 
 The `agent` and `cron` states (shown during background agent / scheduled activity) have no filename keywords — assign them manually in the Avatar settings UI if you have suitable tracks.
 
-Example: download an animation called "Thinking" from Mixamo, save it as `Thinking.fbx` and combine it using the GLB maker in tools — it automatically becomes the animation that plays when Sapphire is thinking.
+Example: download an animation called "Thinking" from Mixamo, save it as `Thinking.fbx` and combine it using the GLB maker in tools — it automatically becomes the `processing` animation, the one that plays while your speech is transcribed (the settings call it Transcribing). For the moment she is writing her reply, name a track `Typing`.
 
 You can also manually assign tracks to states in the Avatar settings UI.
 
@@ -152,7 +179,7 @@ Starter set that covers the main avatar states:
 
 ## Lipsync
 
-Lipsync is **not yet supported** but the groundwork is in place. If your model has ARKit blendshapes (52 shapes like `jawOpen`, `mouthSmileLeft`, `eyeBlinkLeft`), those are preserved in the combined GLB. A future update may add real-time lipsync driven by TTS audio output. Mixamo's auto-rigger does not add facial blendshapes — those require a 3D artist.
+Her mouth moves with her voice, on every lane (browser, speakers, device screens) and with any TTS voice. Mouth shapes are made from the audio and her words as each piece of speech is made. A model with ARKit blendshapes (52 shapes like `jawOpen`, `mouthSmileLeft`, `eyeBlinkLeft`) shows them; they are preserved in the combined GLB. **Mouth movement** in the plugin's settings sets how wide it opens (default 1.6×). A model without facial blendshapes has nothing to move: Mixamo's auto-rigger does not add them — those require a 3D artist.
 
 ## Sapphire's Default Avatar
 

@@ -170,7 +170,7 @@ bug, which shipped in eight plugins by copy-paste before being caught).
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/webui/plugins/{name}/settings` | Read settings |
-| PUT | `/api/webui/plugins/{name}/settings` | Save settings |
+| PUT | `/api/webui/plugins/{name}/settings` | Save settings: the keys you send are merged over what is stored (a shallow merge, other keys are kept). Body `{"settings": {...}}` or the bare object |
 | DELETE | `/api/webui/plugins/{name}/settings` | Reset to defaults |
 
 ## Reference for AI

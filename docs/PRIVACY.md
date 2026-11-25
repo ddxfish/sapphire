@@ -51,6 +51,7 @@ You can tell a private chat by the glow on the chat area border, the 🗝 next t
 | **Local models only** | Auto mode only picks providers ticked *Local / private server*. Pinning a cloud provider refuses the turn with a message. |
 | **Local tools only** | Any tool that reaches the network refuses and tells the AI why — including the ones that feel personal but hand text to a service: email, phone calls, Telegram, the plugin store. Tools that declare no locality at all (many older plugins predate the flag) are blocked too, fail-closed — if your unflagged plugins only talk to local hardware, **Settings > Privacy > "allow tools with no locality flag"** lets them run; explicitly network tools stay blocked regardless. |
 | **Voice stays local** | Cloud STT and TTS refuse — you get a short notice instead of speech. The check follows the chat the speech belongs to, so a background turn (a scheduled task, a voice session) is judged on *its* chat, not on whichever chat you happen to have open. |
+| **Embeddings stay local** | A memory saved in a private chat is not sent to an embedder off this machine or your local network. It is saved without one, and search falls back to keywords for it. A local embedder works as usual. |
 | **Encrypted at rest** | Messages, chat settings, tool images, and plugin data are stored as AES-256-GCM values (`@enc1:` prefixed) under the vault's key. |
 | **Invisible when sealed** | Lock the vault and the chat is gone from the picker, Chat Manager, chat search, and the API — it answers exactly like a chat that never existed. |
 
@@ -110,7 +111,7 @@ A task can target a chat by name. While the vault is sealed, a task pointing at 
 
 Backups include the chat database and the vault file (`user/prompts/prompt_vault.enc`), so a restored backup keeps working — but restore **both together**. The vault file holds the key that the encrypted chat rows were written with; pairing an old vault file with a newer chat database makes those rows unreadable, and Sapphire refuses to mint a replacement key rather than orphan them silently.
 
-Local backups are plain `.tar.gz` by default. Turn on `BACKUPS_ENCRYPT_LOCAL` (Settings > Backup) and each one is sealed as a `.sapphirebak` with your backup password — lose that password and those backups are gone. Backups that leave the machine (devices, offsite) are always encrypted.
+Local backups are plain `.tar.gz` by default. Turn on `BACKUPS_ENCRYPT_LOCAL` (Settings > Backup) and each one is sealed as a `.sapphirebak` with your backup password — lose that password and those backups are gone. Backups that go to another machine (a satellite's card, an SSH host, the offsite vault) are always encrypted. A plain folder on this computer set up as a backup device (a USB stick, a second disk) can be switched to unencrypted copies; see [BACKUPS.md](BACKUPS.md).
 
 **A gap worth knowing:** backups taken *before* a chat went private still contain that chat's earlier history in plaintext. Marking a chat private encrypts it from that moment on; nothing can rewrite copies that already left. Prune old backups if that matters to you.
 
@@ -154,14 +155,14 @@ VAULT LIFECYCLE:
 - Padlock (chat sidebar; 🔒 sealed / 🔓 open, blue while armed, amber when standing in a private chat while sealed) = vault toggle only: no vault → setup, locked → unlock, unlocked → lock
 - Settings → Privacy: create / unlock / lock now / change passphrase / delete vault (+ all private chats, typed confirm); `VAULT_IDLE_MINUTES` (default 30, min 1)
 - Idle timer auto-locks; user activity resets it; rekey preserves lock state; no key recovery
-- Endpoints: POST /api/vault/setup | /unlock | /lock | /rekey | /move; state rides `vault` on GET /api/status
 - Disabled in managed mode
 
 PRIVATE CHATS:
-- Never automatic: with the vault UNLOCKED, an operator turn in a public chat is REFUSED (`private_gate`, core/chat/chat_streaming.py); the web picker (shared/private-picker.js) offers switch / create / make private
+- Never automatic: with the vault UNLOCKED, a turn typed in a public chat is REFUSED; the page offers switch / create / make private
+- WHAT YOU SEE in a private chat: a refused tool answers "Tool 'X' requires network access and is blocked in this private chat. Inform the user." (or "…is blocked in this private chat" for a tool with no locality flag). Tell the user which tool and why; never retry it. Cloud models and cloud STT/TTS are refused the same way
 - Gate passes: mode-tagged chats (game/story/librarian/limbo/room), already-private, managed mode
 - Release only via Chat Manager 🔓 (decrypts back to plaintext storage)
-- Enforcement: local-only LLM providers, network tools refuse, cloud STT/TTS refuse
+- Enforcement: local-only LLM providers, network tools refuse, cloud STT/TTS refuse, a remote embedder is skipped (the memory saves unembedded, search uses keywords)
 - At rest: message rows, chat settings, tool images, and plugin chat data stored as `@enc1:` AES-256-GCM under a chat data key wrapped inside the vault frame
 - Chat NAMES stay plaintext at rest
 - NO vault = pre-vault meaning: local-only enforcement, no encryption, no hiding. Legacy private chats are encrypted by a sweep at the next unlock
@@ -170,7 +171,7 @@ WHILE SEALED (vault exists + locked):
 - Private chats absent from chat list, chat picker, Chat Manager, chat search, and by-name API reads (404, same as nonexistent)
 - Active private chat is evicted at lock and at boot → `default` → freshest non-private, non-mode chat → blank scratch chat
 - Single-chat export 404s; task `chat_target` masks to `__locked__` (saving keeps the real target); cron at a sealed chat fails loudly, never auto-creates
-- Plugin hooks withheld unless the plugin manifest declares `privacy_aware: true` (always-deliver: chat_renamed, chat_deleted, plugins_ready, provider_switched, on_wake)
+- Plugin hooks withheld unless the plugin manifest declares `privacy_aware: true` (always-deliver: chat_renamed, chat_deleted, chat_cleared, plugins_ready, provider_switched, on_wake)
 
 EXPORT / COMPRESS:
 - Bulk export and export-zip skip private chats entirely
@@ -181,14 +182,14 @@ PROMPTS:
 - Vault membership is the privacy flag; new prompts saved while unlocked go into the vault
 - Vault prompts and prompts using vault pieces refuse export; locked vault hides them and resets the active prompt to `default`
 - Legacy `privacy_required` prompts still refuse cloud providers until moved into the vault
-- A sealed name never renders: chat sidebar, persona editor and trigger editors show `🗝 vault prompt (locked)` while keeping the stored value, so the chat heals on unlock. Every chat-settings write funnel refuses a sealed name (`sealed_prompt_name` in core/chat/history.py, refs index = the sealed oracle); the PUT settings and persona-load routes answer 409 without naming it
+- A sealed name never renders: chat sidebar, persona editor and trigger editors show `🗝 vault prompt (locked)` while keeping the stored value, so the chat heals on unlock. Setting a chat or persona to a sealed prompt is refused (409) without naming it
 
 BACKUPS:
 - Chat DB and vault file are both backed up — restore them together (the vault holds the chat data key)
 - Backups made before a chat went private still hold its earlier plaintext history
-- BACKUPS_ENCRYPT_LOCAL (default off, Settings > Backup): local backups sealed as .sapphirebak with the backup password; on + no password = no backup made. Backups leaving the machine (devices, offsite) always encrypted
+- BACKUPS_ENCRYPT_LOCAL (default off, Settings > Backup): local backups sealed as .sapphirebak with the backup password; on + no password = no backup made. Backups sent to another machine (a satellite, an SSH host, offsite) always encrypted; a folder on this computer can opt out
 
 OTHER DOORS:
-- MCP server: ask/tell into a private chat refused ("is private; it does not take messages over MCP"); listen refused while the active chat is private and STT is cloud (core/voice_privacy.py stt_gate_reason)
+- MCP server: ask/tell into a private chat refused ("is private; it does not take messages over MCP"); listen refused while the active chat is private and STT is cloud
 - Notification rows never carry a chat name; private=True callers get a flash (toast, no stored row)
 - AI_MODEL_SWITCH_RATCHET (Settings > Tools > AI Self-Management): switch_model only moves DOWN AI_MODEL_SWITCH_ROSTER (top = least private); 'auto' or off-roster current counts as the top rung; the user can still change models in the sidebar

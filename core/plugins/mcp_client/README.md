@@ -105,7 +105,7 @@ Use the **reconnect button** to re-discover tools after a server update, or if a
 - **"Command not found"** — Install Node.js for npx-based servers, or check the command path
 - **Server shows red/error** — Click the reconnect button to retry. Check the Sapphire logs for details
 - **Tools not appearing in chat** — Go to Toolsets, find the `mcp:servername` module, and enable the tools
-- **Fewer tools than expected** — A tool name may conflict with an existing Sapphire tool. Check logs for "conflicts with" warnings
+- **Fewer tools than expected** — A tool name may conflict with an existing Sapphire tool. Check logs for "conflicts with" (a clash with one of Sapphire's own tools) or "already provides" (two MCP servers offering the same name; the second is skipped). In a private chat MCP tools are refused unless Settings > Privacy allows tools with no locality flag
 - **Slow tool calls** — MCP calls have a 30-second timeout. Some servers need warmup time on first call
 - **High CPU** — If a server subprocess misbehaves, remove it in settings. The subprocess will be cleaned up
 

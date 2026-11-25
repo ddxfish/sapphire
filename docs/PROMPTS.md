@@ -4,8 +4,8 @@ Two types: **Monolith** (single block of text) and **Assembled** (component piec
 
 ## Variables used in prompts
 
-- `{ai_name}` - Change in Settings
-- `{user_name}` - Change in Settings
+- `{ai_name}` - Always "Sapphire"; there is no setting for it. To call her something else, write the name into the prompt itself
+- `{user_name}` - Your name: the profile button on the nav rail → **Your Name** (the setup wizard asks for it too)
 
 
 ## Monolith

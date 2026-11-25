@@ -52,11 +52,11 @@ To send notifications to your phone:
    - Enter the service name in "Mobile App Notify Service"
    - Click "Test" to send a test notification
 
-Now the AI can send you alerts: "Hey, remind me to check the oven in 20 minutes" → notification on your phone.
+Now the AI can send you alerts: "Tell my phone the oven is done" → a notification on your phone, sent at once (`ha_notify` has no delay of its own; a timer or a scheduled task can call it later).
 
 ## Blacklist
 
-Block devices you don't want the AI to control. One pattern per line:
+Block devices you don't want the AI to control. One pattern per line. The list starts with `cover.*` and `lock.*` already in it:
 
 | Pattern | What it blocks |
 |---------|---------------|
@@ -109,6 +109,7 @@ AVAILABLE TOOLS:
 - ha_set_switch(name, state) - on/off
 - ha_notify(message, title?) - send phone notification
 - ha_house_status() - get home snapshot
+- ha_get_camera_image(entity_id) - a snapshot from a camera, for you to look at
 
 NOTIFICATIONS:
 - Requires notify_service configured (e.g., "mobile_app_pixel_7")

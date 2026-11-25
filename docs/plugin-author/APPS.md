@@ -34,10 +34,10 @@ user/plugins/my-plugin/
 ```
 
 The `capabilities.app` fields:
-- `label` — display name on the app tile (falls back to plugin display_name)
-- `icon` — emoji shown on the tile (falls back to plugin emoji)
+- `label` — display name on the app tile. Set it: the fallback reads a manifest key `display_name`, not `short_display_name`, so most plugins fall through to the raw plugin name
+- `icon` — emoji shown on the tile. Set it: the fallback reads a manifest key `emoji`, else 📦
 - `description` — short description shown below the tile
-- `nav` — promotes the app out of the Apps grid: `true` gives it its own navrail icon (max 3), or a nav group name like `"chat"` makes it an entry in that group's flyout (no rail slot, uncapped); `"apps"` asks to start pinned on the Apps menu (shipped plugins only, see below)
+- `nav` — gives the app a home on the nav rail as well (its tile stays on the Apps page, without a pin): `true` gives it its own navrail icon (max 3), or a nav group name like `"chat"` makes it an entry in that group's flyout (no rail slot, uncapped); `"apps"` asks to start pinned on the Apps menu (shipped plugins only, see below)
 
 ### app/index.js
 
@@ -55,7 +55,7 @@ export function render(container) {
     });
 
     // Start any timers, intervals, SSE connections
-    _interval = setInterval(() => updateStats(container), 5000);
+    _interval = setInterval(() => refresh(container), 5000);   // refresh() is yours to write
 }
 
 let _interval = null;
@@ -98,7 +98,7 @@ Store persistent data via your plugin's settings:
 ```js
 // Read your plugin's settings
 const res = await fetch('/api/webui/plugins/my-plugin/settings');
-const settings = await res.json();
+const { settings } = await res.json();     // the reply is {plugin, settings}
 
 // Save settings
 await fetch('/api/webui/plugins/my-plugin/settings', {
@@ -139,7 +139,7 @@ With `"nav": true`:
 - Your app gets its own icon in the navrail (between Settings and Apps)
 - Clicking it loads your `app/index.js` directly — no Apps grid in between
 - The URL hash is `#app-{plugin-name}` (bookmarkable)
-- `cleanup()` is called when navigating away, `render()` on return
+- `cleanup()` is called when navigating away, `render()` on return (render runs again only for an app that has a cleanup; without one it is drawn once and kept)
 
 **Limits:** Maximum 3 nav-promoted apps. Beyond that, extras appear in the Apps grid only. Use this sparingly — it's for primary workflows like dashboards, not utilities.
 
@@ -220,7 +220,7 @@ conversation, so the user sees it while they talk to her. Opt in with `places`:
 ## Tips
 
 - Use `cleanup()` to stop intervals, close WebSockets, remove event listeners
-- Use CSS variables from Sapphire's theme (`var(--bg)`, `var(--text)`, `var(--accent)`, etc.)
+- Use CSS variables from Sapphire's theme (`var(--bg)`, `var(--text)`, `var(--trim)`, `var(--primary)`, etc.; `--accent` is an old alias, not for new code)
 - For CSRF-aware API calls: import `fetchWithTimeout` from `/static/shared/fetch.js` (absolute path — relative `../../` won't reach Sapphire's modules), or just use plain `fetch()` with an `X-CSRF-Token` header from `meta[name="csrf-token"]` (the dependency-free pattern the bundled `status` app uses)
 - Your app inherits Sapphire's dark theme automatically
 - Keep your app self-contained — don't modify the nav rail or other views

@@ -2,7 +2,7 @@
   "plugin": "mindpalace",
   "version": "1.2.0",
   "files": {
-    "README.md": "sha256:9daadc60009d767ae414d00b739b70e3ba1849dfd4e173e44ad39e3fae55607a",
+    "README.md": "sha256:4e1a033ae21509d2c77fd9855932e77bf147da278c54ac9b073624dda4c38d5d",
     "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
     "hooks/ready.py": "sha256:1a1379c1ff05c86fd6347c4bb9d0cd86775c7a105668e01d4bac22cea1c11519",
     "plugin.json": "sha256:1df9316b75e295c8eeff655609cfafbf8e266759802beb1bc05b2d492964145b",
@@ -80,5 +80,5 @@
     "tools/temporal.py": "sha256:4c89314cda5e3419f4ac7925d0d9fa7353198473c79d7e7afc226246c101ab13",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "WwzDmqi3ZkQWtKHUEKQOSY3vsgvi8v9JCBHQAhLhmjcoMAIrCsgPTpSWjtw0+R6k5EQPQD52kpGn0bgFe3hBDA=="
+  "signature": "1JeymbiRoCAFjA6USVWFJ+oNIhcUEynrx6rJMO63gUp/pDJdpByPpUFZgk4ueGz6pc34Jb5qwSq/0PGjp+/xDw=="
 }

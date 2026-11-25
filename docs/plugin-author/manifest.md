@@ -6,7 +6,7 @@ Every plugin needs a `plugin.json` in its root folder.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `name` | string | Yes | — | Unique identifier (overrides the folder name if set; folder name is the fallback) |
+| `name` | string | Yes | — | Unique identifier. **Required, and it must equal the plugin's folder name.** A manifest without it is skipped (a warning in the log); one that differs from the folder half-works: tools are filed under the folder name and unloaded by the manifest name, so a reload keeps running the old tool code |
 | `short_display_name` | string | No | — | **The plugin's display title** in lists & Settings. Keep it **2–4 words** (≤40 chars; clipped past that). This is the ONE field for the name — detail goes in `description`, NOT here. |
 | `version` | string | No | — | Semver (`1.0.0`) |
 | `description` | string | No | — | One-line summary shown UNDER the title — free prose. **Never used as the title** (that's `short_display_name`). |
@@ -17,17 +17,17 @@ Every plugin needs a `plugin.json` in its root folder.
 | `display_name` | string | No | — | Legacy fallback for `short_display_name` (also an app label). Prefer `short_display_name`. |
 | `short_name` | string | No | — | Legacy fallback for `short_display_name`. Prefer `short_display_name`. |
 | `priority` | int | No | 50 | Execution order within band (lower = first) |
-| `default_enabled` | bool | No | false | Auto-enable on fresh install |
+| `default_enabled` | bool | No | false | On unless the user has turned the plugin off. Read at every boot, so a plugin that gains this in an update switches on for existing installs too, not only fresh ones |
 | `privacy_aware` | bool | No | false | Declares the plugin safe to run on **private chats**. Without it, every hook is withheld from your plugin on a private-chat turn (fail-closed), and `chat_vaulted` never fires. Only set it if your plugin never persists, transmits, or logs chat content — see [Private chats & `privacy_aware`](hooks.md#private-chats--privacy_aware) |
 | `surfaces` | string[] | No | — (everywhere) | Where this plugin's **presence** injections belong — `"chat"` (the chat view) and/or `"game"` (the Game Room: stories and games). Core withholds `prompt_inject` / `ghost_inject` from the plugin on any other surface, so an avatar that only renders in the chat sidebar never tells her she's visible inside a story. Omit it and the plugin fires everywhere (pre-2026-08-23 behavior). The user can override your default per plugin from the Plugins page ("Show in" strip) — see [Surfaces](hooks.md#surfaces--where-presence-hooks-fire) |
-| `essential` | bool\|string | No | false | `true` = core plugin: boot alarms if it fails to load, hidden from the plugin manager, toggle refused. A **string** names an alternates group (e.g. `"memory"` on both memory and mindpalace): visible and switchable, boot alarms only if NO plugin in the group loaded |
+| `essential` | bool\|string | No | false | `true` = core plugin: boot alarms if it fails to load, hidden from the plugin manager, turning it OFF refused (403). A **string** names an alternates group (e.g. `"memory"` on both memory and mindpalace): visible and switchable, boot alarms only if NO plugin in the group loaded |
 | `managed_hide` | bool | No | false | Hide plugin entirely in managed/resale mode |
 | `settingsUI` | string\|null | No | `"auto"` | Top-level (never inside `capabilities`). Controls the settings panel: `"auto"` (custom JS if `web/index.js` exists, else the manifest schema, else none), `"plugin"` (custom JS), `"manifest"` (auto-render `capabilities.settings`), `"core"` (hardcoded), `"none"` or `null` (no panel) |
-| `requires_plugins` | string[] | No | `[]` | Host plugins this add-on rides (e.g. `["social"]`, `["discord"]`). While a host is missing or not loaded, the add-on stays enabled but unloaded with a "Requires plugin(s) not loaded" error; it loads after every host at boot and is retried automatically when the host loads |
+| `requires_plugins` | string[] | No | `[]` | Host plugins this add-on rides (e.g. `["social"]`, `["discord"]`). Checked when the add-on LOADS: with a host missing or not loaded it stays enabled but unloaded with a "Requires plugin(s) not loaded" error; it loads after every host at boot and is retried automatically when the host loads. If the host is turned off later, an add-on that is already loaded STAYS loaded (its hooks on the host go quiet): guard every call into the host |
 | `tool_expires` | str\|int\|object | No | — | Default `expires` for every tool in the plugin (e.g. `"never"`): when an old result is shortened in what the model is sent. A file's `TOOL_EXPIRES` or a tool's own `expires` wins — see [Tools](tools.md) |
 | `min_core_version` | string | No | — | Oldest Sapphire core your plugin works on. Compared against the `VERSION` file at load: if the core is older, the loader logs one loud `VERSION MISMATCH` warning and **loads anyway** — it never blocks. Set it so "my settings page is blank" becomes one readable log line |
 | `pip_dependencies` | string[] | No | `[]` | Python packages REQUIRED (plain pip specifiers, e.g. `["telethon>=1.34", "requests"]`). Checked before any code loads; missing ones keep the plugin enabled-but-unloaded and show in Settings › Plugins with an **Install** button. The install runs in the background through core's one pip engine (`core/extras.py`, logged to `user/logs/extras-plugin-<name>.log`), and the plugin reloads when the packages land. Enabling the plugin offers the same install. Refused on bare system Python (conda/venv only) and on hosted installs |
-| `extra` | object | No | — | Packages OPTIONAL for the plugin: `{"label": "Claude Agent SDK", "pip": ["claude-agent-sdk>=0.2.163"], "modules": ["claude_agent_sdk"], "note": "what it is and how big"}`. The plugin loads without them; the one feature that needs them checks `core.extras.installed("plugin:<name>")` and refuses with a pointer to the card until the person clicks **Install** there (or accepts the offer when enabling the plugin). `modules` is what proves the set is there without importing it; without it the distributions in `pip` are checked. Same engine, same log, same gates as `pip_dependencies`. Specs are plain requirements only — no options, URLs or paths reach pip from a manifest |
+| `extra` | object | No | — | Packages OPTIONAL for the plugin: `{"label": "Claude Agent SDK", "pip": ["claude-agent-sdk>=0.2.163"], "modules": ["claude_agent_sdk"], "note": "what it is and how big"}`. The plugin loads without them; the one feature that needs them checks `core.extras.installed("plugin:<name>")` and refuses with a pointer to the card until the person clicks **Install** there (or accepts the offer when enabling the plugin). `modules` is what proves the set is there without importing it; without it the distributions in `pip` are checked. Same engine, same log, same gates as `pip_dependencies`. Specs are plain requirements only — no options, URLs or paths reach pip from a manifest A `pip` entry is a plain requirement (`name[extras]>=1.0`) or a direct reference (`name @ git+https://…`); an entry with options or environment markers is dropped without a word, and the plugin then reports it missing for good. `"restart": true` tells the card a restart is needed after the install |
 | `platforms` | array | No | everywhere | The `sys.platform` names it runs on (`["linux", "win32"]`; macOS is `darwin`). Elsewhere the card says so, no env is built and no service starts |
 | `environment` | object | No | — | Dedicated conda env for heavy deps that can't live in Sapphire's env: `{python, pip, conda, channels}`. Built on user consent as `sapphire-plugin-<name>`; pairs with `capabilities.services`. Optional `client: {setting, label, help}` for a plugin that can use its server on another computer. See [Subprocesses](subprocesses.md) |
 | `capabilities` | object | No | — | What the plugin provides (see below) |
@@ -35,7 +35,7 @@ Every plugin needs a `plugin.json` in its root folder.
 ### Plugin display title — set `short_display_name`, don't dump prose
 
 The title shown in plugin lists & Settings resolves in this order:
-`short_display_name` → `display_name` → `short_name` → (first clause of `description`, **truncated to 40 chars**) → `name`.
+`short_display_name` → `display_name` → `short_name` → `title` → (first clause of `description`, up to an em dash, **truncated to 40 chars**) → `name`.
 
 **Set `short_display_name`** (2–4 words, e.g. `"Weather"`, `"Home Assistant"`). The `description` fallback is deliberately truncated — it exists only so legacy plugins don't render a paragraph, NOT as a place to name your plugin. If you set just a long `description`, your title becomes a clipped sentence indistinguishable from the next plugin's; set `short_display_name` and it's a clean, short name.
 
@@ -95,7 +95,7 @@ Each capability is documented in its own guide:
 
 ### Scopes
 
-Scopes let a plugin register data-isolation selectors that appear in the Chat Settings sidebar. Each scope creates a `ContextVar` that your tools can read to know which data partition the current chat is using.
+Scopes let a plugin register data-isolation selectors that appear in the chat sidebar's 🧠 Mind accordion. Each scope creates a `ContextVar` that your tools can read to know which data partition the current chat is using.
 
 **When to use:** If your plugin stores per-user data (memories, contacts, wallet addresses, accounts) and users might want different data sets for different chats (e.g., "work" vs "personal" email accounts).
 
@@ -122,12 +122,12 @@ Scopes let a plugin register data-isolation selectors that appear in the Chat Se
 | Field | Required | Description |
 |-------|----------|-------------|
 | `key` | Yes | Scope identifier — must be a valid Python identifier. Creates `scope_{key}` ContextVar and `{key}_scope` setting key |
-| `label` | Yes | Display label in the Chat Settings sidebar dropdown header |
+| `label` | Yes | Display label of the dropdown in the chat sidebar's 🧠 Mind accordion |
 | `endpoint` | Yes | API endpoint that returns the list of available scope values (for the dropdown) |
-| `data_key` | No | Key in the endpoint response JSON that contains the list (default: root array) |
-| `value_field` | No | Field in each list item to use as the scope value |
-| `name_field` | No | Field in each list item to use as the display name |
-| `label_template` | No | Format string for dropdown labels (e.g., `"{name} ({count})"`) |
+| `data_key` | No | Key in the endpoint response JSON that contains the list (default: `"accounts"`). The response must be an object: a bare array at the root is NOT read and gives an empty dropdown with no error |
+| `value_field` | No | Field in each list item to use as the scope value (default: `"name"`) |
+| `name_field` | No | Field in each list item to use as the display name (default: `"name"`) |
+| `label_template` | No | Format string for dropdown labels (e.g., `"{name} ({count})"`; default: `"{name}"`) |
 | `nav_target` | No | View to navigate to when the "+" button is clicked (e.g., `"mind:memories"`) |
 | `default` | No | Default scope value (default: `"default"`) |
 | `implicit_default` | No | `true` when your tools accept the value `"default"` without an account of that name (e.g. "use the only one"). Sapphire then leaves a persona's `"default"` alone instead of treating it as a dangling name |
@@ -175,15 +175,22 @@ On uninstall, Sapphire automatically deletes:
 - `user/webui/plugins/{name}.json` (plugin settings)
 - `user/plugins/{name}/` (the plugin itself, user plugins only)
 
-If your plugin writes state files that don't follow the `{name}-*` naming convention, declare them in `capabilities.cleanup_paths`:
+Name your state files `{name}.json`, `{name}-*` or `{name}_*` and they are removed for you. `capabilities.cleanup_paths` is for files of yours elsewhere in your own namespace:
 
 ```json
 "capabilities": {
-  "cleanup_paths": ["plugin_state/gcal-csrf.json"]
+  "cleanup_paths": ["webui/plugins/my-plugin-cache.json"]
 }
 ```
 
+It cannot rescue a state file with another name: a path under `plugin_state/` whose name does not start with your plugin's name is refused (`plugin_state/gcal-csrf.json` declared by a plugin called `calendar` is never deleted).
+
 Paths are relative to `user/`. **Namespace-restricted** — only paths under `user/plugin_state/` (with a filename starting with the plugin's name), `user/webui/plugins/`, or `user/plugins/{name}/` are honored. Anything else (`chats/`, `memory.db`, `credentials.json`, etc.) is refused with a `REFUSED` warning in the logs — a malicious or buggy manifest cannot delete cross-plugin or top-level user data.
+
+## Two smaller keys
+
+- **`replaces`** (top level, a list of plugin names): this plugin takes over from an older one. Today core uses it for one thing: a persona keeps the scope it had under the replaced plugin's scope key (the calendar plugin replaces `google-calendar`). It does not turn the old plugin off or copy its on/off state.
+- **`format_js`** (inside a scope entry): a file in your `web/` folder exporting `formatOption(item)`, for a dropdown label that `label_template` cannot express. Without it, `label_template` is used.
 
 ## Priority Bands
 
@@ -226,7 +233,7 @@ user/
   plugin_state/                   # Per-plugin JSON state
     ssh.json
   webui/
-    plugins.json                  # Enabled list: {"enabled": [...]}
+    plugins.json                  # {"enabled": [...], "disabled": [...]} (disabled = a default-on plugin the user turned off)
     plugins/                      # Per-plugin settings
       ssh.json
       sd-server.json
@@ -237,7 +244,7 @@ user/
 - Only `name` is required (unique; overrides folder name). Display title resolution: `short_display_name` → `display_name` → `short_name` → truncated first clause of `description` → `name`. Set `short_display_name` (2-4 words).
 - Top-level fields: `privacy_aware` (bool — hooks delivered in private chats), `surfaces` (["chat","game"] — presence-hook fence for prompt_inject/ghost_inject only), `essential` (true = locked core plugin; string = alternates group — e.g. `"memory"`, which is also how other plugins find the loaded memory engine), `default_enabled`, `priority` (int — a non-int is coerced to 50 with a warning; lower fires first), `managed_hide`, `settingsUI` (TOP-LEVEL only; "auto"|"plugin"|"manifest"|"core"|"none"|null — auto = web/index.js present → plugin, else settings schema → manifest, else none), `requires_plugins` ([host plugin names] — add-on stays enabled-but-unloaded until every host is loaded; loads after hosts, retried when a host loads), `tool_expires` (default `expires` for the plugin's tools, e.g. "never"), `min_core_version` (warn-only version skew check against the `VERSION` file; never blocks), `pip_dependencies` (required pip specifiers; missing → Install button, conda/venv only, background install, auto-reload), `extra` (OPTIONAL packages one feature needs: {label, pip, modules, note} → the same Install button, the plugin loads without them), `environment` ({python, pip, conda, channels, client} — dedicated conda env; `client` = a client-only mode), `platforms` ([sys.platform names] — refused elsewhere before any build or service start), `icon`/`emoji`, `url`, `author`, `version`.
 - `capabilities` keys: `hooks`, `voice_commands`, `commands`, `tools`, `scopes`, `routes`, `sockets`, `schedule`, `settings`, `providers`, `memory_layers`, `games`, `devices`, `agents`, `prompts`, `daemon`, `services`, `app`, `themes`, `motions`, `widgets`, `sidebar_accordion`, `cleanup_paths`, `social` (read by the Social plugin, not the loader: [social.md](social.md)). Each has its own guide page. There is no `web` capability: `web/` files are served by convention at /plugin-web/{name}/.
-- Scope entry: `{key (python identifier), label, endpoint, data_key?, value_field?, name_field?, label_template?, nav_target?, default?, implicit_default?}` — creates `scope_{key}` ContextVar (import from `core.chat.function_manager`, resolves via `__getattr__`) and a `{key}_scope` chat-setting key.
+- Scope entry: `{key (python identifier), label, endpoint, data_key? (default "accounts"; the endpoint must return an object holding the list under that key, a bare array shows nothing), value_field? ("name"), name_field? ("name"), label_template? ("{name}"), nav_target?, default?, implicit_default?}` — creates `scope_{key}` ContextVar (import from `core.chat.function_manager`, resolves via `__getattr__`) and a `{key}_scope` chat-setting key.
 - `sidebar_accordion`: `{title?, icon?, content?, script?}` — files live in the plugin's `web/` dir, served at `/plugin-web/{name}/...`; script exports `init(contentEl, pluginName)`, called after the HTML fragment lands; chat surface only; renders only while the plugin is enabled.
 - `cleanup_paths`: relative to `user/`, namespace-restricted to `plugin_state/` (filename must start with the plugin name), `webui/plugins/`, or `plugins/{name}/`; anything else is REFUSED. Auto-cleanup already covers `plugin_state/{name}*`, `webui/plugins/{name}.json`, and the plugin dir.
 - Priority bands: system plugins (`core/plugins/`) 0-99, user plugins (`user/plugins/`) 100-199; within a band: 0-19 critical intercepts, 20-49 input modification, 50-79 context enrichment, 80-99 observation (shifted for user band).

@@ -77,7 +77,11 @@ Theme CSS files override Sapphire's CSS variables. **Two runtime behaviors you m
 }
 ```
 
-See `static/themes/dark.css` for the complete list of CSS variables.
+See `interfaces/web/static/themes/dark.css` for the color set, and the `:root` block of `interfaces/web/static/shared.css` for everything else (`--text-on-accent`, `--border-subtle`, the `--radius-*` and `--font-*` families, `--nav-bg`). While your theme is active the core theme sheet is off, so your CSS sits on those dark defaults: a light theme must set `color-scheme: light` and `--text-on-accent` itself, or buttons and form controls come out unreadable.
+
+**A chat's own trim color wins.** A chat or persona with a trim color sets it on the page itself, over your theme's `--trim`.
+
+**Ids:** a theme id (and a motion id) is lowercase letters, digits, `-` and `_`, 1 to 50 characters. A theme with any other id is dropped without a word in the log.
 
 ## Preview Colors
 
@@ -86,7 +90,7 @@ The `preview` object controls the color swatch shown in the theme picker card:
 ```json
 {
   "bg": "#0a0a1a",      // Background color (leftmost bar)
-  "bg2": "#12122a",     // Secondary background (optional, auto-derived if missing)
+  "bg2": "#12122a",     // Secondary background (optional; missing = the card uses the current theme's)
   "text": "#e0e0ff",    // Text color
   "accent": "#ff00ff",  // Accent/trim color
   "border": "#333366"   // Border color (optional)
@@ -327,7 +331,7 @@ window.addEventListener('sapphire-theme-setting', e => {
 
 ### Chat Style Settings
 
-A common pattern is "frosted glass" chat messages. If your setting key matches `*-chat-style`, Sapphire automatically sets a `data-{theme}-chat` attribute on the document element:
+A common pattern is "frosted glass" chat messages. If your setting key matches `*-chat-style`, Sapphire automatically sets a `data-{prefix}-chat` attribute on the document element, where the prefix is your setting key without `-chat-style` (key `glass-chat-style` gives `data-glass-chat`, whatever the theme is called):
 
 ```json
 {"key": "cyberpunk-chat-style", "type": "select", "label": "Chat Style", "default": "transparent",
@@ -350,7 +354,7 @@ Then in your CSS:
 - Animated backgrounds should use `z-index: -1` and `pointer-events: none`
 - Always provide a cleanup mechanism in your JS (canvas removal, interval clearing)
 - Keep performance in mind — offer a performance tier setting so users on slow machines can dial it down
-- Test with both light and dark base themes to ensure your variables cover everything
+- There is no base theme under yours: it sits on the dark defaults of shared.css. Check every surface (chat, settings, modals), and for a light theme set `color-scheme: light` and `--text-on-accent`
 
 ## Reference for AI
 

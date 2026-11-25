@@ -89,7 +89,9 @@ github_file(action="write", repo="owner/name", path="docs/x.md",
 github_file(action="delete", repo="owner/name", path="old.txt",
             commit_message="Remove old", branch="main")
 
-# Bulk push — one commit, one tool call:
+# Bulk push — one commit, one tool call. local_path must be inside the Sapphire
+# folder; user/ and the credentials folder are refused, so her private data and
+# keys can never be pushed:
 github_file(action="push_directory",
             repo="sapphireprime/bitcoin",
             local_path="core/plugins/bitcoin",

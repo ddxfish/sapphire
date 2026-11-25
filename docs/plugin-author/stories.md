@@ -10,7 +10,7 @@ Reference implementation: the **story-titanic** plugin (its repo doubles as the 
 
 ```
 my-story-plugin/
-├── plugin.json                  # ordinary manifest — no story capability needed
+├── plugin.json                  # ordinary manifest — no story capability needed (emotion pieces need capabilities.prompts, below)
 ├── stories/
 │   └── <slug>/
 │       ├── story.json           # pack meta
@@ -21,7 +21,7 @@ my-story-plugin/
     └── pieces.json              # optional emotion pieces (see below)
 ```
 
-Any plugin with a `stories/` dir is a story pack — the host scans every plugin's `stories/` at read time. Backdrops are served through an **images-only lane**: room JSONs (your solutions) are never web-served.
+Any plugin with a `stories/` dir is a story pack — the host scans the `stories/` of every enabled, **signed** plugin at read time (and `user/story_presets/`). A pack in an unsigned plugin is skipped, even with the unsigned-plugins switch on; unsigned packs are planned and not there yet. Backdrops are served through an **images-only lane**: room JSONs (your solutions) are never web-served.
 
 ## `story.json`
 
@@ -153,6 +153,48 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 - An object may declare its own `look` interaction — it **replaces** the generic object read and carries the full grammar (message, conditions, dice, seals, effects, `show`). `examine`/`inspect` route into it too. Undeclared, `look` keeps its built-in desc + verbs read. (2026-08-22 — declared machinery beats every built-in verb now, `take` and `look` included.)
 - **Starting items** (2026-08-22): story.json may carry `"start_items": {name: spec}` — objects the player begins with, living in **no room**. Full object grammar minus room-bound fields (no `hidden`/`condition`/`takeable` — a kit item is simply with you); declared verbs, dice, seals and `show` all fire from the pocket in any room, and `{"has": name}` conditions see them with no wiring. Membership is **derived at load**, never journaled: editing the pool mid-run changes the inventory on her next turn, and seal/dice keys anchor room-independently. Players author their own via the gear's Characters tab (🎒 Player starts with — same shadow/tombstone law as room objects).
 
+## The cast
+
+Every story has a cast: the characters, what each wears, and a small sheet of facts about each. With nothing declared there are two, made for you: her role (id from the role's name, played by the DM) and `player` (played by the person). To name your own, add `cast` to `story.json`:
+
+```json
+"cast": [
+  {"id": "mara", "name": "Mara", "desc": "The ship's engineer, dry and exact.",
+   "controlled_by": "dm", "image": "mara.jpg", "badge": "🔧",
+   "slots": ["head", "hands", "body"],
+   "wearing": {"body": "flight suit"},
+   "parts": {},
+   "fields": {"trust": 0}},
+  {"id": "player", "name": "You", "controlled_by": "player"}
+]
+```
+
+Only `id` is required. `controlled_by` is `dm` (the default) or `player`. Setup slots are filled into the cast like everywhere else. The cast is read when a run STARTS: a playthrough already under way keeps the cast it began with, so a change to your pack shows in new runs only.
+
+**Effects** (in a room's or an object's `effects`):
+
+| Effect | Shape | Does |
+|---|---|---|
+| `wear` | `{"char": "mara", "slot": "hands", "item": "gloves"}` (or a list of them) | Puts an item on a character's slot; gear moves between body and inventory |
+| `unwear` | `{"char": "mara", "slot": "hands"}` | Takes off whatever that slot holds |
+| `part` | `{"char": "mara", "part": "hand", "key": "held", "value": true}` | Sets a fact about a body part (`value` defaults to true) |
+| `cast_set` | `{"mara": {"mood": "wary"}}` | Sets fields on a character's sheet |
+| `cast_adjust` | `{"mara": {"trust": 1}}` | Adds to number fields |
+
+**Conditions** (wherever a condition goes):
+
+| Condition | Shape | True when |
+|---|---|---|
+| `wearing` | `"spacesuit"` | anyone wears it, in any slot |
+| `wearing` | `{"char": "mara", "item": "gloves"}` (add `"slot"` to pin the slot; `{"char", "slot"}` alone = that slot holds anything) | that character wears it |
+| `part` | `{"char": "mara", "part": "hand", "key": "held"}` | that part's fact is set |
+| `cast_field` | `{"char": "mara", "key": "mood", "value": "wary"}` | the sheet field equals the value |
+| `cast_gte` | `{"char": "mara", "key": "trust", "n": 2}` | the number field is at least `n` |
+
+Worn gear is not inventory: `has:` never sees something a character is wearing.
+
+`story.json` may also name its own reply-format piece with `"format": "<piece name>"`; without it the engine's manual for the identity mode is used.
+
 ## Dice
 
 ```json
@@ -196,7 +238,13 @@ The GM tab also carries one engine law, **Max one move per turn** (all stories, 
 
 ## Emotion pieces
 
-Ship `prompts/pieces.json` with keys namespaced `story_<slug>_<emotion>` (e.g. `story_titanic_smitten`). Resolution order: your story-specific piece, then the generic `story_engine_<emotion>`, else the emotion is silently skipped.
+Ship `prompts/pieces.json` with keys namespaced `story_<slug>_<emotion>` (e.g. `story_titanic_smitten`), under `{"components": {"emotions": {...}}}`, **and declare it in your manifest**, or the file is never read:
+
+```json
+"capabilities": { "prompts": { "pieces": "prompts/pieces.json", "kind": "internal" } }
+```
+
+Resolution order: your story-specific piece, then the generic `story_engine_<emotion>`, then a piece named just `<emotion>`, else the emotion is silently skipped.
 
 ## Saves
 
@@ -210,7 +258,7 @@ The journal follows its chat: renamed with it, encrypted with it when the chat g
 
 1. `story.json` + rooms (every room reachable, `start` exists, endings have cards if you have art).
 2. Backdrops as ~q82 JPGs; tile art in `backdrops/` too.
-3. Unsigned plugins allowed (Settings > Plugins banner switch), restart. Don't sign it yourself — only keyholders sign ([Signing](signing.md)).
+3. Get the plugin signed by a keyholder ([Signing](signing.md), [Publishing](publishing.md)), restart. A story pack shows only from a signed plugin: an unsigned one is skipped even with the unsigned-plugins switch on. Don't sign it yourself — a self-made key is always blocked.
 4. Your 📖 tile appears in the Game Room library; play it end to end — then hand it to someone who can be surprised.
 
 See [Games](games.md) for mechanical games, [Publishing](publishing.md) for the store.
@@ -230,7 +278,8 @@ STORY PACKS (Game Room story engine):
 - Dice: roll {sides, beat, once, success {effects}, failure {message}, retry_message} — rolled value journaled at roll time (replay never re-rolls).
 - Sealed blanks: interaction carries sealed {ask, fallback?, hold_message?, wait?} — player writes the reveal in a popup raised ONLY when she reaches for the blank (live countdown default 120s, per-seal wait or meta.seal_wait, clamp 5-600); unfilled/no-player => honest hold; fallback only on explicit player choice; fills are journal events; effects fire once at first reveal; a seal and a dice roll never share a verb.
 - Identity: role shipped => default story mode (full swap, prompt registers under role name); local = her own persona; combined = both. Byte-exact prompt preview (eye icon); no hidden instructions. GM law "Max one move per turn" default on.
-- Emotion pieces: prompts/pieces.json keys `story_<slug>_<emotion>`; resolution: story-specific, then story_engine_<emotion>, else skipped.
+- Emotion pieces: prompts/pieces.json keys `story_<slug>_<emotion>`; declared via capabilities.prompts {pieces, kind: internal}, shape {components: {emotions: {...}}}; resolution: story-specific, then story_engine_<emotion>, then bare <emotion>, else skipped.
 - Saves: the chat IS the save — per-(story, chat) event journal on the chat; state = pure replay (no LLM/randomness/clock). Journal follows the chat: rename/private-encrypt/delete. Vault-locked chat: playthrough invisible, engine refuses writes, role prompt name hidden. In local/combined the local persona can't be a vault prompt.
 - Player-side editing (scenarios/shadows) is user-layer only: shipped-object rewording field-merges (mechanics survive), mechanics edits go through fidelity gates (_replace / mechanics units, wholesale swap per playthrough); the pack stays canonical. Ship nothing for any of it.
-- Checklist: reachable rooms, start exists, tile/backdrops ~q82 JPG, ship unsigned with unsigned plugins allowed (keyholders sign; signing.md), 📖 tile in Game Room library.
+- Checklist: reachable rooms, start exists, tile/backdrops ~q82 JPG, a pack shows ONLY from a signed plugin (keyholders sign; signing.md; an unsigned pack is skipped even with unsigned plugins allowed, unsigned packs are planned), 📖 tile in Game Room library.
+- Cast: story.json `cast` [{id (required), name, desc, controlled_by dm|player, image, badge, slots, wearing {slot: item}, parts, fields}]; none declared = the role + `player`. Read when a run starts (an old run keeps its cast). Effects: wear {char, slot, item}, unwear {char, slot}, part {char, part, key, value?}, cast_set {char: {key: value}}, cast_adjust {char: {key: delta}}. Conditions: wearing ("item" or {char, item, slot?}), part {char, part, key}, cast_field {char, key, value}, cast_gte {char, key, n}. Worn gear is not inventory (`has:` does not see it). story.json `format` names its own reply-format piece.

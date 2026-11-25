@@ -23,6 +23,7 @@ Give each client its own key, so you can revoke one without touching the others.
 | `ask` | Send her a message in a named chat and wait for her answer (up to 5 minutes; the chat is made if missing). Private chats are refused |
 | `tell` | Same, without waiting |
 | the tools you ticked | Run as if she called them |
+| `room_invite`, `room_reset`, `room_update` | Only while chat-room invites are on (`MCP_ROOM_INVITES`): invite her into a room on your side, reset it, update it |
 
 **A key bound to a persona** also gets, as that persona (its voice, its memory scope; the client can't pick another):
 
@@ -61,7 +62,7 @@ To try a tool by hand: `bash tools/mcp-persona.sh <tool> '<json args>'`.
 
 ## Another Sapphire
 
-Two Sapphires talk over this door. Add one as a device (**System → Devices → Another Sapphire**, see [DEVICES.md](DEVICES.md)) with a key from her, and yours can ask or tell her, or use her shared tools. **This Sapphire's name on your network** (`INSTANCE_NAME`, on the MCP Server tab) is what the other one sees.
+Two Sapphires talk over this door. Add one as a device (**System → Devices → + Add Device → Another Sapphire**, see [DEVICES.md](DEVICES.md)) with a key from her, and yours can ask or tell her, or use her shared tools. **This Sapphire's name on your network** (`INSTANCE_NAME`, on the MCP Server tab) is what the other one sees.
 
 **Chat-room invites** are also on the MCP Server tab: whether she accepts them, which chat she decides in, and which persona she joins as. See [CHAT-ROOM.md](CHAT-ROOM.md#being-the-guest).
 

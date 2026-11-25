@@ -14,7 +14,7 @@ Bot accounts are safe, simple, and purpose-built for automation. No ban risk.
 4. In Sapphire, go to **Settings > Telegram**
 5. Make sure **API ID** and **API Hash** are set (from https://my.telegram.org — create an app if you haven't; the URL/platform/description fields don't matter, use `https://localhost` or leave blank)
 6. Click **+ Add Bot**, paste your token, give it a name, click Connect
-7. Create a daemon task in **Schedule** to auto-reply to messages
+7. Create a daemon in **Triggers → Daemons** (**+ Daemon**, source Telegram Message) to auto-reply to messages
 
 ### How users reach your bot
 
@@ -41,7 +41,7 @@ Client accounts log in as a real Telegram user. Full access to everything a huma
 3. Click **+ Add Client**, enter a name and phone number
 4. Enter the verification code Telegram sends you
 5. If you have 2FA enabled, enter your password
-6. Create a daemon task in **Schedule** to auto-reply
+6. Create a daemon in **Triggers → Daemons** (**+ Daemon**, source Telegram Message) to auto-reply
 
 ### Client advantages
 
@@ -58,10 +58,7 @@ Client accounts log in as a real Telegram user. Full access to everything a huma
 
 ## Using Both
 
-You can run bot and client accounts simultaneously. Each account appears in the sidebar scope dropdown with an icon:
-
-- `[robot]` Bot accounts
-- `[phone]` Client accounts
+You can run bot and client accounts simultaneously. Each account appears by its name in the chat sidebar's telegram dropdown.
 
 Each account can have its own daemon task with different filters and prompts. Use the bot for public interactions and the client for private power-user workflows.
 
@@ -82,7 +79,7 @@ Daemon auto-replies support a `reply_format` of `text` / `markdown` / `html` / `
 
 ## Daemon Events
 
-The plugin emits `telegram_message` events when messages arrive. Create tasks in Schedule with filters:
+The plugin emits `telegram_message` events when messages arrive. Create daemons in Triggers → Daemons with filters:
 
 - **Account**: Which account to listen on
 - **Chat ID**: Filter to specific chats

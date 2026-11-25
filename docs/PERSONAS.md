@@ -42,7 +42,7 @@ These are starting points. Edit them freely — your changes are saved separatel
 
 Open the chat sidebar and you'll find the **faces strip** — a row of persona avatars just under the chat actions. Click a face to load that persona onto the current chat: prompt, voice, tools, spice set, scene, and scopes all switch at once. The fields below the strip are the chat's live values — the strip and the fields are one form, so anything a persona sets is immediately visible and tweakable right there.
 
-The last cell on the strip is **New...** — it captures the current chat's settings as a new persona. The ↗ button beside the strip jumps to the full Personas view.
+The last cell on the strip is **New...** — it captures the current chat's look and voice (not its scopes) as a new persona. The ↗ button beside the strip jumps to the full Personas view.
 
 ### Favorites — curating the strip
 
@@ -83,7 +83,7 @@ Click the **Personas** nav item (in the Persona group, alongside Prompts, Toolse
 
 Scope dropdowns are driven by the live scope registry, so a plugin that registers a scope shows up in the persona editor without any core change — and a persona keeps a plugin's scope binding even while that plugin is unloaded.
 
-**A scope a persona doesn't name is off.** New personas start with every scope on None, and you pick what each one gets. A scope from a plugin you turn on later is None too, until you choose. (Personas from before this rule had a missing scope read as `default`; on update Sapphire wrote that down for each of them once, so nothing they had went quiet. A copy of the file from before is kept beside it as `personas.json.pre-scope-pin.bak`.)
+**A scope a persona doesn't name is off.** New personas start with every scope on None, and you pick what each one gets. A scope from a plugin you turn on later is None too, until you choose. (Personas from before this rule had a missing scope read as `default`; on update Sapphire wrote that down for each of them once, so nothing they had went quiet. A copy of the file from before is kept beside it as `personas.json.pre-scope-pin.bak`.) One more one-time change: an account scope (email, calendar, bitcoin and the like) that was saved as `default` when no account of that name exists is set to None the first time the Personas view opens, with a notice, and a copy of the file is kept as `personas.json.pre-scope-release.bak`. If a persona's email went quiet after an update, this is why: pick its account again in the editor.
 
 ---
 
@@ -94,9 +94,9 @@ Both creation paths **capture the current chat** — set up a chat the way you l
 1. **From the chat sidebar**: click the **New...** cell at the end of the faces strip
 2. **From the Personas view**: click **+** above the roster
 
-Either way, name it and Sapphire snapshots the chat's prompt, voice, toolset, spice set, model, scene, and scopes into a new persona. Then polish it in the editor — tagline, avatar (click the avatar circle), and any settings you want to differ from the source chat.
+Either way, name it and Sapphire snapshots the chat's prompt, voice, toolset, spice set, model and scene into a new persona. **Scopes are not copied:** every scope (memory, email, calendar and the rest) starts on None, so a new persona reads nothing until you pick its scopes in the editor. Then polish it there — tagline, avatar (click the avatar circle), and any settings you want to differ from the source chat.
 
-**Duplicate** is the third path: copy an existing persona and edit from there (the copy starts without an avatar so you can upload your own).
+**Duplicate** is the third path: copy an existing persona and edit from there. The copy gets its own copy of the prompt (editing one no longer changes the other), starts with every scope on None like a new persona, and has no avatar so you can upload your own.
 
 ---
 
@@ -124,7 +124,9 @@ The default persona's settings merge with your chat defaults — persona setting
 
 A persona exports as a **PNG character card**: the image *is* the avatar, and the
 persona data is embedded in a PNG text chunk. Import accepts these cards — and,
-for backward compatibility, the older JSON bundles.
+for backward compatibility, the older JSON bundles. One refusal: a persona whose
+prompt is private (in the vault, or marked privacy-required) or uses a vault piece
+cannot be exported, because the card would carry that prompt in the clear.
 
 **Export** (`GET /api/personas/{name}/export.png`) produces a PNG where:
 - the **pixels** are the persona's avatar (re-encoded to PNG), or a generated
@@ -226,19 +228,10 @@ ACTIVATION:
 - The chat's private flag is never changed by persona activation
 - Voice, prompt, toolset all apply immediately
 
-STORAGE:
-- Seeded from core/personas/personas.json on first run; after that user/personas/personas.json is authoritative (deleted personas stay deleted; Backup UI can re-merge defaults)
-- Avatars: user/personas/avatars/
-
-API:
-- GET /api/personas — list all
-- POST /api/personas/{name}/load — activate on current chat
-- POST /api/personas/from-chat — capture current chat as persona
-- POST /api/personas/{name}/avatar — upload image (max 4MB)
-- GET /api/personas/{name}/export.png — export as a PNG character card
-- POST /api/personas/import-card — import a PNG card (multipart; field "file")
-- POST /api/personas/import — import a legacy JSON bundle
-- PUT /api/personas/default — set default for new chats; DELETE clears it
+YOU have no tool to load or make a persona. The user does it: a face on the chat sidebar's strip, or Personas › Load. Loading replaces THIS chat's prompt, voice, toolset, model, scene and every scope (one the persona does not name becomes none); the private flag is untouched. Say that before they click when their scopes matter.
+- New (from a chat, the strip's New… or Personas +) and Duplicate both start with EVERY scope on None: a new persona reads no memory, mail or calendar until its scopes are picked in the editor. Duplicate also gets its own copy of the prompt.
+- Export as a PNG card: GET /api/personas/{name}/export.png (refused, 403, when its prompt is private or uses a vault piece). Import a card in the Personas view.
+- If a persona's email or calendar scope went to None by itself: account scopes saved as 'default' with no such account were set to None once (backup personas.json.pre-scope-release.bak).
 
 BUILT-IN PERSONAS (12):
 sapphire, cobalt, anita, claude, alfred, ada, einstein, nexus, cantos, marcus, eddie, agent (background-worker persona used by the agent system)

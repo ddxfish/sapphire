@@ -127,7 +127,7 @@ user/plugins/my-plugin/
     test_my_tool.py        # no __init__.py
 ```
 
-Shipped-plugin tests run from the repo root with `pytest` — the root `pytest.ini` sets `testpaths = tests core/plugins` and skips `user/`, `infra/`, and `tmp/`. Run your own with `python -m pytest user/plugins/my-plugin/tests` from the repo root; `from plugins.my_plugin import ...` resolves there too, because the `plugins.<name>` namespace spans both bands.
+Shipped-plugin tests run from the repo root with `pytest` — the root `pytest.ini` sets `testpaths = tests core/plugins` and skips `user/`, `infra/`, and `tmp/`. Run your own with `python -m pytest user/plugins/my-plugin/tests` from the repo root; `importlib.import_module("plugins.my-plugin.tools.my_tool")` resolves there too (the module name is the FOLDER name, so a hyphenated folder cannot be written as `from plugins.my_plugin import ...`; name the folder with underscores if you want plain imports), because the `plugins.<name>` namespace spans both bands.
 
 **Do not add an `__init__.py` to `tests/`.** pytest collects tests across every plugin's `tests/` dir simultaneously; an `__init__.py` turns each one into the same import name (`tests`) and triggers import-name collisions. Leave the directory as plain, non-package — pytest's rootdir-relative collection handles it fine.
 
@@ -190,3 +190,14 @@ user/plugins/smart-home/
 ```
 
 See each guide above for the details on every capability.
+
+## Reference for AI
+
+Building a plugin? Start at doc_name='plugin-author/ai-reference' (the compact rules), then the one page for what you are adding:
+- tools → plugin-author/tools · hooks → hooks · HTTP routes → routes · settings → settings · manifest keys → manifest · load/unload order → lifecycle
+- background work: daemons (event sources), schedule (cron tasks), subprocesses (your own server), agents (an agent kind)
+- on screen: web-ui (shared helpers), APPS (an app page), widgets (dashboard), THEMES, games, stories
+- voice: providers (a TTS/STT/LLM/embedding provider), voice-routing (her audio to your avatar or robot), voice-commands
+- devices → devices · memory layers → memory-layers · slash commands → commands · prompts → prompts · social networks → social
+- shipping: signing (who may sign, what blocks), publishing (the store, updates, size limits)
+A plugin lives in user/plugins/<name>/ with plugin.json at its root, and `name` must equal the folder name. An unsigned plugin loads only with unsigned plugins allowed (Settings > Plugins banner); never ship a plugin.sig you did not get from a keyholder, and delete one that came with a copied sample. After adding files: Settings > Plugins > Rescan, then toggle it on. A single tool with no other parts: use the Toolmaker (doc_name='toolmaker'). This page in full (what a plugin is, a complete example, tests): full=true.

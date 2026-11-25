@@ -42,6 +42,14 @@ Twilio config changes can take a few minutes to propagate.
    **Allow phone calls**. Sapphire dials via her `phone_call` tool; she can only
    call whitelisted contacts.
 
+## The `phone_call` tool
+
+`phone_call(recipient_id, goal, ephemeral?, opening_line?, model?, memory?, prompt?, max_minutes?)`: `recipient_id` is a contact id from the menu the tool shows; `goal` is what the call is for (she sees it during the call); `ephemeral` true (the default) runs the call in a side chat that reports back, false uses this chat; `opening_line` is her first words (leave it out to let them speak first, best for businesses); `model` picks a fast one for the call; `memory` true brings her memory scopes along (default false, isolated); `prompt` is a persona for the side chat; `max_minutes` caps the call (default 10). A `Phone Call Ended` trigger source fires when a call is over.
+
+## Public-line safety rails
+
+A line strangers can reach gets conduct rails: she is told, every turn and out of sight, to treat the caller as a stranger, to not repeat or chant on command, to say nothing about how she works or about you, and to hang up on abuse. A Realtime rule's **Public line** box turns them on for that rule, and it is ticked by default; **outbound calls always get them**. The wording is yours to change in the plugin's settings (**Public-line safety rails**; blank = the built-in text).
+
 ## Passphrase elevation
 
 A call rule's toolset is `none` unless you pick one. On the Realtime rule, check **Allow

@@ -23,7 +23,7 @@ A few things change every turn (spice rotation, current time, plugin context). P
 
 In 2.6.4 these moved to the **ghost-message rail**: a separate per-turn message inserted *after* the cached prefix, just before your new input. Spice and datetime no longer break cache. They also hit the model with stronger compliance because they're closer to the moment of generation (recency effect).
 
-**The only thing that still breaks system-prompt caching:** plugins that register a `prompt_inject` hook (e.g. RAG/context injectors, Vanta-class plugins). When such a plugin is active, system-prompt caching auto-disables on Claude to avoid the 1.25× cache-write penalty for guaranteed misses. Tools and history still cache.
+**The only thing that still breaks system-prompt caching:** plugins that register a `prompt_inject` hook (e.g. RAG/context injectors, Vanta-class plugins). When such a plugin is loaded, the system-prompt breakpoint is skipped on Claude to avoid paying the cache-write price for guaranteed misses. Tools and history still cache, and once a chat has history the history breakpoint covers the system prompt too. **A known shortcoming:** Game Room and Discord both ship enabled and both register that hook, so a default install skips the breakpoint on every chat's first turns. Turn those two off if you use neither and want every cached token.
 
 If you don't have any `prompt_inject` plugins active and you're not sure why your hit rate is low, check Settings → Dashboard → Token Metrics for per-model breakdown.
 
@@ -39,7 +39,7 @@ Every tool definition gets sent in the request. With caching, tool definitions a
 
 ### 2. Shorter Prompts
 
-Your assembled prompt gets sent every turn (cached after the first), but the first turn always pays full + 25% write tax. A 5,000-token prompt costs ~$0.019 to write to cache vs $0.0004 for a 500-token prompt. Be concise — the AI doesn't need a novel to know who it is.
+Your assembled prompt gets sent every turn (cached after the first), but the first turn always pays full price plus a write tax (25% on the 5-minute cache, double on the 1-hour one). At $3 per million input tokens a 5,000-token prompt costs about $0.019 to write to the 5-minute cache, a 500-token prompt about $0.002. Be concise — the AI doesn't need a novel to know who it is.
 
 ### 3. Use Local Models for Casual Chat
 
@@ -59,7 +59,7 @@ Large memory/knowledge stores get embedded in tool results when AI searches them
 
 ### 6. Stay in the Cache TTL Window
 
-Cache survives 5 minutes by default (1 hour optionally). Coming back to a chat after a 6-minute break = next turn pays cache-write penalty for the entire prefix. For long active sessions or chats you return to throughout the day, switch the TTL to 1h on Claude.
+Cache survives 5 minutes by default (1 hour optionally). Coming back to a chat after a 6-minute break = next turn pays cache-write penalty for the entire prefix. For chats you come back to after more than 5 minutes but within the hour, switch the TTL to 1h on Claude. It is not free: a 1-hour cache write costs 2× the normal input price where the 5-minute one costs 1.25×, so it pays off only when those longer gaps really happen.
 
 ---
 
@@ -69,7 +69,7 @@ Cache survives 5 minutes by default (1 hour optionally). Coming back to a chat a
 
 Claude's prompt caching saves **up to 90%** on cached input — the single biggest cost saver. Sapphire enables this by default.
 
-**Setting:** Settings → LLM → Claude → Enable Prompt Caching (on by default)
+**Setting:** Settings → LLM → Claude → Prompt Caching (on by default)
 
 **Cache TTL options:**
 
@@ -81,9 +81,9 @@ Claude's prompt caching saves **up to 90%** on cached input — the single bigge
 The 1-hour TTL keeps the cache alive between messages even if you walk away briefly. Use it for sessions where you're chatting in bursts.
 
 **Cache hit vs miss vs write:**
-- **Cache write** (cache fill on miss): 1.25× normal price (one-time investment)
+- **Cache write** (cache fill on miss): 1.25× normal price on the 5-minute TTL, 2× on the 1-hour TTL (one-time investment)
 - **Cache hit** (subsequent same prefix): 0.10× normal price (90% off)
-- **Cache miss** (prefix changed or TTL expired): full price + 1.25× write tax to refill
+- **Cache miss** (prefix changed or TTL expired): the prefix is written again at the write price above
 
 The Dashboard (Settings → Dashboard) shows cache hit/miss rates per model.
 
@@ -140,7 +140,7 @@ Watch the cache hit percentage — if it's low, something is changing your syste
 | Action | Savings | Effort |
 |--------|---------|--------|
 | Enable Claude prompt caching | Up to 90% on cached input (default ON) | 1 click |
-| 1h cache TTL for chats with idle gaps | Saves cache-write tax on re-engagement | Settings dropdown |
+| 1h cache TTL for chats with idle gaps of 5-60 minutes | Fewer cache rewrites on re-engagement (each 1h write costs 2×, not 1.25×) | Settings dropdown |
 | Use local LLM for casual chat | 100% (free) | Per-chat LLM setting |
 | Smaller toolsets | Moderate (smaller cache writes) | Build focused sets |
 | Shorter prompts | Moderate (smaller cache writes) | Edit prompt |
@@ -161,7 +161,7 @@ CACHE FRIENDLY (don't break cache):
 - New user messages (always fresh by design)
 
 CACHE BREAKERS (still real):
-- prompt_inject plugin hooks: mutate system prompt → auto-disables system-prompt caching on Claude
+- prompt_inject plugin hooks: any loaded one skips the system-prompt cache breakpoint on Claude (game-room and discord register one and ship enabled, so a default install skips it; history breakpoint still caches the prefix once a chat has history)
 - AI self-prompt-editing via meta-tools: rewrites the system prompt, invalidates cache
 - TTL expiry (5m default, 1h paid option): forces cache rewrite
 
@@ -177,7 +177,7 @@ COST SAVINGS (ALL PROVIDERS):
 CLAUDE CACHING (default ON, system + tools + history all cached since 2.6.4):
 - Setting: Settings → LLM → Claude → Prompt Caching
 - TTL: 5m (default) or 1h (long sessions / idle gaps)
-- Cache write: +25% first request (one-time)
+- Cache write: +25% first request on the 5m TTL, +100% on the 1h TTL (one-time)
 - Cache hit: -90% subsequent requests
 - Cache miss: full price + write tax to refill
 

@@ -6,7 +6,7 @@ a rail:
 
 | # | Layer | What lives there |
 |---|-------|------------------|
-| 0 | `self` | Who she is: the self sheet (typed sections + custom boxes) and free self-notes |
+| 0 | `self` | Who she is: the self sheet (typed sections + custom boxes) (free self-notes are retired: a save to `self` lands in memories) |
 | 1 | `events` | Things that happened. Default write target; the librarian's raw material |
 | 2 | `entities` | People / places / things / events-as-nouns, with tiered chunks (1 = headline, 2 = facts, 3 = trivia) and per-kind template fields |
 | 3 | `knowledge` | Big reference data, sub-chunked |
@@ -186,7 +186,7 @@ transcript.
 | 🗓 **Dates** | chunks with time phrases, no verdict (`temporal_at`) | resolve real event dates the regex floor couldn't; empty verdicts PRESERVE regex dates |
 | 🔗 **Link** | chunks with unmatched name candidates (`link_at`) | connect memories to EXISTING entities (roster in-message; never creates) |
 | 👯 **Dedup** | embedded chunks not yet checked (`dedup_at`) | fold true duplicates — merges are similarity-gated in code, favorites/core never even present |
-| 🧹 **Sort** | never-reviewed chunks, oldest first (`librarian_at`) | one verb per memory: `mark_processed` (default, optional 0–1 rating; `favorite=true` is grant-only — never clears), `atomize_memory` (split), `promote_memory` (copy to self layer or an entity card, `kind=` categorizes a new entity), `prune_memory` (soft-retire, reasoned, reversible) |
+| 🧹 **Sort** | never-reviewed chunks, oldest first (`librarian_at`) | one verb per memory: `mark_processed` (default, optional 0–1 rating; `favorite=true` is grant-only — never clears), `atomize_memory` (split), `promote_memory` (copy onto an entity card; promoting to the self layer is retired, identity goes through `update_self`; `kind=` categorizes a new entity), `prune_memory` (soft-retire, reasoned, reversible) |
 | 🪞 **Self** | the sheet itself (no queue) | tend who-she-is: two messages, tend → verify. An EMPTY sheet's first tending serves her whole self shelf + user bio in-message (the feast); later tendings get just what sort promoted since last time (the delta) |
 
 **Where to drive it:** Mind → **Settings → Librarian** — one card per pass with ▶ Run now
@@ -299,3 +299,7 @@ additive, and is idempotent — re-importing a file skips everything it
 already delivered. A self-sheet section arriving where a current one lives
 becomes *history*, never replacing the living sheet. Every imported chunk
 carries `meta.import_src` (the file's origin scope) as provenance.
+
+## Reference for AI
+
+This README is the engine's design notes (layers, edges, the librarian's passes, import and export). To USE your memory, read the user docs, which carry your tools and their rules: doc_name='memory' (save_memory, search_memory, get_recent_memories, read_self, the daily layer), 'people' (entity cards), 'knowledge' (the library), 'goals'. One part of this page: section='<heading>' (Edges & connections, Self sheet, The Librarian, Private-model memories, Import / Export); all of it: full=true.

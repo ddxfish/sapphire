@@ -14,7 +14,7 @@ Docker works in **layers** — the base system, Python packages, AI models, and 
 - **No dependency hell** — No conda, no pip conflicts, no "works on my machine." Everything is pre-configured
 - **One command install** — Pull and run. That's it
 - **Clean uninstall** — Remove the container and your system is exactly how it was before
-- **Built-in command line** — The container includes a full Linux environment with standard tools (curl, grep, git, etc.) that Sapphire's shell plugin can use safely
+- **Built-in command line** — The container includes a full Linux environment with standard tools (curl, grep and the like; git on the CPU image only) that Sapphire's shell plugin can use safely
 
 ---
 

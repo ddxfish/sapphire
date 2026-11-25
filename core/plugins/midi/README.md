@@ -111,8 +111,8 @@ Length defaults to one beat. `C4` is middle C. Barlines are ignored.
 
 A listen waits up to 60 seconds for the first key. It then records up to the
 length she asked for and ends early after 5 seconds of quiet. The take is handed
-to her as a new turn on the chat that asked. If that chat is mid-turn, delivery
-waits up to 3 minutes for it to be free.
+to her as a new turn on the chat that asked. If that chat is mid-turn, the take
+waits in its inbox until she is free; it is not dropped.
 
 ## Hearing the keys from a page
 

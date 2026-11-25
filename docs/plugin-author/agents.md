@@ -107,10 +107,11 @@ and the text as its mission** — `run()` should then resume rather than start o
   `resume_token`, privacy). Mission, pending question and last report go to `plugin_chat_data`
   under the chat (owner `core-agents` — core state, out of reach of any plugin card's Purge data) — encrypted when vaulted, deleted with the chat. Don't persist content yourself.
 - **Delivery.** Reports and questions ride the per-chat inbox (`core/chat/inbox.py`): they wait
-  for her current message to end, fold with neighbours that land within 3 s, and never need a
-  browser.
+  for her current message to end, each one gets a reply of its own (machine returns never fold
+  together; only the user's typed turns do), and never need a browser.
+- **Something to remember between wakes.** `self.remember(**fields)` keeps small metadata on the agent's row (a workspace name, a mode) so the next wake has it. Metadata only, never content.
 - **Events.** `agent_spawned`, `agent_waiting`, `agent_event`, `agent_completed`,
-  `agent_dismissed` — ids and status only. Don't publish content yourself.
+  `agent_dismissed` — ids, names and status, never the mission or report text. Don't publish content yourself.
 - **Concurrency.** `max_concurrent` counts running agents; waiting and idle don't.
 
 ## 4. Don'ts

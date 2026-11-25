@@ -2,7 +2,7 @@
   "plugin": "midi",
   "version": "2.0.0",
   "files": {
-    "README.md": "sha256:da57f8313f2120d0a6c0162d8dc41f6aac745d325348cb0894ee12cdf5bb214f",
+    "README.md": "sha256:93fc1db9a3e9e91e10e04f7ac6c329481dd211921f750e99cdb324944c75981e",
     "keyboard_driver.py": "sha256:5d48bb02b41c766fd7cb965c8e3d0527a9e821d4df641f7faf63e98d7a2058c8",
     "midi_core.py": "sha256:4520b954b9212b9f9a83d4ec587aa1dbfe8099a8c16c7b4eb923a66cab711a3c",
     "midi_midifile.py": "sha256:83cf1ac6ed5aeb39428fbdeecc5d73f09239c443a9ca945924741b82dc4122f0",
@@ -21,5 +21,5 @@
     "tests/test_tap.py": "sha256:a3ef6ac2a7b193b8d33777f7122bdf1a51cec119c832beac648ab9f7e41d442b",
     "tools/midi_tools.py": "sha256:61b6943485ae55af4c8eaf8b11a2e2d8e0140819e54fbcb04215f63255c8e6d1"
   },
-  "signature": "D8gKFAaJXLjjxGDuWh8fLJB2dIDDw0PpAKxhb4Cung2wIyOBZfTgGd5NtNy69NYZqWdu4oasJjS1LZJpQdPlBw=="
+  "signature": "q5lXoVmoqEuoTXYVIgV+f2JYg1dG71I9MTgaZPHeyqhnpEGWiEVkGmcWuSv4Eavghe3peP/jYBF011UR7sjfBQ=="
 }

@@ -2,7 +2,7 @@
   "plugin": "twilio-voice",
   "version": "0.3.0",
   "files": {
-    "README.md": "sha256:09de7d057acffe9cffea1e66048c0c144c2d8337f4d642e192245df790706217",
+    "README.md": "sha256:712adb08f6377f03c16accf656fe097da3cfe37dee6cb3416574242c351487e0",
     "codec.py": "sha256:8bea0022c1fac3aa023ca275446a96ca647901217e28a4b0919c614a93f29abb",
     "daemon.py": "sha256:4089bc28c6a5c7779882803f9271b02fe79c8d4c58220987f0ee981080604cac",
     "hooks/hangup_sentinel.py": "sha256:0be92f34fb02d297449841a728ad73de9fdee9f5d95cb04a640d9bf586bd2da3",
@@ -20,5 +20,5 @@
     "twilio_source.py": "sha256:7a9a0b6d7c8589a18011b2ccd130275a03c090a70065a3e5ac6f2337666db65d",
     "web/index.js": "sha256:ccc6882ecc8a0d35db67dac0a22c39bc1612db3d9807995cbaa1f6bd480ac70d"
   },
-  "signature": "CyEbl45LFzvSZrYkUTpAs7WASrjoyy8+arw/DBlXay9qYE286XwMwVdvD7OszFKo5PIe2/1zr8b4GezlfFRyDQ=="
+  "signature": "pRaDRC4mct1sLIKn+HlK3Bk2+A2Xow+MewW7Qxjyn9S5n66D/Eg0402/btVhlCWe1kPh4W5oIA4Cx31t4h/LDw=="
 }

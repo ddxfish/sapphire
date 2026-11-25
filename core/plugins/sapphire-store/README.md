@@ -14,7 +14,7 @@ door to it.
 An install downloads the plugin's source (a GitHub or GitLab repo, or a direct
 `https://` .zip), copies it to `user/plugins/<name>`, enables it and rescans.
 It refuses: a direct .zip on localhost or a private network, zip entries that
-would escape the plugin folder or pass 10 MB, a name a shipped plugin already uses, and a plugin
+would escape the plugin folder or pass 10 MB, a zip over 50 MB or one that unpacks to more than 100 MB, a name a shipped plugin already uses, and a plugin
 that is already installed (uninstall first to update).
 
 A store plugin with no signature loads only with unsigned plugins allowed (the

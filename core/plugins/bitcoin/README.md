@@ -39,7 +39,7 @@ QR codes need one small package, `segno`. If it is missing, the wallet page show
 
 The AI can send BTC when you ask:
 - "Send 0.001 BTC to bc1q..."
-- "Transfer half a bitcoin to this address"
+- "Transfer 0.002 bitcoin to this address" (an amount over your limits is refused: the default is at most 0.005 BTC at once)
 
 Amounts are specified in BTC (e.g., `"0.001"`) and are exact to the satoshi.
 
@@ -124,3 +124,4 @@ TROUBLESHOOTING:
 - Wrong balance: verify WIF key matches expected wallet
 - "No QR code was shown": the segno package is missing; the wallet page in Settings → Plugins → Bitcoin has the Install button
 - "cannot be used: its key is stored but this machine cannot decrypt it": the hostname or OS user changed; the key is not lost, never make a new wallet over it
+- The tool names before 1.2.0 (get_wallet, send_bitcoin, get_transactions) still work as hidden aliases, so a saved toolset that lists them keeps working.

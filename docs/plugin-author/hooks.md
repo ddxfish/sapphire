@@ -17,19 +17,19 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `post_execute` | After tool call | `function_name`, `result` | Audit, react to results |
 | `tools_filter` | After toolset resolution, before each LLM call | `tools` (subtract-only) | Withhold tools from this turn — [see below](#tools_filter--per-turn-tool-fence) |
 | `pre_tts` | Before whole-blob speech: the speakers, satellites, the browser's non-streaming playback, Telegram voice notes | `tts_text`, `skip_tts`, metadata `tts_client` | Modify text, cancel TTS — [route her voice elsewhere](voice-routing.md) |
-| `post_tts` | After playback ends (legacy/whole-blob) | `tts_text` | Analytics, reactions, subtitles |
-| `tts_stream_start` | Streaming TTS: turn begins | `skip_tts` | Disable the whole turn's streaming speech |
+| `post_tts` | After playback ends (legacy/whole-blob) | `tts_text`; metadata `duration`, `stopped_early` (the streaming playback lane adds `chunks`, `first_chunk_ms`, `streaming`) | Analytics, reactions, subtitles |
+| `tts_stream_start` | Every chat reply: the turn begins (metadata `stream_id`, `voice`, `speed`, `plays_here`, `device`) | `skip_tts` | Disable the whole turn's speech |
 | `tts_chunk_text` | Streaming TTS: per chunk, before synth | `tts_text`, `skip_tts` | Rewrite or mute a chunk before it's voiced |
-| `tts_chunk_audio` | Streaming TTS: per chunk, after synth | `metadata['audio']` carrier, `skip_tts` | Transform/replace chunk audio bytes; `skip_tts` = you took it (not played here, not counted as lost) |
-| `tts_stream_end` | Streaming TTS: turn ends | — | Finalize captions/recording |
+| `tts_chunk_audio` | Every chat reply: once per audio segment, after synth (metadata also `chunk_index`, `segment`, `avatar`, `plays_here`, `device`) | `metadata['audio']` carrier, `skip_tts` | Transform/replace chunk audio bytes; `skip_tts` = you took it (not played here, not counted as lost) |
+| `tts_stream_end` | Every chat reply: the turn ends (the reply is MADE, not yet heard; may carry `avatar_tail`). Not fired at all when TTS is off, the privacy gate refuses, or a whole reply has nobody to hear it (speech not played here and no chunk hook registered) | — | Finalize captions/recording |
 | `tts_stop` | The user stopped her voice (⏹, a tap on a face) | metadata `stream_id` (the reply named, or None), `chat_wide` | Flush audio your plugin plays itself: `tts_stream_end` means the reply was MADE, and a reply made whole ends before a word is heard |
-| `on_wake` | Wakeword detected | — | Play sounds, log, custom reactions |
+| `on_wake` | Wakeword detected (not when it is heard WHILE she is speaking: that stops her voice and fires `tts_stop` only) | — | Play sounds, log, custom reactions |
 | `provider_switched` | After a TTS/STT/embed provider hot-swap | metadata `kind`, `provider` | Warm caches / reset state (observational) |
 | `chat_renamed` | After a chat rename succeeds | metadata `old`, `new` | Re-key chat-keyed data your plugin holds *outside* the chat-scoped store |
 | `chat_deleted` | After a chat delete succeeds (every path) | metadata `name` | Drop chat-keyed data your plugin holds *outside* the chat-scoped store |
 | `chat_cleared` | After a chat's transcript is cleared (every clear path) | metadata `chat` | Drop turn-anchored rows (journals, message-index anchors) — the messages they pointed at are gone |
 | `chat_vaulted` | After a chat is encrypted into the vault | metadata `name` | Scrub plaintext deposits keyed by that name. **`privacy_aware` plugins only — see [Private chats](#private-chats--privacy_aware)** |
-| `plugins_ready` | After a registration wave settles — fires on the boot scan AND on hot reload, rescan, and toggle-on | metadata `loaded`, `reason`, `plugin` (the plugin that just (re)loaded; `None` on a full scan) | Boot work that needs other plugins present — handlers must be idempotent |
+| `plugins_ready` | After a registration wave settles — fires on the boot scan AND on hot reload, rescan, and toggle-on | metadata `loaded`, `reason` (`scan`, `reload`, `rescan` or `toggle`), `plugin` (the plugin just turned on, set for `toggle` only; `None` for `scan`, `reload` and `rescan`, so never use it to tell whether YOU reloaded) | Boot work that needs other plugins present — handlers must be idempotent |
 | `vault_unlocked` | After the prompt vault unlocks | — | Re-derive anything you cached from vault contents (vault prompts, private chats) |
 | `vault_locked` | After the prompt vault locks (manual or idle timer) | — | Drop anything you derived from vault contents — sealed chats and vault prompts are hidden again. Neither vault hook is always-delivered: while the active chat is private they reach `privacy_aware` plugins only |
 
@@ -90,6 +90,9 @@ class HookEvent:
     chat_name: Optional[str] = None          # This turn's chat (runner-stamped)
     chat_private: Optional[bool] = None      # True = private chat (runner-stamped)
     surface: Optional[str] = None            # 'chat' | 'game' — the chat's surface (fire-site-stamped)
+    ghost_text: Optional[str] = None         # ghost_inject: set it to contribute a line
+    ghost_label: str = ""                    # ghost_inject: set by the runner (your plugin's label)
+    ghost_contributions: List[tuple] = ...   # ghost_inject: collected by the runner, not yours to edit
 ```
 
 `chat_name` / `chat_private` are stamped by the runner, not by you — read them, don't set them. See [Private chats](#private-chats--privacy_aware). `surface` is stamped by the fire site for the presence hooks — see [Surfaces](#surfaces--where-presence-hooks-fire).
@@ -120,7 +123,7 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `tts_chunk_text` | **Yes** | Yes | `tts_text`, `skip_tts` |
 | `tts_chunk_audio` | **Yes** | Yes | `metadata['audio']['audio_bytes']`, `['content_type']` |
 | `tts_stream_end` | **Yes** | Yes | None (observational) |
-| `tts_stop` | No | Yes | None (observational; metadata `stream_id`, `chat_wide`, `chat`) |
+| `tts_stop` | Yes | Yes | None (observational; metadata `stream_id`, `chat_wide`, `chat`) |
 | `on_wake` | No | Yes | None (notification only) |
 | `provider_switched` | No | No | None (observational; metadata `kind`, `provider`) |
 | `chat_renamed` | No | No | None (observational; metadata `old`, `new`) |
@@ -168,8 +171,10 @@ toolset membership and the Toolsets UI are untouched.
 
 - **Subtract-only.** The fire site intersects your result against the original
   list, so additions never land.
-- **Fail-open.** If a handler raises, the unfiltered list ships — a buggy fence
-  must not silence every tool.
+- **A handler that raises is skipped**, not undone: what it removed before the
+  error, and what other handlers removed, still stands.
+- **Never set `event.tools` to `None` or `[]`** unless you mean it: that removes
+  every tool for the turn.
 - The fence is re-applied on the post-tool-cycle refresh, so it holds across
   tool calls within the same turn.
 - `chat_name` is pre-stamped by the fire site; there is no `system` or `config`
@@ -659,10 +664,10 @@ The ghost rail is **labeled operator metadata**, not invisible puppetry. If you 
 ## Reference for AI
 
 - Register: `capabilities.hooks` = `{hook_name: "hooks/file.py"}`; handler = `def <hook_name>(event)` or `def handle(event)`; never `def run` (schedule-only, silently fails to register).
-- Pipeline hooks: `stt_audio`, `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason`/`plugin`), `vault_unlocked` / `vault_locked` (no meta; re-derive/drop anything cached from vault contents; withheld from non-privacy_aware plugins while the active chat is private). Plugins also fire their own hooks (e.g. discord_*, `twilio_call_ended`) — see each plugin's README.
+- Pipeline hooks: `stt_audio`, `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `tools_filter`, `pre_tts`, `post_tts`, `tts_stream_start`, `tts_chunk_text`, `tts_chunk_audio`, `tts_stream_end`, `tts_stop` (the user stopped her voice; meta `stream_id` or None, `chat_wide`, `chat`, `system`; flush any audio you play yourself), `on_wake`. Lifecycle hooks: `provider_switched` (meta `kind`/`provider`), `chat_renamed` (meta `old`/`new`), `chat_deleted` (meta `name`), `chat_cleared` (meta `chat`), `chat_vaulted` (meta `name`, privacy_aware only), `plugins_ready` (meta `loaded`/`reason` scan|reload|rescan|toggle/`plugin`, set on toggle only), `vault_unlocked` / `vault_locked` (no meta; re-derive/drop anything cached from vault contents; withheld from non-privacy_aware plugins while the active chat is private). Plugins also fire their own hooks (e.g. discord_*, `twilio_call_ended`) — see each plugin's README.
 - `plugins_ready` fires on the boot scan AND on hot reload, rescan, and toggle-on — handlers must be idempotent and re-check their plugin is still loaded.
 - Voice elsewhere (avatar, game, robot): listen on `pre_tts` (text, whole-blob lanes incl. the browser's non-streaming playback and Telegram voice notes) and `tts_chunk_audio` (her audio, streaming only); the user mutes this computer with Settings > TTS > Play speech here (`TTS_LOCAL_PLAYBACK`, hooks keep firing). Per turn: `skip_tts` in `pre_tts`/`tts_stream_start` cancels; `skip_tts` in `tts_chunk_audio` = consumed (not played here, counted as voiced, no drop notice; nulling `audio_bytes` = dropped, notice shown). Page: voice-routing.md.
-- `tools_filter`: `event.tools` = final tool-schema list for this turn; subtract-only (additions discarded by intersection); handler errors fail open (unfiltered list ships); no `system`/`config` on the event; `chat_name` pre-stamped.
+- `tools_filter`: `event.tools` = final tool-schema list for this turn; subtract-only (additions discarded by intersection); a raising handler is skipped (its partial edits and other handlers' removals stand); event.tools = None or [] removes ALL tools; no `system`/`config` on the event; `chat_name` pre-stamped.
 - `chat_cleared`: chat-scoped store rows SURVIVE a clear (unlike delete) — use this hook to drop turn-anchored rows whose message anchors are gone.
 - LLM side call (summary, classify) from any hook: `from core.chat.llm_providers.resolve import resolve, ProviderRefused`; `resolve('auto'|provider_key, model, private=event.chat_private, health='skip').provider.chat_completion([{role, content}], generation_params={...})` -> `.content`. Run it in a thread from `post_chat` (fires inline before the turn completes). Never `system.llm_chat.chat()` for this: that's a full persisted turn in the active chat. Chat list: `system.llm_chat.list_chats()` (session_manager has no list_chats).
 - `pre_tts` metadata carries `tts_client` (the TTS client speaking).
@@ -670,5 +675,5 @@ The ghost rail is **labeled operator metadata**, not invisible puppetry. If you 
 - Private chats: every hook is withheld from plugins without top-level `"privacy_aware": true` (fail-closed on resolver error). ALWAYS_DELIVER regardless of privacy: `chat_renamed`, `chat_deleted`, `chat_cleared`, `plugins_ready`, `provider_switched`, `on_wake`.
 - Surfaces: manifest top-level `"surfaces": ["chat"|"game"]` withholds ONLY `prompt_inject`/`ghost_inject` on other surfaces; user override wins; absent = fire everywhere. A chat's surface = explicit `surface` setting, else derived (`mode: "game"` → `game`).
 - `ghost_inject`: set `event.ghost_text` (one string per plugin per turn); runner attributes it by plugin name in the envelope; ephemeral (never saved, cache-friendly); oversized contributions are truncated; `event.config` is None here.
-- Streaming TTS: `tts_stream_end` fires exactly once per turn on every exit path; `tts_chunk_audio` may fire fewer times than `tts_chunk_text`; `stream_id` correlates a turn's hooks; only streaming-capable providers fire these (legacy providers use `pre_tts`/`post_tts`).
+- Streaming TTS: `tts_stream_end` fires exactly once per turn on every exit path; `tts_chunk_audio` may fire fewer times than `tts_chunk_text`; `stream_id` correlates a turn's hooks; they fire for every chat reply whatever the provider (a provider that can't stream, or Stream speech off, = the reply is made whole and released through the same hooks after the LLM finishes); `tts_chunk_audio` fires once per audio segment, several per chunk on long text (meta `segment`), so key audio on (stream_id, chunk_index, segment); `pre_tts`/`post_tts` are the speech lanes OUTSIDE a chat turn.
 - Handler errors are isolated (logged, next handler fires). Mutations persist across handlers in priority order: system plugins 0-99 first, user plugins 100-199.

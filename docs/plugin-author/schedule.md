@@ -62,6 +62,10 @@ def run(event):
 
 The handler file must export a `run(event)` function. The return value is optional — if provided, it's logged to the schedule activity feed.
 
+Three rules of that file: it is run fresh on every fire, in an empty namespace, so **module-level variables do not survive between runs** (keep state in `plugin_state`) and relative imports do not work; it must sit inside your plugin's folder; and it is skipped while the plugin is off.
+
+A task made at runtime (an alarm the user asked for) is created with `scheduler.create_task({..., "source": "plugin:<name>", "handler": ..., "plugin_dir": ..., "runtime": True, "delete_after_run": True}, trusted=True)`: unlike a manifest task it is stored, so it survives a restart. The clock plugin's alarms work this way.
+
 ### Event Fields
 
 | Key | Type | Description |
@@ -89,17 +93,21 @@ def run(event):
 
 ### Sending a Message via LLM
 
-Scheduled tasks can trigger the AI to speak or respond:
+Scheduled tasks can trigger the AI to speak or respond. Put the request in the chat's inbox: it waits its turn if she is mid-reply, and its header line tells her the user did not type it. Never call `system.llm_chat.chat()` for this (a full turn that reads as the user's own words and can collide with a reply in progress):
 
 ```python
+from core.chat import inbox
+
 def run(event):
     system = event["system"]
-    if system and system.llm_chat:
-        response = system.llm_chat.chat("Give me a morning briefing")
-        if system.tts:
-            system.tts.speak(response)
-    return "Briefing delivered"
+    chat = system.llm_chat.get_active_chat()        # or a chat name from your settings
+    inbox.tell(chat, "Give me a morning briefing.", source='my-plugin',
+               header_line=inbox.header('My plugin', 'schedule', 'morning briefing'),
+               speak='speakers')                    # None for text only
+    return "Briefing asked for"
 ```
+
+`inbox.tell` returns at once; her answer lands in the chat as a turn of its own. See [Starting a turn yourself](tools.md#starting-a-turn-yourself).
 
 ---
 

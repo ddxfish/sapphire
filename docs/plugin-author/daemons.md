@@ -236,7 +236,7 @@ Contract and behavior:
   reach the model or the chat — they're skipped, not stringified.
 - **Vision gate:** the image is sent to the model only if the task's provider supports
   vision. For OpenAI-compatible / Anthropic-compatible custom providers, enable the
-  **👁 vision** checkbox on the provider (Settings → LLM). Non-vision providers get a
+  **Vision model — can see images** checkbox on the provider (Settings → LLM). Non-vision providers get a
   text description of the image instead (local, no network).
 - **Persistence:** the image is stored once in the chat DB and shown in history via a
   marker — the base64 is *not* re-sent every turn, so it won't bloat the chat.
@@ -307,6 +307,10 @@ Daemons survive hot-reload — `stop()` is called before unload, then `start()` 
 
 ---
 
+## Firing one task of your own
+
+`emit_daemon_event` hands an event to every task listening to a source. To fire ONE task you own (a clock inside your daemon reaching a task's own time), use `plugin_loader.fire_task(task_id, payload, plugin="<your name>")`: it skips the message filter, refuses a realtime rule, and routes the answer to your reply handler. `plugin_loader.tasks_for_source(source)` lists the tasks on one of your sources; `tasks_matching(source, event)` those whose filter passes.
+
 ## Reference for AI
 
 DAEMON SYSTEM:
@@ -322,3 +326,4 @@ DAEMON SYSTEM:
 - `realtime: true` on an event source = gate-only: `emit_daemon_event` fires NO tasks; the daemon reads gates via `active_daemon_accounts(source)` + `get_enabled_daemon_task(source, account, payload)` (most-specific filter wins, no match => decline the session)
 - Lifecycle: start on load, stop on unload, survives hot-reload
 - Images: add `"images": [{"data": <base64>, "media_type": "image/png"}]` to the payload — sent to vision-capable providers (gated on the provider's vision support), stored once in the chat DB via a marker (no per-turn replay bloat); max 8 images, 10 MB each, png/jpeg/gif/webp
+- `plugin_loader.fire_task(task_id, payload, plugin=name)` fires one task of your own (no filter, never a realtime rule); `tasks_for_source(source)`, `tasks_matching(source, event)` list them.

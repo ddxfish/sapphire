@@ -38,7 +38,8 @@ Story journals and game saves live *inside* the chat database, so they ride alon
 
 | Data | Location | Why |
 |------|----------|-----|
-| API keys & credentials | `~/.config/sapphire/credentials.json` | Security — credentials are stored outside `user/` deliberately. They're encrypted with a machine-identity key and excluded from backups. |
+| API keys & credentials | `credentials.json` in the config folder (Linux `~/.config/sapphire/`, Windows `%APPDATA%\Sapphire\`, macOS `~/Library/Application Support/Sapphire/`) | Security — credentials are stored outside `user/` deliberately and are never in a backup. The file is readable by your user only (Linux and macOS). Account secrets (email and other account passwords, sign-in tokens, the backup password, a Bitcoin key) are scrambled with a key tied to this machine; LLM and service API keys, the SOCKS login and the Home Assistant token are stored as plain text in that file. |
+| Browser plugin profiles | `user/browser/` | The browser plugin's live cookies, logins and history. Never backed up; after a restore her browser starts logged out. |
 | MCP inbound auth keys | `user/plugin_state/*_mcp_key.json` | Plaintext bearer keys for plugins exposing MCP servers. Re-issued from the plugin UI on restore. |
 | MCP outbound bearer keys | `user/webui/plugins/mcp_client.json` | Plaintext `Authorization` headers for external MCP servers Sapphire connects to. Re-enter from the plugin's settings on restore. |
 | Health-check API token | `user/sapphire-health.token` | Live credential — re-minted by the health script. |
@@ -57,7 +58,7 @@ Private (🔒) chats ride the archive as ciphertext, but backups taken **before*
 
 ### Automatic backups
 
-A scheduler runs daily at the hour you pick (`BACKUPS_HOUR`, default 3 AM local). Three tiers rotate automatically, plus two more that fill on their own:
+A scheduler runs daily at the hour you pick (`BACKUPS_HOUR`, default 3 AM local). A computer that was off or asleep at that hour is not skipped: when Sapphire starts and the newest backup is more than 26 hours old (or there is none), one runs five minutes later. Three tiers rotate automatically, plus two more that fill on their own:
 
 | Tier | When created | Default retention |
 |------|--------------|-------------------|
@@ -125,7 +126,7 @@ You can download any backup from the list in Settings > Backup (or `GET /api/bac
 
 ### Encryption
 
-One **backup password** covers everything Sapphire seals: backups sent to devices and folders ([Device backups](DEVICES.md)), the offsite vault, and — if you turn it on — local backups. Set it in **Settings > Backup > Encryption**. It is stored scrambled in `~/.config/sapphire/` (machine-bound), never inside a backup. **Write it down.** A sealed backup opens with this password and nothing else — not even us. On a new machine, restore-from-file asks for it.
+One **backup password** covers everything Sapphire seals: backups sent to devices and folders ([Device backups](DEVICES.md)), the offsite vault, and — if you turn it on — local backups. Set it in **Settings > Backup > Encryption**. It is stored scrambled in the config folder (machine-bound; `~/.config/sapphire/` on Linux), never inside a backup. **Write it down.** A sealed backup opens with this password and nothing else — not even us. On a new machine, restore-from-file asks for it.
 
 **Encrypt local backups too** (`BACKUPS_ENCRYPT_LOCAL`, off by default) seals every new local backup as a `.sapphirebak` and keeps no plain copy. Turning it on goes through an I-UNDERSTAND confirmation. The one rule it enforces: *if encryption is on and no password is set, no backup is made* — never a plain one in its place. The health strip says so loudly, and the scheduled run publishes a health alert. Backups already in the folder stay as they are.
 
@@ -229,7 +230,7 @@ The **Remembrance** plugin (disabled by default) ships encrypted backups of `use
 - Encryption is password-derived **AES-256-GCM** (scrypt key derivation) in a framed format — a multi-GB backup encrypts in flat memory, and any truncation or tampering fails loudly on decrypt. Encrypted files use the `.sapphirebak` extension.
 - Every upload is preceded by a **ciphertext check** — the file must *not* open as a tar and must carry the encrypted-backup header. A plaintext slip blocks the upload and logs CRITICAL.
 - Downloads are **sha256-verified** before decrypting.
-- The API key and encryption password are stored scrambled in `~/.config/sapphire/` — never inside a backup.
+- The API key and encryption password are stored scrambled in the config folder (`~/.config/sapphire/` on Linux) — never inside a backup.
 - The plugin panel has its own **Offsite excludes** and size cap, layered on top of your local exclude patterns.
 
 ### Restoring from offsite
@@ -279,31 +280,21 @@ Any `KEEP` value set to `0` pauses that tier: nothing new is created, existing b
 
 ## Reference for AI
 
-Local tar backups of user/ (plain by default, optionally sealed) with tiered rotation + offline-at-boot restore; one core gate seals everything that leaves (devices, folders, remembrance). Settings tab: Backup.
+Local tar backups of user/ (plain by default, optionally sealed) with tiered rotation and a restore applied at the next boot. Settings tab: Backup.
 
-SETTINGS KEYS (defaults): BACKUPS_ENABLED=true, BACKUPS_HOUR=3, BACKUPS_KEEP_DAILY=7, BACKUPS_KEEP_WEEKLY=4, BACKUPS_KEEP_MONTHLY=3, BACKUPS_KEEP_MANUAL=5, BACKUPS_KEEP_UPDATE=3 (no UI field), BACKUPS_EXCLUDE_PATTERNS=[] (UI textarea, auto-saves), BACKUPS_MAX_SIZE_WARN_MB=2048, BACKUPS_DIR="" (empty=user_backups/; inside user/ refused → default + backup_dir_error), BACKUPS_ENCRYPT_LOCAL=false. KEEP<=0 = pause tier (no create, no purge).
+YOU have no backup tool of your own. The user does it in Settings > Backup: **Backup Now** (a manual backup; the newest 5 are kept), ↻ on a row to restore, or **Restore from a file**. `remembrance_backup` is the OFFSITE copy only (Remembrance plugin, off by default): no comment = vault status, a comment = a labeled manual backup.
 
-ENCRYPTION (core, 2026-10-06): one backup password (credentials.backup_password, machine-bound scramble; PUT /api/backup/password; status in GET /api/backup/health.password_status). backup_crypto.seal = encrypt + verify (not-a-tar + magic + non-empty) or raise. create_backup(encrypt=None→BACKUPS_ENCRYPT_LOCAL): seals the tar, unlinks plaintext, returns .sapphirebak; encrypt on + no password = NO backup + last_backup_error + health alert backup_password_missing (never plaintext). export_encrypted(type, dest_dir, extra_patterns, cap_mb) = the shipper gate (password → sentinel → cap → create(encrypt=True)); remembrance calls it. sealed(filename) = ship-ready copy of an existing local backup. backup_targets.ship(filename) seals once, one thread per target, Target.check refuses .tar.gz to any remote target and any .sapphirebak lacking the magic; rotation on targets = select_doomed(names, keep). Openers (README.txt, open-backup.sh/.bat, decrypt_backup.py) written beside local backups and onto every target.
+SETTINGS KEYS (defaults): BACKUPS_ENABLED=true, BACKUPS_HOUR=3, BACKUPS_KEEP_DAILY=7, BACKUPS_KEEP_WEEKLY=4, BACKUPS_KEEP_MONTHLY=3, BACKUPS_KEEP_MANUAL=5, BACKUPS_KEEP_UPDATE=3 (no UI field), BACKUPS_EXCLUDE_PATTERNS=[] (UI textarea, auto-saves), BACKUPS_MAX_SIZE_WARN_MB=2048, BACKUPS_DIR="" (empty = user_backups/ beside user/; a folder inside user/ is refused), BACKUPS_ENCRYPT_LOCAL=false. KEEP<=0 pauses that tier.
 
-MECHANISM:
-- Archive = user/ → {backup_dir}/sapphire_{YYYY-MM-DD}_{HHMMSS}_{type}.tar.gz (or .sapphirebak when BACKUPS_ENCRYPT_LOCAL); types daily/weekly/monthly/manual/pre_update (pre_update lists under "update" tier). Local backups plaintext BY DEFAULT; egress (devices, folders, remembrance) always sealed. Encrypted local .sapphirebak files list (🔒) and restore.
-- SQLite: live *.db NEVER tar'd — sqlite3 backup API snapshots each to staging, added at live arcnames; live db/-wal/-shm excluded from walk. Snapshot failure → DB OMITTED from that backup (log: "DB snapshot failed for X ... OMITTED"); retried next run. WAL checkpoint beforehand is best-effort trim only, no longer gates inclusion. Pre-update backup passes require_complete=True → refuses instead of shipping without a busy DB.
-- Always-excluded privacy floor (regardless of patterns): *_mcp_key.json, mcp_client.json, sapphire-health.token, *.tmp/.tmp.*, .bad-*, symlinks/hardlinks; user/models/ excluded as rebuildable cache, user/game-room/library/ (uploaded game files, re-upload after a restore) likewise; user/comfyui/outputs/ (what ComfyUI made) is out unless the ComfyUI plugin's backup switch is on. Credentials live outside user/ (~/.config/sapphire/) — never in archive.
-- Durability: write .partial → chmod 0600 → atomic rename; 0-files-after-exclusions refused; unreadable files skipped w/ warning; create+rotate serialized under one lock.
-- Scheduler: daily at BACKUPS_HOUR (bad value → falls back to 3, loop never dies). Housekeeping first: integrity_check daily, VACUUM Sundays. Integrity failure → sentinel user/health/CORRUPT_{db}_{ts}.flag + sapphire_health_alert event → create+rotate HALT until user deletes flag(s).
-- Estimate: POST /api/backup/estimate {patterns[],extra_patterns[]} → uncompressed total, excluded bytes, per-top-level breakdown, over_warn vs BACKUPS_MAX_SIZE_WARN_MB. UI "Check size" previews unsaved patterns.
+WHAT IS IN ONE: user/ → sapphire_{YYYY-MM-DD}_{HHMMSS}_{type}.tar.gz (.sapphirebak when sealed, listed with 🔒); types daily/weekly/monthly/manual/pre_update. Databases are snapshotted, never copied live; one that is busy is OMITTED from that backup (log "DB snapshot failed … OMITTED") and caught next run.
+NEVER IN ONE: credentials (API keys, passwords: they live in the config folder outside user/), user/models/ (re-downloaded), user/browser/ (browser logins: a restore starts her browser logged out), user/game-room/library/ (uploaded game files), user/comfyui/outputs/ unless the ComfyUI plugin's switch is on, MCP keys, the health token, symlinks.
 
-RESTORE FLOW:
-- UI: Settings > Backup — per-row ↻ (POST /api/backup/restore {filename,password}) or upload (POST /api/backup/restore-upload multipart file+password; accepts .tar.gz/.sapphirebak). Server decrypts if needed, validates (gzip tar rooted at user/, path-traversal + Windows-reserved-name checks), stages user_restore/pending.tar.gz + pending_restore.json, schedules restart.
-- At boot, main.py applies pending restore BEFORE app spawn: extract → user/ becomes user.old (prior user.old → user.old.prev) → swap. Failure = rollback, existing user/ kept, marker cleared (never loop-retries). Own backups extract trusted/faithful; uploads use tarfile 'data' filter; symlinks/hardlinks/devices never extracted.
-- Outcome: user_restore/last_restore_result.json → GET /api/backup/restore-result → UI banner; DELETE same route dismisses. Works in Docker (container CMD is the main.py supervisor).
+WHEN: daily at BACKUPS_HOUR; and 5 minutes after start when the newest backup is older than 26 h (a machine that was off at 3 AM). A database check runs first every day (VACUUM on Sundays).
 
-ROUTES: GET /api/backup/list, GET /api/backup/health (enabled, sentinels, halted, scheduler_alive, newest{filename,size,age_hours}, last_scheduled_result, last_backup_error, devices{targets,shipping,last_ship} → health strip), POST /api/backup/send {filename?} (newest to every online storage device, async; 400 no device/no backup, 409 already sending), POST /api/backup/create {type: daily|weekly|monthly|manual}, POST /api/backup/estimate, DELETE /api/backup/delete/{filename}, GET /api/backup/download/{filename}, POST /api/backup/restore, POST /api/backup/restore-upload, GET/DELETE /api/backup/restore-result. All require auth.
+ENCRYPTION: one backup password (Settings > Backup > Encryption), stored scrambled on this machine, never inside a backup. A backup sent to another machine (a satellite's card, an SSH host, the offsite vault) is always sealed; a folder on this computer set up as a backup device can opt out. BACKUPS_ENCRYPT_LOCAL on + no password = NO backup is made (never a plain one in its place). A lost password = those backups cannot be opened, by anyone. Standalone recovery: tools/decrypt_backup.py (python + the cryptography package + the password).
 
-OFFSITE (core/plugins/remembrance, default_enabled=false):
-- Zero-knowledge: scrypt-derived AES-256-GCM, framed format (magic SAPPHIREBAK, per-frame nonce + frame-index AAD, EOF marker → truncation/reorder/tamper all fail loudly), ext .sapphirebak. Password loss = unrecoverable.
-- Flow: core creates plain tar (plugin extra excludes + size cap offsite_max_mb=2048) → encrypt → verify-ciphertext-or-refuse (CRITICAL log) → upload. Download sha256-verified before decrypt.
-- Schedule: one daily run at offsite_cron_hour (default 4) when auto_enabled; cadence monthly (1st) / weekly (Sun) / daily. Failure surfaces to user; success silent.
-- Tool: remembrance_backup — no comment → vault status; comment → labeled manual backup (kept long-term).
-- Creds (server URL/tenant/API key) scrambled in ~/.config/sapphire/, never in backups; the backup password is core's (Settings > Backup). Gate = core export_encrypted; plugin owns account + cadence + upload + restore download. Restore: panel ↻ → same staged-restart flow.
-- Standalone recovery: tools/decrypt_backup.py (needs only python + cryptography pkg + password) → .tar.gz → tar -xzf.
+RESTORE: ↻ or an uploaded .tar.gz / .sapphirebak → checked, staged, Sapphire restarts → at boot user/ becomes user.old (the one before it: user.old.prev) and the backup takes its place. A failed restore rolls back and keeps the current user/. A banner says how it went.
+
+FIXES: "Backups HALTED" = a database failed its daily check → fix or restore it, then delete the user/health/CORRUPT_*.flag file(s); nothing is backed up until then · "Wrong password or corrupted backup" = no way around it · a backup smaller than expected = your exclude patterns, the never-in-one list, or an omitted busy database · restored on another machine and the API keys are gone = expected, credentials never ride a backup · more: section='Quick Troubleshooting'. Routes: API.md (Backup).
+
+OFFSITE (plugin remembrance): zero-knowledge AES-256-GCM, .sapphirebak. One run a day at offsite_cron_hour (default 4) when auto is on; cadence monthly (1st) / weekly (Sun) / daily; cap offsite_max_mb=2048. Every upload is checked to be ciphertext first; downloads are sha256-verified. A failure is shown to the user, success is silent.

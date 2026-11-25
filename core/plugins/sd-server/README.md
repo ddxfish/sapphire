@@ -13,9 +13,12 @@ Three surfaces:
 > Separate from the older SDXL `image-gen` plugin, which is untouched.
 
 ## The tool — `generate_image`
-- **`prompt`** (required) · **`count`** (1; >1 → a numbered grid the model can see) ·
-  **`seed`** (omit = random; set to reproduce) · **`width`/`height`** (1024) ·
-  **`steps`** (8) · **`cfg_scale`** (1.0) · **`negative_prompt`** ("").
+- **`prompt`** (required) · **`count`** (1; >1 → a numbered grid the model can see; capped by
+  *Max images per call*) · **`seed`** (omit = random; set to reproduce) · **`view`**
+  (true = she sees the image; false = a text confirmation only).
+- That is the whole tool. **Size, steps, CFG and the negative prompt are not tool parameters**:
+  they come from this plugin's Settings (1024×1024, 8 steps, CFG 1.0 by default), and any the
+  model passes are ignored.
 - Every result includes a **recipe** (prompt + params + per-image seed) for exact recreation.
 - Images flow through the core tool-image path: a **vision model sees them**; a text-only
   model gets a CLIP description and the user still sees the full image.
@@ -61,6 +64,8 @@ sd-server is model-agnostic — point it at a different checkpoint and **retune 
 settings**. Load the model in sd-server (its `-m model.gguf`/`--diffusion-model` flag), then
 in the plugin Settings:
 
+Settings also has **Sampler** and **Scheduler** (blank = the server's own) and a list of keywords added to every prompt.
+
 | Model | Steps | CFG | Negative | Size |
 |---|---|---|---|---|
 | **Z-Image Turbo** (default) | 8 | 1.0 | little/none | 1024² |
@@ -68,7 +73,7 @@ in the plugin Settings:
 | **SD 1.5** | ~20–30 | ~7 | helpful | 512² |
 
 The slideshow aspect dims (square 1024², portrait 832×1216, landscape 1216×832) suit SDXL/
-Z-Image; for SD 1.5 lower the base to 512 in Settings. Everything else (slots, profiles,
+Z-Image; they are fixed, so the Slideshow and Reel always render at these sizes, whatever the base size in Settings says (that setting is for her `generate_image` tool; lower it to 512 there for SD 1.5). Everything else (slots, profiles,
 the Reel, recreate-by-seed) is model-independent.
 
 ## Notes

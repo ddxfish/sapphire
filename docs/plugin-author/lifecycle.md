@@ -16,7 +16,7 @@
 Settings > Plugins calls `PUT /api/webui/plugins/toggle/{name}`:
 - **Enable**: Loads immediately — all capabilities register. Before loading, the plugin's record is refreshed from disk: `plugin.json` re-read (a route, setting or hook added while it was off comes up) and the signature checked again
 - **Enable / boot / reload**: each tool module's optional `on_load()` runs after its tools register, fresh or reused from `sys.modules`: the place to register with core (providers, sinks, timers), never import time
-- **Disable**: Unloads immediately — device drivers let go (presence), each tool module's optional `shutdown()` runs, then hooks, tools, routes, schedules are removed and the plugin's modules leave `sys.modules`
+- **Disable**: Unloads immediately, in this order — device drivers let go (presence), hooks and slash commands are removed, each tool module's optional `shutdown()` runs and its tools go, then routes, sockets and schedules, the daemon's `stop()`, its services, and last the plugin's modules leave `sys.modules`. So `shutdown()` runs AFTER your hooks are gone
 
 Refusals:
 - **403** — unsigned (the detail points at the unsigned-plugins switch on the Settings > Plugins banner), tampered, or a verified plugin refused at load (tool-name collision, …; the detail carries the real reason). Also: disabling a locked or core plugin.
@@ -37,7 +37,7 @@ If reload fails, the plugin stays unloaded. No half-loaded state.
 
 ## Rescan
 
-`POST /api/plugins/rescan` discovers new or removed plugin folders without restart. Returns `{"added": [...], "removed": [...]}`.
+`POST /api/plugins/rescan` discovers new or removed plugin folders without restart. Returns `{"status": "ok", "added": [...], "removed": [...]}`; a plugin whose manifest changed on disk shows in `added` as `"<name> (reloaded)"`.
 
 ## Error Isolation
 
@@ -60,7 +60,12 @@ See [Chat-Scoped State](tools.md#chat-scoped-state).
 | GET | `/api/webui/plugins` | List all plugins with metadata |
 | PUT | `/api/webui/plugins/toggle/{name}` | Enable/disable (live) |
 | POST | `/api/plugins/rescan` | Discover new/removed plugins |
-| POST | `/api/plugins/{name}/reload` | Hot-reload (dev) |
+| POST | `/api/plugins/{name}/reload` | Hot-reload (dev); 400 for a plugin that is off |
+| DELETE | `/api/plugins/{name}/uninstall` | Remove a user plugin and its data (403 for a shipped one, 409 while its environment is building) |
+| POST | `/api/plugins/{name}/purge` | Delete everything the plugin stores about the user; it stays installed |
+| PUT | `/api/plugins/{name}/surfaces` | Where its hooks may run (400 unless the manifest declares surfaces) |
+| POST / GET / DELETE | `/api/plugins/{name}/build-env`, `/env-status`, `/env` | Build, watch, remove the plugin's own Python environment |
+| GET / POST | `/api/plugins/{name}/check-update`, `/revert` | Is a newer version in its repo / go back to the one kept copy of the previous version |
 | GET | `/api/plugins/{name}/check-deps` | Which `pip_dependencies` are missing, the environment, and the install command |
 | POST | `/api/plugins/{name}/install-deps` | Install the plugin's packages — `pip_dependencies` and its optional `extra` — in the background (core/extras.py; conda/venv only; poll `GET /api/system/extras/plugin:{name}`), then auto-reload the plugin |
 | GET | `/api/webui/plugins/{name}/settings` | Read plugin settings |
@@ -104,9 +109,9 @@ Each entry also carries `collapsible`, `showInSidebar`, `settings_schema`, `desc
 - Boot: `plugin_loader.scan()` reads `core/plugins/` (system band) then `user/plugins/` (user band) — a same-named user-band copy SHADOWS the system one (warned in the log; the installer refuses such a name, so it means a hand-placed fork); a root-level `plugins/` is NOT scanned (warning if it holds plugin folders); `core/user/` existing logs an error (root computed one level short); each manifest is validated and signature-checked; enabled plugins register hooks, tools, voice commands, routes, schedules; scheduler tasks defer until the scheduler initializes.
 - Live toggle: `PUT /api/webui/plugins/toggle/{name}` — enable first runs `refresh_from_disk` (manifest re-read + signature re-checked), then loads immediately; disable unloads immediately. 403 = unsigned/tampered/refused at load (detail = the reason) or locked/core disable; 409 = alternates partner (`essential` group string) is on; 404 unknown. A failed enable keeps `plugins.json` intent (enabled). Response `{status, plugin, enabled, reload_required, missing_deps, env, warning}`. List entries carry verify_tier, verified_author, band, surfaces/surfaces_active, env, extra, essential, missing_deps, has_prev, sidebar_accordion, settingsUI. Unload order: device presence release → each tool module's optional `shutdown()` (also at Sapphire's own shutdown) → hooks/tools/routes unregistered → the plugin's modules purged from `sys.modules`.
 - Hot reload: `POST /api/plugins/{name}/reload`; a failed reload leaves the plugin unloaded — no half-loaded state. `SAPPHIRE_DEV=1` enables the file watcher (auto-reload on `.py`/`.json` changes, polled).
-- Rescan: `POST /api/plugins/rescan` → `{"added": [...], "removed": [...]}` without restart.
+- Rescan: `POST /api/plugins/rescan` → `{"status": "ok", "added": [...], "removed": [...]}` without restart (a changed manifest = `"<name> (reloaded)"` in added).
 - The `plugins_ready` hook fires after the boot scan AND after reload, rescan, and toggle-on — handlers must be idempotent (see hooks.md).
 - Error isolation: a hook handler exception is logged and skipped (next handler fires); tool execution errors are returned to the AI as error messages.
 - Chat-scoped rows (`plugin_loader.get_chat_state(name)`) are core-managed: carried through rename, encrypted on vault, deleted inside the chat-delete transaction BEFORE `chat_deleted` fires (no archive-on-delete possible from that hook). They survive a chat *clear*.
-- **Purge data** (plugin card ⋮ menu, any band; also the first step of uninstall) deletes everything a plugin stores about the user in one call — `user/plugin_state/<name>.json`, its `<name>-*`/`<name>_*` siblings, and every chat-scoped row it holds — while the plugin stays installed and configured. Rows in sealed (locked-vault) chats are skipped and counted, never deleted blind. Hand-deleting the state file never reached the chat rows; this lever does.
+- **Purge data** (plugin card ⋮ menu, any band; uninstall runs it too, after the files are removed; uninstalling a user copy that shadows a shipped plugin keeps its data) deletes everything a plugin stores about the user in one call — `user/plugin_state/<name>.json`, its `<name>-*`/`<name>_*` siblings, and every chat-scoped row it holds — while the plugin stays installed and configured. Rows in sealed (locked-vault) chats are skipped and counted, never deleted blind. Hand-deleting the state file never reached the chat rows; this lever does.
 - Key endpoints: `GET /api/webui/plugins` (list), `GET/PUT/DELETE /api/webui/plugins/{name}/settings`, `GET /plugin-web/{name}/{path}` (web assets), `/api/plugin/{name}/{path}` (custom routes, auth enforced).

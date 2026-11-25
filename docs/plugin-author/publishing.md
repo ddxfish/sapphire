@@ -131,7 +131,7 @@ See the full [Manifest Reference](manifest.md) for all fields and capabilities.
 Before submitting, test your plugin the way users will experience it:
 
 1. Copy your plugin folder to `user/plugins/your-plugin-name/`
-2. Open Settings > Plugins and enable it
+2. Open Settings > Plugins, click **Rescan** (or restart), and enable it
 3. Verify tools appear, hooks fire, settings render, etc.
 4. Check the Sapphire logs for any load errors
 
@@ -155,6 +155,10 @@ A store admin reviews submissions before they go live.
 
 ### Updating Your Plugin
 
+**Bump `version` in your `plugin.json` on every release.** Sapphire's own update check reads that file from your repository's branch and compares versions; a release where only the store listing changed is never offered to anyone who has the plugin. An update keeps one copy of the previous version, so the user can **Revert**.
+
+**Size limits at install:** no single file over 10 MB, a zip of at most 50 MB, and at most 100 MB unpacked. Anything larger (a model, a video) has to be downloaded by the plugin after install.
+
 Push your changes to GitHub, then visit the same [Submit Your Plugin](https://sapphireblue.dev/plugins/submit-your-plugin/) page — your previous submissions are listed there. Edit the listing to update the version number and any changed details. Users who already installed it can reinstall to get the update.
 
 ---
@@ -173,7 +177,7 @@ To share another branch, give people the branch URL: `https://github.com/you/my-
 |-------|--------------------|---------------|
 | **Official** | `official` | Built by the Sapphire team, signed with the baked-in official key |
 | **Verified Author** | `verified_author` | Signed by an author whose public key is on the central authorized key list |
-| **Community** | `unsigned` | No signature — loads only if sideloading is enabled |
+| **Community** | `unsigned` | No signature — loads only if sideloading is enabled; with it off, even installing one is refused |
 
 Community plugins are unsigned. Users turn on unsigned plugins with the switch on the Settings > Plugins banner (`ALLOW_UNSIGNED_PLUGINS`) to load them. Verification states and the authorized-author path are covered in [Signing](signing.md).
 

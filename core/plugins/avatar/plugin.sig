@@ -2,7 +2,7 @@
   "plugin": "avatar",
   "version": "1.3.0",
   "files": {
-    "README.md": "sha256:73f35b6a26b80727d543fd25bf1270817abbcc519167a882e2d3ee66b8fd608f",
+    "README.md": "sha256:1bd9179daa3c1ef37822f03ea20570ce010dc94744b8ebb35fbafd67c60fb6c9",
     "bone_mapper.py": "sha256:57aa0dc284effd5cc50d771550c8977aa81532ef1d5d0745ac9c7809f211784d",
     "brain.py": "sha256:29d28e65e2c85229be32ea26573ac8f56d7f446e398e3a2da0c2c3f124ae7e30",
     "build_avatar.py": "sha256:c6f55d60cc1095575794197dac9f1bd892cb556fd558f8baee279919ba98cc38",
@@ -34,5 +34,5 @@
     "web/stage.js": "sha256:de93699cf7830219bfbad287670ce468e78484cf1632de54f061a6b7fdc246ba",
     "web/visemes.json": "sha256:d59fd0d349b1b2fec3d70597da36d56931956e89dc8c1675af83a1a704e086ac"
   },
-  "signature": "2wibKrYiVcgncgjAb1FoLhyNFI2oNBKP0jey2QV9iZHkpSRJ2x2b63v0UHl48OPI6GbqKK2SACHh8dYIcfv3Bg=="
+  "signature": "YXvMwcUZJCCw2XwPrO6T9UKytGEYnjxzDvauOXKgwdlKUvWy/L5D+tgiGtv7/N/38NkX/l2F9nr/YSJ3JrVRAQ=="
 }

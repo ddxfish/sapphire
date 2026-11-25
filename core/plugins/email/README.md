@@ -29,7 +29,7 @@ If the server is yours, press **Test** in the account's settings, or open the Em
 
 ### Office 365 / Exchange
 
-Sapphire supports OAuth2 (XOAUTH2) for Microsoft accounts. Select OAuth2 as the auth method and provide your access token. Tokens auto-refresh with a 60-second buffer.
+A Microsoft 365 account can't be set up in this version: Microsoft needs a sign-in (OAuth2) and the account editor has no screen for it. An account made by an earlier version keeps working for as long as its sign-in renews itself (Sapphire refreshes it five minutes before it runs out); if it stops, the only thing to do in the editor is Delete it. A mailbox on your own Exchange server that still takes a password over IMAP and SMTP works like any other server: choose **Other** and type its server names.
 
 ## Available Tools
 
@@ -126,7 +126,7 @@ The same words work in the Email page's search box and in Sapphire's `search_ema
 Multiple email accounts are supported via scopes.
 
 1. Add accounts in Settings → Plugins → Email
-2. Switch using the Email scope dropdown in Chat Settings
+2. Switch with the email dropdown in the chat sidebar's 🧠 Mind accordion
 3. Each scope routes to a different IMAP/SMTP account
 
 ## Daemon (Auto-React to Emails)
@@ -216,13 +216,13 @@ Email integration with IMAP/SMTP, multi-account, privacy-first design.
 
 SETUP:
 - Settings → Plugins → Email
-- Add IMAP/SMTP server, email, password (or OAuth2)
+- Add IMAP/SMTP server, email, password (no OAuth2 setup in this version)
 - Gmail: requires App Password
 
 AVAILABLE TOOLS:
 - get_inbox(folder?, count?, unread_only?) - list a folder (inbox/sent/drafts/archive/spam/trash or a folder name); each line starts with the email id, e.g. [inbox:4821~k7p]. Copy an id whole: the part after ~ belongs to it
 - read_email(id, page?, attachment?) - full email; long bodies are paged; attachment=N opens a picture or text file
-- search_emails(sender?, content?, date?, folder?, count?) - sender matches name+address substring, content=subject OR body, date=YYYY-MM-DD returns ~10 each side
+- search_emails(query?, folder?, count?, sender?, content?, date?) - query = search words, all must match, across ALL folders unless folder is given: plain words, "exact phrase", from:, to:, cc:, subject:, body:, is:unread, is:starred, has:attachment, after:YYYY-MM-DD, before:, on:, newer_than:7d, -word. The older fields work only WITHOUT query: sender (name or address, partial), content (subject or body), date (YYYY-MM-DD, ~10 each side). count default 20, max 50
 - move_emails(ids, to) - to=archive / trash (recoverable) / spam (mark as spam) / inbox (restore, not-spam) / a folder name
 - archive_emails(ids), delete_emails(ids) - the old names for move_emails to archive / trash; same result
 - mark_emails(ids, mark) - read / unread / starred / unstarred
@@ -238,7 +238,7 @@ CONNECTING (accounts.py):
 EMAIL PAGE (Apps > Email, app/index.js + routes/mail.py):
 - The person's own mail reader: folders with counts, 50 per page, search, read, reply/reply-all/forward, compose, drafts, move, mark. Not a tool surface; the AI does not use it.
 - The page shows real addresses and is not limited by the People whitelist (that gate is on the tools only).
-- Routes under /api/plugin/email/: GET folder, GET message, GET attachment (always a download), POST move, POST mark, POST send, POST test, GET certs, POST trust, POST untrust. The page keeps a login open per account for five minutes and a list of each folder's first page on disk (index.py); her tools and the daemon log in fresh each time.
+- Routes under /api/plugin/email/: GET folder, GET counts, GET message, GET attachment (always a download), POST move, POST mark, POST send, POST test, GET certs, POST trust, POST untrust. The page keeps a login open per account for five minutes and a list of each folder's first page on disk (index.py); her tools and the daemon log in fresh each time.
 - HTML mail renders only in a sandboxed iframe with a no-remote-load policy; remote pictures are per-email opt-in.
 - Same ids as the tools (folder:uid). The browser sends back the folder's UIDVALIDITY with each id; the page never reads or writes the tools' stored validity mark.
 
@@ -266,5 +266,5 @@ SCOPES:
 
 TROUBLESHOOTING:
 - Gmail: use App Password (Security → 2FA → App Passwords)
-- O365: use OAuth2 auth method
+- O365: a new Microsoft 365 account can't be set up in this version (no OAuth2 screen); one made earlier keeps working while its sign-in renews
 - Can't send: recipient needs email + allow_email on their person card

@@ -7,7 +7,7 @@ Sapphire itself.
 |---|---|---|
 | This computer | Sapphire | The machine she runs on: volume, outputs, screen, power |
 | Satellite | Sapphire | A room box with mic, speaker, light and camera: a Raspberry Pi, an ESP32 board |
-| SSH machine | the SSH plugin | Any machine you can log in to |
+| SSH connection | the SSH plugin | Any machine you can log in to |
 | IP camera (ONVIF) | the IP Cameras plugin | A network camera she sees through, and turns and zooms when it can move |
 | Hardware synth, MIDI keyboard | the MIDI plugin | Instruments she plays and hears |
 | Phone (KDE Connect) | the KDE Connect plugin | A phone running the KDE Connect app: shares to her chat, its texts, a notification from her, battery |
@@ -19,7 +19,7 @@ Any plugin can bring more types. A type appears when its plugin is enabled.
 
 System > Devices in the rail (or the Devices tab in Settings). Three tabs
 across the top: **Devices** (the list), **Settings** (the board firmware
-sources) and **IR** (the IR library). One card per
+sources, and which avatar is her face on screens) and **IR** (the IR library). One card per
 device: its dot, name, what it can do, and its state. When the devices are of
 more than one type, a row of pills at the top filters by type; **All** is the
 default.
@@ -393,7 +393,8 @@ The device window has more, each shown only on a board that has the part:
 | Brightness in use / when left alone | Screen | Percent (80 / 15) |
 | Dims after / Screen dark after | Screen | Seconds (120) / minutes (0 = never) |
 | Sleeps after | Screen | Minutes (0 = never, the default) on a board that sleeps, the pendant: everything off but its brain; its BOOT key wakes it |
-| Face frames a second, Stream slack, Face sync delay | Screen | Her face as a stream on the glass: the beat (25), packets held (1 to 3, 2), how long her voice waits for her face (700 ms) |
+| Her face here, Her face fills | Avatar | Whether her avatar shows on this screen (Off, While she talks, Always) and how it meets the glass's shape (Contain or Cover) |
+| Face frames a second, Stream slack, Face sync delay | Avatar | Her face as a stream on the glass: the beat (25), packets held (1 to 3, 2), how long her voice waits for her face (700 ms) |
 | Rotation, Invert colors, Mirror image, Upside down | Screen | How the glass sits and a wrong variant put right |
 | Opens on | Screen | The page a board with pages starts on: the chat, Backups, Status, Board or Actions |
 
@@ -483,11 +484,13 @@ Using a tool  purple pulse
 Speaking      cyan solid ceiling=0.6
 ```
 
-**Lights on from / until** are clock times, by the board's own clock. Outside
-them the ring shows **Outside those hours** instead of resting: `off` is dark,
+**Awake from / until** (Power tab on a board with a battery or screen) are clock
+times, by the board's own clock. Inside them the ring rests as set and an idle
+screen dims; outside them an idle screen goes dark, her face comes only with a
+reply, and the ring shows **Outside awake hours** instead of resting: `off` is dark,
 and `sapphire pulse ceiling=0.05` is a soft night light. A new satellite starts
 at 08:00 to 00:00 and `off`, which is what the boards do before any save. Both
-times empty = always on.
+times the same = always awake.
 
 **Listening, thinking and speaking always show**, at any hour and even after
 `off` turned the ring dark: when you say her name at 6 am the yellow comes up,
@@ -528,8 +531,8 @@ takes.
 A question typed in the browser, or asked at another satellite, does not move
 this ring.
 
-**A busy chat.** If the chat is in the middle of a turn, the question waits up
-to 20 seconds for it. After that it is dropped and the ring blinks red.
+**A busy chat.** If the chat is in the middle of a turn, the question waits its
+turn and is answered when the chat is free. It is never dropped.
 
 **Private chats.** A private chat never sends audio to a cloud speech engine,
 and never sends its reply to a cloud voice engine. The satellite stays silent
@@ -635,9 +638,10 @@ shows her face, and it runs on a battery, so it sleeps:
   puts it to sleep now.
 - `device_action("pendant","camera","look","flash")` takes the picture with
   the light beside its lens on, for a dark room.
-- With the FlashHead plugin her face and voice reach it as one stream; the
-  Screen tab's **Face frames a second**, **Stream slack** and **Face sync
-  delay** tune it.
+- Her face and voice reach it as one stream, from whichever avatar is her
+  face on screens (the 3D avatar or FlashHead: Devices > Settings > **Her face
+  on screens**); the board's Avatar tab (**Her face here**, **Face frames a
+  second**, **Stream slack**, **Face sync delay**) tunes it.
 
 ### Streams on the glass
 
@@ -679,10 +683,11 @@ A satellite without a key cannot reach Sapphire at all.
 | `POST /api/devices/<name>/text` | What was typed on it |
 | `GET /api/devices/<name>/text` | Her reply for its screen |
 | `POST /api/devices/<name>/press` | A button press set to send her a message |
-| `POST /api/devices/<name>/ask` | A job that is Sapphire's (a backup now), no chat turn |
+| `POST /api/devices/<name>/ask` | A job that is Sapphire's (a backup now, or stop her voice and reply), no chat turn |
 | `GET /api/devices/<name>/chats` | The chats its picker may show |
 | `POST /api/devices/<name>/chat` | The chat it picked |
 | `GET /api/devices/<name>/history` | Its chat read back for its screen |
+| `POST /api/devices/<name>/face/shown` | Her tile came up on its lit screen, or left it (`{"shown": true/false}`): nothing is sent to it while she is hidden |
 
 The wire for all of these is the [Satellite Protocol](SATELLITE-PROTOCOL.md).
 
@@ -760,7 +765,7 @@ A name she gets wrong answers with the names it knows.
 
 A second Sapphire on your network, as a device. She is reached through her
 MCP door ([MCP.md](MCP.md)), so first, over there: **Settings > MCP Server**, switch it on, and
-make a token under **System > API Keys**. Then here: Add Device > **Another
+make a token under **Settings > System > API Keys**. Then here: Add Device > **Another
 Sapphire**: her address (`https://192.168.1.102:8073`), that token, and the
 name of the chat on her side where this Sapphire's words should land. The
 chat is made over there the first time it is used. **Call me** is how she
@@ -803,7 +808,7 @@ The list keeps looking on its own, so the words change as the phone answers.
 Once it reads "Paired", **Add and test**. A phone that is not paired cannot
 be added. Pairing is once; the phone links by itself from then on. The app
 has to be a 2025 or newer build (protocol 8); older ones are refused with a
-word in the log. **Unpair** on the Link tab forgets the phone.
+word in the log. **Unpair** on the Status tab forgets the phone.
 
 - **Share to her.** In the phone's share sheet pick Sapphire. A picture lands
   in the chat as a pasted picture would, and she sees it; a document is read

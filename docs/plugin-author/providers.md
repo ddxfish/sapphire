@@ -68,7 +68,7 @@ class MyTTSProvider(BaseTTSProvider):
 
 ### 3. Enable the plugin
 
-Settings > Plugins > toggle on. The provider appears in the TTS dropdown. Settings declared in the manifest render inline on the TTS settings page when your provider is selected.
+Settings > Plugins > toggle on. The provider appears as a card on the TTS tab. Settings declared in the manifest render inline on the TTS settings page when your provider is selected.
 
 ## Manifest Reference
 
@@ -91,8 +91,9 @@ Each key is a system name (`tts`, `stt`, `embedding`, `llm`):
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `key` | Yes | Unique provider identifier (used in settings, dropdown values) |
-| `display_name` | Yes | Human-readable name shown in dropdowns |
+| `key` | Yes | Unique provider identifier (used in settings) |
+| `display_name` | Yes | Human-readable name shown on the provider's card |
+| `description` | No | One line shown under the name on the card |
 | `entry` | No | Python file containing the class (default: `provider.py`) |
 | `class_name` | Yes | Class name to instantiate from the entry file |
 | `requires_api_key` | No | If true, UI hints that an API key is needed |
@@ -101,7 +102,7 @@ Each key is a system name (`tts`, `stt`, `embedding`, `llm`):
 
 Extra fields are passed through to the registry as metadata and available via `registry.get_entry(key)`.
 
-> **Privacy gate:** in a private chat (the 👁 eyeball), Sapphire refuses to
+> **Privacy gate:** in a private chat (the 🔒 padlock), Sapphire refuses to
 > transcribe through a non-local STT provider or speak through a non-local
 > TTS provider — the user's voice / response text would leave the machine.
 > An honest `is_local: true` on a genuinely local provider is what keeps it
@@ -274,6 +275,7 @@ Your plugin doesn't have to do anything special — this all works as long as yo
 **Gotchas:**
 - The registry calls your class's `__init__()` with no arguments. Lazy-load the model inside `available` or inside `embed()`, not in `__init__` — otherwise boot stalls on every restart.
 - `stamp_embedding(vec, embedder)` requires passing your embedder instance explicitly. Don't use the no-arg form from plugin code; the default path reads the active singleton, which may be a DIFFERENT provider by the time you get to the call (race during swap). Hold your reference.
+- **A switch to your provider succeeds only when `is_available()` returns True.** For TTS it is polled for up to 20 minutes (a first model download), for STT it is asked once; False at the end means the switch fails and the previous provider (or off) comes back, with your reason in the notification. So return True as soon as you can really speak or listen, and make the first False quick and honest: a missing key should fail in a second, not after a long wait. Set `self._health_why` (TTS) to say what is missing.
 - If your provider talks to a remote API, handle `is_available` correctly — returning False when unconfigured is a legal state (canary passes with "provider reports unavailable, skipping canary"). Returning True while the API is down causes the canary to fail loudly, which is also fine.
 
 ### LLM — `BaseProvider`
@@ -393,9 +395,9 @@ with progress("Downloading voice Amy", source="my-tts", key="my-tts:amy",
 
 1. **Plugin loads** — `plugin_loader.scan()` reads `capabilities.providers` from manifest
 2. **Provider registered** — class is loaded via `exec()`, registered with the system's registry
-3. **User selects** — dropdown in settings page, system calls `switch_*_provider(key)`
+3. **User selects** — a provider card on the settings page. The save starts a switch job (`core/provider_switch.py`) under its own notification row, and the provider setting is saved only when your provider answers
 4. **Provider created** — registry creates an instance of your class
-5. **Plugin unloads** — provider unregistered from registry, system falls back to null or previous provider
+5. **Plugin unloads** — provider unregistered from the registry. Turned off: the provider setting resets to `none`. Reloaded: the user's choice is kept and voice is silent until the plugin has loaded again. It never falls back to a previous provider
 
 ### Boot ordering
 
@@ -411,8 +413,8 @@ If a provider plugin is the configured provider (e.g., `TTS_PROVIDER=elevenlabs`
 
 PROVIDER PLUGINS (TTS / STT / embedding / LLM):
 - Manifest: `capabilities.providers.{tts|stt|embedding|llm}` = {key (unique id), display_name, entry (default provider.py), class_name, requires_api_key?, api_key_env?, is_local?}. `is_local: true` ONLY for fully on-device inference; absent = treated as cloud => private chats refuse the STT/TTS provider (fail-closed privacy gate). Extra fields pass through as registry metadata.
-- TTS: subclass `core.tts.providers.base.BaseTTSProvider`. Required: `generate(text, voice, speed, **kwargs) -> bytes|None`, `is_available() -> bool`. Class attrs: `audio_content_type` (default 'audio/ogg'), `SPEED_MIN`/`SPEED_MAX` (base defaults 0.5/2.5), `supports_streaming` (default False), `supports_pitch` (default False). Optional: `list_voices() -> [{"voice_id", "name"}]`. `generate_stream(text, voice, speed, **kwargs) -> Iterator[bytes]` must yield self-contained decodable blobs in play order; base default wraps generate() one-shot — set supports_streaming=True only with a real override, else streaming TTS silently degrades to one-shot. supports_pitch=True => client passes pitch= kwarg and provider shifts at synthesis; False => client-side resample fallback; never both.
-- STT: subclass `core.stt.providers.base.BaseSTTProvider`; implement `_transcribe_impl(audio_path) -> str|None` (NOT transcribe_file — the base wraps it and applies the Whisper hallucination filter exactly once) + `is_available()`.
+- TTS: subclass `core.tts.providers.base.BaseTTSProvider`. Required: `generate(text, voice, speed, **kwargs) -> bytes|None`, `is_available() -> bool`. Class attrs: `audio_content_type` (default 'audio/ogg'), `SPEED_MIN`/`SPEED_MAX` (base defaults 0.5/2.5), `supports_streaming` (default False), `supports_pitch` (default False), `synth_workers` (default 2: how many chunks the pump may synthesize at once; set 1 for an engine that runs one synthesis at a time, so chunks reach it strictly in order). Optional: `list_voices() -> [{"voice_id", "name"}]`. `generate_stream(text, voice, speed, **kwargs) -> Iterator[bytes]` must yield self-contained decodable blobs in play order; base default wraps generate() one-shot — set supports_streaming=True only with a real override, else streaming TTS silently degrades to one-shot. supports_pitch=True => client passes pitch= kwarg and provider shifts at synthesis; False => client-side resample fallback; never both.
+- STT: subclass `core.stt.providers.base.BaseSTTProvider`; implement `_transcribe_impl(audio_path) -> str|None` (NOT transcribe_file — the base wraps it and applies the Whisper hallucination filter exactly once) + `is_available()`. Return None or '' when nobody spoke; when the ENGINE fails, `raise stt_failed(why)` (from `core.stt.providers.base`), or every lane reports "no speech" for a dead engine. Optional `transcribe_segments()` returns unfiltered segments (`.text`, `.no_speech_prob`, `.avg_logprob`).
 - Embedding: duck-typed contract, subclassing optional. Required members: `PROVIDER_ID` (stable string stamped on every stored vector — changing it orphans data until re-embed; include model version), `DIMENSION`, `available` (cheap property), `embed(texts, prefix='search_document') -> np.float32 array (N, D), rows L2-normalized, or None`. Register-time canary: shape (1, D), float32, finite, L2 norm within [0.90, 1.10] (warning band outside [0.95, 1.05]); failure disables the provider and boots NullEmbedder. `__init__()` is called with NO args — lazy-load models. Re-embed flow: GET /api/embedding/integrity, PUT /api/settings/batch with EMBEDDING_PROVIDER + confirm_embedding_swap, POST /api/embedding/reembed. Use `stamp_embedding(vec, embedder)` with an explicit instance.
 - LLM: subclass `core.chat.llm_providers.base.BaseProvider`: `health_check() -> bool`, `chat_completion(messages, tools=None, generation_params=None) -> LLMResponse`, `chat_completion_stream(...)`, `format_tool_result(tool_call_id, function_name, result) -> dict`.
 - Settings: `capabilities.settings` renders inline on the system settings page when the provider is selected; `"settingsUI": null` suppresses the separate plugin settings page. Read via `plugin_loader.get_plugin_settings(name)`.

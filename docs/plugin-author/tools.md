@@ -60,11 +60,13 @@ def execute(function_name, arguments, config, plugin_settings=None, credentials=
 
 ### Required Exports
 
+Strictly, only `TOOLS` (or a `get_tools()` function) and `execute()` are required. The rest are optional: `ENABLED` defaults to true, `TOOL_CATEGORY` to your plugin's name.
+
 | Export | Type | Description |
 |--------|------|-------------|
 | `ENABLED` | bool | Whether tool is active |
 | `EMOJI` | str | Display icon |
-| `AVAILABLE_FUNCTIONS` | list | Function names this file provides |
+| `AVAILABLE_FUNCTIONS` | list | Function names this file provides. It is a filter: a tool in `TOOLS` whose name is not in this list is not registered, and nothing is logged. Add every tool to both |
 | `TOOLS` | list | OpenAI-compatible function schemas |
 | `TOOL_CATEGORY` | str | The category of every tool in this file (one of the twelve below, or your plugin's own name). A tool overrides with its own `"category"` flag. Missing → your plugin's name: your tools stand alone as a group, asked for by name |
 | `execute()` | function | Dispatcher — returns `(message, success)` |
@@ -165,6 +167,10 @@ def execute(function_name, arguments, config):
 - The same marker works in the text of a turn your plugin starts itself (see [Starting a turn yourself](#starting-a-turn-yourself)). The row then shows on that message.
 - Serve the bytes with a `FileResponse` so seeking works, and keep them where the user's data lives (`user/plugin_state/<name>_*`). Files outside the chat database are not covered by a private chat's vault, so refuse to write them when `scope_private` is set.
 
+## Slowing a runaway tool
+
+A tool schema may carry a top-level `"loop_warn_after": N` (and an optional `"loop_warn_message"`). When the model calls that tool N or more times in one user turn, the message is added to the result it reads, to stop a spiral (an image tool regenerating forever). The flag never reaches the LLM API.
+
 ## Starting a turn yourself
 
 A plugin that has something for the chat outside a tool call — a daemon's result, a device's take, a finished background job — puts it in the chat's **inbox** and the AI answers it as a turn of its own, in order, as soon as she has finished writing whatever she is on now (a streaming-TTS tail is cut over, not waited for). A machine's item waits its turn — through a busy chat, a locked database, even a vault lock (it is held in memory until the unlock) — and is dropped only when the chat is **gone**, when it was queued while the chat was *private* and the chat is public by the time it would run (privacy rolls downhill), when its `ttl` passed, when the user took it out, or on a restart. Each of those calls your `on_drop(why)` with `item.drop_kind` set (`gone`, `privacy`, `stale`, `removed`, `restart`, `unreachable`), so you can leave your own record where that is right — never for `privacy`/`gone`/`sealed`. No browser needs to be open.
@@ -181,7 +187,7 @@ inbox.tell(chat_name, "Take 3 is in: 42 notes, 9.8 s.",
 - `header_line` is the one line above your text that says who wrote it and that the user did not type it — `[My plugin (take) — a recording finished; not typed by the user]`. Every door that isn't the user typing leads with one (agents, satellites, MIDI, phone calls); use `inbox.header(who, kind, what)` so yours reads the same.
 - `inbox.ask(chat, text, source, timeout=...)` is the same door when you need her reply back as the return value (it blocks until she answers or the timeout passes).
 - Returns from a machine never fold with each other: each gets her own reply. Only the user's own typed turns fold. Don't pass `coalesce=True`.
-- Private chats take inbox items like any other (the turn runs on the chat's privacy at that moment — a private chat answers locally). Only a chat that does not exist refuses with `inbox.InboxRefused`; catch it. The one door that refuses private chats is MCP (`ask`/`tell` over the network), which is not yours.
+- Private chats take inbox items like any other (the turn runs on the chat's privacy at that moment — a private chat answers locally). `inbox.InboxRefused` is raised for a chat that does not exist, a full inbox (20 items waiting), a room seat's own chat, or an item with no text and no image: always catch it. The one door that refuses private chats is MCP (`ask`/`tell` over the network), which is not yours.
 - `core.cadence.fire_once(chat, text, ...)` is the older door that **raises `ChatBusy` instead of waiting**. Use it only when a stale result is worse than no result (a timer tick that will fire again anyway). Before 2026-10-06 every plugin used it and lost results whenever she was mid-sentence.
 
 ## Networking from Plugins
@@ -226,7 +232,7 @@ def execute(function_name, arguments, config):
     # ... use account-specific credentials
 ```
 
-Available scope ContextVars: `scope_rag` and `scope_private` are always present (core). The rest — `scope_email`, `scope_bitcoin`, `scope_knowledge`, `scope_memory`, `scope_people`, `scope_goal`, `scope_github`, etc. — resolve via `__getattr__` against the scope registry and only exist while the owning plugin (memory, email, bitcoin, github…) is loaded, so importing one is safe from a tool in that same plugin.
+Available scope ContextVars: `scope_rag` and `scope_private` are always present (core). The rest — `scope_email`, `scope_bitcoin`, `scope_memory`, `scope_people`, `scope_github`, etc. (`scope_knowledge` and `scope_goal` exist only under the legacy memory plugin, not under Mind Palace, the default) — resolve via `__getattr__` against the scope registry and only exist while the owning plugin (memory, email, bitcoin, github…) is loaded, so importing one is safe from a tool in that same plugin.
 
 ---
 
@@ -339,7 +345,7 @@ state.all()                    # entire dict
 state.clear()                  # wipe everything
 ```
 
-PluginState is thread-safe — daemon threads, continuity tasks, and API handlers can all read/write the same plugin's state concurrently without data loss.
+Each PluginState call is locked, so daemon threads, continuity tasks and API handlers can read and write the same plugin's state side by side. A read followed by a save is NOT one step: two threads doing `state.save("n", state.get("n", 0) + 1)` lose counts. For that use `state.update_with_lock(key, fn, default)`, which runs `fn(old) -> new` under the lock.
 
 ### Chat-Scoped State
 
@@ -435,7 +441,7 @@ Tools are added to toolsets and the AI calls them contextually. See [TOOLS.md](.
 - Tool metadata: file-level `TOOL_CATEGORY = 'web'` (one of web, memory, knowledge, people, goals, files, system, devices, comms, media, meta_danger, agents — or the plugin's own name; missing = the plugin's name), per-tool `"category"` override, per-tool `"writes": True` on anything that changes state or acts. A category resolves like a toolset word (an agent's `toolset: 'web, files'`, `extra_toolsets`), groups the Toolsets picker, and names the scope its tools need (memory/knowledge/people/goals by category; any other tool = the one scope its plugin registered). `FunctionManager.tool_meta(name)`, `categories()`, `tools_in_category(cat, writes=None)`, `tool_scope(name)`; `resolve_tools(..., closed_scopes={...})` sheds tools whose scope is closed.
 - Networking: `from core import net` — `net.get/post/put/delete/request(url, ...)` (requests-shaped), `net.session_for(url)` (pooled, lane-fixed), `net.wan_session()` (WAN lane, browser profile). Host classification is syntactic, never resolves DNS: LAN = loopback / RFC1918 / link-local / `*.local` / `*.lan` / `*.home.arpa` / single-label names / registered direct hosts → direct, redirects refused by default; WAN = everything else → proxy env when SOCKS is on. Register LAN FQDNs: `core.socks_proxy.register_direct_hosts(zero_arg_callable, owner=plugin_name)`; keyed by owner (replace-on-reregister), auto-unregistered on plugin unload.
 - `get_tools()` live refresh: re-run on settings save; only `description`/`parameters` update in place; tool names never change; add/remove needs a reload. Keep a static `TOOLS` fallback.
-- PluginState (`plugin_loader.get_plugin_state(name)`): `get/save/delete/all/clear`; thread-safe; backed by `user/plugin_state/{name}.json`.
+- PluginState (`plugin_loader.get_plugin_state(name)`): `get/save/delete/all/clear` (each call locked) + `update_with_lock(key, fn, default)` for read-modify-write; backed by `user/plugin_state/{name}.json`.
 - Paths: `from core.paths import PROJECT_ROOT, SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR, PLUGIN_STATE_DIR` — never count `.parent`s (a short chain lands on a real folder, fails silently). Scripts that can't import core: walk up to `sapphire.py`.
 - PluginChatState (`plugin_loader.get_chat_state(name)`): `put/get` (slot), `append` (returns seq), `append_many` (one transaction, all-or-none, returns seqs), `read_all`, `replace` (atomic renumber), `delete(chat[, key])`, `keys`, `get_all_chats(key)`, `meta`. Rows ride rename/vault/delete with the chat; on a hidden (sealed) chat reads return empty and writes RAISE. Rows survive a chat *clear* (register the `chat_cleared` hook to drop turn-anchored ones).
 - Scopes: `from core.chat.function_manager import scope_email` (etc.) — resolves via `__getattr__` against the scope registry; exists only while the owning plugin is loaded. `scope_rag` and `scope_private` are always present (core).

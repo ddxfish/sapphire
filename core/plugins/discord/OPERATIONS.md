@@ -44,9 +44,9 @@ A failing step is logged; the tick continues.
 **The plugin has no database.** Bot accounts (your label → the bot token, plus the bot name and id
 learned at login) live in core's credentials manager beside every other plugin's secrets:
 `~/.config/sapphire/credentials.json`, section `discord_accounts`, token scrambled at rest, file mode
-0600, included in Sapphire's backups. Channel history for the reply prompt is fetched live from Discord
+0600. It is NOT in Sapphire's backups (they hold `user/` only): keep your bot tokens somewhere else too. Channel history for the reply prompt is fetched live from Discord
 when she answers (Conversation → *Give the AI the last X channel messages*); names come from py-cord's
-cache. The only thing the plugin writes under `user/` is the greetings latch in core's plugin-state JSON.
+cache. The only things the plugin writes under `user/` are the greetings latch and any pending reminders, both in core's plugin-state JSON.
 
 **Upgrading from an install that had the SQLite file (2.0.0 and every 1.x):** on the first boot the
 daemon reads the accounts out of `user/plugin_state/discord/discord.sqlite3` (or the pre-rename

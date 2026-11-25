@@ -78,7 +78,7 @@ Comma-separated hostnames or IPs that must never ride the proxy — LAN gear wit
 
 - A dead or unreachable proxy means requests **fail with errors** — traffic never quietly leaks to a direct connection.
 - Missing credentials: the environment is stamped without auth and the proxy refuses loudly (and the UI warns).
-- A broken proxy at boot triggers a background reachability probe that pushes a warning toast in the web UI and shows on the trust strip — you find out immediately, not tool by tool. The probe re-runs on every proxy settings change.
+- A broken proxy at boot triggers a background reachability probe that pushes a warning toast in the web UI and shows on the trust strip — you find out immediately, not tool by tool. The probe re-runs on every proxy settings change. It dials `1.1.1.1:80` (and `api.anthropic.com:443` when DNS via proxy is on), both through the proxy: nothing goes direct.
 - An empty host or invalid port can't be stamped at all — Sapphire warns loudly in the UI and logs; fix the field.
 
 ### Credentials
@@ -92,7 +92,7 @@ For auth-less proxies (Tor), any placeholder pair works. Saving or clearing cred
 
 ### Windows and system proxies
 
-When SOCKS is **off**, Sapphire checks whether your OS has a system proxy configured (on Windows, the IE/WinINET registry proxy — often a leftover VPN, Fiddler, or corporate setting; on any OS, shell-set `HTTP_PROXY`/`HTTPS_PROXY`). If one exists, the trust strip shows an amber warning: your traffic is *not* direct even though Sapphire's proxy is off. Clear it in your OS network settings, or turn Sapphire's SOCKS on to override it.
+Sapphire does not use the operating system's proxy settings. With SOCKS **off** it goes direct: a proxy set in Windows (the IE/WinINET setting, often left behind by a VPN, Fiddler or a company policy) is ignored, and `HTTP_PROXY`/`HTTPS_PROXY` set in the shell that started Sapphire are removed from her own environment at boot. This is on purpose: the Windows setting carries no exceptions for your local network, so honoring it sent LM Studio, Ollama and Home Assistant traffic to the company proxy. If your network only reaches the internet through a proxy, turn on Sapphire's SOCKS setting; it is the one way to proxy her.
 
 ### Trust strip says SOCKS support is missing
 
@@ -107,15 +107,16 @@ Independent of the proxy, Sapphire holds a set of quiet-egress guarantees:
 | STT (Whisper), image vibes (CLIP), embeddings | Cached models load with `local_files_only` — offline. Network is only touched once, to download a missing model. |
 | Kokoro TTS | Resolves model and voice files from the local Hugging Face cache (no network when cached); a file not yet cached is downloaded once, on first use. `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` in the environment are honored, never set or cleared: a download they block is named as such (notification center, kokoro.log, the Test button), not as the hub's "check your Internet connection". |
 | tiktoken | BPE file cached persistently under `user/cache/tiktoken` — no re-download per reboot. |
-| Hugging Face telemetry | Disabled unconditionally at boot. |
+| Hugging Face telemetry | Off at boot (`HF_HUB_DISABLE_TELEMETRY=1`), unless your own environment already sets that variable: your value wins. |
 | Hugging Face download path | A missing model comes down over Hugging Face's classic path (plain HTTPS from its CDN), set at boot with `HF_HUB_DISABLE_XET=1`; your own value in the environment wins. The newer transfer talks to a second server and can hang for minutes when that server is unreachable. The models you wait on (Whisper, Kokoro, embeddings) try the newer path second when the first stops moving for 20 seconds; with SOCKS on they use the classic path only. |
-| Stalled-download check | Runs only when a model download has stopped moving or failed, never on a healthy one. Sapphire looks the download host up with this computer's DNS, tries each address, and asks one public DNS server (Cloudflare `1.1.1.1`, over HTTPS) for that one hostname, to tell out-of-date DNS from an outage or a dead connection. Nothing else is sent. With SOCKS on the check does not run at all: no lookup, no connection. Sapphire does not use the operating system's proxy settings, so with SOCKS off this check goes direct, as the download itself does. |
+| Stalled-download check | Runs only when a model download has stopped moving or failed, never on a healthy one. Sapphire looks the download host up with this computer's DNS, tries each address, and asks one public DNS server (Cloudflare `1.1.1.1`, over HTTPS) about the stalled download's own hosts and nothing else (for a model: `huggingface.co` and the file server it was sent to; for the wake word and voice-detection downloads: `github.com` and its file host), to tell out-of-date DNS from an outage or a dead connection. Nothing else is sent. With SOCKS on the check does not run at all: no lookup, no connection. Sapphire does not use the operating system's proxy settings, so with SOCKS off this check goes direct, as the download itself does. |
 | Silero VAD | Model pinned to an exact upstream commit URL — no floating "latest" fetch. |
 | Plugin signing keys | Disk-cached allowlist is authoritative for a day — a boot with a warm cache makes no GitHub call. |
 | Update check | A once-daily GitHub check for new releases — one of the **two recurring unprompted outbound calls the core app makes** (the other is the Store row below). Turn off `UPDATE_CHECK_ENABLED` to stop it (takes effect within a day; restart applies immediately). |
 | Dashboard font | One fetch from Google Fonts on first boot (the Dancing Script name font, saved to `user/fonts/`); never again once the file exists. Set `DASHBOARD_FONTS_AUTOFETCH` to `false` in `user/settings.json` to skip it — the dashboard falls back to a system font. |
-| Store | Contacted when you open System > Store (answers cached in memory, `STORE_CACHE_TTL_SECONDS`, default 1 h), and **about once a day in the background** for the dashboard's Plugin Spotlight: one request for the featured list, which the store answers with no body when nothing changed. Every store request says `Sapphire/<version>` as its user agent and carries no install id; the store sees your IP address, as with any request. Turn off `STORE_ENABLED` and Sapphire never contacts the store at all. |
+| Store | Contacted when you open System > Store (answers cached in memory, `STORE_CACHE_TTL_SECONDS`, default 1 h), and **about once a day in the background** for the dashboard's Plugin Spotlight: one request for the featured list, which the store answers with no body when nothing changed. Every store request says `Sapphire/<version>` as its user agent and carries no install id; the store sees your IP address, as with any request. Turn off `STORE_ENABLED` and the Store page and the spotlight stop: the core app no longer contacts the store. One exception: the separate Store plugin (off by default), whose AI tools browse and install from the store on their own setting while that plugin is on. |
 | Video guide | System > Videos fetches public YouTube channel pages and feeds only when opened with a stale cache (12 h, `VIDEO_GUIDE_CACHE_TTL_SECONDS`); hide channels with `VIDEO_GUIDE_CHANNELS_DISABLED`. |
+| Browser libraries for plugins | A plugin that draws in 3D loads its library through Sapphire's own server, which fetches it once from a public CDN (`esm.sh`, `cdn.jsdelivr.net` or `unpkg.com` only) and keeps it in `user/cdn_cache/` for good. Today that is the 3D avatar's three.js, fetched the first time the avatar is shown. It rides the proxy like any download. |
 | Cookies | API traffic accepts no cookies at all; only the web-tools browser session keeps a bounded cookie jar. |
 | Images in chat / store / video guide | Rendered with `no-referrer` policy — remote image hosts don't learn your Sapphire URL. |
 
@@ -132,7 +133,7 @@ All in Settings > Network:
 | `SOCKS_ROUTE_LLM` | `false` | Off: LLM APIs go direct, everything else rides the proxy. On: full tunnel — needs a remote-DNS-capable proxy. |
 | `SOCKS_REMOTE_DNS` | `false` | Off: local DNS (`socks5`), works on every proxy. On: DNS via proxy (`socks5h`), no local name leak — fails on proxies without server-side DNS. |
 | `SOCKS_NO_PROXY_EXTRA` | `""` | Comma-separated hosts that always bypass the proxy (LAN gear with real names). |
-| `UPDATE_CHECK_ENABLED` | `true` | Daily GitHub check for a newer release — the core app's only recurring unprompted outbound call. |
+| `UPDATE_CHECK_ENABLED` | `true` | Daily GitHub check for a newer release — one of the core app's two recurring unprompted outbound calls (the other is the Store's daily Plugin Spotlight request). |
 | `DASHBOARD_FONTS_AUTOFETCH` | `true` | First-boot download of the dashboard name font from Google Fonts. JSON only (`user/settings.json`), no UI. |
 
 Proxy credentials (username/password) are set in the same tab but stored in the credential manager, not in settings.
@@ -148,7 +149,7 @@ Proxy credentials (username/password) are set in the same tab but stored in the 
 | LLM/cloud calls fail, web tools fine | Trust strip: `httpx[socks]` warning? | `pip install 'httpx[socks]'` — it ships in both requirements files now, so this means an older or hand-built environment. |
 | LAN device unreachable with SOCKS on | Does its hostname have dots and a public-looking TLD? | Add it to `SOCKS_NO_PROXY_EXTRA`, or address it by IP / `.local` name. |
 | Plugin daemon ignoring new proxy settings | Was it running when you changed them? | Daemons inherit the environment at spawn — restart the plugin. |
-| Trust strip warns about a system proxy with SOCKS off | OS proxy settings (Windows: WinINET/IE proxy) | Clear the leftover OS proxy, or enable Sapphire's SOCKS to override it. |
+| Nothing reaches the internet on a network that needs a proxy | Is Sapphire's own SOCKS on? | She ignores the operating system's proxy and a shell `HTTP_PROXY`. Set the proxy in Settings > Network. |
 | Tor connects but nothing works | Port | Use `9050` (SOCKS), not `9051` (control port). |
 | Don't want the daily update ping | Settings > Network | Turn off `UPDATE_CHECK_ENABLED`. |
 
@@ -161,41 +162,30 @@ Proxy credentials (username/password) are set in the same tab but stored in the 
 
 ## Reference for AI
 
-SOCKS5 proxy routing + LAN/WAN split + egress invariants. Settings tab: Network.
+SOCKS5 proxy routing, the LAN/WAN split, and what leaves the machine. Settings tab: Network.
 
-SETTINGS KEYS (defaults): SOCKS_ENABLED=false, SOCKS_HOST="", SOCKS_PORT=1080, SOCKS_TIMEOUT=10.0, SOCKS_ROUTE_LLM=false, SOCKS_REMOTE_DNS=false, SOCKS_NO_PROXY_EXTRA="", UPDATE_CHECK_ENABLED=true.
+YOUR TOOLS: get_external_ip, check_internet, website_status(url). All ride the proxy when SOCKS is on, and all are refused in a private chat ("requires network access and is blocked in this private chat").
 
-MECHANISM:
-- SOCKS on -> process env stamped: ALL_PROXY/HTTPS_PROXY/HTTP_PROXY = socks5[h]://user:pass@host:port, plus NO_PROXY belt (stamped first). Applied at boot, post plugin scan, and on every SOCKS settings change (clear_session_cache in core/socks_proxy.py).
-- ALL WAN HTTP egress rides the proxy: web tools, search, downloads, cloud TTS/STT, model + plugin-key downloads, plugin daemons (env inherited at spawn; restart daemon to pick up changes).
-- LAN NEVER proxied: loopback, RFC1918, link-local, localhost, *.local/*.lan/*.home.arpa, single-label hostnames, registered direct hosts, SOCKS_NO_PROXY_EXTRA entries. core/net.py classify() decides per request; never resolves DNS; unknown -> 'wan' (safe default); decodes dotless/hex/octal/zero-padded IP disguises.
-- LAN lane: trust_env=False, redirects refused by default (3xx returned, not followed). WAN lane honors env.
-- NOT carried at all: Discord/Telegram (own libs), voice calls (UDP), email (IMAP/SMTP). Browser->server web UI is inbound, unaffected.
-- HF downloads: HF_HUB_DISABLE_XET=1 by default (sapphire.py env block, setdefault). core/hf_fetch.py = the door for Whisper/Kokoro/embedding models: child process (core/hf_fetch_worker.py), classic path first, xet second (classic only when SOCKS is on), a path silent for 20 s is killed; each path starts from no partial file where hf_xet is installed. Log: user/logs/hf_fetch.log.
-- Stall check: core/net_check.py, only on a stalled/failed download. Local DNS + per-address TLS + one DoH question to 1.1.1.1 for the download host. Verdicts: stale-dns, no-dns, offline, cut-off, host-down, clock, ok. Stands down entirely when SOCKS_ENABLED (no lookup). An OS-level proxy is not used by Sapphire and does not stop it.
-- FAIL-CLOSED: dead proxy = loud errors, never silent direct fallback.
+SETTINGS KEYS (defaults): SOCKS_ENABLED=false, SOCKS_HOST="", SOCKS_PORT=1080, SOCKS_TIMEOUT=10.0, SOCKS_ROUTE_LLM=false, SOCKS_REMOTE_DNS=false, SOCKS_NO_PROXY_EXTRA="", UPDATE_CHECK_ENABLED=true. Proxy login: Settings > Network (Save / Test / Clear; Test returns the exit IP), stored in the config folder outside user/, never backed up; env fallback SAPPHIRE_SOCKS_USERNAME / SAPPHIRE_SOCKS_PASSWORD. Both are needed for the web tools; placeholders are fine for a proxy with no login (Tor).
 
-KNOBS:
-- SOCKS_ROUTE_LLM off (default): LLM provider hosts (core: api.anthropic.com, api.openai.com, generativelanguage.googleapis.com; plus custom base_urls) added to NO_PROXY = exempt. On: full tunnel; requires proxy with remote DNS (httpx/socksio lane ALWAYS sends hostnames to proxy regardless of SOCKS_REMOTE_DNS). LAN LLM hosts always exempt.
-- SOCKS_REMOTE_DNS off (default): socks5 scheme, local DNS, works on any proxy, local resolver sees hostnames. On: socks5h, DNS via proxy, no local leak; proxies without server-side DNS fail every hostname request (0x04 host unreachable) — boot probe detects and warns.
+WHAT RIDES THE PROXY (SOCKS on):
+- All WAN HTTP: web tools, search, downloads, cloud TTS/STT, model and plugin-key downloads, plugin daemons (a daemon reads the proxy at start: restart the plugin after a change).
+- NEVER proxied: the LAN (loopback, private ranges, localhost, *.local / *.lan / *.home.arpa, single-label names, SOCKS_NO_PROXY_EXTRA entries).
+- Not carried at all: Discord and Telegram (their own libraries), voice calls (UDP), email (IMAP/SMTP).
+- LLM providers are EXEMPT by default (SOCKS_ROUTE_LLM off). On = full tunnel, and the proxy must do DNS itself.
+- SOCKS_REMOTE_DNS off (default): this computer looks names up, so the local resolver sees them. On: the proxy does; a proxy that can't fails every request ("host unreachable").
+- FAIL-CLOSED: a dead proxy means loud errors, never a quiet direct connection.
+- The operating system's proxy is never used: with SOCKS off she goes direct, and a shell HTTP_PROXY / HTTPS_PROXY is dropped at boot.
 
-UI/ROUTES:
-- Trust strip "What rides the proxy" in Settings > Network <- GET /api/socks/status (enabled, route_llm, remote_dns, dns_via_proxy, env_applied, httpx_socks, no_proxy[], system_proxy, warnings[]).
-- Credentials: GET/PUT/DELETE /api/credentials/socks, POST /api/credentials/socks/test (fetches icanhazip.com via proxy, returns exit IP). Stored ~/.config/sapphire/credentials.json (outside user/, excluded from backups); env fallback SAPPHIRE_SOCKS_USERNAME/SAPPHIRE_SOCKS_PASSWORD. Both required for web-tools lane when SOCKS on; placeholders OK for auth-less proxies (Tor).
-- Boot: apply_proxy_env early + post-scan; start_boot_probe late (background thread, auth test + hostname-connect test when remote DNS on; failures -> load_errors toast lane + trust strip warnings). Re-probe on every proxy config change.
-- Learn-once toast: LLM 403/blocked/proxy-ish failure while SOCKS_ENABLED and SOCKS_ROUTE_LLM both on -> one PLUGIN_NOTICE per provider per boot suggesting the Route LLM exemption.
-- Windows honesty: SOCKS off -> proxy_status reports urllib.getproxies() (WinINET registry / shell env) as system_proxy; strip shows amber not-direct warning.
+MODEL DOWNLOADS: Whisper, Kokoro and the embedding model download in a child process, the classic Hugging Face path first and the xet path second (classic only with SOCKS on); a path silent for 20 s is ended and the other tried. Log: user/logs/hf_fetch.log. When a download stalls or fails, a check (never with SOCKS on) looks its hosts up locally, tries each address, and asks Cloudflare 1.1.1.1 over HTTPS about those hosts only. The row then names a verdict: stale-dns / no-dns (router DNS: restart it or use 1.1.1.1), offline, cut-off (connection down or filtered), host-down (their side), clock (this computer's date is wrong).
 
-DEPENDENCY: httpx[socks] (socksio) ships in BOTH requirements.txt and install/requirements-minimal.txt (2026-09-20 parity). Missing = older or hand-built env: LLM/httpx lane fails with SOCKS on; strip warns; fix: pip install 'httpx[socks]'.
+WHAT ELSE GOES OUT, unasked:
+- Two recurring calls: the daily GitHub release check (UPDATE_CHECK_ENABLED) and, about once a day, the Store's Plugin Spotlight request (STORE_ENABLED=false stops the Store page and the spotlight; the Store PLUGIN's own tools still reach the store while that plugin is on).
+- Once: the dashboard font from Google Fonts at first boot (DASHBOARD_FONTS_AUTOFETCH=false skips it).
+- Plugin-key allowlist: a disk copy under 24 h old is used with no GitHub call.
+- On demand only: Store pages (cache STORE_CACHE_TTL_SECONDS 3600), the Video guide (YouTube pages when System > Videos opens with a 12 h cache gone stale).
+- Cached models load offline; a voice or model never used before is fetched once. Hugging Face telemetry is off at boot (a value already in the environment wins). HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE are honored and never set by Sapphire; a download they block says so.
+- Once per library: a plugin's browser library (the 3D avatar's three.js) is fetched through /cdn-cache/ from esm.sh, cdn.jsdelivr.net or unpkg.com and kept in user/cdn_cache/.
+- API sessions refuse all cookies; chat, store and video images send no referrer.
 
-EGRESS INVARIANTS (independent of proxy):
-- Cached models load offline: whisper/CLIP/embeddings local_files_only (retry online only if missing); kokoro resolves model/voice files from the local HF cache, downloads once if missing; silero VAD pinned to exact commit URL; tiktoken cache persistent at user/cache/tiktoken.
-- HF_HUB_DISABLE_TELEMETRY=1 unconditionally.
-- HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE honored, never set or cleared by Sapphire; a download they block is named as such (core/hf_words.py why() -> notify.progress words=, kokoro.log, TTS Test).
-- Plugin-key allowlist: disk cache authoritative 24h — warm-cache boot makes no GitHub call.
-- UPDATE_CHECK_ENABLED: daily GitHub release check = one of TWO recurring unprompted core outbound calls (the other: the store spotlight, next line); toggle checked per-iteration (effective within a day, restart = immediate).
-- One-time: first boot fetches the dashboard font (Dancing Script) from Google Fonts into user/fonts/ unless DASHBOARD_FONTS_AUTOFETCH=false (JSON only); skipped once the file exists (core/font_bootstrap.py).
-- Store spotlight: about once a day (core/routes/store.py start_spotlight_refresher, a daemon thread waking at random 30-90 min, asks when its copy in user/plugin_state/store_spotlight.json is 24 h old; conditional GET, 304 = no body); STORE_ENABLED=false = no store request of any kind.
-- On demand only: Store pages (STORE_URL, opening System > Store; cache STORE_CACHE_TTL_SECONDS 3600), Video guide (YouTube channel pages/feeds on opening System > Videos with a stale 12 h cache; VIDEO_GUIDE_CACHE_TTL_SECONDS, VIDEO_GUIDE_CHANNELS_DISABLED).
-- Cookies: API sessions block all Set-Cookie; browser-profile web-tools session keeps a capped jar.
-- Chat/store/video images: referrerpolicy=no-referrer.
+FIXES: every web tool fails after turning SOCKS on = the proxy is down, nothing falls back (Settings > Network > Test) · "credentials not found" = set a username and password (placeholders for Tor) · "host unreachable" on everything = turn off DNS via proxy · LLM 403 while proxied = turn Route LLM off · a LAN device is unreachable = add it to SOCKS_NO_PROXY_EXTRA or use its IP / .local name · Tor = port 9050, not 9051 · LLM calls fail with SOCKS on in a hand-built env = pip install 'httpx[socks]' · more: section='Quick Troubleshooting'.

@@ -6,18 +6,18 @@ You've installed Sapphire and opened it in your browser. The setup wizard walks 
 
 On first launch the wizard opens full-screen (later: Settings → System → Run Setup Wizard). Press **I understand** on the welcome page, then pick the kind of setup:
 
-**Easy** — one page. Sapphire looks at this computer and shows what she picked: her brain (the Sapphire Launcher's LLM, or whichever LLM answers), her voice (Kokoro when a graphics card can run it, Piper on a processor), her ears (Whisper) and the wake word (on, when there is a microphone). Each row has a **Change** button that unfolds the real settings under it. Add your name, check the time zone, and press **Finish**: downloads carry on in the background and show in the notification center. Every row has a light (green works, yellow is being set up, red failed, grey waits for Finish) and a **Test** button: her LLM says hello, her voice speaks (a test tone until she has one), her ears turn a few seconds into words, and the wake word waits for you to say it. The ears test listens on the Sapphire computer's own microphone, so that computer says so first ("I am going to listen to your microphone in 3 seconds", then three beeps), and gives a ping and "Done" when the microphone is closed; the Ears row glows yellow during the warning and red while it listens. Run Easy again later and it shows what you have set, with her pick offered beside any row that differs (**Use it**): nothing changes unless you click.
+**Easy** — one page. Sapphire looks at this computer and shows what she picked: her brain (the Sapphire Launcher's LLM, or whichever LLM answers), her voice (Kokoro when a graphics card has room for it, about 2 GB free; else Piper on the processor), her ears (Whisper) and the wake word (on, when there is a microphone). Each row has a **Change** button that unfolds the real settings under it, and a **Test** button where this computer has speakers or a microphone to test with (the brain's Test is always there). Add your name, check the time zone, and press **Finish**: downloads carry on in the background and show in the notification center. Every row has a light (green works, yellow is being set up, red failed, grey waits for Finish) and a **Test** button: her LLM says hello, her voice speaks (a test tone until she has one), her ears turn a few seconds into words, and the wake word waits for you to say it. The ears test listens on the Sapphire computer's own microphone, so that computer says so first ("I am going to listen to your microphone in 3 seconds", then three beeps), and gives a ping and "Done" when the microphone is closed; the Ears row glows yellow during the warning and red while it listens. Run Easy again later and it shows what you have set, with her pick offered beside any row that differs (**Use it**): nothing changes unless you click.
 
 **Advanced** — every choice, step by step. The required lane first, then a gate, then the optional parts:
 
 1. **You** — your name and timezone, so the AI knows who it's talking to and when.
 2. **Brain** — choose an LLM (local or cloud), enter its key or URL, and hit **Test Connection** to verify it responds.
 3. **Voice** — her voice (text-to-speech), her ears (speech-to-text) and the wake word, each a row of provider cards with everything else under Advanced. Leave them off for a text-only install. Full details: [VOICE.md](VOICE.md).
-4. **Audio** — choose and test your microphone and speakers.
+4. **Audio** — choose and test your microphone and speakers. (Docker has no Audio step: the browser does the audio. A managed install skips Voice and Audio.)
 
 Finish there, or carry on: **Plugins** (the featured ones, on unless you untick them), **Look** (theme, font, background) and **What next** (where everything lives). Provider switches and model downloads run as jobs with rows in the notification center; the wizard shows them too.
 
-If you skip the wizard, everything is reachable later: LLM in Settings → LLM, voice in Settings → TTS / STT / Wakeword (see [VOICE.md](VOICE.md)).
+If you press Skip for now, the wizard opens again at every start until you press Finish, and everything is reachable in the meantime: LLM in Settings → LLM, voice in Settings → TTS / STT / Wakeword (see [VOICE.md](VOICE.md)).
 
 ### LLM Options
 
@@ -35,7 +35,7 @@ If you skip the wizard, everything is reachable later: LLM in Settings → LLM, 
 
 Claude, OpenAI, and Gemini are built in. LM Studio, Ollama, Fireworks, OpenCode, and many more are one click away as curated presets in Settings → LLM. (OpenCode Go is marketed for coding agents — read their terms before leaning on it for a companion.)
 
-Local: Install [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/), load a model, enable the API. Sapphire connects automatically.
+Local: Install [LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/), load a model, enable the API. LM Studio is connected out of the box (port 1234). For Ollama, add it once in Settings → LLM → **+ Add Provider** and pick its preset.
 
 Cloud: Get an API key from the provider and enter it in the provider's **API Key** field in Settings → LLM.
 
@@ -161,7 +161,7 @@ Set scopes in the chat sidebar's **Mind** accordion (or they come bundled with a
 | **Contacts** | Mind Palace people / entities | Yes |
 | **Email** | Email account | No |
 | **Bitcoin** | Wallet | No |
-| **Google Cal** | Calendar account | No |
+| **Calendar** | Which calendar | No |
 | **Telegram** | Telegram account | No |
 | **Discord** | Discord account | No |
 | **RAG** | Per-chat documents | No (strict) |
@@ -206,8 +206,8 @@ Connect Sapphire to your Telegram account.
 1. Install Telegram on your phone if you haven't — you need it to receive the login code
 2. Go to [my.telegram.org](https://my.telegram.org) → log in → click **"API development tools"** (not "Bot API") → get **API ID** and **API Hash**
 3. In Sapphire: Settings → expand Plugin Settings → Telegram
-4. Enter API ID and Hash → click **Save Settings** (must save before adding account)
-5. Scroll down → **+ Add Account** → enter phone → enter code Telegram sends you
+4. Enter API ID and Hash → click **Save Changes** (must save before adding an account)
+5. Scroll down to **Accounts** → **+ Add Client** → enter phone → enter the code Telegram sends you (**+ Add Bot** is for a bot token)
 6. Enable Telegram tools in your toolset
 
 Now the AI can read your chats and send messages. See the Telegram plugin docs in Help → Plugins for full details.

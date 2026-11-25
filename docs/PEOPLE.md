@@ -26,7 +26,7 @@ Person cards have:
 ## How she uses them
 
 - **Saving** a memory that names someone links it to their card automatically, nicknames included (whole words, case-insensitive, the longest name wins, and a real name beats another card's nickname).
-- **`entity=`** on a save files a fact on that card directly. A name that only partly matches still saves, and her reply asks "did you mean…".
+- **`layer='entities'` with `entity=`** on a save files a fact on that card directly (both are needed. A known shortcoming: `entity=` by itself saves an ordinary memory, puts nothing on the card, and does not even link the memory to that person. A fix is planned). A name that only partly matches still saves, and her reply asks "did you mean…".
 - **`list_entities`** gives her the roster, or one kind's cards with their fields.
 - She can't merge or delete entities. Merging is yours: **Mind → Settings → Maintenance → Human dedup → Entities**, which keeps the loser's name as a nickname.
 
@@ -57,7 +57,7 @@ Entities ride the chat's memory scope, like the rest of the Mind (see [Scopes](M
 ENTITIES = Mind Palace entity layer (Mind → Entities): person/place/thing/event/other cards with template fields, nicknames, connections, mention counts, recurring dates (Upcoming strip). User templates: user/mind_palace/templates/*.json.
 
 TOOLS:
-- save_memory(content, entity=NAME) — file a fact on a card; nicknames resolve; a partial match saves + asks "did you mean". save_memory(layer='entities', entity=…) makes the fact a card chunk.
+- save_memory(content, layer='entities', entity=NAME) — file a fact on a card (a card chunk); nicknames resolve; a partial match saves + asks "did you mean". Always pass BOTH. KNOWN SHORTCOMING: entity= without layer='entities' saves a plain events memory with NO link to that person, while the receipt still prints "entity: NAME". Don't trust that line; pass the layer.
 - list_entities(kind?, limit?) — roster (name, kind, nicknames, fact count); with kind, the filled-in fields (relationship, birthday…).
 - search_memory finds entities too; depth=1 follows a card's connections.
 - Merge/delete entities: UI only (Mind → Settings → Maintenance → Human dedup). No save_person: that was the legacy engine.

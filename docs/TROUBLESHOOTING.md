@@ -1,4 +1,3 @@
-<!-- AI_INCLUDE_FULL: Common issues and fixes for audio, LLM, web UI, plugins, and performance, plus reset and reinstall procedures -->
 # Troubleshooting
 
 Contents:
@@ -23,8 +22,8 @@ Contents:
 
 ## Where to Look First
 
-- **Main log**: `user/logs/sapphire.log` (rotates daily). Most problems leave a line here — search for `ERROR` or the feature name. Voice engines log apart: `user/logs/kokoro.log` (TTS), `user/logs/whisper.log` (STT).
-- **System > Notifications**: errors land here as rows. A failed reply carries a **Fix it** button that opens the setting to change (see [NOTIFICATIONS.md](NOTIFICATIONS.md)).
+- **Main log**: `user/logs/sapphire.log` (rotates daily). Most problems leave a line here — search for `ERROR` or the feature name. Voice engines log apart: `user/logs/kokoro.log` (TTS), `user/logs/whisper.log` (STT). Also there: `hf_fetch.log` (model downloads), `gpu-install.log`, `extras-<name>.log` (a plugin's package install), and one log per plugin service.
+- **System > Notifications**: errors land here as rows (a failed download or voice switch says why, and may offer **Try again**). A failed reply shows its error on the message itself in the chat, with a **Fix it** button that opens the setting to change (see [NOTIFICATIONS.md](NOTIFICATIONS.md)).
 - **Browser console** (F12) for web UI problems — JS errors and failed requests show up there, not in the server log.
 - **Running as a systemd service?** `journalctl --user -u sapphire -f`
 - **Sapphire Launcher users**: the launcher's **Troubleshoot** tab checks whether Sapphire responds, verifies package versions and dependency health, scans voice features (STT/TTS/wake word), and detects your GPU — with fix buttons for common issues.
@@ -36,7 +35,7 @@ Ordered lightest to heaviest. Start at the top.
 
 ### Light Reset (settings + password only)
 
-Resets all settings to defaults and clears the login password. **Keeps everything else** — chats, memories, prompts, personas, knowledge, and your API keys (those live in a separate credentials file outside `settings.json`). The setup wizard runs again on next start.
+Resets all settings to defaults and clears the login password. **Still logged in and only want the settings reset?** Use **Settings > System > Danger Zone > Reset All Settings** (it asks twice) and skip the commands below: they are for when you can't get in. Which plugins are on, and each plugin's own settings, are kept either way. **Keeps everything else** — chats, memories, prompts, personas, knowledge, and your API keys (those live in a separate credentials file outside `settings.json`). The setup wizard runs again on next start.
 
 Only want the wizard again? **Settings > System > Run Setup Wizard** — no reset needed.
 
@@ -67,7 +66,7 @@ If only your prompts are broken, you don't need this — see [Prompt issues](#pr
 
 ### Reinstall Packages (conda env only)
 
-Nuke the conda environment and reinstall from scratch. App files and your `user/` data are untouched. Use this if your pip packages are messed up — it just reinstalls the packages, doesn't touch Sapphire.
+Nuke the conda environment and reinstall from scratch. App files and your `user/` data are untouched. Use this if your pip packages are messed up — it just reinstalls the packages, doesn't touch Sapphire. Three things were installed into that environment after setup and go with it, so redo them afterwards: **Install GPU torch and restart** (Windows with an NVIDIA card) and **Install Whisper GPU support** (Linux, Settings > STT), both described under [Voice runs on the CPU](#voice-runs-on-the-cpu-gpu-found-torch-cannot-use-it), and each plugin's **Install** button on its Missing strip in Settings > Plugins.
 
 ```bash
 conda deactivate && conda remove -n sapphire --all -y && conda create -n sapphire python=3.11 -y && conda activate sapphire && pip install -r requirements.txt && python main.py
@@ -75,16 +74,18 @@ conda deactivate && conda remove -n sapphire --all -y && conda create -n sapphir
 
 ### Nuclear Reset (full reinstall, data preserved)
 
-Full app reinstall: fresh clone, fresh conda environment. Your `user/` directory is **moved aside and restored** — never deleted. Stop Sapphire first, then run from the directory *containing* `sapphire/`:
+Full app reinstall: fresh clone, fresh conda environment. Your `user/` directory and your local backups (`user_backups/`, which sits beside `user/` inside the app folder) are **moved aside and restored** — never deleted. Stop Sapphire first, then run from the directory *containing* `sapphire/`:
 
 **Linux/macOS:**
 ```bash
 mv sapphire/user ~/sapphire-user-backup
+[ -d sapphire/user_backups ] && mv sapphire/user_backups ~/sapphire-backups-kept
 rm -rf sapphire
 conda deactivate && conda remove -n sapphire --all -y
 conda create -n sapphire python=3.11 -y && conda activate sapphire
 git clone https://github.com/ddxfish/sapphire.git
 mv ~/sapphire-user-backup sapphire/user
+[ -d ~/sapphire-backups-kept ] && mv ~/sapphire-backups-kept sapphire/user_backups
 cd sapphire && pip install -r requirements.txt
 python main.py
 ```
@@ -92,16 +93,19 @@ python main.py
 **Windows (PowerShell):**
 ```powershell
 Move-Item sapphire\user "$env:USERPROFILE\sapphire-user-backup"
+if (Test-Path sapphire\user_backups) { Move-Item sapphire\user_backups "$env:USERPROFILE\sapphire-backups-kept" }
 Remove-Item -Recurse -Force sapphire
 conda deactivate; conda remove -n sapphire --all -y
 conda create -n sapphire python=3.11 -y; conda activate sapphire
 git clone https://github.com/ddxfish/sapphire.git
 Move-Item "$env:USERPROFILE\sapphire-user-backup" sapphire\user
+if (Test-Path "$env:USERPROFILE\sapphire-backups-kept") { Move-Item "$env:USERPROFILE\sapphire-backups-kept" sapphire\user_backups }
 cd sapphire; pip install -r requirements.txt
 python main.py
 ```
 
 Notes:
+- Never run the delete line without the two move lines above it: deleting the `sapphire/` folder deletes `user_backups/` with it, and that is every local backup you have. (A backup folder you set yourself in Settings > Backup is safe when it is outside the app folder; one given as a relative path lives inside it, so move that aside the same way.)
 - Your password is **not** reset by this — it lives outside the app folder. Add the `secret_key` line from [Light Reset](#light-reset-settings--password-only) if you want that too.
 - Want fresh data as well? That's [Reset Everything](#reset-everything-delete-data) below — don't just skip the `mv`/`Move-Item` lines, back up first.
 - [Sapphire Launcher](https://github.com/ddxfish/sapphire-launcher) can do this without a terminal — its Uninstall tab removes the env or the whole install, then **Go** reinstalls.
@@ -122,12 +126,12 @@ Genuinely forgotten? Delete the password hash file `secret_key` and restart Sapp
 
 ### Reset Everything (Delete data)
 
-Nuclear option - fresh start. Deletes all user data including chats, settings, and password. Stop Sapphire first, then from the `sapphire/` folder delete `user/` and the `secret_key` from the table above:
+Nuclear option - fresh start. Deletes your chats, memory, settings and password. Stop Sapphire first, then from the `sapphire/` folder delete `user/` and the `secret_key` from the table above:
 
 **Linux / macOS:**
 ```bash
 rm -rf user/
-rm ~/.config/sapphire/secret_key          # macOS: ~/Library/Application\ Support/Sapphire/secret_key
+rm ~/.config/sapphire/secret_key          # macOS: ~/Library/Application\ Support/Sapphire/secret_key; with XDG_CONFIG_HOME set: $XDG_CONFIG_HOME/sapphire/secret_key
 python main.py
 ```
 
@@ -146,18 +150,33 @@ docker compose up -d
 ```
 Your API keys stay in `sapphire-config/`; delete the whole folder to drop them too.
 
+**What this leaves behind.** Two things survive the commands above, on purpose, and you have to delete them yourself if you want nothing left (handing the computer to someone else, for example):
+
+- **Your backups.** `user_backups/` in the `sapphire/` folder (Docker: `sapphire-backups/`), or the folder you chose in Settings > Backup. Each one is a full copy of your chats and memory, readable by anyone unless you turned on backup encryption.
+- **Your saved keys.** The config folder that held `secret_key` (the table above) also holds `credentials.json` (API keys, account passwords, the backup password) and `api_tokens.json`. Delete the whole folder to drop them (Docker: `sapphire-config/`).
+
 You'll need to re-run setup and reconfigure settings.
 
 ## Startup Issues
 
-**"Connection refused" or "No LLM endpoints available"**
+**"Your settings file (user/settings.json) can't be read"**
+- The file is damaged (a hand edit with a missing comma, a full disk). Sapphire runs on default settings, refuses to save over the file, and holds internet requests until it is fixed, so a proxy setting it could not read is never skipped.
+- Fix the JSON by hand (a copy of the broken file is beside it as `settings.json.corrupt`), or use Settings > System > Danger Zone > Reset All Settings. Then restart.
+
+**"Your saved keys and passwords … can't be read" (all API keys seem gone)**
+- `credentials.json` in the config folder is damaged. Sapphire refuses to save over it, so nothing more is lost.
+- Repair the file by hand, or choose to start fresh from that notification: the old file is kept beside it as `credentials.json.corrupt.<date>` and you enter your keys again.
+
+**"Connection refused", "No LLM that's turned on answered", or "No LLM is turned on, so Auto has nothing to use"**
 - LLM server not running. Start LM Studio/llama-server first.
 - Wrong port in settings. Default expects `http://127.0.0.1:1234/v1`
 - Check LM Studio has "Start Server" enabled and "Allow LAN" if needed.
+- "…answered, but has no model ready yet": the server is up with no model loaded. Load one, or set a model on its card in Settings > LLM.
+- "No LLM is turned on": flip the switch on a provider's row in Settings > LLM.
 
-**"Failed to load module" warnings on startup**
-- Usually harmless to core functionality. Missing optional dependencies for optional features.
-- If a specific feature is broken, check logs for the actual error.
+**`[PLUGINS] <name> failed to load` or `BLOCKED <name>` in the log on startup**
+- That one plugin did not load; the rest of Sapphire runs. `failed to load` is an error in the plugin (often a missing package: see its Missing strip in Settings > Plugins); `BLOCKED` is a signature problem. See [Plugin Issues](#plugin-issues).
+- The line right after it in `user/logs/sapphire.log` holds the actual error.
 
 **"Another Sapphire is already running on this user/" / "Port 8073 is already taken"**
 - One Sapphire per `user/` folder: a second `python main.py` stops at once instead of booting a twin. The line names the holder; stop that one first (launcher Stop, Task Manager, `systemctl --user stop sapphire`).
@@ -206,8 +225,9 @@ You'll need to re-run setup and reconfigure settings.
 
 **My reply vanished when the phone locked / the tab slept**
 - It didn't. Turns run on the server, so a browser losing its connection never cancels one — only Stop does.
-- Wake the tab: it says "Connection dropped — she's still working, reconnecting…" and rejoins the live reply on its own, picking up where it stopped.
-- If it can't reconnect (roughly a minute of tries), the reply still finishes and lands in the chat — reload the page and it's there.
+- Wake the tab: it rejoins the live reply on its own, quietly, picking up where it stopped.
+- If it can't reconnect (roughly a minute of tries) it says "Couldn't reconnect — her reply lands in the chat when she finishes". The reply still finishes on the server: reload the page and it's there.
+- After a Regenerate or Continue the words are "Connection dropped — she's still working; the reply lands when she finishes": that one does not rejoin, the finished reply appears by itself.
 - Audio isn't replayed for the part you missed; with TTS on the finished reply is spoken once when it arrives.
 
 **My message sat waiting while she was still replying**
@@ -257,7 +277,7 @@ You'll need to re-run setup and reconfigure settings.
 
 **Wake word not triggering**
 - Check which wakeword you are using in Settings > Wakeword, and that wake word is enabled (model changes apply on save, no restart)
-- Make sure you pip installed install/requirements-wakeword.txt
+- Minimal install only: make sure you pip installed install/requirements-wakeword.txt (a full install already has it)
 - Turn your mic volume up to 70-100%, and set the system mic to the one you want wakeword on
 - Try Hey Mycroft instead of Hey Sapphire, or lower the sensitivity threshold to 0.5
 - Test a different mic
@@ -276,7 +296,8 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - Use headphones, or let the duplex echo-cancel tier engage (see VOICE.md — echo tiers)
 
 **Conversation mode connects but she is silent**
-- Conversation audio requires streaming TTS: Settings > TTS > streaming enabled AND a streaming-capable provider (Kokoro or Piper). Cloud TTS providers render on screen only.
+- With streaming off, or a voice that can't stream (ElevenLabs, gTTS), she speaks once the whole reply is written, so a long reply is a long quiet wait. For speech that starts sooner: Settings > TTS > Streaming on, with Kokoro or Piper.
+- No voice at all: check that a voice is picked in Settings > TTS, then `user/logs/kokoro.log` (or the plugin voice's own error in the notification center).
 
 **No voice, and the notification center says "Hugging Face offline mode is on"**
 - `HF_HUB_OFFLINE` (or `TRANSFORMERS_OFFLINE`) is set in your environment. Hugging Face then refuses every download, so a voice or model Sapphire has not fetched yet cannot arrive. Guides for other AI tools often say to set it for a faster start; Sapphire never sets it.
@@ -289,10 +310,19 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - Linux / macOS: look for `export HF_HUB_OFFLINE=1` in `~/.bashrc`, `~/.profile`, `~/.zshrc` or the service unit that starts Sapphire; remove it and restart.
 - The same words appear in `user/logs/kokoro.log` and under the TTS tab's Test button. The variable is read once at start, so a restart is needed either way.
 
+**"Switching TTS to … failed" (or STT, embedding, wake word) in the notification center**
+- Changing a voice, ears or embedding provider runs in the background under its own notification. When it fails the row says why and ends "Kept <the old one>.": the provider you had is back and working. "Still off." means there was no working one to go back to.
+- A failed model download offers **Try again** on that row; it keeps your pick.
+- Picking a second, different provider while one is still switching is refused: wait for the first to finish.
+
 **A model download says "not moving", or fails and names your DNS**
-- A download with no bytes for 20-30 seconds turns yellow and says so. For Whisper, Kokoro and the embedding model Sapphire then tries Hugging Face's other download path by itself; if both fail the row says why and offers **Try again**.
+- A download with no bytes for 20-30 seconds turns yellow and says so. For Whisper, Kokoro and the embedding model Sapphire then tries Hugging Face's other download path by itself; if both fail the row says why. The Whisper and Kokoro rows offer **Try again**; the embedding model has no button and is tried again the next time it is needed.
 - "This network's DNS is giving out-of-date addresses": your router (or whatever answers DNS on your network) is handing out old addresses for the download server. Restart the router, or set this computer's DNS to a public one such as `1.1.1.1` or `9.9.9.9`, then press Try again.
 - "not answering from any address": the trouble is on their side; try again later.
+- "This network's DNS has no answer for …, though a public DNS server does": same cure as the out-of-date addresses above.
+- "This computer does not seem to be online": nothing outside answers at all; check the cable, Wi-Fi or VPN.
+- "…is not answering, and neither is a public DNS server": the connection is down or filtered (a captive portal, a firewall, security software that inspects encrypted traffic).
+- The download's own log is `user/logs/hf_fetch.log`.
 - "This computer's date or time looks wrong": fix the clock (a virtual machine set to the wrong time zone does this), then Try again.
 - The detail of each attempt is in `user/logs/hf_fetch.log`. What this check contacts, and when it stays silent, is in NETWORK.md under "What never phones home".
 
@@ -301,13 +331,13 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 ## Prompt issues
 **If you broke your default prompts**
 - Settings > System tab
-- You can reset all prompts to default, or merge the defaults back into yours
+- **Settings > System > Danger Zone** has two buttons: **Import App Updates** adds the shipped prompts you don't have and changes none of yours; **Reset Prompts to Defaults** replaces yours with the shipped set
 
 ## Vault / private chat issues
 
 **A chat vanished from the dropdown**
-- The vault locked (idle timeout, or someone clicked the eyeball). Private chats are hidden while sealed — that's the design, nothing is lost.
-- Click the 👁 eyeball and unlock. Everything comes back.
+- The vault locked (idle timeout, or someone clicked the padlock). Private chats are hidden while sealed — that's the design, nothing is lost.
+- Click the 🔒 padlock at the top of the chat sidebar and unlock. Everything comes back.
 - Raise the timeout in Settings > Privacy (`VAULT_IDLE_MINUTES`, default 30).
 
 **"Private mode is on, but this chat isn't private"**
@@ -318,9 +348,9 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - Your chats (default included) are private and the vault is locked. Unlock it with the 🔒 button and they all come back.
 - To release a private chat: Chat Manager > its row > 🔓. It decrypts back to normal storage.
 
-**"Provider is not marked local/private-safe"**
+**"<Provider> isn't marked "Local / private server", so it's blocked in this private chat"**
 - The chat is private, so only providers ticked *Local / private server* are allowed.
-- Either pick a local provider, or release the chat in Chat Manager.
+- Tick that box on the provider in Settings > LLM if it really runs on your own machine or network, pick a local provider, or release the chat in Chat Manager.
 - Same rule applies to compressing a private chat, and to cloud STT/TTS (voice goes quiet with a notice instead of speaking).
 
 **Export or compress fails on a private chat**
@@ -329,7 +359,7 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 
 **Forgot the vault passphrase**
 - There is no recovery. The key is derived from the passphrase alone.
-- Restore `user/prompts/prompt_vault.enc` **and** `user/history/sapphire_history.db` together from a backup taken when you still knew it.
+- Restore `user/prompts/prompt_vault.enc`, `user/prompts/vault_refs.json` **and** `user/history/sapphire_history.db` together from a backup taken when you still knew it. Know the cost first: that chat database holds every chat, so your public chats go back to that backup's date too.
 - Or start over: Settings → Privacy → **Delete vault** (asks twice). It deletes the vault and every private chat in it; public chats are untouched. A private Default comes back as an empty public Default.
 
 **Default (or any chat) is stuck private**
@@ -338,7 +368,7 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 
 **"Vault file was corrupt — quarantined"**
 - The bad file is renamed `prompt_vault.enc.bad-<timestamp>` beside itself, never deleted.
-- Restore the vault file from a backup, paired with the chat database from the same backup.
+- Restore the vault file from a backup, paired with `vault_refs.json` and the chat database from the same backup (this rolls every chat back to that backup's date).
 
 ## Chat Database Issues
 
@@ -361,15 +391,15 @@ Full voice triage lives in VOICE.md's Quick Troubleshooting. The two hottest one
 - Go back to Sapphire: Settings > LLM > LM Studio > test button
 
 **Anthropic Claude not responding**
-- conda activate sapphire && pip install anthropic
+- conda activate sapphire && pip install -r requirements.txt (never a bare `pip install anthropic`: that pulls 1.x, which breaks every Claude call, see [Update Issues](#update-issues))
 - Check API key (some are for Claude Code only)
 - Put new API key in Settings > LLM > Claude
 
 **No thinking/reasoning visible**
 - Not all models support thinking. Check provider supports it.
-- Claude: Enable "Extended Thinking" in LLM settings
+- Claude: **Adaptive Thinking** on its card in Settings > LLM (on by default), with an Effort picker
 - GPT-5.x: Uses Responses API, set reasoning_summary to "detailed"
-- Gemini: Set reasoning_effort (low/medium/high) on thinking-enabled models (Gemini 2.5 Flash/Pro)
+- Gemini: Set reasoning_effort (low/medium/high) on thinking-enabled models (thinking is on by default)
 - Local models via LM Studio: May need specific model that outputs `<think>` tags
 
 **Claude prompt caching not working (always MISS)**
@@ -400,7 +430,7 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 **Web search returns no results**
 - Rate limited by DuckDuckGo. Wait and retry.
 - If using the SOCKS proxy, verify it's working (see NETWORK.md)
-- Enable verbose tool debugging in settings for more logging
+- Set **Log Level** to DEBUG in Settings > System (advanced settings) for more logging (`LOG_LEVEL`)
 
 **An MCP client gets 404 "The MCP server is off"**
 - The MCP door is off by default. Turn it on in Settings > MCP Server and tick the tools to share. See [MCP.md](MCP.md).
@@ -422,6 +452,9 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 - **Discord** needs **Git on your PATH** — its `py-cord` dependency installs from a pinned git commit. Windows: `winget install Git.Git`, then reopen the terminal. If `discord.py` is installed, `pip uninstall discord.py` first: it owns the same `discord` import name and conflicts.
 
 ## Continuity Issues
+
+**"Scheduled tasks can't be read"**
+- The tasks file is damaged, so none of your scheduled tasks run until it is fixed. The notification names the file and the error; repair it (or restore it from a backup) and restart.
 
 **Task not running at scheduled time**
 - Check its enabled toggle in Triggers > Scheduled (or Triggers > Heartbeat)
@@ -478,7 +511,7 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 
 **Slow responses**
 - LLM is the bottleneck. Use a 4B or smaller model to test
-- Reduce `LLM_MAX_HISTORY` to send less context, it gets slower over time
+- Lower the **Context limit** (`CONTEXT_LIMIT`) to send less, or set `LLM_MAX_HISTORY` to a message count (0, the default, means no message cap): a long chat gets slower over time
 - Kokoro on an older laptop CPU is slow; an NVIDIA card or a faster CPU helps a lot
 
 **High memory usage**
@@ -546,3 +579,15 @@ The crash is in C-extension code (no Python traceback) and happens every boot. T
 Restart Sapphire after changing these. `user/logs/sapphire.log` then shows `Kokoro subprocess pinned to CUDA_VISIBLE_DEVICES=1`.
 
 **Single-GPU systems:** leave both at default (empty `KOKORO_CUDA_DEVICE`, `FASTER_WHISPER_CUDA_DEVICE=0`). If you still hit the crash, disable wake word at boot and toggle it on after Sapphire is up — that skips the concurrent-init window.
+
+## Reference for AI
+
+This doc is long (34 KB): read ONE part with section='<heading>', never the whole thing.
+- Headings: Where to Look First · Reset Procedures · Startup Issues · Update Issues · Web UI Issues · Audio Issues · Voice & Conversation Issues · Prompt issues · Vault / private chat issues · Chat Database Issues · LLM issues · Network / Proxy Issues · Tool/Function Issues · Plugin Issues · Continuity Issues · Home Assistant Issues · Performance Issues.
+- Start: user/logs/sapphire.log (search ERROR or the feature name); voice engines log apart (kokoro.log, whisper.log; model downloads: hf_fetch.log); System > Notifications rows say why a download or a voice switch failed; a failed reply's own message carries Fix it, which opens the setting to change.
+- Topic docs carry their own section='Quick Troubleshooting': voice, chats, network, backups, phone-calls, game-room, appearance.
+- Plugin won't load: its card's badge, the unsigned-plugins switch, the Missing strip (PLUGINS). Tool missing: is it in this chat's toolset, is its plugin on. A refusal in a private chat is by design (PRIVACY).
+- RESETS DELETE THINGS. Each is its own section: Light Reset · Reinstall Packages · Nuclear Reset · Reset Password · Reset Everything. Give one only when the user asks for a reset, and say what it removes first. Settings only: Settings > System > Danger Zone > Reset All Settings is safer than deleting files. Nuclear Reset keeps user/ and the local backups (user_backups/) ONLY if both move lines run before the delete line. Reset Everything deletes chats, memory and settings, and leaves the backups and the saved API keys behind.
+- Updating: git pull AND pip install -r requirements.txt (never a bare `pip install anthropic`: 1.x breaks Claude).
+- Service: journalctl --user -u sapphire -f. Exit codes: 42 = restart asked for, 43 = another Sapphire holds this user/ folder or the web port, 44 = a web host, port or certificate setting is wrong.
+- Sapphire Launcher users: its Troubleshoot tab checks packages, voice and GPU with fix buttons.

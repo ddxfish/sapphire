@@ -45,7 +45,7 @@ Each seat gets her persona's prompt plus a short room briefing: the room's name 
 In a room, a seat:
 
 - never sees the others' thinking or tools;
-- has spice off, no documents, and an empty ghost line;
+- has spice off, no documents, and an empty Ghost Message box (the time, the idle note and plugin lines can still ride its ghost message);
 - can't use the agent or self-modifying tools, or `ask_user`;
 - can't write memories unless you ticked it for that seat;
 - is private if the room is private.
@@ -69,7 +69,7 @@ When another Sapphire invites yours into her room, your side's settings decide. 
 | Lobby (`MCP_ROOM_LOBBY`) | none | The chat she decides invitations in |
 | Room persona (`MCP_ROOM_PERSONA`) | none | The persona a room chat starts as |
 
-Her side of the room is its own chat (`room-<host>-<room>`). When the host clears or closes the room, that chat is archived and a fresh one starts.
+Her side of the room is its own chat (`room-<host>-<room>`). When the host clears the room, that chat is archived and a fresh one starts; when the host closes it, the chat is archived and no new one is made.
 
 ## Limits
 
@@ -86,8 +86,8 @@ RULES (defaults): human_every 1 (UI "Bot turns per round": off | 1 | 2 | 3 | 5 |
 
 SEATS: persona (own chat seat-<id>, local edits: name, context, colour, prompt, toolset, brain, voice, memory_write default off) · Another Sapphire guest (device; she decides on her box ≤300 s, joins with chatroom_join; one seat per device) · door (persona answered over this box's MCP door by an API-key holder; waits 120 s, skipped when away). Guests/door seats refused in private rooms.
 
-IF YOU ARE A SEAT: answer in ONE message as yourself; never write others' lines; your cue = lines since your last as "Name: text" + newest 6 pictures; '(pass)' or '<<PASS>>' sits the round out; @Name makes that seat next; 300 s turn limit. Forced: spice off, RAG/documents off, ghost empty, unlisted scopes 'none', private if room private. Removed: meta_danger + agents tools, ask_user, memory/knowledge/people/goal writers unless memory_write. read_self first on your first turn if you have it.
+IF YOU ARE A SEAT: answer in ONE message as yourself; never write others' lines; your cue = lines since your last as "Name: text" + newest 6 pictures; '(pass)' or '<<PASS>>' sits the round out; @Name makes that seat next; 300 s turn limit. Forced: spice off, RAG/documents off, the Ghost Message box empty (time, idle and plugin ghost lines may still ride), unlisted scopes 'none', private if room private. Removed: meta_danger + agents tools, ask_user, memory/knowledge/people/goal writers unless memory_write. read_self first on your first turn if you have it.
 
-IF YOU ARE INVITED (MCP_ROOM_INVITES on): you decide in one turn in MCP_ROOM_LOBBY (empty = ephemeral turn); chatroom_join(persona?, model?, toolset?, name?) joins; your room chat = room-<host>-<room>; MCP_ROOM_SHARE_TOOLS adds tool names to your lines; host clear/close = room_reset (archive + fresh).
+IF YOU ARE INVITED (MCP_ROOM_INVITES on): you decide in one turn in MCP_ROOM_LOBBY (empty = ephemeral turn); chatroom_join(persona?, model?, toolset?, name?) joins; your room chat = room-<host>-<room>; MCP_ROOM_SHARE_TOOLS adds tool names to your lines; host clear = room_reset (archive + a fresh chat); host close = archived, no fresh chat.
 
 VOICE: per-seat voice in the browser; rounds wait for reading (ping 20 s, 45 s quiet = nobody reading, 300 s max a line); open room = landing chat; satellite-originated user line → bots read on that satellite.

@@ -39,5 +39,5 @@ Capture happens on the machine **Sapphire runs on** (the "local" source). For mo
 ## Notes
 
 - Captures the **full canvas** (every monitor in one image). It's downscaled to a long-edge cap (default 1568px, configurable in settings) before going to the model — vision models downscale anyway, so this just saves tokens.
-- **Privacy:** ships disabled by default. Enabling it in a toolset is the consent — once on, the AI can capture the screen silently via `source="local"`. Don't add it to a default/shared toolset if that's not what you want.
+- **Privacy:** the plugin is on by default, but its tool `get_screenshot` is in none of the shipped toolsets, so the AI cannot use it until you add it to one. Adding it to a toolset is the consent — once it is there, the AI can capture the screen silently via `source="local"`. The `all` toolset holds every tool, this one included. Don't add it to a default/shared toolset if that's not what you want, and turn the plugin off in Settings > Plugins to rule it out entirely.
 - This is **server-side** capture (the Sapphire host's screen). A browser-based "share screen" button (`getDisplayMedia`) is a possible future addition; it needs a user click, so it isn't silent.

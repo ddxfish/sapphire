@@ -10,7 +10,7 @@ This is the guide for **AI-created tools** — simple tool plugins. For full plu
 
 1. AI calls `tool_save(name, code)` — validates and saves as `user/plugins/{name}/`
 2. AI calls `tool_load()` — discovers and activates the new plugin live
-3. The tool appears in the current toolset immediately — no restart
+3. The tool is loaded at once, no restart. She can call it in this chat when the chat's toolset takes it in: `all` does, a saved toolset with a fixed list does not until the tool is added to it (Persona → Toolsets)
 
 Tool Maker auto-generates a `plugin.json` manifest from the code. The AI only writes the Python file.
 
@@ -286,7 +286,7 @@ TOOLS = [{
 
 ### Lazy Imports
 
-For heavy dependencies, import inside execute() so they only load when called:
+For heavy dependencies, import inside execute() so they only load when called. This only delays the loading: validation reads every import in the file, wherever it sits, so in Strict mode the module must still be on the allowlist (`pandas` below needs Moderate):
 
 ```python
 def execute(function_name, arguments, config):
@@ -299,7 +299,9 @@ def execute(function_name, arguments, config):
 
 ## Validation Levels
 
-Tool Maker validates code before saving. The level is set in Settings > Tool Maker.
+Tool Maker validates code before saving. The level is set in Settings → Plugins → ⚙ on Toolmaker. (The Toolmaker plugin is off by default: turn it on there, and allow unsigned plugins, since every tool she makes is one.)
+
+In Strict and Moderate these calls are refused wherever they appear: `open()`, `eval`, `exec`, `compile`, `getattr`, `setattr`, `delattr`, `globals`, `locals`, `__import__`, and `os.system`, `os.popen`, `os.remove`, `os.unlink`, `os.rename`, `os.kill`, `os.environ`. A tool that needs a file or a setting uses the plugin's own state and settings instead.
 
 | Level | What's checked |
 |-------|----------------|
@@ -320,7 +322,7 @@ Tool Maker validates code before saving. The level is set in Settings > Tool Mak
 ### Workflow
 
 1. Call `tool_save("weather", code)` — validates, creates `user/plugins/weather/`
-2. Call `tool_load()` — rescan picks it up, tool is immediately available
+2. Call `tool_load()` — rescan picks it up and the tool is loaded; it is callable here once this chat's toolset includes it (`all` does; add it to a saved toolset)
 3. The tool shows up in the plugin list and can be enabled/disabled like any plugin
 
 ### Name Rules
@@ -389,7 +391,9 @@ RULES:
 - EMOJI = optional plugin icon (skipping it just means no icon); pick one that fits the tool's purpose
 - is_local: True=fully local; False/"endpoint"=leaves the machine; UNSET=treated non-local (private chats refuse, fail-closed). network flag = UI badge only, never routing
 - network: True = network badge in the UI only (routing is the net facade's job, not this flag's)
-- Lazy imports for heavy deps (import inside execute, not at top)
+- Lazy imports for heavy deps (import inside execute, not at top); validation still checks them, so in strict the module must be allowlisted
+- Blocked calls in strict AND moderate: open(), eval/exec/compile, getattr/setattr/delattr, globals/locals, __import__, os.system/popen/remove/unlink/rename/kill/environ. In managed (Docker-hosted) mode the level is always strict
+- A new tool is callable in this chat only when the chat's toolset includes it (`all` does; a saved toolset needs it added)
 - TOOLS, AVAILABLE_FUNCTIONS, SETTINGS, SETTINGS_HELP, EMOJI: plain literals (tool_save reads them without running the code)
 - No parameters: `"properties": {}, "required": []`
 

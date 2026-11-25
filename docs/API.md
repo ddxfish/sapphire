@@ -19,7 +19,7 @@ curl -k https://localhost:8073/api/status \
 
 The full token value is shown **once** at creation — copy it then. Listing shows only the last 4 characters; each token is individually revocable (`DELETE /api/system/api-tokens/{token_id}`).
 
-**Persona keys.** A token made with a `persona` works at `/mcp` only. Anywhere else it is refused with 401, so a persona key can never act as a full admin key. See [MCP.md](MCP.md).
+**Persona keys.** A token made with a `persona` works at `/mcp` only. Anywhere else it counts as no key (401 on an `/api/*` route), so a persona key can never act as a full admin key. See [MCP.md](MCP.md).
 
 ### Open routes
 No login needed:
@@ -27,20 +27,20 @@ No login needed:
 | Route | Guard |
 |-------|-------|
 | `GET /api/health` | none; says only status, instance name, MCP on |
-| `GET/POST/PUT /api/events/webhook/{path}` | the webhook task's own secret (`X-Webhook-Secret` or GitHub-style `X-Hub-Signature-256`), 1 MB cap |
+| `GET/POST/PUT /api/events/webhook/{path}` | the webhook task's own secret (`X-Webhook-Secret` or GitHub-style `X-Hub-Signature-256`) when it has one; a task whose secret was cleared answers anyone who knows the path. 1 MB cap |
 | `GET /login`, `POST /login`, `GET /setup`, `POST /setup` | form CSRF field, 5 attempts per 60 s per IP |
 | `GET /favicon.ico`, `/static/*`, `/user-assets/*` (`user/public/`), `/user-fonts/*`, `/core-widgets/*` | static files |
-| The 11 device doors under `/api/devices/{id}/…` | the device's own key as Bearer (see [Devices](#devices)) |
+| The 12 device doors under `/api/devices/{id}/…` | the device's own key as Bearer (see [Devices](#devices)) |
 
 ### CSRF
 A browser session sends `X-CSRF-Token` on every POST/PUT/PATCH/DELETE. It must equal the session's token, which the server stamps into the page it serves (there is no API to fetch it). A missing or wrong token is **403** "This page is out of date. Reload it and try again." `/login` and `/setup` carry it as the form field `csrf_token`. Bearer-token callers have no cookie and need no CSRF header.
 
 ### WebSockets
-`/ws/conversation` and `/ws/plugin/{plugin}/{path}` accept the session cookie only (no Bearer), and the `Origin` must match `Host`. A refused handshake is accepted and closed with **4401**. Plugin sockets also close 4404 (no such socket), 4429 (that plugin already holds 8), 4410 (the plugin unloaded), 1011 (its handler crashed).
+`/ws/conversation` and `/ws/plugin/{plugin}/{path}` accept the session cookie only (no Bearer), and the `Origin` must match `Host`. A refused handshake is accepted and closed with **4401**. `/ws/conversation` also closes 4409 (local conversation mode is on) and 4500 (the session could not start). Plugin sockets also close 4404 (no such socket), 4429 (that plugin already holds 8), 4410 (the plugin unloaded), 1011 (its handler crashed).
 
 ### Status codes
-- **401**: no login on an `/api/*` route (or `/mcp`), or a persona key used off `/mcp`.
-- **307**: no login on a page route redirects to `/login`; before setup is done, to `/setup`.
+- **401**: no login on an `/api/*` route, or a persona key used on one.
+- **307**: no login on a page route, **or on `/mcp`**, redirects to `/login` (an MCP client with a missing or wrong token gets this redirect, not a 401). Before setup is done every route, `/api/*` included, redirects to `/setup`.
 - **403**: CSRF failure, a wrong vault passphrase, a wrong webhook secret. Never "not logged in".
 
 ### Rate Limiting
@@ -56,7 +56,9 @@ A browser session sends `X-CSRF-Token` on every POST/PUT/PATCH/DELETE. It must e
 | Devices (login routes) | 240 reads, 60 writes, 1200 glass frames |
 | IR codes, wake word library | 60 writes |
 | Device doors | 30 per door per caller address; `text` reads and `history` 600 |
-| Plugin routes `/api/plugin/*` | 60 GET, 30 other, per plugin per verb (`media: true` GETs unmetered) |
+| Plugin routes `/api/plugin/*` | 60 GET, 30 other, per plugin per verb (`media: true` and `live: true` GETs unmetered) |
+| `/api/setup/easy/hello` | 10 |
+| `/api/setup/easy/say`, `listen`, `wake` (shared) | 30 |
 
 ---
 
@@ -124,7 +126,7 @@ See [SLASH-COMMANDS.md](SLASH-COMMANDS.md).
 
 ### Chat Rooms
 
-A room is a chat with several speakers. Not a room → 404; a bad request → 400. See [CHAT-ROOM.md](CHAT-ROOM.md).
+A room is a chat with several speakers. Not a room → 404 (except `stop` and `state`, which do not check); a bad request → 400. See [CHAT-ROOM.md](CHAT-ROOM.md).
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -141,7 +143,7 @@ A room is a chat with several speakers. Not a room → 404; a bad request → 40
 | POST | `/api/rooms/{chat}/start` | Run one more round; `{rounds}` = N rounds before the human rule asks again |
 | POST | `/api/rooms/{chat}/stop` | Stop the rounds |
 | GET | `/api/rooms/{chat}/state` | The runner's state |
-| POST | `/api/rooms/{chat}/voice` | The tab reading lines aloud: `{on}` while reading, `{mid}` when a line is read, `{flush}` when it went quiet. The rounds keep pace with it |
+| POST | `/api/rooms/{chat}/voice` | The open room tab's heartbeat (about every 20 s): renews the voice landing lease → `{ok}`. The body is ignored; rounds never wait on the reading |
 
 ### Chat Sessions
 
@@ -153,11 +155,11 @@ A room is a chat with several speakers. Not a room → 404; a bad request → 40
 | DELETE | `/api/chats/{name}` | Delete chat (also deletes its plugin/playthrough data) |
 | POST | `/api/chats/{name}/activate` | Switch active chat |
 | GET | `/api/chats/active` | `{active_chat, landing}`: the active chat, and where voice lands right now |
-| POST | `/api/chats/{name}/landing` | `{on}`: where voice (wake word, satellites, browser conversation) lands while a room is open; `on: false` clears it. Typed turns stay on the active chat → `{landing, active_chat}`; 404 unknown chat |
+| POST | `/api/chats/{name}/landing` | `{on}`: where voice (wake word, satellites, browser conversation) lands while a room is open; `on: false` clears it. Typed turns stay on the active chat → `{landing, active_chat}`; 404 unknown chat. A landing is a 90 s lease: renew it with `POST /api/rooms/{chat}/voice` about every 20 s, or voice goes back to the active chat without a word |
 | GET | `/api/chats/{name}/settings` | Get chat settings |
 | PUT | `/api/chats/{name}/settings` | Update chat settings |
 | POST | `/api/chats/{name}/rename` | Rename a chat (carries tool images, message rows, and RAG scope along) |
-| POST | `/api/chats/{name}/archive` | Toggle a chat's archived flag (UI shade — chat stays fully functional) |
+| POST | `/api/chats/{name}/archive` | `{archived: bool}` (default true): set a chat's archived flag; it does not toggle (UI shade — chat stays fully functional) |
 | GET | `/api/chats/{name}/export` | Full raw export of one chat (name, settings, messages) |
 | POST | `/api/chats/bulk-export` | Export many chats as one JSON document |
 | POST | `/api/chats/bulk-export-zip` | Export many chats as a zip, one JSON file per chat |
@@ -167,8 +169,11 @@ A room is a chat with several speakers. Not a room → 404; a bad request → 40
 | POST | `/api/chats/{name}/repair` | Diagnose/repair a chat's unreadable message rows |
 | POST | `/api/chats/{name}/compress` | Start the background compress job (summarize history) |
 | GET | `/api/chats/compress/status` | Status of the one-at-a-time compress job (UI polls this) |
-| GET/PUT | `/api/chats/compress/instructions` | Read or save the compress instructions override |
+| GET/PUT | `/api/chats/compress/instructions` | Read or save the compress instructions override; `?kind=daily` reads or saves the `/compact-daily` day wording instead. GET also returns the `default` |
 | GET | `/api/chats/{name}/prompt-preview` | The exact system prompt + ghost envelope the next turn would send |
+| GET | `/api/chats/compress/preview` | `?chat=`: the days of a chat the daily-summary wording can be tried on (still raw turns, today included), newest first → `{days}`. No model call; 400 bad chat |
+| POST | `/api/chats/compress/preview` | `{chat, instructions?, day?}`: what `/compact-daily` would write for one day, nothing saved. One or more real model calls on the chat's own model; 400, 404 unknown chat |
+| GET | `/api/chats/{name}/ghost-last` | The ghost envelope the last turn actually sent (in memory since boot) → `{chat, private, ghost, at}`; ghost null = no turn since boot, "" = none; private chats are never kept; 404 sealed/unknown |
 
 ### Message History
 
@@ -180,16 +185,16 @@ A room is a chat with several speakers. Not a room → 404; a bad request → 40
 | DELETE | `/api/history/tool-call/{id}` | Delete specific tool call |
 | POST | `/api/history/messages/edit` | Edit a message. The message-edit routes act on `?chat=` by name when given (a room's rail), else the active chat |
 | GET | `/api/history/raw` | Export raw chat history |
-| POST | `/api/history/import` | Import chat history |
+| POST | `/api/history/import` | `{messages}`: REPLACE the active chat's messages with these (not an append); 409 while a reply is streaming |
 
 ### TTS / STT / Audio
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/api/tts` | Generate TTS audio |
+| POST | `/api/tts` | `{text, output_mode: "play"\|"file", voice?, speed?, pitch?, format?}`. `play` (the default) speaks on this machine's speakers and returns JSON; only `file` returns audio bytes (`format`: `mp3` or `wav` to re-encode). 204 nothing to play on purpose, 403 privacy gate, 413 text too long, 503 no audio made; with TTS off, 200 `"TTS disabled"` |
 | POST | `/api/tts/stream` | Streaming TTS for known text, as SSE (`tts_stream_start`, `tts_chunk`, `tts_stream_end`). With streaming off or a provider that can't stream, the text is made whole first, then sent the same way. 503 only with TTS off or no engine: fall back to `/api/tts` |
 | POST | `/api/tts/preview` | Preview voice sample |
-| GET | `/api/tts/status` | TTS server status |
+| GET | `/api/tts/status` | Whether her voice is playing now → `{playing, tts_playing}` |
 | POST | `/api/tts/stop` | Stop TTS playback |
 | POST | `/api/tts/test` | Test TTS provider connectivity |
 | GET | `/api/tts/voices` | List voices for active TTS provider |
@@ -252,12 +257,13 @@ Provider switches are jobs. `STT_PROVIDER`, `TTS_PROVIDER`, `EMBEDDING_PROVIDER`
 | GET | `/api/llm/custom-providers/{key}/models` | Fetch models from a custom provider |
 | GET | `/api/llm/presets` | List LLM provider presets |
 | GET | `/api/llm/generation-params` | `?provider=&model=`: the `temperature`, `top_p`, `max_tokens` a blank provider-card field inherits for that model |
+| POST | `/api/llm/launcher/check` | The wizard's Brain step: add the Sapphire Launcher's LLM if it came up after boot (once), then its status + `added_now`; 409 while settings.json is unreadable |
 
 ### Provider Registry (TTS / STT)
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/tts/providers` | List TTS providers (core + plugin) |
+| GET | `/api/tts/providers` | List TTS providers (core + plugin; a provider of a plugin that is off is listed too, marked `plugin_enabled: false`, with `missing_deps`) |
 | GET | `/api/stt/providers` | List STT providers (core + plugin) |
 
 ### Embeddings
@@ -283,6 +289,7 @@ Vault state (`{exists, unlocked}`) rides the top-level `vault` key on `GET /api/
 | POST | `/api/vault/rekey` | Change the passphrase (needs the current one; lock state preserved) |
 | POST | `/api/vault/move` | Move a prompt or piece in/out of the vault |
 | POST | `/api/vault/move-batch` | Move many at once (`{direction, items:[{kind:'prompt',name}|{kind:'piece',comp_type,key}]}`) — one request, per-item receipts, one change event; 409 if the vault is locked |
+| POST | `/api/vault/delete` | `{confirm: "I UNDERSTAND"}`: delete the vault AND every private chat it encrypts (the forgotten-passphrase exit); 400 without the words, 404 no vault, 409 a private chat still answering; 403 in managed mode |
 
 Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. Membership changes need the vault unlocked (403 otherwise); while sealed, private chats answer as nonexistent on every by-name route.
 
@@ -314,6 +321,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/personas/{name}/export.png` | Export persona as a PNG character card (avatar image + full bundle in a `sapphire_persona` tEXt chunk) |
 | POST | `/api/personas/import-card` | Import persona from an uploaded PNG character card (multipart; `overwrite_prompt`/`overwrite_avatar`/`overwrite_persona` flags; JSON bundles go through `/api/personas/import`) |
 | POST | `/api/personas/import` | Import persona from a portable JSON bundle (legacy format) |
+| POST | `/api/personas/release-phantom-scopes` | `{lists: {scope_key: [values]}}`: one-time migration, account scopes saved as a non-existent `default` become none → `{done, changed}`; idempotent |
 
 ### Prompts
 
@@ -338,6 +346,8 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | POST | `/api/prompts/pieces/trash` | Soft-delete pieces into the trash |
 | POST | `/api/prompts/pieces/trash/restore` | Restore trashed pieces (never overwrites a live key) |
 | POST | `/api/prompts/pieces/trash/purge` | Empty the piece trash (both stores while unlocked) |
+| POST | `/api/prompts/import` | `{name, prompt: {type, content or components, privacy_required}, components?, overwrite?, keep_components?}`: same funnel as persona cards; 409 taken name unless overwrite |
+| POST | `/api/prompts/{name}/rename` | `{new_name}`: moves the prompt in its store and repoints chats, personas and continuity tasks; 409 name taken |
 
 ### Toolsets
 
@@ -490,6 +500,7 @@ See [NOTIFICATIONS.md](NOTIFICATIONS.md).
 | POST | `/api/notifications/{id}/read` | Mark one row read |
 | DELETE | `/api/notifications/{id}` | Remove one row; 409 while it is active |
 | DELETE | `/api/notifications` | Remove every row that is not active |
+| POST | `/api/notifications/{id}/repair` | Run the row's one-click fix (Try again on a failed download, Repair on a toolset fix) → `{ok, message, row, counts}`; 404 no such row or nothing to repair, 409 already running |
 
 ### Backup
 
@@ -571,14 +582,14 @@ What a plugin declares in its manifest. See [plugin-author/routes.md](plugin-aut
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/store/status` | Store reachability + cache info |
+| GET | `/api/store/status` | Whether the store is on, its base URL and cache TTL → `{enabled, base, cache_ttl}` (nothing is probed) |
 | GET | `/api/store/categories` | List plugin categories with counts |
 | GET | `/api/store/plugins/list` | List/search store plugins (`q`, `category`, `featured`, `sort`, `page`, `per_page`) |
 | GET | `/api/store/plugins/{slug}` | Single plugin detail (description, screenshots, version, author) |
 | GET | `/api/store/personas/list` | List/search store personas (same query params as plugins) |
 | GET | `/api/store/personas/categories` | Persona categories with counts |
 | GET | `/api/store/personas/{slug}` | Detail page for one persona |
-| POST | `/api/store/personas/{slug}/install` | Download a persona's PNG card and import it (same overwrite flags as import-card) |
+| POST | `/api/store/personas/{slug}/install` | Download a persona's PNG card and import it (the same overwrite flags as import-card, here as query parameters) |
 
 ### Dashboard
 
@@ -654,7 +665,23 @@ What a plugin declares in its manifest. See [plugin-author/routes.md](plugin-aut
 | GET | `/api/email/accounts` | List email accounts (multi-scope) |
 | PUT | `/api/email/accounts/{scope}` | Set email account for scope |
 | DELETE | `/api/email/accounts/{scope}` | Remove email account for scope |
-| POST | `/api/email/accounts/{scope}/test` | Test email account |
+| POST | `/api/email/accounts/{scope}/test` | Test email account (older route; the Email page tests through the plugin route below) |
+
+The four `/api/webui/plugins/email/…` rows above are the older single-account form: they act on the account named `default`. The Email page (Apps > Email) and the account editor use the plugin's own routes, under `/api/plugin/email/`:
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/plugin/email/folder` | `?scope=&folder=&page=&q=&unread=`: one folder's page of mail, newest first, with the folder list and its counts |
+| GET | `/api/plugin/email/counts` | `?scope=`: the folder list with message counts |
+| GET | `/api/plugin/email/message` | `?scope=&id=&read=1`: one mail, for reading (`id` is `folder:uid`) |
+| GET | `/api/plugin/email/attachment` | `?scope=&id=&n=`: one attachment, always as a download |
+| POST | `/api/plugin/email/move` | `{scope, ids, to}`: to a role (archive, spam, trash, inbox…) or a folder name |
+| POST | `/api/plugin/email/mark` | `{scope, ids, mark}`: read, unread, starred, unstarred |
+| POST | `/api/plugin/email/send` | `{scope, mode, id, to, cc, bcc, subject, body, draft}`: send, reply, forward, or save a draft |
+| POST | `/api/plugin/email/test` | Log in for reading and for sending with what is in the form (certificates checked); no mail is sent, each half answers for itself |
+| GET | `/api/plugin/email/certs` | The certificates the person has trusted; with `?scope=`, where that account's two servers stand now |
+| POST | `/api/plugin/email/trust` | `{host, port, which, fingerprint}`: trust that exact certificate for that server |
+| POST | `/api/plugin/email/untrust` | `{host, port}`: check that server the normal way again |
 
 ### GitHub Plugin
 
@@ -668,11 +695,20 @@ What a plugin declares in its manifest. See [plugin-author/routes.md](plugin-aut
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/bitcoin/wallets` | List bitcoin wallets (multi-scope) |
-| PUT | `/api/bitcoin/wallets/{scope}` | Set wallet for scope |
-| DELETE | `/api/bitcoin/wallets/{scope}` | Remove wallet for scope |
-| POST | `/api/bitcoin/wallets/{scope}/check` | Check wallet balance |
-| GET | `/api/bitcoin/wallets/{scope}/export` | Export wallet details |
+Write a wallet through the plugin's own routes: they ask before a key is replaced and let go of everything that named a deleted wallet. A replaced key is money gone for good.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/bitcoin/wallets` | List bitcoin wallets (scope, label, address; never a key) |
+| PUT | `/api/plugin/bitcoin/wallet/{scope}` | `{wif?, label?, generate?, replace?}`: make a wallet, rename one, or put a new key in one. A key already there is replaced only when `replace` names it (the wallet's current address, or `"unreadable"` for a key this machine cannot decrypt); without it the answer is 409 with `needs_replace`, `old_address` and `new_address`. `generate` never replaces a key (409). No answer ever repeats a key |
+| DELETE | `/api/plugin/bitcoin/wallet/{scope}` | Delete the wallet and release every chat, persona and task that named it; 404 unknown |
+| POST | `/api/plugin/bitcoin/check/{scope}` | Balance → `{scope, address, balance_sat, balance_btc, coins}`; 409 no readable key, 502 the block explorers did not answer |
+| GET | `/api/plugin/bitcoin/sends/{scope}` | The last 20 rows of the send ledger for that wallet, newest first → `{scope, sends: [{ts, to, btc, fee, txid, status, why, chat}]}` |
+| GET | `/api/plugin/bitcoin/qr/{scope}` | `?amount=` optional: a pay-me QR → `{address, uri, png}` (png is base64); 404 no wallet, 503 the QR package is missing |
+| GET | `/api/bitcoin/wallets/{scope}/export` | Export one wallet **including its private key** (for your own backup file) |
+| PUT | `/api/bitcoin/wallets/{scope}` | Older core route, kept for old clients. `{wif?, label?, generate?}`: makes a wallet or renames one. It never replaces a key: 409 when the wallet exists and the key differs, or on `generate` for a wallet that exists |
+| DELETE | `/api/bitcoin/wallets/{scope}` | Older core route: removes the wallet but does NOT release the chats, personas and tasks that named it. Use the plugin route |
+| POST | `/api/bitcoin/wallets/{scope}/check` | Older core route: balance → `{success, address, balance_btc, balance_sat}` |
 
 ### Calendar Plugin
 
@@ -688,8 +724,11 @@ The Google account of a calendar is kept by core (one per calendar name); everyt
 | GET | `/api/plugin/calendar/events?start=&end=&calendar=` | Events in a range, repeats expanded, with links and refresh state |
 | POST | `/api/plugin/calendar/events` | Add an event (`to`: `local` or a link id) |
 | PUT / DELETE | `/api/plugin/calendar/events/{id}` | Change / delete an event (`day`: one occurrence) |
-| GET / POST | `/api/plugin/calendar/links` | List a calendar's links / link an ICS address or a Google calendar |
+| GET / POST | `/api/plugin/calendar/links` | List a calendar's links / link an ICS address, a Google calendar, or a calendar of a CalDAV account |
 | PUT / DELETE | `/api/plugin/calendar/links/{id}` | Rename or recolour / unlink |
+| GET / POST | `/api/plugin/calendar/accounts` | `?calendar=`: its CalDAV accounts / add one: `{calendar, preset, server?, username, password? or email_account?, label?}` (iCloud, Fastmail, Nextcloud, Yahoo, any CalDAV server) |
+| PUT / DELETE | `/api/plugin/calendar/accounts/{account_id}` | Change an account (a blank password keeps the stored one) / remove it: its links and their copies go, the server is untouched |
+| GET | `/api/plugin/calendar/config` | The plugin's own settings and their form |
 | POST | `/api/plugin/calendar/target` | Where a calendar's new events go |
 | POST | `/api/plugin/calendar/sync` | Refresh linked calendars now |
 | GET | `/api/plugin/calendar/auth` `callback` `status` | Google sign-in |
@@ -714,7 +753,7 @@ The Google account of a calendar is kept by core (one per calendar name); everyt
 
 ### Devices
 
-Login required, except the 11 doors a device opens with its own key (marked **Device key**: `Authorization: Bearer <device key>`; 401 says the same for a wrong key and an unknown device). Every Devices route answers 404 on a hosted install. See [DEVICES.md](DEVICES.md) and [Satellite Protocol](SATELLITE-PROTOCOL.md).
+Login required, except the 12 doors a device opens with its own key (marked **Device key**: `Authorization: Bearer <device key>`; 401 says the same for a wrong key and an unknown device). Devices routes answer 404 on a hosted install (all but `GET /api/devices/face-feed`). See [DEVICES.md](DEVICES.md) and [Satellite Protocol](SATELLITE-PROTOCOL.md).
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -745,6 +784,9 @@ Login required, except the 11 doors a device opens with its own key (marked **De
 | POST | `/api/devices/{id}/chat` | Device key. `{name}`: the chat it talks in |
 | GET | `/api/devices/{id}/history` | Device key. That chat read back: `?before=&max=`, newest first, with a cursor |
 | GET | `/api/devices/{id}/events` | Device key. SSE stream of what that satellite's light and screen should show |
+| GET | `/api/devices/face-feed` | Her face as a feed: which avatar, on which boards, what went to each |
+| PUT | `/api/devices/face-feed/source` | `{source: "<avatar>" or "off"}`: which avatar is her face on her screens; 422 unknown avatar |
+| POST | `/api/devices/{id}/face/shown` | Device key. `{shown: bool}`: her tile came up on, or left, the board's lit screen (firmware 1.0.0) → `{ok}` |
 
 ### Firmware & Flasher
 
@@ -802,7 +844,7 @@ Who may use this computer's shared workers. A door is `kokoro`, or a loaded plug
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| WS | `/ws/conversation` | Browser conversation-mode WebSocket — connecting starts the mode, disconnecting ends it (session-cookie auth only) |
+| WS | `/ws/conversation` | Browser conversation-mode WebSocket — connecting starts the mode; a deliberate close ends it, while a dropped connection is held for a short grace period so the tab can resume (session-cookie auth only) |
 | GET | `/api/runtime/true-speech` | Current true-speech (conversation) mode state — ephemeral, for UI load-state |
 | PUT | `/api/runtime/true-speech` | Enter/exit true-speech mode (continuous listen, no wakeword) |
 
@@ -818,7 +860,7 @@ Who may use this computer's shared workers. A door is `kokoro`, or a loaded plug
 | GET | `/api/setup/easy/status` | The light on each Easy row, for what is live now: `{voice, ears, wake}`, each `{state, why, busy}` with state `ok`, `loading` (being set up, or its engine is still starting), `blocked` (it works, and a setting keeps it from this computer, such as Play speech here), `failed` (its last switch failed and nothing is set, or it did not load) or `off`. `busy`: its switch job runs now. The page polls only while something is `loading` |
 | POST | `/api/setup/easy/hello` | The Brain row's test: the LLM Auto would use says hello. `{ok, text, name, why}` |
 | POST | `/api/setup/easy/wake` | The Wake row's test: waits up to 8 s for the wake phrase and says only whether it was heard, `{ok, heard, why, busy}`. Nothing is recorded |
-| GET | `/api/setup/easy/brain` | The Easy page's Brain row `{state, text, hint}`: `running` (the launcher's LLM), `ok` (another provider answers), `loading` (starting, or still downloading: the text carries the percent), `stopped` (installed, not running), `none`. When nothing answers on the launcher's port the launcher itself is asked (`--llm-status`, only when its `llm.json` names it). `?light=true` is the page's poll (the launcher only) |
+| GET | `/api/setup/easy/brain` | The Easy page's Brain row `{state, text, hint}`: `running` (the launcher's LLM), `ok` (another provider answers), `loading` (starting, or still downloading: the text carries the percent), `stopped` (installed, not running), `none`. When nothing answers on the launcher's port the launcher itself is asked (`--llm-status`, only when its `llm.json` names it). `?light=true` is the page's poll (the launcher only) Side effect: each call adds the Sapphire Launcher's LLM as a provider if it came up since boot (once) |
 | GET | `/api/setup/featured` | The plugins the wizard offers `{featured: [{name, group, title, blurb, description, icon, enabled, loaded, missing_deps, legacy}]}` |
 
 The wizard itself is the `#setup` view: it hosts the real Settings tabs, so provider readiness and model downloads are the provider switch jobs and their notification rows (above). Provider status and package checks have no routes of their own any more.
@@ -895,45 +937,21 @@ AUTH:
 - Browser: session cookie via /login (30-day sessions). Mutations (POST/PUT/PATCH/DELETE) need header `X-CSRF-Token` = the session token stamped into the page; wrong/missing = 403
 - Programmatic: `Authorization: Bearer <token>` — named API tokens minted at Settings > System > API Keys or POST /api/system/api-tokens (full value shown ONCE at creation; list shows last-4; revoke via DELETE /api/system/api-tokens/{token_id})
 - Bearer auth needs no CSRF token
-- Persona key (token made with `persona`): works ONLY at /mcp; 401 on every other route
-- Open (no login): GET /api/health; /api/events/webhook/{path} (task's own secret); /login, /setup (form CSRF, 5/60s per IP); /favicon.ico; static mounts /static /user-assets /user-fonts /core-widgets; the 11 device doors /api/devices/{id}/{wake,voice,room,text,press,ask,chats,chat,history,events} (device key as Bearer)
+- Persona key (token made with `persona`): works ONLY at /mcp; on any other route it counts as no key (401 on /api/*)
+- Open (no login): GET /api/health; /api/events/webhook/{path} (the task's own secret, when it has one: a webhook with none is open); /login, /setup (form CSRF, 5/60s per IP); /favicon.ico; static mounts /static /user-assets /user-fonts /core-widgets; the 12 device doors /api/devices/{id}/{wake,voice,room,text (POST+GET),press,ask,chats,chat,face/shown,history,events} (device key as Bearer)
 - WebSockets /ws/conversation and /ws/plugin/{plugin}/{path}: session cookie only + Origin == Host; refused = close 4401
 - 429 buckets per session/IP: chat 30/min, TTS 30/min, transcribe 20, plugin routes 60 GET/30 other, devices 240 reads/60 writes
-- 401 = not logged in on /api/* (or persona key off /mcp); 307 = page route → /login (or /setup before setup); 403 = CSRF, vault passphrase, webhook secret
+- 401 = not logged in on /api/* (a persona key there too); 307 = no login on a page route OR on /mcp → /login, and before setup every route → /setup; 403 = a refusal by rule (CSRF, a wrong passphrase / password / webhook secret, managed mode, the privacy gate), never "not logged in"
 
 MCP DOOR (POST /mcp, off until Settings > MCP Server; see MCP.md):
 - JSON-RPC: initialize, ping, tools/list, tools/call. Own tools: ask, tell; with MCP_ROOM_INVITES: room_invite, room_reset, room_update; plus the tools ticked in settings
 - Persona key adds: speak, ding, listen (MCP_SERVER_MIC), memory_* on the persona's own scope, room_read/room_wait/room_post (a door seat in a room here)
 
-ROUTE MODULES (core/routes/):
-- chat.py: chat (active chat only) + stream (SSE; busy chat QUEUES), attach, queue + queue/drop, cancel, events SSE, health/status/init, history editing (?chat= by name), chat sessions + lifecycle (rename, archive, trim, repair, compress + status, bulk delete/clear/export, single export, prompt-preview, landing)
-- content.py: prompts, prompt components, piece trash/rename/usage, toolsets, functions, spices, spice sets, personas (PNG character-card export.png / import-card, legacy JSON import)
-- settings.py: settings CRUD, credentials, SOCKS proxy + /api/socks/status, LLM providers + test + test-thinking + generation-params, custom providers, presets, TTS/STT/embedding provider registries, system status, system prompt (read-only)
-- system.py: extras install, GPU probe + install, backup suite (list/create/delete/download tar.gz/health/estimate/restore/restore-upload/restore-result/send/password), audio devices, continuity tasks, avatars, restart/shutdown, update + cancel + last-update-result, integrity verify + repair, metrics, api-tokens, password, daemon events + webhook (no login), dashboard system-info + component-status, runtime true-speech GET/PUT
-- plugins.py: plugin listing/toggle/rescan/reload/surfaces, install/uninstall/revert/check-update/purge, deps check/install, per-plugin conda envs (build-env, env-status, env DELETE), apps + apps/pins, games/themes/motions, plugin settings, HA/email/bitcoin/gcal/github/ssh routes, the /api/plugin/{plugin}/{path} dispatcher, /ws/plugin/{plugin}/{path}
-- knowledge.py: embedding test/integrity/reembed, memory, goals, knowledge tabs/entries/dedup, people, per-chat RAG documents, images-in-view, export/import
-- tts.py: TTS generate/stream (SSE)/preview/status/stop/test, voices, transcribe, mic active, STT VAD status/test, image upload
-- agents.py: agent status/kinds/chats/list/spawn/transcript/answer/say/stop/providers/dismiss, workspace run/stop/status
-- notifications.py: notification center rows (list, post, read, delete)
-- setup.py: setup wizard state + featured plugins
-- perception.py: perception deposit, cadence status
-- devices.py: devices, connections, provision, glass stream, firmware + flasher, the 11 device-key doors
-- wakeword.py: wake word library + per-listener switch
-- ir.py: IR code library
-- mcp.py: /mcp door + /api/mcp/tools
-- rooms.py: chat rooms (seats, say, rounds, voice pacing)
-- commands.py: slash command menu + run
-- worker_door.py: shared worker door clients (kokoro, plugin client modes)
-- vault.py: privacy vault setup/unlock/lock/rekey/move
-- conversation.py: /ws/conversation WebSocket (browser conversation mode — connect starts, disconnect ends)
-- store.py: read-only store proxy — plugins AND personas (status, categories, list/search, detail, persona install)
-- dashboard.py: dashboard widget layout + available widgets
-- backgrounds.py: scene background library (list/serve/upload/delete, webp)
-- fonts.py: font registry, serve, pinned sha256-verified download
-- videos.py: in-app Video Guide feed (cached)
-- media.py: tool-image serving
-- docs.py: doc tree, search, markdown content
-Plus app-level routes in core/api_fastapi.py: /, /login, /logout, /setup, /favicon.ico, /api/avatar/{filename}, /plugin-web/{name}/{path}, /workspace/{project}/{path}, /cdn-cache/{path}, and the static mounts /static, /user-assets, /user-fonts, /core-widgets.
+YOU have no HTTP tool: this section is for helping a user script against Sapphire. The full list of routes, by area, is the human half: full=true, or section='<area heading>' (Chat, Chat Sessions, Settings, Backup, Devices, Plugins — Listing & Lifecycle, Privacy Vault …).
+
+EXAMPLE: curl -k -H "Authorization: Bearer $TOKEN" "https://localhost:8073/api/history?chat=default" · curl -k -N -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"text":"hi","chat":"work"}' https://localhost:8073/api/chat/stream (SSE). Token: Settings > System > API Keys (shown once). The certificate is self-signed: -k, or pin it.
+
+MEMORY ROUTES: /api/memory, /api/goals, /api/knowledge and /api/people are the LEGACY engine (plugin `memory`, off by default). Her default memory is Mind Palace, at /api/plugin/mindpalace/….
 
 KEY ENDPOINTS:
 - GET /api/status — unified UI state (prompt, context, spice, streaming, TTS/STT readiness, vault state)
@@ -972,7 +990,7 @@ MULTI-ACCOUNT CREDENTIALS (email/gcal/github):
 - GET /api/{type}/accounts — list all scoped accounts
 - PUT /api/{type}/accounts/{scope} — set account for scope
 - DELETE /api/{type}/accounts/{scope} — remove
-- Bitcoin differs: /api/bitcoin/wallets[/{scope}] (+ /check, /export) — wallets, not accounts
+- Bitcoin differs: wallets, not accounts. List: GET /api/bitcoin/wallets; key export: GET /api/bitcoin/wallets/{scope}/export. WRITES go through the plugin: PUT/DELETE /api/plugin/bitcoin/wallet/{scope} (replace a key only with `replace` naming the old address, else 409 needs_replace), POST …/check/{scope}, GET …/sends/{scope}, GET …/qr/{scope}. The old core PUT /api/bitcoin/wallets/{scope} only makes or renames a wallet and never replaces a key (409)
 
 COMMON PATTERNS:
 - Scoped endpoints use ?scope=name query param

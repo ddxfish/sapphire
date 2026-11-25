@@ -73,7 +73,7 @@ All of the following are enforced automatically — you cannot disable them:
 
 - **Authentication**: `require_login` dependency — session or API key required
 - **CSRF**: Middleware validates tokens on POST/PUT/DELETE from browser sessions
-- **Rate limiting**: 60 GET / 30 non-GET requests per minute, per plugin (bucketed by session — or by bearer-token hash when bearer auth is used). GETs on a route declared `media: true` or `live: true` are exempt — that is the one door for streaming a file to the browser
+- **Rate limiting**: 60 GET requests per minute, and 30 for each other method (POST, PUT and DELETE are counted apart), per plugin (bucketed by session — or by bearer-token hash when bearer auth is used). GETs on a route declared `media: true` or `live: true` are exempt — that is the one door for streaming a file to the browser
 - **Bearer-token auth (opt-in)**: a plugin may *add* (never weaken) a bearer path by writing `user/plugin_state/{plugin}_mcp_key.json` (`{"key": "..."}`). A request whose `Authorization: Bearer <key>` matches then bypasses session login — used by MCP clients. Session CSRF still cannot be disabled.
 
 ## Example: Webcam Capture Endpoint
@@ -105,7 +105,7 @@ core/plugins/webcam/
 
 ### Sharing state between files
 
-Route, hook and socket files are **exec'd, each into its own namespace** — they are not importable modules, relative imports don't work in them, and a module-level dict in `routes/capture.py` is invisible to `tools/webcam.py`. (Handlers from the *same* file do share that file's namespace.) To share state across files, park it in a named module in `sys.modules`; both files run the same helper:
+Route, hook and socket files are **exec'd, each into its own namespace** — they are not importable modules, relative imports don't work in them, and a module-level dict in `routes/capture.py` is invisible to `tools/webcam.py`. (Handlers from the *same* file do share that file's namespace, within one capability: a file used both as a hook and as a route is run twice, with two separate states.) To share state across files, park it in a named module in `sys.modules`; both files run the same helper:
 
 ```python
 import sys, threading, types
@@ -215,8 +215,8 @@ async def view(websocket, settings):
 - `body`: parsed JSON dict for POST/PUT/DELETE (DELETE bodies ARE parsed — confirm tokens ride them); `{}` for GET, multipart requests, unparseable JSON, or a non-object JSON body.
 - Returns: `dict` → JSON 200; `(dict, int)` 2-tuple → JSON with that status code; `Response` object → passed through; anything else → FastAPI default serialization.
 - Sync handlers run in a threadpool; async handlers are awaited directly.
-- Enforced, not disableable: session auth (`require_login`), CSRF on POST/PUT/DELETE from browser sessions, rate limit 60 GET / 30 non-GET per minute per plugin (GETs on `media: true` routes exempt — serve the file with a `FileResponse`, which does HTTP Range).
+- Enforced, not disableable: session auth (`require_login`), CSRF on POST/PUT/DELETE from browser sessions, rate limit 60 GET and 30 per other method per minute per plugin (GETs on `media: true` or `live: true` routes exempt — serve the file with a `FileResponse`, which does HTTP Range).
 - Bearer opt-in: `user/plugin_state/{plugin}_mcp_key.json` = `{"key": "..."}` lets a matching `Authorization: Bearer` header bypass session login (rate-bucketed by token hash). Additive only — session CSRF can't be weakened.
 - Routes register on load, drop on unload, re-register on hot reload.
-- Route, hook and socket files are exec'd, one namespace per file (handlers in the same file share it): not importable, no relative imports, no module state shared across files. Share state via a named module in `sys.modules` (the webcam plugin: `_sapphire_webcam_state`). Tool files are installed in sys.modules as `plugins.<name>.tools.<file>`.
+- Route, hook and socket files are exec'd, one namespace per file and per capability (handlers in the same file share it; a file used as both hook and route runs twice with separate state): not importable, no relative imports, no module state shared across files. Share state via a named module in `sys.modules` (the webcam plugin: `_sapphire_webcam_state`). Tool files are installed in sys.modules as `plugins.<name>.tools.<file>`.
 - Sockets: `capabilities.sockets` = `[{path, handler: "file.py:async_fn"}]` -> `/ws/plugin/{plugin_name}/{path}`; handler `async def fn(websocket, settings)` gets an ACCEPTED Starlette WebSocket; core does login+Origin, cap 8/plugin (4429), 4404 unknown, 4410 on plugin unload (handler task cancelled), 1011 on raise. No bearer, no CSRF header.

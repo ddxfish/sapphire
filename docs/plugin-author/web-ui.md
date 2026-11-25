@@ -9,12 +9,15 @@ Plugin web UIs can import these from `/static/shared/`:
 | Module | Key Exports | Purpose |
 |--------|------------|---------|
 | `plugin-registry.js` | `registerPluginSettings(config)`, `unregisterPluginSettings(id)` | Register/remove settings tabs |
+| `plugin-settings-renderer.js` | `renderSettingsForm(container, schema, values, opts)`, `readSettingsForm(container, schema)` | Draw a form from a settings schema and read it back: the same renderer the Settings page uses |
+| `account-manager.js` | `createAccountManager(config)` | The accounts list with add / edit / delete that the email, calendar and other account plugins share |
+| `accordion.js` | `accordionHtml({id, title, icon, desc, content, open})`, `initAccordions(root, ns)` | Folding sections |
 | `plugins-api.js` | **default export** object — `pluginsAPI.listPlugins()`, `.getSettings(name)`, `.saveSettings(name, data)`, `.resetSettings(name)`, `.togglePlugin(name)`, plus install / uninstall / revert / update-check helpers | Plugin backend API wrapper (auto-injects CSRF) |
 | `notify.js` | `notify({title, body, level, go, source, key})`, `flash(msg, level, seconds)`, `goTo(go)`, `rows(filter)`, `counts()`, `onChange(fn)` | The notification center: a row on the server + the toast its level earns, or a toast alone (`flash`) |
 | `toast.js` | `showToast(msg, type, duration)`, `showActionToast(msg, label, callback, type, duration)` | Legacy names, re-exported from `notify.js`: `warning`/`error` become rows, `success`/`info` flash |
 | `modal.js` | `showModal(title, fields, onSave, opts)`, `showConfirm(msg, onConfirm)`, `showPrompt(title, label, default)`, `showHelpModal(title, text)`, `escapeHtml(str)` | Dialogs with auto form serialization |
 | `danger-confirm.js` | `showDangerConfirm(config)`, `showDangerBanner(container, msg)` | High-stakes type-to-confirm gates |
-| `fetch.js` | `fetchWithTimeout(url, opts, timeout)`, `sessionId`, `errWords(e, fallback)`, `statusWords(status)`, `wordsOf(body, status)`, `errorText(res)`, `responseError(res)` | Pre-configured fetch with CSRF, 401 redirect, timeout — plus THE plain-words error helpers: a thrown error or a failed response turned into a sentence a person can read (never "Failed to fetch") |
+| `fetch.js` | `fetchWithTimeout(url, opts, timeout)`, `sessionId`, `errWords(e, fallback)`, `statusWords(status)`, `wordsOf(body, status)`, `errorText(res)`, `responseError(res)` | Fetch with CSRF, 401 redirect and a timeout (60 s by default). `fetchWithTimeout` does NOT return a Response: it returns the parsed JSON (a Blob for audio, `null` for a 204) and throws an Error with `.status` and `.code` on any non-2xx, so never call `.json()` on its result — plus THE plain-words error helpers: a thrown error or a failed response turned into a sentence a person can read (never "Failed to fetch") |
 | `download.js` | `saveBlob(blob, name)`, `saveJson(name, data)`, `saveUrl(url, name)` | THE way to save a file to the user's disk. A bare `<a href download>` fails on the self-signed cert (Brave), and a blob revoked in the same tick loses the file — always go through these |
 | `llm-picker.js` | `providerOptions(data, current, {includeNone, autoLabel})`, `refreshModelControls(data, els, providerKey, currentModel)`, `readModel(els, providerKey)` | THE LLM provider + model picker. Provider and model are one value: auto/none hide the model controls. `data` = `{providers, metadata}` from `/api/llm/providers`; your surface owns the markup and saving |
 
@@ -24,7 +27,7 @@ single default object:
 ```javascript
 import { showToast } from '/static/shared/toast.js';        // named
 import pluginsAPI from '/static/shared/plugins-api.js';      // default
-const plugins = await pluginsAPI.listPlugins();
+const { plugins } = await pluginsAPI.listPlugins();   // the reply is {plugins, locked, ...}
 ```
 
 ## Modal Field Types
@@ -121,7 +124,7 @@ The module must export a `default` object with an `init()` method. It's loaded v
 | Event | Detail | Fires When |
 |-------|--------|------------|
 | `sapphire:tool_start` | `{id, name, args}` | A tool begins executing during chat streaming |
-| `sapphire:plugin_toggled` | the toggle API response — `{plugin, enabled, reload_required, ...}` — **or no detail at all** (the Store fires it bare after an install) | A plugin is toggled on/off in the UI (the app refreshes init data and reloads plugin scripts). Read `e.detail?.plugin`, never `e.detail.plugin` |
+| `sapphire:plugin_toggled` | the toggle API response — `{plugin, enabled, reload_required, ...}` — always with a detail today (the Store sends `{plugin, enabled: true}` after an install) | A plugin is toggled on/off in the UI (the app refreshes init data and reloads plugin scripts). Read `e.detail?.plugin`, never `e.detail.plugin` |
 | `sapphire:plugin_updated` | `{plugin}` | A plugin is updated or reverted in place (the app drops that plugin's script cache and reloads it) |
 
 ### CSRF Headers

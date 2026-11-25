@@ -6,6 +6,8 @@ the chat by itself** when it is done — with or without a browser open.
 
 ## What an agent is
 
+Both plugins that bring agents are **off by default**: turn on **Agents** (the `llm` kind) or **Claude Code** in Settings → Plugins, and give the chat's toolset the four agent tools (see below). No shipped toolset carries them.
+
 A *kind* is a sort of agent a plugin teaches her — today two ship:
 
 | kind | plugin | what it is | cloud? | follow-up turns? |

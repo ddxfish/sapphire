@@ -21,6 +21,8 @@ A single-file GUI that installs and manages everything — no terminal needed. I
 2. Run it, click **Scan System** to see what's already installed, then **Go** to install anything missing
 3. Click **Launch**, then **Open Browser**
 
+The launcher can also install and run a local LLM for you (its LLM tab). Sapphire finds that model by herself: on a fresh install it becomes her first choice, with nothing to configure.
+
 If you use the launcher, you're done — skip to [First Run](#first-run) step 2. The rest of this page is the manual path: same result, done by hand.
 
 ---
@@ -42,7 +44,7 @@ bash Miniconda3-latest-Linux-x86_64.sh -b
 ~/miniconda3/bin/conda init
 ```
 
-Close and reopen your terminal.
+Close and reopen your terminal, then accept conda's Terms of Service (see [below](#accept-condas-terms-of-service-both-os)).
 
 ### Windows
 
@@ -51,11 +53,23 @@ Open PowerShell as Administrator:
 ```powershell
 winget install Anaconda.Miniconda3
 winget install Git.Git
+& "$env:USERPROFILE\miniconda3\condabin\conda.bat" init powershell
+& "$env:USERPROFILE\miniconda3\condabin\conda.bat" init cmd.exe
 ```
 
-Or download Miniconda manually from [miniconda.io](https://docs.conda.io/en/latest/miniconda.html)
+The two `init` lines put `conda` on your path: without them a new window does not know the command. Or download Miniconda manually from [miniconda.io](https://docs.conda.io/en/latest/miniconda.html)
 
 Close and reopen PowerShell.
+
+### Accept conda's Terms of Service (both OS)
+
+In the new terminal, once. Since July 2025 conda refuses to create an environment until this is done:
+
+```bash
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/msys2
+```
 
 > **Why Git?** Cloning Sapphire, and plugins whose dependencies install straight from a git commit — the Discord plugin's `py-cord` is pinned that way, so `git` has to stay on your PATH for it to install. If you ever installed `discord.py`, run `pip uninstall discord.py` first: it claims the same `discord` import name and breaks py-cord.
 
@@ -84,7 +98,7 @@ cd sapphire
 pip install -r requirements.txt
 ```
 
-> **Windows with an NVIDIA GPU:** the default `torch` from PyPI has no CUDA, so voice would run on the CPU. Easiest: the top of Settings > TTS and Settings > STT offers **Install GPU torch and restart**, which picks the right wheel for your card and installs it on the restart, before Sapphire boots. By hand, in the same env: `pip install torch --index-url https://download.pytorch.org/whl/cu128` (GTX 10-series or older: `cu126`). Linux gets CUDA from PyPI already. Details: [TROUBLESHOOTING.md](TROUBLESHOOTING.md#voice-runs-on-the-cpu-gpu-found-torch-cannot-use-it).
+> **Windows with an NVIDIA GPU:** the default `torch` from PyPI has no CUDA, so voice would run on the CPU. Easiest: the top of Settings > TTS and Settings > STT offers **Install GPU torch and restart**, which picks the right wheel for your card and installs it on the restart, before Sapphire boots. By hand, in the same env: `pip install torch --index-url https://download.pytorch.org/whl/cu128` (GTX 10-series or older: `cu126`). On Linux the `torch` from PyPI already runs Kokoro on the card. Whisper needs one more download for the card (about 550 MB, CUDA 12 libraries): Settings > STT offers **Install Whisper GPU support**; until then her ears run on the processor. Details: [TROUBLESHOOTING.md](TROUBLESHOOTING.md#voice-runs-on-the-cpu-gpu-found-torch-cannot-use-it).
 
 ### Minimal Install
 
@@ -111,7 +125,7 @@ pip install -r install/requirements-stt.txt
 # Wakeword (OpenWakeWord detection)
 pip install -r install/requirements-wakeword.txt
 
-# Flashing ESP32 boards from Sapphire's own computer (Settings > Devices > New board)
+# Flashing ESP32 boards from Sapphire's own computer (System > Devices > + Add Satellite > Dev board)
 # Not needed to flash from the browser (Chrome/Edge): that lane has no dependency.
 # Skip it: the Devices page offers to install this set the first time it is needed.
 pip install -r install/requirements-flash.txt
@@ -170,17 +184,19 @@ Sapphire automatically falls back between enabled providers if one fails.
 python main.py
 ```
 
-1. Open https://localhost:8073
+1. Open https://localhost:8073. Your browser warns about the certificate, because Sapphire makes her own: choose Advanced → Proceed, once.
 2. Create a password (secures web UI and API)
-3. Complete setup wizard (LLM, voice, audio)
+3. Complete the setup wizard: **Easy** (one page, picked for this computer) or **Advanced** (step by step: you, LLM, voice, audio)
 4. Send a test message
+
+The first run downloads her voice, her ears and her memory model (a few hundred MB). Each shows its progress in the notification center (the bell), and a download that stops moving says why.
 
 Sapphire creates `user/` directory with your settings and data. Run once before customizing.
 
 ### Change or reset the password
 
 - **Change it** in Settings › System › Login Password. Enter the current one, pick a new one (10+ characters). The tab you did it from stays logged in; every other device and browser is asked to log in again once.
-- **Forgot it?** Stop Sapphire, delete the `secret_key` file from the config directory, start again — you get the setup page back. Config directory: Linux `~/.config/sapphire/`, macOS `~/Library/Application Support/Sapphire/`, Windows `%APPDATA%\Sapphire\`.
+- **Forgot it?** Stop Sapphire, delete the `secret_key` file from the config directory, start again — you get the setup page back. Config directory: Linux `~/.config/sapphire/` (or `$XDG_CONFIG_HOME/sapphire` when that is set), macOS `~/Library/Application Support/Sapphire/`, Windows `%APPDATA%\Sapphire\`.
 
 ---
 
@@ -311,7 +327,15 @@ WINDOWS PREREQS:
 ```
 winget install Anaconda.Miniconda3
 winget install Git.Git
+& "$env:USERPROFILE\miniconda3\condabin\conda.bat" init powershell   (then the same with: init cmd.exe)
 # reopen PowerShell
+```
+
+CONDA TERMS OF SERVICE (both OS, once, or `conda create` refuses):
+```
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/msys2
 ```
 
 INSTALL (both OS):
@@ -358,4 +382,4 @@ TROUBLESHOOTING:
 - "Connection refused": LLM server not running
 - LLM not responding: Check provider enabled in Settings
 
-UPDATE: cd sapphire && git pull (preserves user/)
+UPDATE: cd sapphire && git pull && pip install -r requirements.txt (or the in-app updater; preserves user/). Never git pull alone: a new release can need a new package (Email needs imapclient).

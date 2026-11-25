@@ -114,7 +114,9 @@ On startup (and plugin rescan), Sapphire:
 4. Tries the baked-in official key first, then authorized third-party keys
 5. Reports the verification tier in logs and the plugin list UI
 
-Authorized keys are fetched from a remote URL (`PLUGIN_KEYS_URL` in settings), cached locally for 24 hours, with a disk fallback if the fetch fails.
+A signed plugin may hold no compiled code: any `.pyc`, `.pyo`, `.so`, `.pyd`, `.dll` or `.dylib` inside it makes it fail verification (compiled code cannot be signed, and Python would run it ahead of the signed source). Python's own `__pycache__` folders are removed when a plugin passes.
+
+Authorized keys come from a remote URL (`PLUGIN_KEYS_URL` in settings) and are kept on disk (`user/authorized_plugin_keys.json`). A copy less than 24 hours old is used with no network call at all; only an older or missing copy triggers a fetch, and a failed fetch falls back to the old copy.
 
 ## plugin.sig Format
 
