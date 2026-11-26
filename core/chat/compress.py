@@ -12,7 +12,8 @@
 #   extract — /extract-daily: the same day summaries for a chat of any age,
 #             handed to memory instead; the chat is not written (below).
 # target_tokens is the approximate total size of the compressed output
-# (whole, chunked) or of each day's summary (daily).
+# (whole, chunked) or of each day's summary (daily, extract). It is the size
+# of the WRITTEN text: a model's thinking is given its own room (_summarize).
 #
 # One job at a time, module-level state, thread-run: a local model chewing a
 # big chat takes minutes and must not hold an HTTP worker. Routes 409 while
@@ -42,6 +43,10 @@ REQUEST_TIMEOUT = 600          # background job — generous beats truncated
 # call, so no call can blow a destination model's context window. The chat
 # itself is NEVER touched until every call has succeeded (write-last).
 INPUT_CEILING_TOKENS = 12000
+# Output room a summarize call gets on top of the summary's own size: what a
+# turn on that model gets (make_provider), never under this. Thinking is spent
+# from the same limit as the answer on every OpenAI-style endpoint.
+ROOM_FLOOR = 8192
 
 _job_lock = threading.Lock()
 _job: Dict[str, Any] = {"running": False, "done": False}
@@ -200,10 +205,17 @@ def make_provider(provider_key: str, model: str = "", conversation: str = None,
     unbuildable or refused provider."""
     from core.chat.llm_providers.resolve import resolve, ProviderRefused
     try:
-        return resolve(provider_key, model, private=private, timeout=REQUEST_TIMEOUT,
-                       health='skip', conversation=conversation).provider
+        sel = resolve(provider_key, model, private=private, timeout=REQUEST_TIMEOUT,
+                      health='skip', conversation=conversation)
     except ProviderRefused as e:
         raise ValueError(str(e)) from e
+    try:
+        from core.chat.llm_providers import provider_registry
+        room = int(provider_registry.get_generation_params(sel.key, sel.effective_model).get('max_tokens') or 0)
+    except Exception:
+        room = 0
+    sel.provider.output_room = max(room, ROOM_FLOOR)     # read by _summarize
+    return sel.provider
 
 
 # What to keep and whose voice: the only part a person edits. The frames below
@@ -290,6 +302,15 @@ DAILY_INSTRUCTIONS = (
     "is one short sentence saying it was a quiet day."
 )
 
+# The words after the command, for one run. They go in as part of the
+# {instructions} value, so they sit last before the transcript.
+_NOTE_CLAUSE = (
+    "\n\nOne more instruction was given for this run only. It was given for "
+    "every day of the run, so it may name days other than this one. Where it "
+    "and the wording above disagree, follow this one. The size above still "
+    "holds:\n"
+)
+
 INSTRUCTIONS_PATH = Path(__file__).parent.parent.parent / "user" / "prompts" / "compress_instructions.txt"
 DAILY_INSTRUCTIONS_PATH = INSTRUCTIONS_PATH.with_name("compact_daily_instructions.txt")
 MAX_INSTRUCTIONS_CHARS = 8000
@@ -356,18 +377,40 @@ def cap_text(text: str, ceiling: int = INPUT_CEILING_TOKENS) -> str:
 
 
 def _summarize(provider, frame: str, text: str, budget: int, guide: Dict[str, str]) -> str:
-    prompt = frame.format(budget=budget, text=cap_text(text), **guide)
-    resp = provider.chat_completion(
-        [{"role": "user", "content": prompt}],
-        generation_params={"max_tokens": int(budget * 1.3) + 200,
-                           "temperature": 0.3})
-    out = (resp.content or "").strip()
-    # Local models sometimes leak reasoning into content despite extraction.
+    """One summary, whole or not at all. `budget` is the size of the WRITTEN
+    text, with the slack `allowed` gives it, and is checked on that text. The
+    call's own limit is that plus the model's room (make_provider). The limit
+    used to be set by the size alone: where thinking is spent from the same
+    limit, a thinking model was cut off mid-summary or handed back only its
+    thinking, and either was kept as the summary (2026-11-26). A reply that is
+    cut off, empty or over its size is asked for once more with double the
+    room; then the job fails and that summary is not kept."""
     from core import think
-    out = think.strip(out)
-    if not out:
-        raise RuntimeError("Summarizer returned empty content")
-    return out
+    from core.chat.llm_providers.base import LENGTH_FINISH
+    prompt = frame.format(budget=budget, text=cap_text(text), **guide)
+    allowed = int(budget * 1.3) + 200
+    room = getattr(provider, "output_room", ROOM_FLOOR)
+    why = ""
+    for attempt in (1, 2):
+        resp = provider.chat_completion(
+            [{"role": "user", "content": prompt}],
+            generation_params={"max_tokens": allowed + room * attempt, "temperature": 0.3})
+        # Thinking handed back in place of an answer is no answer. Local models
+        # also leak reasoning into content despite extraction.
+        out = "" if getattr(resp, "content_is_reasoning", False) else think.strip((resp.content or "").strip())
+        size = count_tokens(out)
+        if size > allowed:
+            why = (f"came out at about {size} tokens, over the {budget} asked for. "
+                   f"Give a bigger size, or use a terser model")
+        elif getattr(resp, "finish_reason", None) in LENGTH_FINISH:
+            why = ("was cut off: the model ran out of room, most often by thinking. "
+                   "Turn its thinking down, or raise its max tokens")
+        elif not out:
+            why = "came back empty"
+        else:
+            return out
+        logger.warning(f"[COMPRESS] A summary {why.split('.')[0].split(':')[0]} (try {attempt} of 2)")
+    raise RuntimeError(f"A summary {why}. It was not kept.")
 
 
 def _merge_partials(provider, partials: List[str], target_tokens: int,
@@ -414,11 +457,12 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
                       target_tokens: int, on_progress=None,
                       instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
                       room: bool = False, day: Optional[date] = None,
-                      daily_instructions: str = DAILY_INSTRUCTIONS) -> List[Dict[str, Any]]:
+                      daily_instructions: str = DAILY_INSTRUCTIONS, note: str = "") -> List[Dict[str, Any]]:
     """Compress `head` into synthetic summary pairs. Pure of storage —
     testable with a mock provider. on_progress(str) narrates for job status.
     day (whole mode): the pair is that day's summary, written by the day
-    wording (daily_instructions) on top of `instructions`."""
+    wording (daily_instructions) on top of `instructions`. note: the words
+    typed after /compact-daily or /extract-daily, for this run's days only."""
     results = day is None       # a day's summary is written from what was said, not from tool results
     chunks = chunk_by_turns(head, CHUNK_INPUT_TOKENS, results)  # module global: patchable
     if not chunks:
@@ -427,6 +471,8 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
     if day:
         guide["voice"] += (f" The conversation took place on {day_label(day)}." + _DAILY_CLAUSE
                            + " " + (daily_instructions or DAILY_INSTRUCTIONS).strip())
+        if (note or "").strip():
+            guide["instructions"] += _NOTE_CLAUSE + note.strip()   # last before the transcript, in every call of the day
     if mode == "chunked":
         per = max(MIN_PAIR_TOKENS, target_tokens // len(chunks))
         pairs = []
@@ -444,13 +490,16 @@ def compress_messages(head: List[Dict[str, Any]], mode: str, provider,
         summary = _summarize(provider, _CHUNK_FRAME,
                              render_transcript(chunks[0], persona, room, results), target_tokens, guide)
     else:
+        # Each partial gets its share of the size asked for, never under the
+        # usual one. A fixed 1000 a chunk ignored the size: a long day asked
+        # for at 8K was merged from the same thin partials as one at 2K.
+        per = min(target_tokens, max(PARTIAL_SUMMARY_TOKENS, -(-target_tokens // len(chunks))))
         partials = []
         for i, c in enumerate(chunks):
             if on_progress:
                 on_progress(f"chunk {i + 1}/{len(chunks)}")
             partials.append(_summarize(provider, _CHUNK_FRAME,
-                                       render_transcript(c, persona, room, results),
-                                       min(PARTIAL_SUMMARY_TOKENS, target_tokens), guide))
+                                       render_transcript(c, persona, room, results), per, guide))
         summary = _merge_partials(provider, partials, target_tokens, on_progress, guide)
     return _summary_pair(summary, head, persona, day)
 
@@ -545,7 +594,8 @@ def daily_plan(head: List[Dict[str, Any]], days: Optional[int], start_hour: int,
 
 def daily_pairs(plan: Dict[str, Any], provider, target_tokens: int, on_progress=None,
                 instructions: str = DEFAULT_INSTRUCTIONS, persona: str = "",
-                room: bool = False, daily_instructions: str = DAILY_INSTRUCTIONS) -> List[Dict[str, Any]]:
+                room: bool = False, daily_instructions: str = DAILY_INSTRUCTIONS,
+                note: str = "") -> List[Dict[str, Any]]:
     """One new pair per finished day of raw turns, merged in day order with
     the kept pairs and today's turns (raw, as they were)."""
     items = list(plan["kept"]) + list(plan.get("today") or [])
@@ -555,7 +605,7 @@ def daily_pairs(plan: Dict[str, Any], provider, target_tokens: int, on_progress=
             on_progress(f"day {i + 1}/{len(days)}")
         items.append((day, start, compress_messages(
             rows, "whole", provider, target_tokens, instructions=instructions,
-            persona=persona, room=room, day=day, daily_instructions=daily_instructions)))
+            persona=persona, room=room, day=day, daily_instructions=daily_instructions, note=note)))
     items.sort(key=lambda it: (it[0], it[1]))
     return [m for _, _, rows in items for m in rows]
 
@@ -586,7 +636,7 @@ def _int_setting(config, key: str, default: int, lo: int, hi: int) -> int:
 def _compress_chat(session_manager, chat_name: str, mode: str,
                    provider_key: str, model: str, target_tokens: int,
                    keep_last_turns: int, backup: bool,
-                   on_progress=None, persona: str = "") -> Dict[str, Any]:
+                   on_progress=None, persona: str = "", note: str = "") -> Dict[str, Any]:
     exported = session_manager.export_chat(chat_name)
     if exported is None:
         raise ValueError(f"Chat '{chat_name}' not found")
@@ -636,7 +686,7 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     if plan is not None:
         pairs = daily_pairs(plan, provider, int(target_tokens), on_progress=on_progress,
                             instructions=instructions, persona="" if room else persona, room=room,
-                            daily_instructions=day_wording)
+                            daily_instructions=day_wording, note=note)
     else:
         pairs = compress_messages(head, mode, provider, int(target_tokens),
                                   on_progress=on_progress, instructions=instructions,
@@ -815,7 +865,7 @@ def extract_plan(session_manager, chat_name: str) -> Dict[str, Any]:
 
 
 def _extract_chat(session_manager, chat_name: str, provider_key: str, model: str,
-                  target_tokens: int, persona: str = "", on_progress=None) -> Dict[str, Any]:
+                  target_tokens: int, persona: str = "", on_progress=None, note: str = "") -> Dict[str, Any]:
     plan = extract_plan(session_manager, chat_name)
     days = plan["days"]
     if not days:
@@ -831,7 +881,7 @@ def _extract_chat(session_manager, chat_name: str, provider_key: str, model: str
             on_progress(f"day {i + 1}/{len(days)}")
         try:
             pair = compress_messages(rows, "whole", provider, int(target_tokens), instructions=instructions,
-                                     persona=persona, day=day, daily_instructions=wording)
+                                     persona=persona, day=day, daily_instructions=wording, note=note)
             # Kept the moment it is written: a long chat is hours of model
             # work, and a failure at day 150 must not cost the 149 before it.
             why = keeper.keep_extracted(session_manager, chat_name, {
@@ -859,7 +909,7 @@ def stop_extract() -> bool:
 
 
 def start_extract_job(session_manager, chat_name: str, *, provider_key: str, model: str,
-                      target_tokens: int, persona: str = ""):
+                      target_tokens: int, persona: str = "", note: str = ""):
     """Start the background extract. It holds the compress job's one slot: two
     jobs would be two streams on one model. Returns (ok, error)."""
     def done(report):
@@ -870,7 +920,7 @@ def start_extract_job(session_manager, chat_name: str, *, provider_key: str, mod
     def work(on_progress):
         _extract_stop.clear()
         return _extract_chat(session_manager, chat_name, provider_key, model, target_tokens,
-                             persona, on_progress=on_progress)
+                             persona, on_progress=on_progress, note=note)
     return _start_job(session_manager, chat_name, "extract", work, begin="Saving a chat's days to memory",
                       done=done, failed="Saving days to memory failed", go={'view': 'layer-daily'})
 
@@ -882,11 +932,12 @@ def get_job_status() -> Dict[str, Any]:
 
 def start_compress_job(session_manager, chat_name: str, *, mode: str,
                        provider_key: str, model: str, target_tokens: int,
-                       keep_last_turns: int, backup: bool, persona: str = ""):
-    """Start the one-at-a-time background compress. Returns (ok, error)."""
+                       keep_last_turns: int, backup: bool, persona: str = "", note: str = ""):
+    """Start the one-at-a-time background compress. Returns (ok, error).
+    note: this run's own instruction for the days (daily mode only)."""
     def work(on_progress):
         return _compress_chat(session_manager, chat_name, mode, provider_key, model, target_tokens,
-                              keep_last_turns, backup, on_progress=on_progress, persona=persona)
+                              keep_last_turns, backup, on_progress=on_progress, persona=persona, note=note)
     return _start_job(
         session_manager, chat_name, mode, work, begin=f"Compressing a chat ({mode})",
         done=lambda r: f"Chat compressed: {r.get('messages_before')} to {r.get('messages_after')} messages",

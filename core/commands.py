@@ -214,6 +214,27 @@ def _undo(chat, args, by):
 
 DAILY_TOKENS = 2000
 _TOKENS_RE = re.compile(r'(\d{1,5})(k?)')
+_SIZE_TRY_RE = re.compile(r'\d+[a-z]?')     # 4K, 2500, and the typos of one (4M): a size or a refusal, never words
+
+
+def _daily_args(name, args):
+    """(tokens, note, refusal) of /compact-daily and /extract-daily. A size
+    first, when the first word is one. Every word after it is this run's
+    instruction to whoever writes the days, kept as typed: the person's, or
+    hers to herself."""
+    from core.chat.compress import MAX_INSTRUCTIONS_CHARS
+    first = args.split(None, 1)[0] if args else ''
+    tokens, note = DAILY_TOKENS, args
+    if _SIZE_TRY_RE.fullmatch(first.lower()):
+        m = _TOKENS_RE.fullmatch(first.lower())
+        tokens, note = (int(m[1]) * (1000 if m[2] else 1) if m else 0), args[len(first):]
+        if not 500 <= tokens <= 20000:
+            return 0, '', (f"/{name} takes a size per day from 500 to 20K tokens, like 4K, not '{first}'. "
+                           f"Instructions for writing the days come after the size, or start with a word.")
+    note = note.strip()
+    if len(note) > MAX_INSTRUCTIONS_CHARS:
+        return 0, '', f"The instructions after /{name} are capped at {MAX_INSTRUCTIONS_CHARS} characters."
+    return tokens, note, None
 
 
 def _compact_daily(chat, args, by):
@@ -226,30 +247,28 @@ def _compact_daily(chat, args, by):
     refused = _cut_refused(sm, chat, 'compact-daily')
     if refused:
         return {'ok': False, 'say': refused}
-    tokens = DAILY_TOKENS
-    if args:
-        m = _TOKENS_RE.fullmatch(args.lower().replace(' ', ''))
-        tokens = int(m[1]) * (1000 if m[2] else 1) if m else 0
-        if not 500 <= tokens <= 20000:
-            return {'ok': False, 'say': f"/compact-daily takes a size per day from 500 to 20K tokens, like 4K, not '{args}'."}
+    tokens, note, bad = _daily_args('compact-daily', args)
+    if bad:
+        return {'ok': False, 'say': bad}
     settings = sm.read_chat_settings(chat)
     if settings is None:
         return {'ok': False, 'say': f"Chat '{chat}' not found."}
     persona = settings.get('persona') or ''
     if persona and not persona_manager.exists(persona):
         persona = ''
+    told = ' Each day is written with your instructions.' if note else ''
 
     def _start():
         return compress.start_compress_job(
             sm, chat, mode='daily', provider_key=settings.get('llm_primary') or 'auto',
             model=settings.get('llm_model') or '', target_tokens=tokens, keep_last_turns=1,
-            backup=not settings.get('private_chat'), persona=persona)
+            backup=not settings.get('private_chat'), persona=persona, note=note)
 
     if by == 'user':
         if sm.is_streaming(chat):
             return {'ok': False, 'say': 'Wait for the reply to finish, then /compact-daily.'}
         ok, err = _start()
-        return {'ok': ok, 'say': 'Compacting by day in the background.' if ok else err}
+        return {'ok': ok, 'say': 'Compacting by day in the background.' + told if ok else err}
 
     if has_deferred(chat):
         return {'ok': False, 'say': 'A command is already waiting for this turn to end.'}
@@ -267,35 +286,26 @@ def _compact_daily(chat, args, by):
 
     defer(chat, _apply)
     return {'ok': True, 'say': f'When this turn ends, the chat will be compacted into one summary '
-                               f'per finished day (about {tokens} tokens each); today stays as it is.'}
-
-
-EXTRACT_GO_SECONDS = 600
-_extract_seen = {}      # chat -> (when, what the report said): go needs that report first
+                               f'per finished day (at most about {tokens} tokens each); today stays as it is.' + told}
 
 
 def _extract_daily(chat, args, by):
     """This chat's finished days into memory as day summaries, the chat left as
-    it is (core/chat/compress.py, extract). The bare command only reports what
-    it would do. `go` starts it, and only after a report for this chat that
-    still holds. go is not in the help line on purpose: the report is where
-    the word is learned, so whoever types it has read what they start."""
-    import time
+    it is (core/chat/compress.py, extract). It starts at once and its answer
+    says what it is saving: the chat is not written, each day is kept as it is
+    made, `stop` ends it, and a day can be deleted in Mind > Daily. (Until
+    2026-11-26 the bare command only reported and a second line, `go`,
+    started it.)"""
     from core.chat import compress
     from core.personas import persona_manager
     sm = _sm()
-    words = args.lower().split()
-    if words == ['stop']:
+    if args.lower().split() == ['stop']:
         ok = compress.stop_extract()
         return {'ok': ok, 'say': 'Stopping after the day being written. The days already saved stay.' if ok
                 else 'No extract is running.'}
-    go = 'go' in words
-    tokens, size = DAILY_TOKENS, ''.join(w for w in words if w != 'go')
-    if size:
-        m = _TOKENS_RE.fullmatch(size)
-        tokens = int(m[1]) * (1000 if m[2] else 1) if m else 0
-        if not 500 <= tokens <= 20000:
-            return {'ok': False, 'say': f"/extract-daily takes a size per day from 500 to 20K tokens, like 4K, not '{args}'."}
+    tokens, note, bad = _daily_args('extract-daily', args)
+    if bad:
+        return {'ok': False, 'say': bad}
     try:
         plan = compress.extract_plan(sm, chat)
     except ValueError as e:
@@ -312,39 +322,27 @@ def _extract_daily(chat, args, by):
                     f"one covers more than a day.")
     if not days:
         return {'ok': True, 'say': ' '.join(['No finished day of this chat is waiting to be saved.'] + left)}
-    first, last = days[0][0].isoformat(), days[-1][0].isoformat()
-    seen = (len(days), first, last, plan['scope'])
-    again = f"/extract-daily go{' ' + size.upper() if size else ''}"
-    if not go:
-        _extract_seen[chat] = (time.monotonic(), seen)
-        model = ' / '.join(x for x in (settings.get('llm_primary') or 'auto', settings.get('llm_model') or '') if x)
-        return {'ok': True, 'say': ' '.join([
-            f"{len(days)} finished day{'s' if len(days) != 1 else ''} of this chat "
-            f"{'are' if len(days) != 1 else 'is'} not in memory yet: "
-            + (first if first == last else f"{first} to {last}") + '.',
-            f"{'Each' if len(days) != 1 else 'It'} would be summarized by this chat's model ({model}), "
-            f"at most about {tokens} tokens a day, "
-            f"and saved to the memory scope '{plan['scope']}'. The chat itself is not changed."]
-            + left + [f"To start: {again}"])}
-    at, was = _extract_seen.get(chat) or (0, None)
-    if was != seen or time.monotonic() - at > EXTRACT_GO_SECONDS:
-        return {'ok': False, 'say': 'First see what it would do: /extract-daily. Then go.' if was is None or was == seen
-                else 'This chat has changed since that report. See it again: /extract-daily.'}
+    n, first, last = len(days), days[0][0].isoformat(), days[-1][0].isoformat()
     persona = settings.get('persona') or ''
     if persona and not persona_manager.exists(persona):
         persona = ''
+    model = ' / '.join(x for x in (settings.get('llm_primary') or 'auto', settings.get('llm_model') or '') if x)
 
     def _start():
-        _extract_seen.pop(chat, None)
         return compress.start_extract_job(
             sm, chat, provider_key=settings.get('llm_primary') or 'auto',
-            model=settings.get('llm_model') or '', target_tokens=tokens, persona=persona)
+            model=settings.get('llm_model') or '', target_tokens=tokens, persona=persona, note=note)
 
-    started = (f"Saving {len(days)} day{'s' if len(days) != 1 else ''} to memory in the background, oldest first. "
-               f"Each is kept as it is written. /extract-daily stop ends it early.")
+    started = ' '.join([
+        f"Saving {n} finished day{'s' if n != 1 else ''} of this chat to memory in the background, oldest first: "
+        + (first if first == last else f"{first} to {last}") + '.',
+        f"{'Each is' if n != 1 else 'It is'} written by this chat's model ({model}), "
+        f"at most about {tokens} tokens a day" + (', with your instructions' if note else '')
+        + f", and kept in the memory scope '{plan['scope']}' as it is written. The chat itself is not changed."]
+        + left + ['/extract-daily stop ends it early.'])
     if by == 'user':
         if sm.is_streaming(chat):
-            return {'ok': False, 'say': f'Wait for the reply to finish, then {again}.'}
+            return {'ok': False, 'say': 'Wait for the reply to finish, then /extract-daily.'}
         ok, err = _start()
         return {'ok': ok, 'say': started if ok else err}
 
@@ -419,11 +417,16 @@ def _context(chat, args, by):
 
 
 register('compact', _dialog('compact', games=False), description='summarize older history (opens the compress dialog)')
-register('compact-daily', _compact_daily, args='[tokens]', ai=True,
-         description='summarize history into one labelled summary per day for the last few days, today left as it is (default 2K tokens a day at most, e.g. /compact-daily 4K)')
-register('extract-daily', _extract_daily, args='[tokens]', ai=True,
-         description="save this chat's finished days to memory as day summaries, the chat left as it is, old chats too; "
-                     "it first reports what it would do and how to start")
+register('compact-daily', _compact_daily, args='[tokens] [instructions]', ai=True,
+         description='summarize history into one labelled summary per day for the last few days, today left as it is. '
+                     'The size is a cap on each written day (default 2K tokens, 500 to 20K; thinking is not counted). '
+                     'Any words after it are instructions to the writer for this run, on top of the usual wording: '
+                     '/compact-daily 6K keep November 25 in full detail. Each day is written on its own, so name a day by its date')
+register('extract-daily', _extract_daily, args='[tokens] [instructions]', ai=True,
+         description="save this chat's finished days to memory as day summaries, the chat left as it is, old chats too. "
+                     "It starts at once and says what it is saving; days already kept are left alone. "
+                     "Size and instructions as for /compact-daily: /extract-daily 8K February 10 matters most, keep its details. "
+                     "/extract-daily stop ends it")
 register('context', _context, description="what's taking up this chat's context, biggest first")
 register('continue', _action('continue'), description='keep writing the last reply')
 register('help', _help, args='[command]', description='list the slash commands')

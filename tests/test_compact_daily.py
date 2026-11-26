@@ -631,3 +631,110 @@ def test_the_extract_job_holds_the_one_slot_and_ends_with_its_count(keeper, monk
     assert status['ok'] is True and status['mode'] == 'extract' and status['result']['days'] == 3
     assert began == [("Saving a chat's days to memory", {'view': 'layer-daily'})]
     assert ended == [{'title': '3 days saved to memory'}] and len(keeper.kept) == 3
+
+
+# ─── the size is the written day's; thinking has its own room (2026-11-26) ───
+
+class Replies:
+    """A provider that answers from a list, and keeps what each call asked for."""
+
+    def __init__(self, *replies):
+        self.replies, self.asked, self.prompts = list(replies), [], []
+
+    def chat_completion(self, msgs, generation_params=None):
+        self.asked.append(generation_params['max_tokens'])
+        self.prompts.append(msgs[0]['content'])
+        r = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+        return SimpleNamespace(**{'content': '', 'finish_reason': 'stop', 'content_is_reasoning': False, **r})
+
+
+def _sum(p, budget=2000):
+    return compress._summarize(p, compress._CHUNK_FRAME, 'USER: hi', budget, compress._guide())
+
+
+def test_the_size_is_the_written_summary_and_thinking_has_its_own_room():
+    """Krem, 2026-11-26: "2K tokens should be that day, not max_tokens". The
+    call's limit was the size x 1.3 + 200, and thinking is spent from that
+    same limit on every OpenAI-style endpoint."""
+    p = Replies({'content': 'the day'})
+    p.output_room = 16000                                               # what a turn on this model gets (make_provider)
+    assert _sum(p) == 'the day' and p.asked == [2800 + 16000]
+    assert 'at most about 2000 tokens' in p.prompts[0]                  # the size she is asked to write to is unchanged
+    bare = Replies({'content': 'the day'})                              # no room known: the floor
+    _sum(bare)
+    assert bare.asked == [2800 + compress.ROOM_FLOOR]
+
+
+def test_a_cut_off_summary_is_asked_for_again_with_double_the_room_then_fails():
+    p = Replies({'content': 'half a sen', 'finish_reason': 'length'}, {'content': 'the whole day'})
+    assert _sum(p) == 'the whole day'
+    assert p.asked == [2800 + compress.ROOM_FLOOR, 2800 + 2 * compress.ROOM_FLOOR]
+    for finish in ('length', 'max_tokens'):                             # openai-style, and Claude's word for it
+        p = Replies({'content': 'half a sen', 'finish_reason': finish})
+        with pytest.raises(RuntimeError, match='cut off.*thinking.*not kept'):
+            _sum(p)
+        assert len(p.asked) == 2
+
+
+def test_thinking_handed_back_as_the_answer_is_no_summary():
+    """openai_compat puts the reasoning in `content` when the answer is empty
+    (content_is_reasoning). It was kept as the day."""
+    p = Replies({'content': 'Let me think about what the user wants...', 'content_is_reasoning': True,
+                 'finish_reason': 'length'}, {'content': '<think>hm</think>the day'})
+    assert _sum(p) == 'the day'
+    with pytest.raises(RuntimeError, match='cut off'):
+        _sum(Replies({'content': 'Let me think...', 'content_is_reasoning': True, 'finish_reason': 'length'}))
+    with pytest.raises(RuntimeError, match='came back empty'):
+        _sum(Replies({'content': '<think>only this</think>'}))
+
+
+def test_a_summary_over_its_size_is_not_kept():
+    """With room to think, the call's limit no longer stops a long writer:
+    the size is checked on the written text, thinking left out."""
+    long = 'word ' * 4000
+    with pytest.raises(RuntimeError, match='over the 2000 asked for.*bigger size'):
+        _sum(Replies({'content': long}))
+    assert _sum(Replies({'content': long}, {'content': 'the day'})) == 'the day'    # the second try fit
+    assert _sum(Replies({'content': '<think>' + long + '</think>the day'})) == 'the day'    # thinking is not the summary
+    assert _sum(Replies({'content': long}), budget=20000)                           # the same text inside a bigger size
+
+
+def test_a_long_days_partials_grow_with_the_size_asked_for(monkeypatch):
+    """A day over one chunk is written in parts and merged. Each part was
+    capped at 1000 tokens whatever the size, so 8K gave no more than 2K did."""
+    monkeypatch.setattr(compress, 'CHUNK_INPUT_TOKENS', 60)
+    rows = sum((_turn('2026-02-10T12:00:00', n) for n in range(1, 5)), [])
+    assert len(compress.chunk_by_turns(rows, 60)) == 4
+    for size, part in ((2000, 1000), (8000, 2000), (20000, 5000), (600, 600)):
+        p = Provider()
+        compress.compress_messages(rows, 'whole', p, size, day=date(2026, 2, 10))
+        assert all(f'at most about {part} tokens' in x for x in p.prompts[:4]), size
+        assert f'at most about {size} tokens' in p.prompts[4] and 'PARTIAL SUMMARIES' in p.prompts[4]
+
+
+def test_this_runs_instructions_reach_every_call_of_a_day_and_only_days(keeper, monkeypatch):
+    monkeypatch.setattr(compress, 'CHUNK_INPUT_TOKENS', 60)
+    rows = sum((_turn('2026-02-10T12:00:00', n) for n in range(1, 4)), [])
+    note = 'February 10 matters most: keep {every} detail.'
+    p = Provider()
+    compress.compress_messages(rows, 'whole', p, 4000, day=date(2026, 2, 10), note=f'  {note} ')
+    assert len(p.prompts) == 4                                          # three parts and the merge
+    for x in p.prompts:
+        assert note in x and 'for this run only' in x and 'The size above still holds' in x
+        assert x.index('tight prose') < x.index(note) < x.rindex('Output ONLY')     # after the wording, before the text
+    plain = Provider()
+    compress.compress_messages(rows, 'whole', plain, 4000, day=date(2026, 2, 10))
+    assert not any('for this run only' in x for x in plain.prompts)
+    whole = Provider()
+    compress.compress_messages(rows, 'whole', whole, 4000, note=note)   # a plain compress has no day: no note
+    assert not any(note in x for x in whole.prompts)
+
+    monkeypatch.setattr(compress, 'CHUNK_INPUT_TOKENS', 6000)
+    p = Provider()
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: p)
+    compress._extract_chat(PublicSM(_old_chat()), 'c', 'auto', '', 2000, note=note)
+    assert len(p.prompts) == 3 and all(note in x for x in p.prompts)    # every day of the run
+    p.prompts.clear()
+    compress.daily_pairs(compress.daily_plan(_turn('2026-11-02T10:00:00', 1), days=5, start_hour=4, now=NOW),
+                         p, 2000, note=note)
+    assert note in p.prompts[0]

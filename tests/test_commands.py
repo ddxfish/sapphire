@@ -286,9 +286,19 @@ def test_compact_daily_takes_a_size(sm, jobs, arg, tokens):
     assert commands.run(f'/compact-daily {arg}', 'c')['ok'] and jobs[0]['target_tokens'] == tokens
 
 
-@pytest.mark.parametrize('arg', ['lots', '100', '21K', '4M'])
+@pytest.mark.parametrize('arg', ['100', '21K', '4M', '4 K'])
 def test_compact_daily_refuses_a_bad_size(sm, jobs, arg):
     assert not commands.run(f'/compact-daily {arg}', 'c')['ok'] and not jobs
+
+
+def test_the_words_after_compact_daily_are_this_runs_instructions(sm, jobs):
+    out = commands.run('/compact-daily 6K keep November 25 in full detail', 'c')
+    assert out['ok'] and 'with your instructions' in out['say']
+    assert (jobs[0]['target_tokens'], jobs[0]['note']) == (6000, 'keep November 25 in full detail')
+    commands.run('/compact-daily lots of detail on the film', 'c')      # no size: every word is the note
+    assert (jobs[1]['target_tokens'], jobs[1]['note']) == (2000, 'lots of detail on the film')
+    commands.run('/compact-daily', 'c')
+    assert jobs[2]['note'] == ''
 
 
 def test_compact_daily_refuses_mid_reply(sm, jobs):
@@ -567,7 +577,7 @@ def test_the_undo_copy_goes_with_the_chat(store):
     assert store.undo_turn_cut('s')[0] == 0
 
 
-# ─── /extract-daily: report first, then go ───────────────────────────────────
+# ─── /extract-daily: it starts at once and says what it is saving ───────────
 
 @pytest.fixture
 def extract(sm, monkeypatch):
@@ -578,51 +588,56 @@ def extract(sm, monkeypatch):
     monkeypatch.setattr('core.chat.compress.extract_plan', lambda sm_, chat: state.plan)
     monkeypatch.setattr('core.chat.compress.start_extract_job',
                         lambda sm_, chat, **k: state.jobs.append(k) or (True, ''))
-    commands._extract_seen.clear()
     return state
 
 
-def test_extract_daily_only_reports_until_go(sm, extract):
+def test_extract_daily_starts_at_once_and_says_what_it_is_saving(sm, extract):
+    """No second line to start it (`go`, until 2026-11-26): the answer carries
+    what the report did."""
     out = commands.run('/extract-daily', 'c')
-    assert out['ok'] and not extract.jobs
-    for words in ('2 finished days', '2026-02-10 to 2026-02-11', "memory scope 'sapph'", 'claude / opus',
-                  'The chat itself is not changed', '1 day already kept in memory is left alone',
-                  'Today is left out', '2 older compress summaries are left out', 'To start: /extract-daily go'):
+    assert out['ok']
+    assert extract.jobs == [{'provider_key': 'claude', 'model': 'opus', 'target_tokens': 2000, 'persona': '', 'note': ''}]
+    for words in ('Saving 2 finished days', '2026-02-10 to 2026-02-11', "memory scope 'sapph'", 'claude / opus',
+                  'at most about 2000 tokens a day,', 'The chat itself is not changed',
+                  '1 day already kept in memory is left alone', 'Today is left out',
+                  '2 older compress summaries are left out', '/extract-daily stop ends it early'):
         assert words in out['say'], words
-    out = commands.run('/extract-daily go', 'c')
-    assert out['ok'] and 'Saving 2 days to memory' in out['say'] and '/extract-daily stop' in out['say']
-    assert extract.jobs == [{'provider_key': 'claude', 'model': 'opus', 'target_tokens': 2000, 'persona': ''}]
-    assert not commands.run('/extract-daily go', 'c')['ok'] and len(extract.jobs) == 1     # one report, one go
+    assert 'instructions' not in out['say'] and not hasattr(commands, '_extract_seen')
 
 
-def test_extract_daily_go_needs_the_report_it_is_going_on(sm, extract, monkeypatch):
-    out = commands.run('/extract-daily go', 'c')                        # never reported
-    assert not out['ok'] and 'First see what it would do' in out['say'] and not extract.jobs
-    commands.run('/extract-daily', 'c')
-    extract.plan = {**extract.plan, 'days': extract.plan['days'][:1]}   # the chat changed since
-    out = commands.run('/extract-daily go', 'c')
-    assert not out['ok'] and 'changed since that report' in out['say'] and not extract.jobs
-    commands.run('/extract-daily', 'c')
-    monkeypatch.setattr(commands, 'EXTRACT_GO_SECONDS', -1)             # the report went stale
-    assert not commands.run('/extract-daily go', 'c')['ok'] and not extract.jobs
-    commands.run('/extract-daily', 'other')                             # a report for another chat
-    monkeypatch.setattr(commands, 'EXTRACT_GO_SECONDS', 600)
-    assert commands.run('/extract-daily go', 'other')['ok'] and len(extract.jobs) == 1
+def test_the_words_after_extract_daily_are_this_runs_instructions(sm, extract):
+    out = commands.run('/extract-daily 8k February 10 matters most.\nKeep its Details', 'c')
+    assert out['ok'] and 'at most about 8000 tokens a day, with your instructions' in out['say']
+    assert (extract.jobs[0]['target_tokens'], extract.jobs[0]['note']) == (8000, 'February 10 matters most.\nKeep its Details')
+    commands.run('/extract-daily February 10 matters most', 'c')        # no size: the default, and every word is the note
+    assert (extract.jobs[1]['target_tokens'], extract.jobs[1]['note']) == (2000, 'February 10 matters most')
+    commands.run('/extract-daily 2026-02-10 is the day to keep whole', 'c')     # a date is a word, not a size
+    assert extract.jobs[2]['note'] == '2026-02-10 is the day to keep whole'
 
 
-def test_extract_daily_takes_a_size_and_hides_go_from_the_help(sm, extract):
-    out = commands.run('/extract-daily 4k', 'c')
-    assert 'about 4000 tokens' in out['say'] and 'To start: /extract-daily go 4K' in out['say']
-    assert commands.run('/extract-daily go 4K', 'c')['ok'] and extract.jobs[0]['target_tokens'] == 4000
-    assert not commands.run('/extract-daily lots', 'c')['ok'] and not commands.run('/extract-daily go 21K', 'c')['ok']
-    line = next(c for c in commands.all_commands() if c['name'] == 'extract-daily')
-    assert line['args'] == '[tokens]' and ' go' not in line['description']     # the report is where go is learned
+@pytest.mark.parametrize('line', ['21K', '100', '4M', '10 February matters', '21K keep it all'])
+def test_extract_daily_refuses_what_looks_like_a_size_and_is_not_one(sm, extract, line):
+    out = commands.run(f'/extract-daily {line}', 'c')
+    assert not out['ok'] and 'from 500 to 20K' in out['say'] and 'start with a word' in out['say'] and not extract.jobs
+
+
+def test_instructions_are_capped(sm, extract, jobs):
+    assert not commands.run('/extract-daily ' + 'x' * 8001, 'c')['ok'] and not extract.jobs
+    assert not commands.run('/compact-daily 4K ' + 'x' * 8001, 'c')['ok'] and not jobs
+    assert commands.run('/extract-daily ' + 'x' * 8000, 'c')['ok']
+
+
+def test_the_help_lines_say_instructions_and_no_go(sm, extract):
+    for name in ('extract-daily', 'compact-daily'):
+        line = next(c for c in commands.all_commands() if c['name'] == name)
+        assert line['args'] == '[tokens] [instructions]' and 'instructions' in line['description']
+    assert ' go' not in next(c for c in commands.all_commands() if c['name'] == 'extract-daily')['description']
 
 
 def test_extract_daily_says_why_it_cannot_and_when_nothing_waits(sm, extract, monkeypatch):
     extract.plan = {**extract.plan, 'days': []}
     out = commands.run('/extract-daily', 'c')
-    assert out['ok'] and 'No finished day of this chat is waiting' in out['say'] and 'To start' not in out['say']
+    assert out['ok'] and 'No finished day of this chat is waiting' in out['say'] and not extract.jobs
 
     def refuse(sm_, chat):
         raise ValueError("This chat's days are not kept in memory: private chat.")
@@ -634,23 +649,21 @@ def test_extract_daily_says_why_it_cannot_and_when_nothing_waits(sm, extract, mo
 def test_extract_daily_stop(sm, extract, monkeypatch):
     monkeypatch.setattr('core.chat.compress.stop_extract', lambda: True)
     assert 'days already saved stay' in commands.run('/extract-daily stop', 'c')['say']
+    assert not extract.jobs                                             # stop is a word of its own, never an instruction
     monkeypatch.setattr('core.chat.compress.stop_extract', lambda: False)
     assert not commands.run('/extract-daily stop', 'c')['ok']
 
 
-def test_her_extract_daily_reports_then_waits_for_her_turn(sm, extract):
-    assert not commands.run('/extract-daily go', 'c', by='ai')['ok']    # she sees the report first too
-    assert 'To start: /extract-daily go' in commands.run('/extract-daily', 'c', by='ai')['say']
-    out = commands.run('/extract-daily go', 'c', by='ai')
-    assert out['ok'] and out['say'].startswith('When this turn ends: saving 2 days')
+def test_her_extract_daily_waits_for_her_turn(sm, extract):
+    out = commands.run('/extract-daily 4K keep the pendant day whole', 'c', by='ai')
+    assert out['ok'] and out['say'].startswith('When this turn ends: saving 2 finished days')
     assert not extract.jobs and commands.has_deferred('c')
     commands.finish_turn(sm, 'c')
-    assert len(extract.jobs) == 1
+    assert (extract.jobs[0]['target_tokens'], extract.jobs[0]['note']) == (4000, 'keep the pendant day whole')
 
 
-def test_a_reply_still_running_holds_the_persons_go(sm, extract):
-    commands.run('/extract-daily', 'c')
+def test_a_reply_still_running_holds_the_persons_extract(sm, extract):
     sm.streaming = True
-    assert not commands.run('/extract-daily go', 'c')['ok'] and not extract.jobs
+    assert not commands.run('/extract-daily', 'c')['ok'] and not extract.jobs
     sm.streaming = False
-    assert commands.run('/extract-daily go', 'c')['ok']                 # the report still stands
+    assert commands.run('/extract-daily', 'c')['ok'] and len(extract.jobs) == 1

@@ -21,7 +21,7 @@
     "templates/place.json": "sha256:83c59537759fe88af58a8e4444b8adfb087e0fde59dbaed2d2bdd98372c7e09e",
     "templates/thing.json": "sha256:6482cd81a39b832618c3147336d65b10241b006b96167694aacfb1e9bcf133a5",
     "tests/conftest.py": "sha256:922ab5bd47c78f75f1cbcf75958b2d33e7562eaf0c4a16b7cff4cde35ce33dc1",
-    "tests/test_daily.py": "sha256:e12bd45be9d49ef763f49147ad297c1721dd9e3cd397f06e2eb7d2f8ccc5edc6",
+    "tests/test_daily.py": "sha256:46121ae64769ceb9b42d7069a6c44e68e13ba0539dc6f59a1d5a3169ae6bf17d",
     "tests/test_dynamics.py": "sha256:4e558fe86c1c0912bb5c4b735e054c2366dcef3d7f59827e3fe15d7d8a7872a1",
     "tests/test_engine_switch.py": "sha256:11beca373a140314e88eb0014ab2e06c215126c0fac794d4b8ef783f3b9d68eb",
     "tests/test_geonames.py": "sha256:e12a63a71b7d869cab315ef8e622bef3ae2ccb514879ece2bac43ee140fd8836",
@@ -80,5 +80,5 @@
     "tools/temporal.py": "sha256:4c89314cda5e3419f4ac7925d0d9fa7353198473c79d7e7afc226246c101ab13",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "O/+zZFcYPNU9OXJTrgT416rOIudZCmQ1QDxigsAAkaCqvJepLF5hLYnqIsuCgi6gXf9qShOIo65KlIoOU4nPAw=="
+  "signature": "5yIQ+qFxY18hvPYYd4TAueHFVjpfTFqjV7OH3oMoPDV+yZO5cDc1eJC7nmx5XOUX/Qnup0EqZ7IYhc8TWQD/CQ=="
 }

@@ -1338,7 +1338,8 @@ def test_a_compact_cancelled_for_growing_the_chat_records_nothing(tmp_path, monk
 
     class Chatty:
         def chat_completion(self, msgs, generation_params=None):
-            return SimpleNamespace(content='a summary far longer than the day it retells ' * 400)
+            # longer than the day, inside the size asked for: over the size is refused before the grow guard
+            return SimpleNamespace(content='a summary far longer than the day it retells ' * 40)
 
     woke = []
     ts = (datetime.now() - timedelta(days=2)).replace(hour=14).isoformat()

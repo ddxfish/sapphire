@@ -160,7 +160,7 @@ Compress rewrites older history as AI-written summaries while the recent tail st
 - **Model** — pick the provider/model that writes the summaries. Private chats only offer local providers.
 - **Speaks as** — the persona the summary is written as, so it reads as her own memory ("I") and wears her avatar. Starts on the chat's persona. Only the name goes to the summarizer, never the persona's prompt. Room chats have no selector: their summaries are third person, attributed by speaker name.
 - **Advanced** — the instructions for what summaries keep and how they're written. Your edit is saved to `user/prompts/compress_instructions.txt` when you press Compress and applies to every later compress; **Reset to default** removes it. Rooms use fixed instructions.
-- **Target size** — the approximate total size of the compressed output.
+- **Target size** — the approximate total size of the compressed output. It counts the written summary only: a model's thinking has its own room. A summary that comes back cut off, empty or well over its size is asked for once more; if that fails too the job fails, says why, and the chat stays as it was.
 - **Keep last N turns verbatim** — the untouched tail. When an LLM history window is set (Settings → LLM, default 0 = unlimited), the server caps this below half of it; a bigger tail would push the summary out of what the model ever sees.
 - **Back up full JSON first** — writes an export to `user/history/exports/` before touching anything. Forced off for private chats (nothing readable leaves the database).
 
@@ -241,7 +241,7 @@ TRIM (POST /api/chats/{name}/trim):
 
 COMPRESS (POST /api/chats/{name}/compress, core/chat/compress.py):
 - Background job, one at a time (409 if busy); modes: whole (one summary pair) | chunked (one pair per ~6k-token span). The route takes only those two; daily (one labelled pair per day) is the same job started by /compact-daily, never by this POST (see SLASH-COMMANDS)
-- target_tokens ≈ output size; keep_last_turns must be < half LLM_MAX_HISTORY when that is > 0 (default 0 = unlimited, no cap); optional backup JSON to user/history/exports/ (forced off for private chats); private chats need a local provider
+- target_tokens ≈ output size (the written summary; thinking not counted; cut off, empty or over size = one retry, then the job fails with the chat untouched); keep_last_turns must be < half LLM_MAX_HISTORY when that is > 0 (default 0 = unlimited, no cap); optional backup JSON to user/history/exports/ (forced off for private chats); private chats need a local provider
 - Write-last: chat untouched until all LLM calls succeed; restart mid-job = chat untouched
 - Status: GET /api/chats/compress/status (UI polls)
 - Voice: optional `persona` in the POST (omitted = the chat's own; "" = none); instructions override via GET/PUT /api/chats/compress/instructions (blank or default removes user/prompts/compress_instructions.txt); rooms ignore both
