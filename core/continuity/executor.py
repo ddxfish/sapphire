@@ -744,7 +744,8 @@ class ContinuityExecutor:
                 logger.debug(f"[Continuity] chat hold not taken for '{target_chat}': {e}")
         try:
             return self._run_foreground_held(task, result, progress_cb, response_cb, cancel_event,
-                                             target_chat, session_manager, ExecutionContext)
+                                             target_chat, session_manager, ExecutionContext,
+                                             hold_stream=(_held[0] if hold_sid is not None else None))
         finally:
             if hold_sid is not None:
                 if result.get("cancelled"):
@@ -762,7 +763,8 @@ class ContinuityExecutor:
                 logger.error(f"[Continuity] Waiting commands failed: {e!r}")
 
     def _run_foreground_held(self, task, result, progress_cb, response_cb, cancel_event,
-                             target_chat, session_manager, ExecutionContext) -> Dict[str, Any]:
+                             target_chat, session_manager, ExecutionContext,
+                             hold_stream=None) -> Dict[str, Any]:
         original_voice: Dict[str, Any] = {}
         self._voice_lock.acquire()
         try:
@@ -823,7 +825,11 @@ class ContinuityExecutor:
                 self.system.llm_chat.tool_engine,
                 task_settings,
                 session_manager=self.system.llm_chat.session_manager,
-                cancel_check=(cancel_event.is_set if cancel_event is not None else None),
+                # the task's own stop, or the chat hold's: a vault seal stops
+                # a private chat's turns through the hold (core/prompt_vault.py)
+                cancel_check=lambda: bool(
+                    (cancel_event is not None and cancel_event.is_set())
+                    or getattr(hold_stream, 'cancel_flag', False)),
             )
 
             # Set Discord reply channel for auto-reply targeting
@@ -876,6 +882,12 @@ class ContinuityExecutor:
                 # already read — same shape make_stream_session builds.
                 _hist = ConversationHistory(max_history=session_manager.max_history)
                 _hist.messages = list(history_messages or [])
+                # A private chat's run says so when it saves: delete-vault
+                # under it must not land its rows in a public chat of the
+                # same name (history._private_gone_conn).
+                _mark_fn = getattr(session_manager, 'purge_mark', None)
+                _mark = _mark_fn(True) if (_mark_fn and chat_settings.get("private_chat")) else None
+                _hist._purge_mark = _mark
                 _brain_token = stream_brain.set_override({
                     "chat": target_chat,
                     "settings": _cc if isinstance(_cc, dict) else {},
@@ -927,16 +939,23 @@ class ContinuityExecutor:
                                           if m.get("role") == "user" and not m.get("origin") else m
                                           for m in canonical_messages]
                     appended = session_manager.append_messages_to_chat(
-                        target_chat, canonical_messages)
+                        target_chat, canonical_messages,
+                        **({"purge_mark": _mark} if _mark is not None else {}))
                     if appended is False:
-                        # Deleted chat or active-stream-wait timeout — the
-                        # tool effects already happened; the transcript is
-                        # now missing this exchange. Surface it (scout,
-                        # 2026-07-20) instead of discarding the bool.
+                        # Deleted chat, sealed vault or stream-wait timeout —
+                        # the tool effects already happened; the transcript
+                        # is now missing this exchange. A task ERROR, not a
+                        # log line under a success (isolation hunt D1: a run
+                        # sealed under reported success with its rows gone).
                         logger.warning(
                             f"[Continuity] Transcript append to "
                             f"'{target_chat}' FAILED — the chat is missing "
-                            f"this exchange (deleted mid-run or stream-busy).")
+                            f"this exchange (deleted, sealed or stream-busy).")
+                        lost = ("The run finished but its messages could not be "
+                                "saved to the chat (deleted, locked in the vault, or busy).")
+                        result["errors"].append(lost)
+                        publish(Events.CONTINUITY_TASK_ERROR,
+                                {"task": task.get("name", "Unknown"), "error": lost})
                 else:
                     # Fallback to simple pair if new_messages not available
                     session_manager.append_to_chat(target_chat, msg, response or "")

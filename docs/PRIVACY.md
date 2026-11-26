@@ -63,6 +63,13 @@ The vault locks when you click the blue open padlock, press **Lock now** in Sett
 
 If you're sitting in a private chat when it locks, Sapphire moves you out first — to `default`, or the freshest ordinary chat, or a blank scratch chat if nothing else is safe. Your private chat isn't changed, just hidden until you unlock.
 
+**A reply in progress in a private chat:**
+
+- **You lock it** (the padlock, **Lock now**, or deleting the vault): the vault does not stay open. Every private reply in progress is stopped, the same as pressing Stop: what she had written so far is saved, the rest is cut. That includes ones you can't see, such as a task running on a private chat or someone talking to a satellite in one. The vault locks once they have stopped, usually within a second or two, and after 15 seconds regardless.
+- **The idle timer locks it:** it waits for a private reply in progress to finish, then locks. If that reply runs for another whole idle period, it is stopped.
+
+Talking to her resets the idle clock from anywhere: typing, the wake word, a satellite, a phone call. Her own activity does not: a scheduled task on a private chat won't keep the vault open, and after the idle lock that task fails with an error until you unlock.
+
 ---
 
 ## Prompts in the vault
@@ -158,7 +165,10 @@ One vault, one passphrase (`user/prompts/prompt_vault.enc`, scrypt + AES-256-GCM
 VAULT LIFECYCLE:
 - Padlock (chat sidebar; 🔒 sealed / 🔓 open, blue while armed, amber when standing in a private chat while sealed) = vault toggle only: no vault → setup, locked → unlock, unlocked → lock
 - Settings → Privacy: create / unlock / lock now / change passphrase / delete vault (+ all private chats, typed confirm); `VAULT_IDLE_MINUTES` (default 30, min 1)
-- Idle timer auto-locks; user activity resets it; rekey preserves lock state; no key recovery
+- Idle timer auto-locks; the PERSON's turns reset it (typed, wake word, satellite, phone), her own lanes (tasks, agents, cadence) do not; rekey preserves lock state; no key recovery
+- A private chat's turn in flight: a clicked lock or delete-vault STOPS it (rows so far saved), then seals, 15 s at most; the idle lock waits for it, one more idle period at most
+- WHAT YOU SEE if the vault locked under your turn: "[Cancelled...]" rows, and a prompt or piece you try to create answers "The vault locked during this turn, so nothing was saved." Do not retry; tell the user it needs an unlock
+- A task whose messages could not be saved to its chat (locked, deleted, busy) ends as an ERROR, not a success
 - Disabled in managed mode
 
 PRIVATE CHATS:

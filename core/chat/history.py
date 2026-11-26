@@ -1787,6 +1787,33 @@ class ChatSessionManager:
                            (chat_name,)).fetchone()
         return bool(row and row["vaulted"])
 
+    def purge_mark(self, private):
+        """What a writer keeps when it reads a PRIVATE chat (None for a
+        public one) and hands back when it saves: see _private_gone_conn."""
+        return getattr(self, '_purge_gen', 0) if private else None
+
+    def _private_gone_conn(self, conn, chat_name: str, vaulted: bool, mark) -> bool:
+        """True when a writer that read `chat_name` as a PRIVATE chat (`mark`,
+        from purge_mark) would now be writing into a public one of the same
+        name. Delete-vault purges every private chat and brings `default`
+        back public; a turn that outlived the purge then saved its rows,
+        possibly the whole decrypted window, in plaintext under the old name
+        (isolation hunt D2, 2026-11-23). Row writers pick encryption from the
+        row as it is NOW, so the writer has to say what it read. Only a purge
+        since the read counts: a chat the person made public mid-turn takes
+        the turn's rows as it always did. A legacy private chat (vaulted=0,
+        flag in plaintext settings) still counts as private."""
+        if mark is None or mark == getattr(self, '_purge_gen', 0) or vaulted:
+            return False
+        row = conn.execute("SELECT settings FROM chats WHERE name = ?",
+                           (chat_name,)).fetchone()
+        if not row:
+            return False        # gone: the 0-rows paths already drop the save
+        try:
+            return not (json.loads(row["settings"] or '{}') or {}).get('private_chat')
+        except Exception:
+            return False        # unreadable settings: not this guard's call
+
     def _row_payload(self, vaulted: bool, msg: Dict[str, Any]) -> str:
         s = self._row_json(msg)
         return self._enc_value(s) if vaulted else s
@@ -2172,6 +2199,11 @@ class ChatSessionManager:
         # the key is gone (lock raced the save) — the outer except logs and
         # the watermark never advances, same posture as any failed save.
         vaulted = self._is_vaulted_conn(conn, eff_name)
+        if is_override and self._private_gone_conn(
+                conn, eff_name, vaulted, getattr(eff_chat, '_purge_mark', None)):
+            raise RuntimeError(
+                f"rows save refused — this turn read '{eff_name}' as a private "
+                f"chat and it is not one now (the vault was deleted under it)")
 
         resync = (state is None
                   or getattr(eff_chat, "_needs_full_resync", False)
@@ -4077,6 +4109,9 @@ class ChatSessionManager:
                         except sqlite3.OperationalError:
                             pass   # table may not exist yet
                 conn.commit()
+                # still under the store lock: every writer that read a
+                # private chat before this is now stale (_private_gone_conn)
+                self._purge_gen = getattr(self, '_purge_gen', 0) + 1
         except Exception as e:
             logger.error(f"[VAULT] vaulted-chat purge failed: {e}")
             return None
@@ -4596,6 +4631,7 @@ class ChatSessionManager:
         # on the next save; 2026-10-08). The override's first save is
         # append-only; rows the active lane adds meanwhile are absorbed.
         hist._rows_state = state
+        hist._purge_mark = self.purge_mark(settings.get('private_chat'))   # see _private_gone_conn
         return {"chat": chat_name, "settings": settings,
                 "system_prompt": None, "tools": None, "history": hist}
 
@@ -4617,9 +4653,11 @@ class ChatSessionManager:
         except Exception:
             pass
         settings = dict(settings) if settings else {}
+        own_private = bool(settings.get("private_chat"))   # the chat's own flag, before the ratchet
         settings["private_chat"] = bool(privacy_required
                                         or settings.get("private_chat"))
         hist = ConversationHistory(max_history=self.max_history)
+        hist._purge_mark = self.purge_mark(own_private)   # see _private_gone_conn
         # F1 (2026-09-08): RAW seed + watermark (see _read_store_messages) —
         # the LLM-view seed made the worker's first save a lossy resync.
         # Unreadable rows or a read error latch the chat read-only (the
@@ -4808,7 +4846,8 @@ class ChatSessionManager:
         ])
 
     def append_messages_to_chat(self, chat_name: str, new_messages: list,
-                                 max_wait_if_streaming: float = 60.0) -> bool:
+                                 max_wait_if_streaming: float = 60.0,
+                                 purge_mark=None) -> bool:
         """Append a list of messages to a named chat WITHOUT switching active chat.
 
         Preserves the full conversation structure including tool_calls and tool
@@ -4822,6 +4861,11 @@ class ChatSessionManager:
         cron write with a stale in-memory snapshot. The `_is_streaming` guard
         already protects `delete_chat` and `set_active_chat` — extending it
         here closes the asymmetry.
+
+        purge_mark: purge_mark() from when the caller read this chat as a
+        PRIVATE one (a task's run). The write is refused if the vault was
+        deleted since and the name now belongs to a public chat
+        (_private_gone_conn).
 
         Returns True if the messages were written, False if the wait timed out
         and the write was skipped to avoid corruption. Pre-2026-05-07 the wait
@@ -4878,6 +4922,11 @@ class ChatSessionManager:
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(f"Chat '{chat_name}' not found — skipping append (may have been deleted)")
+                    return False
+                if purge_mark is not None and self._private_gone_conn(
+                        conn, chat_name, self._is_vaulted_conn(conn, chat_name), purge_mark):
+                    logger.warning(f"append refused — '{chat_name}' was a private chat when "
+                                   f"this run read it and the vault was deleted since")
                     return False
 
                 for msg in new_messages:

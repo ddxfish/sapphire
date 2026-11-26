@@ -174,6 +174,9 @@ async def vault_lock(_=Depends(require_login)):
     """Lock NOW. Synchronous by contract (phase 0b): active-preset handoff
     and the vault_changed event complete inside lock(), BEFORE this returns
     200 — the eyeball client's follow-up `PUT private_chat:false` must see
-    the locked world. Idempotent."""
-    prompt_vault.lock(reason="user")
+    the locked world. Idempotent. A private turn in flight is stopped first
+    (prompt_vault's leases), which can take a few seconds: off the event
+    loop, so the turn's own end is never waiting on this request."""
+    from starlette.concurrency import run_in_threadpool
+    await run_in_threadpool(prompt_vault.lock, "user")
     return {"status": "success", "vault": prompt_vault.vault_status()}

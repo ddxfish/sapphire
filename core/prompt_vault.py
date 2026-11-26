@@ -57,7 +57,7 @@ _key = None            # derived AES key while unlocked, else None
 _salt = None           # header salt cached so saves reuse the derived key
 _data = None           # decrypted {"monoliths", "components", "scenario_presets"}
 _timer = None          # idle-lock threading.Timer
-_defer_timer = None    # Ruling-B deferred-lock retry (cancelled on unlock/stop)
+_defer_timer = None    # the waiting idle seal's limit (cancelled on unlock/stop)
 _last_activity = 0.0   # time.monotonic() of last vault activity
 _refs = {}             # {name: "monolith"|"preset"} — referenced names only
 _refs_loaded = False
@@ -420,7 +420,7 @@ def unlock(passphrase) -> tuple:
         return False, 'corrupt'
     with _lock:
         _key, _salt = key, salt
-        # A pending Ruling-B deferred lock must die here — firing after a
+        # A waiting idle seal's limit must die here — firing after a
         # successful unlock would re-seal a vault the user just opened.
         if _defer_timer is not None:
             _defer_timer.cancel()
@@ -475,55 +475,147 @@ def _fire_plugin_hook(name):
         logger.warning(f"[VAULT] {name} hook dispatch failed: {e}")
 
 
-def lock(reason="") -> bool:
+# ── leases: private turns in flight ──
+#
+# A private chat's turn writes rows that need the key, so a seal that lands
+# under it loses them. Every such turn holds a LEASE from the moment it is
+# accepted (LLMChat.begin_stream, the one door every lane passes: typed, wake
+# word, satellite, phone, room seat, task) until its rows are written. The
+# seal used to know only the open chat's typed turn; a turn running by name
+# was sealed mid-reply (isolation hunt D1, 2026-11-23).
+#
+# Two kinds of seal (Krem's ruling, 2026-11-26):
+#   a decision (the Lock button, delete vault): the vault does not stay open.
+#     Nothing private starts, the turns in flight are stopped like the Stop
+#     button stops them (rows so far are written), then the key drops.
+#   the idle timer: waits for the turns in flight, then seals. One more idle
+#     period is the limit; after it the idle seal stops them too.
+
+STOP_WAIT_S = 15.0      # how long a seal waits for the turns it stopped
+
+_leases = {}            # token → cancel fn of a private turn in flight
+_no_leases = threading.Event()
+_no_leases.set()
+_sealing = False        # a seal is between its decision and the key drop
+_pending = False        # the idle seal is waiting for the turns in flight
+_seal_mutex = threading.Lock()   # one seal at a time
+
+
+class Sealing(Exception):
+    """A seal is under way: nothing private starts now."""
+
+
+def lease(cancel=None):
+    """A private chat's turn is starting. Returns the token to hand back to
+    release() when its rows are written, or None when the vault is locked
+    (there is nothing to hold open; the turn meets the sealed chat on its
+    own). Raises Sealing between a seal's decision and its key drop: a turn
+    let in there would have been sealed under (hunt D4). `cancel`: what stops
+    this turn, called by a seal that will not wait."""
+    with _lock:
+        if _key is None:
+            return None
+        if _sealing:
+            raise Sealing()
+        token = object()
+        _leases[token] = cancel
+        _no_leases.clear()
+        return token
+
+
+def release(token):
+    """The turn's rows are written (or it never ran). Idempotent."""
+    if token is None:
+        return
+    with _lock:
+        if token not in _leases:
+            return
+        del _leases[token]
+        if _leases:
+            return
+        _no_leases.set()
+        waiting = _pending
+    if waiting:
+        # the idle seal was waiting on this turn: it looks again now, on its
+        # own thread (this one is a turn's finally)
+        t = threading.Thread(target=_on_idle, name="vault-idle-seal", daemon=True)
+        t.start()
+
+
+def leases_held() -> int:
+    with _lock:
+        return len(_leases)
+
+
+def _stop_turns(cancels):
+    """A seal that will not wait: stop the private turns in flight and see
+    them gone. Chat names are never logged here (they are the secret)."""
+    for cancel in cancels:
+        try:
+            if cancel is not None:
+                cancel()
+        except Exception as e:
+            logger.warning(f"[VAULT] a private turn could not be told to stop: {e}")
+    if _no_leases.wait(STOP_WAIT_S):
+        logger.info(f"[VAULT] stopped {len(cancels)} private turn(s) before the seal")
+    else:
+        logger.warning(f"[VAULT] {leases_held()} private turn(s) still running "
+                       f"{STOP_WAIT_S:.0f}s after being stopped — sealing anyway; "
+                       f"whatever they write now is refused")
+
+
+def lock(reason="", wait=False) -> bool:
     """Seal the vault: drop key + plaintext, cancel the idle timer, hand off
-    the active preset if it was a vault name. Idempotent."""
-    global _key, _salt, _data, _timer, _defer_timer
-    # Ruling B (2026-08-17): a mid-stream seal can't flush the in-flight
-    # turn (keyless saves raise) and the end-of-stream eviction would then
-    # DISCARD it while the toast claimed it was safe — so a lock during a
-    # PRIVATE chat's live stream WAITS for the reply to finish. Retries
-    # itself every 5s; idempotent if the vault locked some other way
-    # meanwhile. Non-private streams don't defer: their saves don't need
-    # the key.
-    try:
-        from core.api_fastapi import get_system
-        _sm = get_system().llm_chat.session_manager
-        if getattr(_sm, '_is_streaming', False) and \
-                bool((getattr(_sm, 'current_settings', None) or {}).get('private_chat')):
-            with _lock:
-                still_open = _key is not None
-            if still_open:
-                # Tracked so unlock()/stop() can CANCEL it — an untracked
-                # timer would re-lock a vault the user just unlocked with
-                # their passphrase (hunt 2026-08-17 D4).
-                with _lock:
+    the active preset if it was a vault name. Idempotent.
+
+    A private turn in flight is STOPPED first (see the leases above), and the
+    key drops once it is gone or STOP_WAIT_S has passed. wait=True is the
+    idle timer's: it returns False with the vault still open and seals when
+    the last turn ends."""
+    global _key, _salt, _data, _timer, _defer_timer, _sealing, _pending
+    with _seal_mutex:
+        with _lock:
+            if _key is None:
+                return False
+            if wait and _leases:
+                if not _pending:
+                    _pending = True
                     if _defer_timer is not None:
                         _defer_timer.cancel()
-                    t = threading.Timer(5.0, lambda: lock(reason=reason or "deferred"))
+                    t = threading.Timer(_idle_seconds(), _on_idle, kwargs={'stop': True})
                     t.daemon = True
                     _defer_timer = t
                     t.start()
-                logger.info("[VAULT] lock deferred — private chat mid-stream; "
-                            "retrying in 5s so the turn flushes first")
+                    logger.info(f"[VAULT] idle lock waiting — {len(_leases)} private "
+                                f"turn(s) in flight; sealing when they end")
                 return False
-    except Exception:
-        pass
-    if vault_unlocked():
-        _flush_active_chat()   # key still present: the private chat saves encrypted
-    with _lock:
-        if _key is None:
-            return False
-        gone = set(_data.get('monoliths', {})) | set(_data.get('scenario_presets', {}))
-        # Best-effort key destruction: drop every reference (Python can't
-        # zero immutable bytes in place).
-        _key = _salt = _data = None
-        if _timer is not None:
-            _timer.cancel()
-            _timer = None
-        if _defer_timer is not None:
-            _defer_timer.cancel()
-            _defer_timer = None
+            # From here to the key drop nothing private starts (lease() raises).
+            # Decision and flag are one critical section with lease(), so a
+            # turn is either counted above or refused: never in between.
+            _sealing = True
+            held = list(_leases.values())
+        try:
+            if held:
+                _stop_turns(held)
+            _flush_active_chat()   # key still present: the private chat saves encrypted
+        finally:
+            with _lock:
+                gone = set((_data or {}).get('monoliths', {})) | \
+                    set((_data or {}).get('scenario_presets', {}))
+                # Best-effort key destruction: drop every reference (Python
+                # can't zero immutable bytes in place).
+                _key = _salt = _data = None
+                # a turn that did not stop holds nothing now: the key it
+                # was holding open is gone
+                _leases.clear()
+                _no_leases.set()
+                _sealing = _pending = False
+                if _timer is not None:
+                    _timer.cancel()
+                    _timer = None
+                if _defer_timer is not None:
+                    _defer_timer.cancel()
+                    _defer_timer = None
     logger.info(f"[VAULT] locked{f' ({reason})' if reason else ''}")
     # Vault hunt R6: the replay ring outlives the seal — pre-lock
     # chat_switched / settings events carry names that just became secrets.
@@ -576,9 +668,9 @@ def destroy() -> tuple:
     global _refs, _refs_loaded, _piece_salt, _piece_hashes
     if not vault_exists():
         return False, 'no_vault'
-    lock(reason="deleting")       # flush, evict, hand off — the normal seal
+    lock(reason="deleting")       # stop private turns, flush, evict, hand off — the normal seal
     if vault_unlocked():
-        return False, 'busy'      # lock deferred: a private reply is streaming
+        return False, 'busy'      # unlocked again under us: keep it
     try:
         from core.api_fastapi import get_system
         n = get_system().llm_chat.session_manager.purge_vaulted_chats()
@@ -826,18 +918,26 @@ def _arm_timer_locked(delay=None):
     _timer = t
 
 
-def _on_idle():
+def _on_idle(stop=False):
     """Timer callback. Re-checks activity under the lock — cancel() can't stop
-    an already-running callback, and activity may have landed since arming."""
+    an already-running callback, and activity may have landed since arming.
+    Also what a waiting idle seal runs when the last private turn ends, and
+    (stop=True) when its limit is up: the person came back meanwhile → the
+    wait is over and the clock runs again; else seal."""
+    global _pending, _defer_timer
     with _lock:
         if _key is None:
             return
         idle = time.monotonic() - _last_activity
         timeout = _idle_seconds()
         if idle < timeout - 0.05:
+            _pending = False
+            if _defer_timer is not None:
+                _defer_timer.cancel()
+                _defer_timer = None
             _arm_timer_locked(timeout - idle)
             return
-    lock(reason="idle timeout")
+    lock(reason="idle timeout", wait=not stop)
 
 
 # ── overlays (the read surface step 2 merges) ──

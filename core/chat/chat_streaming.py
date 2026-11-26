@@ -534,17 +534,26 @@ class StreamingChat:
                     yield {"type": "final", "text": _refusal,
                            "cancelled": False, "error": True}
                     return
-                if getattr(self, "operator_lane", False):
-                    # A human typed this by name (a room's bound rail while
-                    # the pointer is elsewhere): the operator rulings ride —
-                    # vault idle touch + the private gate on THIS chat (mode-
-                    # tagged sessions pass the gate). Phone and background
-                    # lanes never reach here.
-                    try:
+                _typed = getattr(self, "operator_lane", False)
+                try:
+                    # The PERSON is here, so the vault's idle clock restarts:
+                    # typed by name, a satellite, a phone call. Her own lanes
+                    # (cadence, an agent's report, a task) hold the seal off
+                    # while they run but never feed the clock, or a heartbeat
+                    # on a private chat would keep the vault open for good.
+                    # A private voice session on an ordinary prompt used to
+                    # meet the idle lock mid-conversation (isolation hunt D1).
+                    from core.idle import is_person
+                    if _typed or is_person(getattr(self, "turn_source", None)):
                         from core import prompt_vault as _pv_touch
                         _pv_touch.touch()
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
+                if _typed:
+                    # A human typed this by name (a room's bound rail while
+                    # the pointer is elsewhere): the private gate rides on
+                    # THIS chat (mode-tagged sessions pass the gate). Phone
+                    # and background lanes never gate.
                     _gate_words = self._private_gate()
             else:
                 # THE private gate (2026-11-07, replaced talk-marks-private):
@@ -1761,3 +1770,13 @@ class StreamingChat:
                 self._typing_ended = True
                 publish(Events.AI_TYPING_END, self._typing_payload())
             self.writes_done = True
+            # The rows are written: a private turn stops holding the vault
+            # open HERE, not at the route's end_stream, which waits for her
+            # voice to finish (core/prompt_vault.py, the leases).
+            _lease = self.__dict__.pop('vault_lease', None)
+            if _lease is not None:
+                try:
+                    from core import prompt_vault as _pv_lease
+                    _pv_lease.release(_lease)
+                except Exception as _lease_e:
+                    logger.error(f"[CLEANUP] vault lease release failed: {_lease_e!r}")

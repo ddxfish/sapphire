@@ -254,7 +254,67 @@ class LLMChat:
             stream.target_chat = None        # bound to the active pointer
         else:
             stream.target_chat = chat_name   # A1: explicit target (pinned)
+        # A private chat's turn holds the vault open from here until its rows
+        # are written (core/prompt_vault.py, the leases). Taken BEFORE the
+        # registration so a seal under way refuses the turn outright: the
+        # caller sees a busy chat, tries again, and meets the sealed one.
+        lease = self._vault_lease(chat_name, stream)
         tails = []
+        try:
+            self._register_stream(stream, sid, chat_name, exclusive, tails)
+        except BaseException:
+            self._vault_release(lease)
+            raise
+        stream.vault_lease = lease
+        stream.active_chat_name = chat_name
+        # The browser already drops the old tail's chunks (stream_id mismatch
+        # on the new tts_stream_start); mute the pump too so a slow CPU
+        # doesn't keep synthesizing audio nobody will play. Outside the lock:
+        # stop_tts is two bool writes.
+        for t in tails:
+            t.stop_tts()
+        if tails:
+            logger.info(f"begin_stream: muted {len(tails)} audio tail(s) on '{chat_name}'")
+        return stream, sid, chat_name
+
+    def _vault_lease(self, chat_name, stream):
+        """The vault lease for a turn on `chat_name`, or None when the chat is
+        not private or the vault is locked. Raises ChatBusy while a seal is
+        under way. A chat that cannot be read takes no lease: its turn is
+        about to be refused anyway."""
+        from core import prompt_vault
+        if not chat_name or not prompt_vault.vault_unlocked():
+            return None
+        sm = self.session_manager
+        try:
+            if chat_name == (sm.get_active_chat_name() or ''):
+                private = bool((sm.current_settings or {}).get('private_chat'))
+            else:
+                private = bool((sm.read_chat_settings(chat_name) or {}).get('private_chat'))
+        except Exception as e:
+            logger.debug(f"begin_stream: privacy of the chat unreadable, no vault lease: {e}")
+            return None
+        if not private:
+            return None
+
+        def _stop():
+            stream.cancel_flag = True
+        try:
+            return prompt_vault.lease(cancel=_stop)
+        except prompt_vault.Sealing:
+            logger.info("begin_stream: refused — the vault is sealing")
+            raise ChatBusy(chat_name)
+
+    @staticmethod
+    def _vault_release(lease):
+        if lease is not None:
+            from core import prompt_vault
+            prompt_vault.release(lease)
+
+    def _register_stream(self, stream, sid, chat_name, exclusive, tails):
+        """begin_stream's critical section: the exclusive check and the
+        registration are one, so two simultaneous sends can't both pass.
+        Fills `tails` with the audio tails the new turn cuts."""
         with self._streams_lock:
             if exclusive:
                 # A stream past llm_done is an audio tail: its history row is
@@ -274,27 +334,21 @@ class LLMChat:
                 # the CALLER's voice — never muted by a web send (E1#4). A
                 # typed turn's own tail (operator_lane, pinned once the view
                 # moved) is the operator's voice: the next turn cuts it.
-                tails = [s for s in mine if s.llm_done and not s.cancel_flag
-                         and (not s.target_chat or getattr(s, 'operator_lane', False))]
+                tails.extend(s for s in mine if s.llm_done and not s.cancel_flag
+                             and (not s.target_chat or getattr(s, 'operator_lane', False)))
             self._streams_by_id[sid] = stream
             self._streams_by_chat.setdefault(chat_name, set()).add(sid)
-        stream.active_chat_name = chat_name
-        # The browser already drops the old tail's chunks (stream_id mismatch
-        # on the new tts_stream_start); mute the pump too so a slow CPU
-        # doesn't keep synthesizing audio nobody will play. Outside the lock:
-        # stop_tts is two bool writes.
-        for t in tails:
-            t.stop_tts()
-        if tails:
-            logger.info(f"begin_stream: muted {len(tails)} audio tail(s) on '{chat_name}'")
-        return stream, sid, chat_name
 
     def end_stream(self, stream_id, chat_name):
         """Unregister a stream. Idempotent. When the chat's last stream goes,
-        the inbox is told the chat may be free (core/chat/inbox.py)."""
+        the inbox is told the chat may be free (core/chat/inbox.py). Hands
+        back the turn's vault lease if its own end has not (a task's hold
+        never runs the engine; a stream whose generator never started)."""
         freed = False
         with self._streams_lock:
-            self._streams_by_id.pop(stream_id, None)
+            stream = self._streams_by_id.pop(stream_id, None)
+            if stream is not None:
+                self._vault_release(stream.__dict__.pop('vault_lease', None))
             ids = self._streams_by_chat.get(chat_name)
             if ids is not None:
                 ids.discard(stream_id)

@@ -219,6 +219,37 @@ VAULT_LOCKED_MSG = "Vault is locked — unlock the vault to save this item."
 VAULT_TAKEN_MSG = "That name is taken — pick another."
 
 
+# A private chat's turn outlived the seal and is writing something new. Its
+# words came from a private chat: plaintext is the one place they must not go.
+VAULT_SEALED_TURN_MSG = ("The vault locked during this turn, so nothing was saved. "
+                         "Save it again in this chat once the vault is unlocked.")
+
+
+def _private_turn_sealed() -> bool:
+    """Is a PRIVATE CHAT's turn writing while the vault's key is gone? Only a
+    turn that outlived the seal can be (one that would not stop when the vault
+    locked): a new prompt or piece from it used to land in the plaintext
+    store (isolation hunt C1, 2026-11-23). The chat's own flag decides, not
+    the turn's private flag alone: a legacy 🔒 prompt on a public chat runs
+    private with the vault locked, and its saves are plaintext as before.
+    A chat that cannot be read counts as private (fail closed)."""
+    from core import prompt_vault
+    if prompt_vault.vault_unlocked() or not prompt_vault.vault_exists():
+        return False
+    try:
+        from core.chat.function_manager import scope_private
+        if not scope_private.get():
+            return False
+    except Exception:
+        return False
+    try:
+        from core.api_fastapi import get_system
+        sm = get_system().llm_chat.session_manager
+        return bool(sm.get_chat_settings().get('private_chat'))
+    except Exception:
+        return True
+
+
 def _vault_open() -> bool:
     """May THIS writer use the vault? Unlocked AND an open reader. A public
     turn's save behaves exactly as it does with the vault locked: before the
@@ -390,6 +421,9 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
             return False, VAULT_LOCKED_MSG
         in_user = (name in prompt_manager._monoliths
                    or name in prompt_manager._scenario_presets)
+        if not in_user and _private_turn_sealed():
+            logger.warning("Refused a new prompt from a private turn that outlived the seal")
+            return False, VAULT_SEALED_TURN_MSG
         if not in_user and not _vault_open() and prompt_vault.vault_has_prompt(name):
             logger.warning("Refused a save over a vault prompt name from a reader "
                            "who may not see the vault")
@@ -580,6 +614,9 @@ def save_component(comp_type: str, key: str, value: str,
         logger.warning(f"Refused vault-origin piece save '{comp_type}/{key}' while locked")
         return False, VAULT_LOCKED_MSG
     in_user = key in prompt_manager._components.get(comp_type, {})
+    if not in_user and _private_turn_sealed():
+        logger.warning("Refused a new piece from a private turn that outlived the seal")
+        return False, VAULT_SEALED_TURN_MSG
     if not in_user and not _vault_open() and prompt_vault.vault_has_piece(comp_type, key):
         logger.warning("Refused a save over a vault piece key from a reader "
                        "who may not see the vault")

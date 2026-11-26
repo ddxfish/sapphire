@@ -3,13 +3,19 @@
 Wave 1 landed 2026-11-26: the READER RULE (core/prompt_vault.py, Krem's
 ruling A). Vault content exists only for a private turn and the person at the
 editor; every other reader sees the locked-vault world. The tests for roots A
-and B now pin that rule. Roots C and D are still open: their tests assert the
-SECURE behavior and stay xfail(strict), so the mark fails loudly the day the
-fix lands (remove the mark then).
+and B now pin that rule.
+
+Wave 2 landed the same day: the VAULT LEASE (core/prompt_vault.py). A private
+chat's turn holds the vault open from begin_stream until its rows are written;
+a decision to lock stops those turns and seals once they are gone, the idle
+lock waits for them (D1, D4, C1, D2). C2 and C3 are still open: their tests
+assert the SECURE behavior and stay xfail(strict), so the mark fails loudly
+the day the fix lands (remove the mark then).
 
 Hermetic: the vault is in-memory only (no file), the prompt stores are
 swapped for small dicts and nothing here ever calls a real saver.
 """
+import time
 import types
 
 import pytest
@@ -406,21 +412,58 @@ def test_c3_move_in_does_not_overwrite_the_vault_original(world):
     assert not ok
 
 
-@pytest.mark.xfail(strict=True, reason="C1: a turn that outlives the seal "
-                   "routes her new piece to the plaintext store")
+def _sealed_private_turn(monkeypatch, chat_private=True):
+    """The seal landed under a turn: key gone, vault file still there, the
+    turn's own flag still private."""
+    import core.api_fastapi as af
+    pv.VAULT_PATH.write_bytes(b'sealed')
+    monkeypatch.setattr(pv, '_key', None)
+    monkeypatch.setattr(pv, '_data', None)
+    sm = types.SimpleNamespace(get_chat_settings=lambda: {'private_chat': chat_private})
+    monkeypatch.setattr(af, 'get_system', lambda: types.SimpleNamespace(
+        llm_chat=types.SimpleNamespace(session_manager=sm)))
+
+
 def test_c1_private_turn_create_after_the_seal_is_refused(world, monkeypatch):
     from core.chat.function_manager import scope_private
     from functions import meta
     token = scope_private.set(True)            # this turn is private
     try:
-        monkeypatch.setattr(pv, '_key', None)  # the seal lands mid-turn
-        monkeypatch.setattr(pv, '_data', None)
+        _sealed_private_turn(monkeypatch)
         with pv.reading(True):
-            meta._prompt_pieces({'action': 'create', 'component': 'emotions',
-                                 'key': 'aftermath', 'value': SECRET})
+            out = meta._prompt_pieces({'action': 'create', 'component': 'emotions',
+                                       'key': 'aftermath', 'value': SECRET})
+            ok, msg = pc.save_prompt('aftermath', {'type': 'monolith', 'content': SECRET})
     finally:
         scope_private.reset(token)
     assert 'aftermath' not in pm._components.get('emotions', {})
+    assert 'vault locked during this turn' in str(out).lower()
+    assert not ok and msg == pc.VAULT_SEALED_TURN_MSG
+    assert 'aftermath' not in pm._monoliths
+
+
+def test_c1_a_private_prompt_on_a_public_chat_still_saves_while_locked(world, monkeypatch):
+    """A legacy private prompt runs its turn private with the vault locked:
+    that is no outlived seal, and her new piece saves as it always did."""
+    from core.chat.function_manager import scope_private
+    token = scope_private.set(True)
+    try:
+        _sealed_private_turn(monkeypatch, chat_private=False)
+        ok, _ = pc.save_component('emotions', 'calm', 'You feel calm.')
+    finally:
+        scope_private.reset(token)
+    assert ok and pm._components['emotions']['calm'] == 'You feel calm.'
+
+
+def test_c1_an_existing_plaintext_piece_can_still_be_edited(world, monkeypatch):
+    from core.chat.function_manager import scope_private
+    token = scope_private.set(True)
+    try:
+        _sealed_private_turn(monkeypatch)
+        ok, _ = pc.save_component('emotions', 'happy', 'You feel very happy.')
+    finally:
+        scope_private.reset(token)
+    assert ok
 
 
 # ── D1: the seal and a private turn running by name ──
@@ -459,29 +502,198 @@ def store(tmp_path, monkeypatch):
     pv.stop()
     pv._key = pv._salt = pv._data = None
     pv._refs, pv._refs_loaded = {}, False
+    pv._leases.clear()
+    pv._no_leases.set()
+    pv._pending = pv._sealing = False
 
 
-@pytest.mark.xfail(strict=True, reason="D1: the deferral reads pointer "
-                   "streams and the open chat only")
-def test_d1_lock_waits_for_a_private_turn_running_by_name(store):
-    sm = store
-    sm.begin_streaming("secret", pinned=True)      # satellite / task / room lane
-    try:
-        assert sm.is_streaming("secret") and not sm._is_streaming, "setup"
-        locked = pv.lock("idle timeout")
-        assert locked is False, "the seal must wait for the private turn"
-        assert pv.vault_unlocked()
-    finally:
-        sm.end_streaming("secret", pinned=True)
+def _llm(sm):
+    """A bare LLMChat: begin_stream / end_stream are the real ones."""
+    import threading
+    from core.chat.chat import LLMChat
+    llm = object.__new__(LLMChat)
+    llm.session_manager = sm
+    llm.tool_engine = None
+    llm._streams_lock = threading.Lock()
+    llm._streams_by_id, llm._streams_by_chat = {}, {}
+    return llm
 
 
-def test_d1_control_lock_does_wait_for_the_open_private_chat(store):
-    """The existing deferral, for contrast: a pointer-bound private turn."""
+@pytest.fixture
+def fast_stop(monkeypatch):
+    monkeypatch.setattr(pv, 'STOP_WAIT_S', 0.3)
+
+
+def test_d1_a_private_turn_by_name_holds_a_lease_a_public_one_does_not(store):
+    llm = _llm(store)
+    _, sid, _ = llm.begin_stream("secret", exclusive=True)   # satellite / task / room lane
+    assert pv.leases_held() == 1
+    _, sid2, _ = llm.begin_stream("desk", exclusive=True)
+    assert pv.leases_held() == 1
+    llm.end_stream(sid, "secret")
+    llm.end_stream(sid2, "desk")
+    assert pv.leases_held() == 0
+
+
+def test_d1_the_open_private_chat_holds_one_too(store):
     sm = store
     assert sm.set_active_chat("secret")
-    sm.begin_streaming()
+    llm = _llm(sm)
+    stream, sid, _ = llm.begin_stream(exclusive=True)        # typed, pointer-bound
+    assert stream.target_chat is None and pv.leases_held() == 1
+    llm.end_stream(sid, "secret")
+    assert pv.leases_held() == 0
+
+
+def test_d1_the_idle_lock_waits_for_a_private_turn_then_seals(store):
+    llm = _llm(store)
+    _, sid, _ = llm.begin_stream("secret", exclusive=True)
+    pv._last_activity = 0.0                      # the person has been gone a long time
+    pv._on_idle()
+    assert pv.vault_unlocked(), "the idle seal must wait for the private turn"
+    llm.end_stream(sid, "secret")                # its rows are written
+    for _ in range(100):
+        if not pv.vault_unlocked():
+            break
+        time.sleep(0.02)
+    assert not pv.vault_unlocked(), "and seal the moment it ends"
+
+
+def test_d1_a_person_back_before_the_turn_ends_calls_the_idle_lock_off(store):
+    llm = _llm(store)
+    _, sid, _ = llm.begin_stream("secret", exclusive=True)
+    pv._last_activity = 0.0
+    pv._on_idle()
+    assert pv._pending
+    pv.touch()                                   # the person spoke
+    llm.end_stream(sid, "secret")
+    time.sleep(0.2)
+    assert pv.vault_unlocked() and not pv._pending
+
+
+def test_d1_the_idle_locks_limit_stops_the_turn(store, fast_stop):
+    llm = _llm(store)
+    stream, sid, _ = llm.begin_stream("secret", exclusive=True)
+    pv._last_activity = 0.0
+    pv._on_idle(stop=True)                       # what the limit timer runs
+    assert stream.cancel_flag and not pv.vault_unlocked()
+    llm.end_stream(sid, "secret")
+
+
+def test_a_clicked_lock_stops_private_turns_and_seals_once_they_are_gone(store, fast_stop):
+    """Krem's ruling 2026-11-26: the vault does not stay open. The turn is
+    stopped, seen gone, then the key drops; a public turn is left alone."""
+    import threading
+    llm = _llm(store)
+    private, sid, _ = llm.begin_stream("secret", exclusive=True)
+    public, sid2, _ = llm.begin_stream("desk", exclusive=True)
+    seen = {}
+
+    def turn():                                  # the private turn's own thread
+        while not private.cancel_flag:
+            time.sleep(0.01)
+        seen['key_at_last_write'] = pv.chat_data_key() is not None
+        llm.end_stream(sid, "secret")
+    t = threading.Thread(target=turn, daemon=True)
+    t.start()
+    assert pv.lock("user") is True
+    t.join(2)
+    assert seen == {'key_at_last_write': True}, "its last rows were written with the key"
+    assert not pv.vault_unlocked() and not public.cancel_flag
+    llm.end_stream(sid2, "desk")
+
+
+def test_a_clicked_lock_seals_anyway_when_a_turn_will_not_stop(store, fast_stop):
+    llm = _llm(store)
+    stream, sid, _ = llm.begin_stream("secret", exclusive=True)
+    assert pv.lock("user") is True               # nothing ends the turn
+    assert stream.cancel_flag and not pv.vault_unlocked()
+    assert pv.leases_held() == 0
+    llm.end_stream(sid, "secret")                # its late end is harmless
+
+
+def test_d4_nothing_private_starts_while_a_seal_is_under_way(store, monkeypatch):
+    from core.chat.chat import ChatBusy
+    llm = _llm(store)
+    monkeypatch.setattr(pv, '_sealing', True)    # between the decision and the key drop
+    with pytest.raises(ChatBusy):
+        llm.begin_stream("secret", exclusive=True)
+    assert not llm._streams_by_chat, "refused turns leave nothing registered"
+    _, sid, _ = llm.begin_stream("desk", exclusive=True)     # a public chat is untouched
+    llm.end_stream(sid, "desk")
+
+
+def test_a_refused_turn_hands_its_lease_back(store):
+    from core.chat.chat import ChatBusy
+    llm = _llm(store)
+    _, sid, _ = llm.begin_stream("secret", exclusive=True)
+    with pytest.raises(ChatBusy):
+        llm.begin_stream("secret", exclusive=True)           # the chat is taken
+    assert pv.leases_held() == 1
+    llm.end_stream(sid, "secret")
+    assert pv.leases_held() == 0
+
+
+def test_no_lease_while_the_vault_is_locked(store):
+    assert pv.lock("user")
+    assert pv.lease() is None
+
+
+def test_delete_vault_stops_private_turns_and_goes_through(store, fast_stop):
+    llm = _llm(store)
+    stream, sid, _ = llm.begin_stream("secret", exclusive=True)
+    ok, code = pv.destroy()
+    assert (ok, code) == (True, '') and stream.cancel_flag
+    assert not store.chat_exists("secret")
+    llm.end_stream(sid, "secret")
+
+
+# ── D2: a turn that outlived delete-vault never writes into the public
+#    chat that took its name ──
+
+def _private_default(sm):
+    assert sm.set_active_chat("default")
+    assert sm.update_chat_settings({'private_chat': True}, expected_active="default")
+    sm.add_user_message("the private window")
+    sm.add_assistant_final("still private")
+    assert sm.set_active_chat("desk")
+
+
+def _plain_rows(sm, name):
+    with sm._get_connection() as conn:
+        return [r[0] for r in conn.execute(
+            "SELECT message_json FROM chat_messages WHERE chat_name = ?", (name,))]
+
+
+def test_d2_a_by_name_turns_save_after_delete_vault_is_refused(store):
+    from core.chat import stream_brain
+    sm = store
+    _private_default(sm)
+    sess = sm.make_stream_session("default")     # a by-name turn read the private chat
+    assert pv.destroy() == (True, '')
+    assert sm.chat_exists("default")             # back, and public
+    tok = stream_brain.set_override(sess)
     try:
-        assert pv.lock("idle timeout") is False
-        assert pv.vault_unlocked()
+        sm.add_assistant_final("a late row from the private turn")
     finally:
-        sm.end_streaming()
+        stream_brain.reset_override(tok)
+    assert not any('private' in r for r in _plain_rows(sm, "default"))
+
+
+def test_d2_a_tasks_append_after_delete_vault_is_refused(store):
+    sm = store
+    _private_default(sm)
+    mark = sm.purge_mark(True)                   # the task read it as private
+    assert pv.destroy() == (True, '')
+    assert sm.append_messages_to_chat(
+        "default", [{"role": "assistant", "content": "late private row"}],
+        purge_mark=mark) is False
+    assert _plain_rows(sm, "default") == []
+
+
+def test_d2_a_chat_made_public_mid_turn_still_takes_the_turns_rows(store):
+    """No purge since the read: the guard stays out of the way."""
+    sm = store
+    mark = sm.purge_mark(True)
+    assert sm.append_messages_to_chat(
+        "desk", [{"role": "assistant", "content": "hello"}], purge_mark=mark) is True
