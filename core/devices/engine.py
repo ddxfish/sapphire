@@ -1486,11 +1486,50 @@ def doing(row):
     return out
 
 
+def _named(device_id, thing, action='', value=''):
+    """A hub call with its arguments named. She fills named arguments: shown
+    only in order, the thing went into `value` (2026-11-26)."""
+    args = [('device', device_id), ('capability', thing), ('action', action), ('value', value)]
+    return 'device_action(' + ', '.join(f"{k}={json.dumps(str(v))}" for k, v in args if v) + ')'
+
+
 def _run_one(row, t, c):
     """One example call for a thing: an action with an example first."""
     acts = [(n, a) for n, a in c['actions'].items() if _hers(a)]
     n, a = next(((n, a) for n, a in acts if a['example']), acts[0] if acts else ('', {}))
-    return _call(*([row['id'], t['call']] + ([n] if n else []) + ([a['example']] if a.get('example') else [])))
+    return _named(row['id'], t['call'], n, a.get('example') or '')
+
+
+def _reread(row, caps, capability, action, value, owner):
+    """A hub call that does not fit as given, read again: the thing, the
+    action and the value are looked for among ALL the words she sent, in
+    whatever argument they came. Run only when exactly one reading fits: one
+    thing (a room said beside it is only where it is) or else one room, and
+    one of that kind's actions. The answer ends with the plain way to say
+    it. None when nothing fits: the caller answers as it always did."""
+    words = [w for part in (capability, action, value)
+             for w in re.split(r'[\s/:,>]+', str(part or '').strip()) if w]
+    every = things(row)
+    named = {i: t for i, w in enumerate(words) for t in every
+             if _call_name(w) == t['call'] or w.lower() == t['id'].lower()}
+    rooms = {i for i, w in enumerate(words) if any(t['room'] and _call_name(t['room']) == _call_name(w) for t in every)}
+    if len(named) == 1:
+        at, = named
+        target, kind, skip = named[at]['call'], named[at]['kind'], {at} | rooms
+    elif not named and len(rooms) == 1:
+        at, = rooms
+        target, kind, skip = _call_name(words[at]), ROOM_KIND, {at}
+    else:
+        return None
+    cap = next((c for c in caps if c.get('things') and c['capability'] == kind), None)
+    rest = [w for i, w in enumerate(words) if i not in skip and _slug(w) != kind]
+    verbs = [i for i, w in enumerate(rest) if cap and _slug(w) in cap['actions']]
+    if len(verbs) != 1:
+        return None
+    act = _slug(rest.pop(verbs[0]))
+    told, ok = run(row['id'], target, act, ' '.join(rest), owner=owner, again=True)
+    plain = f"(Said plainly: {_named(row['id'], target, act, ' '.join(rest))})"
+    return (f"{told}\n{plain}" if isinstance(told, str) else told), ok
 
 
 def _house(row, caps, room='', only=None):
@@ -1508,10 +1547,11 @@ def _house(row, caps, room='', only=None):
     kinds = [c for c in ([only] if only else caps) if c.get('things')]
     head = f"{_head(row, st)}, " + (f"checked {_age(st['ts'])}" if st['ts'] else 'not checked yet')
     readings = [f"{k} {v}" for p in st['parts'] for k, v in p['readings'].items()][:READINGS]
-    pick = next(((t, c) for c in kinds for t in mine if t['kind'] == c['capability'] and c['actions']), None)
-    # how a hub is used, said FIRST: its kinds below look like capabilities, and are not what she names
-    how = (f"Name a thing where a capability would stand: {_run_one(row, *pick)}."
-           + ('' if room else f" A room's name there means its {ROOM_KIND}s.")) if pick else ''
+    fit = [(t, c) for c in kinds for t in mine if t['kind'] == c['capability'] and c['actions']]
+    pick = next((p for p in fit if p[0] not in away), fit[0] if fit else None)     # the example is a thing that answers
+    # how a hub is used, said FIRST and with the arguments named: its kinds below look like capabilities, and are not what she names
+    how = (f"Use one: {_run_one(row, *pick)}. capability is the thing's own name"
+           + ('.' if room else f", or a room's name for its {ROOM_KIND}s.")) if pick else ''
 
     def build(live, names):
         out = [head, '  ' + ' · '.join(readings) if readings else '', how]
@@ -1521,7 +1561,8 @@ def _house(row, caps, room='', only=None):
             here = [t for t in mine if t['kind'] == c['capability'] and not (live and t in away)]
             if not here and not only:
                 continue                    # nothing of this kind she can use right now: not taught
-            verbs = ', '.join(f"{n} {a['values']}".strip() for n, a in c['actions'].items() if _hers(a))
+            verbs = ', '.join(n + (f" (value {a['values']})" if a['values'] else '')
+                              for n, a in c['actions'].items() if _hers(a))
             out.append(_block(row, c, MAX_ROWS + 1) if only else f"Each {c['capability']} takes {verbs}:")
             places = sorted({t['room'] for t in here}, key=lambda r: (not r, r.lower()))
             for place in places:
@@ -1536,10 +1577,11 @@ def _house(row, caps, room='', only=None):
         out += [_block(row, c, MOST) for c in caps if not c.get('things') and not only and not room]
         if not every:
             out.append('  (nothing here yet)')
-        if live and away:
-            out.append(f"Not answering now: {', '.join(t['call'] for t in away)}")
+        if live and away:                   # a count: their names cost a line each, and naming one answers why
+            out.append(f"Not answering now: {len(away)} more (unplugged or out of reach).")
         if shut:
-            out.append(f"Locked ({LOCKED_NOTE}): {', '.join(t['call'] for t in shut)}")
+            out.append(f"Locked by the user: {', '.join(t['call'] for t in shut[:5])}"
+                       + (f" and {len(shut) - 5} more" if len(shut) > 5 else ''))
         if not names:
             out.append(f"A room's things by name: {_call(row['id'], '<room>')}")
         return '\n'.join(x for x in out + [_down_note(st)] if x)
@@ -1706,13 +1748,14 @@ def text_of(result):
     return str(result.get('text') or '') if isinstance(result, dict) else str(result)
 
 
-def run(device_id=None, capability=None, action=None, value=None, owner=False):
+def run(device_id=None, capability=None, action=None, value=None, owner=False, again=False):
     """device_action. Every level of missing or wrong argument answers with
     the list one level up, so a wrong guess costs one call, never a dead end.
     Returns (result, ok). result is text, or {'text', 'images'} when the
     action took pictures (the shape every picture-taking tool answers with).
     owner=True is the user at the Devices page, or core itself: a capability
-    that is locked for her still runs."""
+    that is locked for her still runs. again=True is a call this function
+    made itself (a hub call read again, _reread): it is not read a third time."""
     if not _slug(device_id):
         return list_text()
     if _slug(device_id) == ALL:
@@ -1724,8 +1767,17 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
     caps = describe(row)
     hub = any(c.get('things') for c in caps)      # things sit behind it: she names one where a capability would stand
 
+    def reread():       # a hub call that does not fit: found among her words, or None
+        return None if again or not hub else _reread(row, caps, capability, action, value, owner)
+
     cap_name = _slug(capability)
     if not cap_name:
+        if _slug(action) or str(value or '').strip():       # she meant to do something: the list alone would say nothing of why not
+            fixed = reread()
+            if fixed:
+                return fixed
+            if hub:
+                return f"capability is missing: it is the thing's name.\n{_house(row, caps)}", False
         return (_house(row, caps) if hub else _screen(row, caps)), True
     cap = next((c for c in caps if c['capability'] == cap_name), None)
     target = None
@@ -1733,6 +1785,9 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
         target = aim(row, capability)
         cap = target and next((c for c in caps if c.get('things') and c['capability'] == target['kind']), None)
     if not cap:
+        fixed = reread()
+        if fixed:
+            return fixed
         near = [t['call'] for t in things(row) if _call_name(capability) in t['call']][:8] if hub else []
         if near:
             return f"'{row['id']}' has no '{capability}'. Close: {', '.join(near)}.", False
@@ -1746,6 +1801,9 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
     brief = _brief(row)
     if cap.get('things'):
         if not target:                      # a kind named, not a thing: nothing to act on
+            fixed = reread() if act else None
+            if fixed:
+                return fixed
             said = _house(row, caps, only=cap)
             return (f"Name the {cap_name} itself where '{cap_name}' stands.\n{said}", False) if act else (said, True)
         named = _call_name(target['room']) or target['things'][0]['call']
@@ -1753,6 +1811,9 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
             return (_house(row, caps, room=target['room']) if target['room']
                     else _thing(row, cap, target['things'][0])), True
         if act not in cap['actions']:
+            fixed = reread()
+            if fixed:
+                return fixed
             return f"A {cap['capability']} has no action '{action}'.\n{_block(row, cap, MAX_ROWS + 1)}", False
         usable = [t for t in target['things'] if owner or not t['locked']]
         if not target['things']:
@@ -1765,6 +1826,9 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
     elif not act:
         return _screen(row, caps, only=cap), True
     elif act not in cap['actions']:
+        first, _, more = str(action).strip().partition(' ')
+        if not again and not str(value or '').strip() and _slug(first) in cap['actions']:
+            return run(device_id, capability, first, more.strip(), owner=owner, again=True)   # "volume 40" in the action argument
         return f"'{cap_name}' has no action '{action}'.\n{_screen(row, caps, only=cap)}", False
     if not _hers(cap['actions'][act]) and not owner:
         return f"'{act}' on '{row['id']}' is for the person at {PAGE} only.", False

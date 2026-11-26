@@ -67,7 +67,7 @@ def _blocked(thing, patterns):
 
 def carry():
     """Once: the Home Assistant that 1.x was set up with becomes a device
-    named home. What the old blacklist blocked is unticked on it, and the
+    named homeassistant. What the old blacklist blocked is unticked on it, and the
     phone it notified is ticked. Nothing old is deleted. When Home Assistant
     does not answer, nothing is kept and the next start tries again: the
     blacklist cannot be carried without the list of things it blocked."""
@@ -85,8 +85,8 @@ def carry():
         old, token = _old(), _token()
         if not token:
             return                      # never set up: nothing to carry
-        name = next(n for n in ('home', 'home-assistant', 'home-2', 'home-3') if n not in table)
-        engine.add(name, 'Home', NAME, {'url': old.get('url') or OLD_URL, 'token': token})
+        name = next(n for n in (NAME, NAME + '-2', NAME + '-3', NAME + '-4') if n not in table)   # the name Add Device gives one too
+        engine.add(name, 'Home Assistant', NAME, {'url': old.get('url') or OLD_URL, 'token': token})
         try:
             if not engine.status(name, fresh=True)['online']:
                 raise engine.DeviceError('Home Assistant did not answer')

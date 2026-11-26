@@ -194,19 +194,53 @@ def test_a_wrong_name_or_action_answers_with_the_way_forward(hub):
     assert hub.ran == []
 
 
+def test_a_call_that_does_not_fit_is_read_again_and_run(hub):
+    """What she really sent (2026-11-26): no capability, the action and its
+    value in one argument, the room and the thing in `value`. It came back as
+    a success that only printed the house, so nothing said what was wrong."""
+    text, ok = core.run('home', '', 'set 10', 'living-room pole-lamp')
+    assert ok is True and hub.ran == [('light', 'set', '10', ['light.pole'], '')]
+    assert text == ('set done\n(Said plainly: device_action(device="home", capability="pole-lamp", '
+                    'action="set", value="10"))')
+    for said, ran in (
+        (('living-room pole-lamp', 'set', '10'), ('light', 'set', '10', ['light.pole'], '')),
+        (('light', 'set', 'pole-lamp 10'), ('light', 'set', '10', ['light.pole'], '')),
+        (('pole-lamp', 'set 10', ''), ('light', 'set', '10', ['light.pole'], '')),
+        (('', 'off', 'living-room'), ('light', 'off', '', ['light.arm', 'light.pole'], 'Living Room')),
+        (('', '', 'bug-zappers on'), ('switch', 'on', '', ['switch.zap'], '')),
+    ):
+        hub.ran.clear()
+        assert core.run('home', *said)[1] is True, said
+        assert hub.ran == [ran], said
+
+
+def test_a_call_with_two_readings_or_none_is_refused_in_words(hub):
+    for said in (('', 'on', 'pole-lamp arm-lamp'),              # two things
+                 ('', 'set', '10'),                             # no thing
+                 ('', 'on off', 'pole-lamp'),                   # two actions
+                 ('', '', 'pole-lamp 10')):                     # no action
+        text, ok = core.run('home', *said)
+        assert ok is False and hub.ran == [], said
+    text, ok = core.run('home', '', 'set', '10')
+    assert text.startswith("capability is missing: it is the thing's name.") and 'Use one: device_action(' in text
+    core.update('home', allow={'light.pole': False})            # reading it again opens no lock
+    text, ok = core.run('home', '', 'set 10', 'living-room pole-lamp')
+    assert ok is False and 'is locked' in text and hub.ran == []
+
+
 # --- what she reads ----------------------------------------------------------
 
 def test_the_house_on_one_screen(hub):
     text, ok = core.run('home')
     assert ok is True
-    assert 'Each light takes on, off, set <0-100>:' in text
+    assert 'Each light takes on, off, set (value <0-100>):' in text
     assert '  living-room: arm-lamp=off, pole-lamp=on 60%' in text
     assert '  hall-light' in text                               # no room: no room in front of it
     assert 'Each switch takes on, off:' in text and '  back-porch: bug-zappers' in text
-    assert 'Locked (the user has not allowed you this' in text and text.count('front-door') == 1
+    assert 'Locked by the user: front-door' in text and text.count('front-door') == 1
     assert 'Each lock' not in text                              # a kind with nothing she may use is not taught
-    assert text.splitlines()[1].startswith('Name a thing where a capability would stand: device_action("home","')
-    assert "A room's name there means its lights." in text      # said before the kinds, not after them
+    assert text.splitlines()[1] == ('Use one: device_action(device="home", capability="arm-lamp", action="set", '
+                                    'value="40"). capability is the thing\'s own name, or a room\'s name for its lights.')
     assert 'tok-secret-long' not in text
 
 
@@ -216,14 +250,16 @@ def test_things_the_hub_cannot_reach_are_said_once(hub):
                                                       'switch.zap': 'unavailable', 'switch.hall': 'unavailable'}):
         text, _ = core.run('home')
     assert '  living-room: pole-lamp=on 60%' in text and 'back-porch' not in text
-    assert 'Not answering now: arm-lamp, bug-zappers, hall-switch' in text and '=unavailable' not in text
+    assert 'Not answering now: 3 more (unplugged or out of reach).' in text and '=unavailable' not in text
+    assert 'arm-lamp' not in text                               # a count: fifteen dead names were a quarter of the screen
     assert 'Each switch' not in text                            # every switch is away: no empty heading
 
 
 def test_one_thing_and_one_room(hub):
     text, ok = core.run('home', 'pole-lamp')
     assert ok is True and text.startswith('pole-lamp: Pole Lamp, a light in Living Room (home). Now: on 60%')
-    assert 'set <0-100>  brightness' in text and 'Run one: device_action("home","pole-lamp","set","40")' in text
+    assert 'set <0-100>  brightness' in text
+    assert 'Run one: device_action(device="home", capability="pole-lamp", action="set", value="40")' in text
     text, ok = core.run('home', 'living-room')
     assert ok is True and 'living-room: the room Living Room' in text and 'arm-lamp=off, pole-lamp=on 60%' in text
     assert 'bug-zappers' not in text

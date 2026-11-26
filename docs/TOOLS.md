@@ -183,7 +183,7 @@ Pixels only reach the model if the provider is known to accept them — tick **V
 | `device_status` | devices.py | One device right now: online/offline, readings, abilities |
 | `device_action` | devices.py | Use a device; `device_action(device)` alone lists its actions |
 
-Satellites, IP cameras, KDE Connect phones, a Home Assistant and other device plugins act through these three — see [DEVICES.md](DEVICES.md). The thirteen `ha_*` tools are gone since Home Assistant 2.0.0: `device_action("home", "pole-lamp", "set", "40")`.
+Satellites, IP cameras, KDE Connect phones, a Home Assistant and other device plugins act through these three — see [DEVICES.md](DEVICES.md). The thirteen `ha_*` tools are gone since Home Assistant 2.0.0: `device_action("homeassistant", "pole-lamp", "set", "40")`.
 
 ### Integrations
 
@@ -326,7 +326,7 @@ TOOL MODULES:
 - sapphire-store: store_browse, store_install(slug) — installs AND enables immediately. claude-code: activate_plugin
 - coding-harness: read_file, write_file, edit_file, list_files, search_files, run_command (paths relative to its working directory)
 - blender: blender_scene, blender_code, blender_see. github: github_repo, github_file, github_issue, github_search
-- homeassistant: no tools of its own. Its house is a device: device_action(home) lists every thing, device_action(home, <thing or room>, <action>, <value>) runs one
+- homeassistant: no tools of its own. Its house is a device: device_action(homeassistant) lists every thing, device_action(homeassistant, <thing or room>, <action>, <value>) runs one
 - clock plugin: get_time, set_timer, set_stopwatch, set_alarm
 - agents.py (core): agent_list, agent_peek, agent_spawn, agent_action — kinds come from plugins (`llm` from the agents plugin, `claude_code` from the claude-code plugin)
 - schedule_tool.py: schedule_task

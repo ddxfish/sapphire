@@ -398,9 +398,10 @@ def test_her_three_calls_end_to_end(house):
     engine.status('home', fresh=True)
     text, ok = engine.run('home')
     assert ok is True and '  living-room: arm-lamp=off, pole-lamp=on 60%' in text
-    assert 'Each climate takes set <temperature>, mode <mode>:' in text and 'thermostat=cool, 74°F now, set to 72' in text
+    assert 'Each climate takes set (value <temperature>), mode (value <mode>):' in text
+    assert 'thermostat=cool, 74°F now, set to 72' in text
     assert 'Each sensor takes read:' in text and 'back-door=open' in text
-    assert 'Locked (' in text and 'garage-door' in text and 'pixel-7' in text
+    assert 'Locked by the user: ' in text and 'garage-door' in text and 'pixel-7' in text
     assert 'tok-secret-long' not in text and len(text) < 1500
     assert engine.run('home', 'living-room', 'set', '+20')[1] is True
     assert engine.run('home', 'thermostat', 'set', '76') == ('Thermostat: set 76 sent.', True)
@@ -412,7 +413,8 @@ def test_her_three_calls_end_to_end(house):
 
 def test_the_old_setup_becomes_a_device_once(house):
     ready.carry()
-    row = engine.get('home')
+    row = engine.get('homeassistant')
+    assert row['label'] == 'Home Assistant'
     assert row['parts'][0]['config'] == {'url': CONFIG['url']} and row['parts'][0]['plugin'] == 'homeassistant'
     assert 'tok-secret-long' not in json.dumps(house.store.d)
     locked = {t['id'] for t in engine.things(row) if t['locked']}
@@ -420,7 +422,7 @@ def test_the_old_setup_becomes_a_device_once(house):
     assert 'notify.mobile_app_pixel_7' not in locked and 'notify.mobile_app_tablet' in locked
     assert 'light.pole' not in locked
     assert house.state.d == {'carried': True}
-    engine.remove('home')
+    engine.remove('homeassistant')
     ready.carry()                                           # the user deleted it: it does not come back
     assert engine.rows() == {}
 
@@ -431,7 +433,7 @@ def test_nothing_is_carried_while_home_assistant_does_not_answer(house):
     assert engine.rows() == {} and house.state.d == {}      # the blacklist is not lost: tried again next start
     house.ha.fail = None
     ready.carry()
-    assert 'home' in engine.rows()
+    assert 'homeassistant' in engine.rows()
 
 
 def test_nothing_is_carried_without_an_old_token_or_onto_a_house_that_is_there(house):

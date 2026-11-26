@@ -16,7 +16,6 @@
       {
         "driver": "homeassistant",
         "label": "Home Assistant",
-        "kind": "Home",
         "icon": "🏠",
         "module": "device_driver.py",
         "things": true,

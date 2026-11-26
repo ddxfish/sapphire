@@ -489,7 +489,7 @@ A Home Assistant is a device (System > Devices). Its Status tab says what is wro
 - "refused the access token": make a new Long-Lived Access Token in your HA profile and enter the whole string on the Status tab
 
 **The old `ha_*` tools are gone**
-- Since 2.0.0 she uses `device_action`. The house you had set up became the device `home` at the first start, once Home Assistant answered. If it did not, add it: + Add Device > Home
+- Since 2.0.0 she uses `device_action`. The house you had set up became the device `homeassistant` at the first start, once Home Assistant answered. If it did not, add it: + Add Device > Home Assistant
 - A toolset of your own that listed `ha_*` tools needs `device_list`, `device_status` and `device_action` in their place
 
 **She says a thing is locked**

@@ -2,11 +2,11 @@
   "plugin": "homeassistant",
   "version": "2.0.0",
   "files": {
-    "README.md": "sha256:7322b2a38416d2f836457760d1e7c1033a46a81a2a8fb18907efc3f35c5c58d6",
+    "README.md": "sha256:fe0e4700bc67df1a333c25d9da9ac612402b2674fe2f57160dc743575012c69b",
     "device_driver.py": "sha256:4ee584285c9598c10814be01d962d8c6d974e84acd6559c406e59054528138ed",
-    "hooks/ready.py": "sha256:5d67249dfd092ed0e9190c612d5de89ec99a2031c2bcc4d8d55b51dd7b8cd642",
-    "plugin.json": "sha256:41299f05eef08d2601dd560961186fd63684309f1a6c79f97a01c75e30d9604b",
-    "tests/test_ha_driver.py": "sha256:f7701cde1f2dd92da8ad6fbf9b7e918d6934e764258171f14903b02602438145"
+    "hooks/ready.py": "sha256:a4723c0bdd50e01b8695d322aff0ddb0be3b203ef0e6ca6f2abb8004beedcb8a",
+    "plugin.json": "sha256:610e7ecb2bf89c5d3498641389dcd798554462f37a199a5a2b839ded165d29ff",
+    "tests/test_ha_driver.py": "sha256:3a8481c8bd04f83c98e8c0b42f9db3eac512418135b1178c8ca41b58e882bc89"
   },
-  "signature": "BXT4+f/KqaSPXXESC44ygdRB0+dfIjbA8uiYCGMccPVFkKzjGtAVH3FowrYEykZGsgBdVU3x37ocRIEzBFnLBA=="
+  "signature": "d4ColTFuRvojPSjTi75l6TNCR8xRm9q3kej4OcgEUwxiBWhBIgRiIF7RrWMyl/FP4jOlcSslguLee/ECI744Dw=="
 }

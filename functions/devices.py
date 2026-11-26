@@ -61,9 +61,10 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "device": {"type": "string", "description": "From device_list"},
-                    "capability": {"type": "string", "description": "e.g. ssh. Omit for the list."},
-                    "action": {"type": "string", "description": "Omit for the list"},
-                    "value": {"type": "string"}
+                    "capability": {"type": "string", "description": "e.g. ssh. On a house: the thing's own name, "
+                                                                     "e.g. pole-lamp. Omit for the list."},
+                    "action": {"type": "string", "description": "One word, e.g. set. Omit for the list"},
+                    "value": {"type": "string", "description": "What the action takes, e.g. 40"}
                 },
                 "required": ["device"]
             }

@@ -837,7 +837,7 @@ paired again. **Unpair** forgets it.
 
 ## Home Assistant
 
-One device for the whole house. + Add Device > **Home**, then its address
+One device for the whole house. + Add Device > **Home Assistant**, then its address
 (`http://homeassistant.local:8123`) and a long-lived access token (in Home
 Assistant: your profile, Security, Long-lived access tokens). Add a second
 house the same way under another name.
@@ -860,22 +860,27 @@ switches and what you hid in Home Assistant are left out.
 She names a thing, or a room, in place of a capability:
 
 ```
-device_action("home")                              the whole house: rooms, things, what each is doing
-device_action("home", "pole-lamp", "set", "40")    one light to 40%
-device_action("home", "living-room", "set", "+20") a room is its lights
-device_action("home", "thermostat", "set", "76")
-device_action("home", "evening", "run")            a scene
+device_action("homeassistant")                              the whole house: rooms, things, what each is doing
+device_action("homeassistant", "pole-lamp", "set", "40")    one light to 40%
+device_action("homeassistant", "living-room", "set", "+20") a room is its lights
+device_action("homeassistant", "thermostat", "set", "76")
+device_action("homeassistant", "evening", "run")            a scene
 ```
 
 A light's `set` takes a brightness, a step (`+20`), a color (`blue`, `warm`,
 `2700k`, `#ff8800`), or a brightness then a color. An order to a thing Home
 Assistant cannot reach fails in words; it is never called done.
 
+A call she gets slightly wrong still runs when it can mean one thing only:
+the thing, the action and the value are found among her words, whichever
+argument they came in, and the answer ends with the plain way to say it. Two
+readings, or none, is a refusal in words.
+
 A scheduled Device task picks a thing or a room the same way, with no AI in
 the loop: lights off at 23:00.
 
 **Coming from the old plugin (1.x).** The house you had set up becomes the
-device `home` by itself at the first start, once Home Assistant answers. What
+device `homeassistant` by itself at the first start, once Home Assistant answers. What
 your blacklist blocked is unticked, and the phone you had picked for
 notifications is ticked. If you had taken locks or covers off the blacklist,
 tick them again. The thirteen `ha_*` tools are gone; a toolset of your own
@@ -907,6 +912,6 @@ DEVICES (core/devices/, page System > Devices):
 - Phone: battery read · share send|list · sms conversations|read|send "<number or name> | <words>" · notify ping|find · contacts find.
 - MIDI keyboard: sound instrument|loudness|on|off · notes play "C4 E4 G4 C5:2 bpm=120"|loop|listen [s]|stop. Hardware synth: sound voice|effect · notes play|loop|listen|stop.
 - Another Sapphire: chat ask|tell · tools <her tool> <words fill args in order>. A question from a Sapphire cannot ask one back.
-- Home Assistant (a hub): device_action(home) = every thing by room with its state. A thing's or a room's name stands where the capability would; a room = its lights. light on|off|toggle|set "<0-100|+N|-N> [color]" · switch, fan on|off|toggle · climate set <temp>|mode <mode> · scene, script run · cover open|close|stop|set · lock lock|unlock · media play|pause|stop|next|previous|volume · camera look · alarm arm|disarm · sensor read · notify ping <words>. "Locked" things = the user's tick on its Things tab. "not answering" = Home Assistant cannot reach it; do not retry.
+- Home Assistant (a hub): device_action(homeassistant) = every thing by room with its state. A thing's or a room's name stands where the capability would; a room = its lights. light on|off|toggle|set "<0-100|+N|-N> [color]" · switch, fan on|off|toggle · climate set <temp>|mode <mode> · scene, script run · cover open|close|stop|set · lock lock|unlock · media play|pause|stop|next|previous|volume · camera look · alarm arm|disarm · sensor read · notify ping <words>. capability = the thing's own name, never its kind. "Locked by the user" = their tick on its Things tab. "not answering" = Home Assistant cannot reach it; do not retry.
 - IR names come from the IR library (core/ir/library.py resolve); an unknown name answers with the known list.
 - Wire: docs/SATELLITE-PROTOCOL.md. Drivers: docs/plugin-author/devices.md.
