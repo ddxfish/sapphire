@@ -907,9 +907,11 @@ def seat_brain(chat, s_room, room, seat):
     st['persona'] = seat.get('persona') or ''
     st['custom_context'] = '\n\n'.join(t for t in (str(st.get('custom_context') or '').strip(),
                                                    str(seat.get('context') or '').strip()) if t)
-    pd = prompts.get_prompt(st.get('prompt') or 'default')
-    if not isinstance(pd, dict):
-        pd = prompts.get_prompt('default')
+    from core import prompt_vault
+    with prompt_vault.reading(st['private_chat']):   # rendered FOR this seat's room (the reader rule)
+        pd = prompts.get_prompt(st.get('prompt') or 'default')
+        if not isinstance(pd, dict):
+            pd = prompts.get_prompt('default')
     base = (pd.get('content', '') if isinstance(pd, dict) else '') or ''
     names = _names(room)
     drop = set(OFF_NAMES)

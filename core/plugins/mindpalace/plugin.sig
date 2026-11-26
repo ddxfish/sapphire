@@ -73,12 +73,12 @@
     "tools/library_tools.py": "sha256:512d6767f0230885903091f933c597c8300db2b22c44cf1c616a7201b7fd1a8b",
     "tools/metadata.py": "sha256:357e88459b5ef59bb2333b087fd68a2006ff5ac61b0a9cb885c6469f776e9972",
     "tools/palace_tools.py": "sha256:a18cf5490febaf274e3fd47e57d86e3790f95b2fc11a21bf53c60c5c82d61726",
-    "tools/prompt_audit.py": "sha256:2576970f0a653a5ff8487dc897fcae6d7c6abad19f261f0058b3358072a82a09",
+    "tools/prompt_audit.py": "sha256:4d845754bc1c3808383daef6ed3a1caaa2fc7c5c3cfbbfc35cf923f55b70cccd",
     "tools/self_tools.py": "sha256:3faa5ef58f2a852fee32bc6025abe2917a759c76683e8b219ccbd6b077dfdd42",
     "tools/spider.py": "sha256:28a770e9611fa8874a6fd24f0f0d751330b74db0a0d58ebe2cc4a1ad6922ed2b",
     "tools/templates.py": "sha256:31d9934e39b271c8559a3ac51a62540ed384ece4cacc6fc49dd7f5b3957c3ccc",
     "tools/temporal.py": "sha256:4c89314cda5e3419f4ac7925d0d9fa7353198473c79d7e7afc226246c101ab13",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "5yIQ+qFxY18hvPYYd4TAueHFVjpfTFqjV7OH3oMoPDV+yZO5cDc1eJC7nmx5XOUX/Qnup0EqZ7IYhc8TWQD/CQ=="
+  "signature": "UYrXxAbLM2k5JqccrQmt+qZf1vwSIz/fp5HwlIkxWis4PAZ9yz7VaQVV5PzLKaU72/Lr307kKMsCpeUMZEklDg=="
 }

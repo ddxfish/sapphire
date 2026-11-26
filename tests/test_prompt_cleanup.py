@@ -87,8 +87,9 @@ class TestPieceUsage:
                          '_privacy_required': True},
                    'b': {'character': 'x', 'extras': []},
                    'broken': 'not-a-dict'}
-        monkeypatch.setattr(type(prompt_manager), 'scenario_presets',
-                            property(lambda self: presets))
+        # the FULL view: usage is bookkeeping, never the reader's view
+        monkeypatch.setattr(type(prompt_manager), 'full_scenario_presets',
+                            lambda self: presets)
         usage = crud.piece_usage()
         assert sorted(usage['character']['x']) == ['a', 'b']
         assert usage['extras']['e1'] == ['a']
@@ -350,13 +351,13 @@ class TestVaultRewrite:
 
 class TestDanglers:
     def test_detection(self, monkeypatch):
-        monkeypatch.setattr(type(prompt_manager), 'components',
-                            property(lambda self: {'extras': {'fear': 'x'}}))
-        monkeypatch.setattr(type(prompt_manager), 'scenario_presets',
-                            property(lambda self: {
+        monkeypatch.setattr(type(prompt_manager), 'full_components',
+                            lambda self: {'extras': {'fear': 'x'}})
+        monkeypatch.setattr(type(prompt_manager), 'full_scenario_presets',
+                            lambda self: {
                                 'ok': {'extras': ['fear'], 'character': ''},
                                 'broken': {'extras': ['fear', 'gone'],
-                                           'character': 'missing'}}))
+                                           'character': 'missing'}})
         d = crud.dangling_refs()
         assert 'ok' not in d
         assert {(r['type'], r['key']) for r in d['broken']} \

@@ -538,7 +538,10 @@ class TestMergeIntoManager:
         pv.set_monolith("vlt_mono", "Vault monolith text")
         pv.set_piece("emotions", "vlt_piece", "Vault piece text")
         pv.set_preset("vlt_preset", {"character": "vlt"})
-        yield prompt_manager
+        # An OPEN reader (a private turn, the editor): the views are closed
+        # unless a lane opens them - the reader rule, 2026-11-26.
+        with pv.reading(True):
+            yield prompt_manager
         prompt_packs.unregister_plugin(self.PACK)
         prompt_manager._monoliths.pop("vlt_mono", None)
         prompt_manager._components.get("emotions", {}).pop("vlt_piece", None)
@@ -548,6 +551,35 @@ class TestMergeIntoManager:
         assert merged.monoliths["vlt_mono"]["privacy_required"] is True
         assert merged.components["emotions"]["vlt_piece"] == "Vault piece text"
         assert merged.scenario_presets["vlt_preset"]["_privacy_required"] is True
+
+    def test_closed_reader_sees_the_locked_world(self, merged):
+        """The reader rule: unlocked is not enough. A closed reader (any turn
+        in a public chat, any background thread) gets no vault name or text."""
+        with pv.reading(False):
+            assert pv.vault_unlocked()
+            assert "vlt_mono" not in merged.monoliths
+            assert "vlt_piece" not in merged.components.get("emotions", {})
+            assert "vlt_preset" not in merged.scenario_presets
+            # the full views are for bookkeeping: they do not depend on the reader
+            assert "vlt_mono" in merged.full_monoliths()
+            assert "vlt_piece" in merged.full_components()["emotions"]
+            assert "vlt_preset" in merged.full_scenario_presets()
+
+    def test_closed_reader_resolves_a_vault_prompt_withheld(self, merged):
+        """Name, type and privacy answer honestly (every gate reads them off
+        this result); the text and the piece list stay in the vault."""
+        from core import prompt_crud
+        with pv.reading(False):
+            got = prompt_crud.get_prompt("vlt_mono")
+            assert got["privacy_required"] is True and got["withheld"] is True
+            assert got["type"] == "monolith" and got["content"] == ""
+            preset = prompt_crud.get_prompt("vlt_preset")
+            assert preset["privacy_required"] is True and preset["components"] == {}
+        assert prompt_crud.get_prompt("vlt_mono")["vault"] is True
+
+    def test_default_is_closed(self, vault):
+        """No lane said anything: closed."""
+        assert pv.reader_ok() is False
 
     def test_locked_names_absent(self, merged):
         pv.lock()
@@ -659,8 +691,11 @@ class TestDegradedTurn:
         old = prompt_state._assembled_state.get("active_preset", "default")
         prompt_state._assembled_state["active_preset"] = "vlt_active"
         try:
-            msg = prompt_state.get_current_prompt()
+            with pv.reading(True):      # the private chat that wears it
+                msg = prompt_state.get_current_prompt()
             assert msg["content"] == "Vault text"
+            # any other reader: the assembled state, quietly (not a missing name)
+            assert "Vault text" not in prompt_state.get_current_prompt()["content"]
         finally:
             prompt_state._assembled_state["active_preset"] = old
 
@@ -726,7 +761,8 @@ class TestPromptWriteRouting:
         store_dir.mkdir()
         monkeypatch.setattr(prompt_manager, "USER_DIR", store_dir)
         pv.setup("key")
-        yield prompt_manager
+        with pv.reading(True):      # the editor / a private turn (the reader rule)
+            yield prompt_manager
         prompt_packs.unregister_plugin(self.PACK)
         for n in list(prompt_manager._monoliths):
             if n.startswith("vlt_"):
@@ -867,11 +903,42 @@ class TestPieceWriteRouting:
         store_dir.mkdir()
         monkeypatch.setattr(prompt_manager, "USER_DIR", store_dir)
         pv.setup("key")
-        yield prompt_manager
+        with pv.reading(True):      # the editor / a private turn (the reader rule)
+            yield prompt_manager
         for ctype in list(prompt_manager._components):
             for k in list(prompt_manager._components[ctype]):
                 if k.startswith("vlt_"):
                     del prompt_manager._components[ctype][k]
+
+    def test_a_closed_writer_writes_as_if_locked(self, routed):
+        """The reader rule on the write side: a public turn's new piece goes
+        to the plaintext store (it used to go INTO the vault, where that chat
+        could never see it again), and it cannot touch what the vault holds."""
+        from core import prompt_crud
+        assert prompt_crud.save_component("character", "vlt_kept", "Vault text.")[1].endswith("(vault)")
+        with pv.reading(False):
+            ok, msg = prompt_crud.save_component("character", "vlt_new", "Plain.")
+            assert ok and not msg.endswith("(vault)")
+            assert "vlt_new" in routed._components["character"]
+            assert not pv.vault_has_piece("character", "vlt_new")
+            # over a vault key: refused, and no plaintext shadow is left
+            ok, msg = prompt_crud.save_component("character", "vlt_kept", "Overwrite.")
+            assert not ok and msg == prompt_crud.VAULT_TAKEN_MSG
+            assert "vlt_kept" not in routed._components["character"]
+            assert prompt_crud.save_component("character", "vlt_x", "v", origin="vault") \
+                == (False, prompt_crud.VAULT_LOCKED_MSG)
+            assert prompt_crud.delete_component("character", "vlt_kept") == (False, 'not_found')
+            # prompts, the same
+            assert prompt_crud.save_prompt("vlt_mono_kept", {"type": "monolith", "content": "x"})[0] is True
+        assert pv.overlay_components()["character"]["vlt_kept"] == "Vault text."
+        assert "vlt_mono_kept" in routed._monoliths, "a closed writer's new prompt is plaintext"
+        ok, _ = prompt_crud.save_prompt("vlt_vmono", {"type": "monolith", "content": "secret"})
+        assert ok and pv.vault_has_prompt("vlt_vmono")
+        with pv.reading(False):
+            ok, msg = prompt_crud.save_prompt("vlt_vmono", {"type": "monolith", "content": "over"})
+            assert not ok and msg == prompt_crud.VAULT_TAKEN_MSG
+            assert prompt_crud.delete_prompt("vlt_vmono") is False
+        assert pv.overlay_monoliths()["vlt_vmono"]["content"] == "secret"
 
     def test_new_piece_routes_to_vault(self, routed):
         from core import prompt_crud

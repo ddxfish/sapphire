@@ -60,8 +60,12 @@ async def get_history(request: Request, chat: str = None, _=Depends(require_logi
         prompt_content = ""
         try:
             from core import prompts as _prompts
-            _pn = (sm.read_chat_settings(chat) or {}).get("prompt")
-            _pd = _prompts.get_prompt(_pn) if _pn else None
+            _cs = sm.read_chat_settings(chat) or {}
+            _pn = _cs.get("prompt")
+            # rendered FOR that chat (the vault's reader rule)
+            from core import prompt_vault as _pv
+            with _pv.reading(bool(_cs.get("private_chat"))):
+                _pd = _prompts.get_prompt(_pn) if _pn else None
             prompt_content = (_pd.get("content", "") if isinstance(_pd, dict) else "") or ""
         except Exception:
             prompt_content = ""
@@ -837,26 +841,30 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 slot["count"] += 1
                 slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
 
-        # Prompts data
-        from core import prompt_packs
-        prompt_names = prompts.list_prompts()
-        _hidden_prompts = prompts.hidden_prompt_kinds()
-        pack_sources = prompt_packs.get_sources()
-        user_prompt_names = set(prompts.prompt_manager._monoliths) | set(prompts.prompt_manager._scenario_presets)
-        prompt_list = []
-        for name in prompt_names:
-            pdata = prompts.get_prompt(name)
-            prompt_list.append({
-                'name': name,
-                'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
-                'char_count': len(pdata.get('content', '')) if isinstance(pdata, dict) else len(str(pdata)),
-                'source': pack_sources.get(name) if name not in user_prompt_names else None,
-                'vault': prompts.is_vault_prompt(name)
-            })
-        current_prompt_name = prompts.get_active_preset_name()
-        current_prompt_data = prompts.get_prompt(current_prompt_name) if current_prompt_name else None
-        # Visible view — hidden pack scaffolding stays out of UI payloads
-        prompt_components = prompts.visible_components()
+        # Prompts data — the person's screen: it reads the vault while unlocked
+        # (the reader rule, core/prompt_vault.py).
+        from core import prompt_packs, prompt_vault as _pv_reader
+        with _pv_reader.reading(True):
+            prompt_names = prompts.list_prompts()
+            _hidden_prompts = prompts.hidden_prompt_kinds()
+            pack_sources = prompt_packs.get_sources()
+            user_prompt_names = set(prompts.prompt_manager._monoliths) | set(prompts.prompt_manager._scenario_presets)
+            prompt_list = []
+            for name in prompt_names:
+                pdata = prompts.get_prompt(name)
+                prompt_list.append({
+                    'name': name,
+                    'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
+                    'char_count': len(pdata.get('content', '')) if isinstance(pdata, dict) else len(str(pdata)),
+                    'source': pack_sources.get(name) if name not in user_prompt_names else None,
+                    'vault': prompts.is_vault_prompt(name)
+                })
+            current_prompt_name = prompts.get_active_preset_name()
+            current_prompt_data = prompts.get_prompt(current_prompt_name) if current_prompt_name else None
+            # Visible view — hidden pack scaffolding stays out of UI payloads
+            prompt_components = prompts.visible_components()
+            prompt_presets = {k: v for k, v in prompts.prompt_manager.scenario_presets.items()
+                              if k not in _hidden_prompts}
 
         # Spices data
         spice_data = _build_spice_response()
@@ -985,8 +993,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "current_name": current_prompt_name,
                 "current": current_prompt_data,
                 "components": prompt_components,
-                "presets": {k: v for k, v in prompts.prompt_manager.scenario_presets.items()
-                            if k not in _hidden_prompts},
+                "presets": prompt_presets,
                 # Referenced vault names ONLY (ruling C amendment) — lets
                 # dropdown synthesizers label dangling names "(vault 🗝)"
                 # while locked instead of a bare mystery name.
@@ -1943,9 +1950,12 @@ async def chat_prompt_preview(chat_name: str, request: Request, _=Depends(requir
             if not sess:
                 raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
             pn = sess["settings"].get("prompt", "default")
-            pd = prompts.get_prompt(pn)
-            if not isinstance(pd, dict):
-                pd = prompts.get_prompt("default")
+            # rendered FOR this chat (the vault's reader rule, core/prompt_vault.py)
+            from core import prompt_vault as _pv
+            with _pv.reading(bool(sess["settings"].get("private_chat"))):
+                pd = prompts.get_prompt(pn)
+                if not isinstance(pd, dict):
+                    pd = prompts.get_prompt("default")
             sess["system_prompt"] = (pd.get("content", "") if isinstance(pd, dict) else "") or ""
             sess["tools"] = llm._resolve_toolset_tools(
                 sess["settings"].get("toolset", "all"), sess["settings"].get("extra_toolsets"))

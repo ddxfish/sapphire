@@ -39,6 +39,9 @@ class FakePM:
     def components(self):
         return self._components
 
+    def full_components(self):
+        return self._components
+
     def save_components(self, reason=None):
         self.save_calls += 1
         return self._save_result

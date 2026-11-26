@@ -4,8 +4,8 @@ the prompt system only while unlocked (tmp/prompt-vault-plan.md, build item 1).
 
 Mirror-registry pattern like core/prompt_packs.py: decrypted content lives in
 memory only, merged at READ time via the overlay_* accessors. Locked = every
-accessor returns {} — vault names exist nowhere. App-wide global: unlocked for
-every consumer or none.
+accessor returns {} — vault names exist nowhere. Unlocked is app-wide, but
+READING is per lane: see "the reader rule" below.
 
 Crypto is bytes-level on purpose — backup_crypto's file→file API would stage
 plaintext on disk. Distinct magic so the vault is never misidentified as a
@@ -35,6 +35,8 @@ import os
 import struct
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from core.fs_utils import replace_with_retry
@@ -61,6 +63,42 @@ _refs = {}             # {name: "monolith"|"preset"} — referenced names only
 _refs_loaded = False
 _piece_salt = None     # random hex salt for the piece-refs hashes (sidecar)
 _piece_hashes = set()  # salted sha256 of plaintext piece keys vault presets use
+
+
+# ── the reader rule ──
+# Vault content exists only for a private turn and for the person at the
+# editor (isolation hunt 2026-11-23, Krem's ruling A). Unlocked is NOT enough:
+# before this rule the vault was open for every consumer at once, so her read
+# tools handed vault text to a cloud turn in a public chat, and a plain preset
+# wearing a vault piece rendered it into a heartbeat.
+# CLOSED unless a lane opens it — a lane that forgets shows too little, never
+# too much. The merged prompt views (prompt_manager) ask reader_ok(); the
+# overlay_* accessors below stay the FULL view for writers, movers and
+# collision checks, which must never depend on who is reading.
+# A render is opened for the chat it is FOR (that chat's private flag), never
+# for whoever happens to call it.
+_reader: ContextVar = ContextVar('vault_reader', default=False)
+
+
+@contextmanager
+def reading(allowed=True):
+    """Open (or close) the vault's read side for the code inside."""
+    token = _reader.set(bool(allowed))
+    try:
+        yield
+    finally:
+        _reader.reset(token)
+
+
+def reader_ok() -> bool:
+    return bool(_reader.get())
+
+
+async def editor_reader():
+    """Route dependency for the person at the editor: their request reads the
+    vault. async on purpose - a sync dependency runs in a worker thread and
+    its set would never reach the route. Not reset: a request is its own task."""
+    _reader.set(True)
 
 
 class VaultCorrupt(ValueError):
@@ -506,6 +544,17 @@ def lock(reason="") -> bool:
         _prompts.clear_transients()
     except Exception:
         pass
+    # ALWAYS re-render the live prompt, last, after everything above changed
+    # what it is made of. It used to be re-rendered only when the active NAME
+    # was a vault name, so a plain preset wearing a vault piece (or a timed
+    # mood) kept the vault text in the live cache after the seal, and the
+    # docs' own advice ("lock the vault to talk in an ordinary chat") sent it
+    # to a cloud model (isolation hunt A4, 2026-11-23).
+    try:
+        from core.prompt_crud import revalidate_active
+        revalidate_active(reason="vault locked")
+    except Exception as e:
+        logger.warning(f"[VAULT] live prompt re-render after lock failed: {e}")
     try:
         from core import ghost_messages
         ghost_messages.forget_all()       # the sidebar's "last ghost" memory, every chat
@@ -617,7 +666,8 @@ def rekey(current, new) -> tuple:
 def _handoff_active(gone_names):
     """Active preset was a vault name → hand off to 'default' loudly, exactly
     like prompt_packs.unregister_plugin. Runtime-only: stored chat settings
-    untouched, self-heals on next unlock."""
+    untouched, self-heals on next unlock. The live re-render is lock()'s own
+    last step (it runs for every seal, not only this case)."""
     if not gone_names:
         return
     try:
@@ -626,11 +676,13 @@ def _handoff_active(gone_names):
         active = prompt_state.get_active_preset_name()
         if active in gone_names and active not in prompt_manager._monoliths \
                 and active not in prompt_manager._scenario_presets:
+            # The piece state goes with the name: left behind, the sealed
+            # preset's keys showed in her "active:" line on any later turn and
+            # her next piece change forked them into a plaintext preset (A7).
+            prompt_state.reset_to_defaults()
             prompt_state.set_active_preset_name('default')
             logger.warning(f"[VAULT] Active prompt '{active}' sealed in locked "
                            f"vault — active preset reset to 'default'.")
-            from core.prompt_crud import revalidate_active
-            revalidate_active(reason="vault locked")
     except Exception as e:
         logger.warning(f"[VAULT] active-preset handoff failed: {e}")
 

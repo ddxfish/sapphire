@@ -835,6 +835,19 @@ def _apply_chat_settings_unlocked(system, settings: dict):
         logger.error(f"Error applying TTS settings: {e}")
 
     try:
+        _apply_prompt_setting(system, settings)
+    except Exception as e:
+        logger.error(f"Error applying prompt settings: {e}")
+
+    _apply_chat_settings_rest(system, settings)
+
+
+def _apply_prompt_setting(system, settings: dict):
+    """The chat's prompt into the live cache, rendered FOR this chat: the
+    vault's reader rule (core/prompt_vault.py) opens the vault only when the
+    chat is private. Whoever switched to it is not the reader."""
+    from core.prompt_crud import live_reading
+    with live_reading(system, settings):
         if "prompt" in settings:
             prompt_name = settings["prompt"]
             prompt_data = prompts.get_prompt(prompt_name)
@@ -848,7 +861,7 @@ def _apply_chat_settings_unlocked(system, settings: dict):
                 # Pieces BEFORE the live snapshot (C-5): a preset failing
                 # validation keeps the previous prompt and trackers intact.
                 ok = True
-                if hasattr(prompts.prompt_manager, 'scenario_presets') and prompt_name in prompts.prompt_manager.scenario_presets:
+                if prompt_name in prompts.prompt_manager.full_scenario_presets():
                     ok = prompts.apply_scenario(prompt_name)
                 if ok:
                     system.llm_chat.set_system_prompt(content)
@@ -894,9 +907,9 @@ def _apply_chat_settings_unlocked(system, settings: dict):
                     }, ephemeral=True)
                 except Exception:
                     pass
-    except Exception as e:
-        logger.error(f"Error applying prompt settings: {e}")
 
+
+def _apply_chat_settings_rest(system, settings: dict):
     try:
         # Reset before apply so scopes not present in this chat's settings fall
         # back to defaults instead of inheriting the previous chat's values.
@@ -974,25 +987,29 @@ def reapply_if_active(system, domain: str, name: str):
                 [name], extra_toolsets=chat_settings.get('extra_toolsets') or None)
             publish(Events.TOOLSET_CHANGED, {"name": name})
         elif domain == 'prompt':
-            data = prompts.get_prompt(name)
-            # Same fix as _apply_chat_settings: existence is "is dict",
-            # not "content truthy". An intentionally-empty prompt (the
-            # 'blank' prompt) must hot-reload correctly when edited.
-            # 2026-04-27 fix.
-            if isinstance(data, dict):
-                # Re-run apply_scenario for assembled presets — setting
-                # content alone left _assembled_state on the OLD pieces, and
-                # the next spice rotation reassembled from them, silently
-                # reverting the edit. Runs BEFORE set_system_prompt (C-5):
-                # a bad edit keeps the previous prompt live instead of
-                # half-applying.
-                if name in prompts.prompt_manager.scenario_presets:
-                    if not prompts.apply_scenario(name):
-                        logger.error(f"Hot-reload: edited preset '{name}' failed "
-                                     f"validation — previous prompt kept")
-                        return
-                system.llm_chat.set_system_prompt(data.get('content', '') or '')
-                publish(Events.PROMPT_CHANGED, {"name": name, "action": "reapplied"})
+            # Rendered FOR the open chat (the vault's reader rule): the editor
+            # that saved this reads the vault, the open chat may not.
+            from core.prompt_crud import live_reading
+            with live_reading(system):
+                data = prompts.get_prompt(name)
+                # Same fix as _apply_chat_settings: existence is "is dict",
+                # not "content truthy". An intentionally-empty prompt (the
+                # 'blank' prompt) must hot-reload correctly when edited.
+                # 2026-04-27 fix.
+                if isinstance(data, dict):
+                    # Re-run apply_scenario for assembled presets — setting
+                    # content alone left _assembled_state on the OLD pieces, and
+                    # the next spice rotation reassembled from them, silently
+                    # reverting the edit. Runs BEFORE set_system_prompt (C-5):
+                    # a bad edit keeps the previous prompt live instead of
+                    # half-applying.
+                    if name in prompts.prompt_manager.full_scenario_presets():
+                        if not prompts.apply_scenario(name):
+                            logger.error(f"Hot-reload: edited preset '{name}' failed "
+                                         f"validation — previous prompt kept")
+                            return
+                    system.llm_chat.set_system_prompt(data.get('content', '') or '')
+                    publish(Events.PROMPT_CHANGED, {"name": name, "action": "reapplied"})
         elif domain == 'persona':
             # Persona is a bundle; rerun the full apply so prompt/toolset/
             # voice/scopes all sync to the edited persona's settings.

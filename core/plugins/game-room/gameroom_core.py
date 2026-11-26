@@ -581,9 +581,12 @@ def _dynamic_options(kind):
                 out.append({'value': key, 'label': str(label)})
             return out
         if kind == 'prompts':
-            from core import prompts
-            # list_prompts() already excludes hidden pack costumes
-            return [{'value': n, 'label': n} for n in (prompts.list_prompts() or []) if n]
+            from core import prompts, prompt_vault
+            # list_prompts() already excludes hidden pack costumes. The
+            # person's own picker reads the vault (the reader rule); what a
+            # session then RENDERS is judged per session in _system_prompt.
+            with prompt_vault.reading(True):
+                return [{'value': n, 'label': n} for n in (prompts.list_prompts() or []) if n]
         if kind == 'toolsets':
             # the chat sidebar's list: user toolsets + the two builtins,
             # alphabetical (the manager's own order is creation order)
@@ -1094,9 +1097,17 @@ def _system_prompt(contract, view, cfg, gcfg=None):
     playing style — substituted AFTER .format, so user braces can't break
     formatting. .replace (not .format) on persona text for the same reason."""
     cfg = cfg or {}
-    persona_text = _resolve_persona_prompt(cfg.get('persona'))
-    if persona_text is None:
-        persona_text = _resolve_prompt_text(cfg.get('prompt'))
+    # Rendered FOR this session (the vault's reader rule, core/prompt_vault.py):
+    # only a private session, which _call_llm holds to local providers, reads
+    # the vault. A public session whose persona lives there plays as the
+    # table persona, the same seat it gets with the vault locked. This lane
+    # has no prompt gate, so before the rule a vault persona's whole text
+    # went to whatever provider Auto picked, every move.
+    from core import prompt_vault
+    with prompt_vault.reading(bool(cfg.get('privacy_required'))):
+        persona_text = _resolve_persona_prompt(cfg.get('persona'))
+        if persona_text is None:
+            persona_text = _resolve_prompt_text(cfg.get('prompt'))
     if persona_text:
         base = (persona_text.replace('{ai_name}', view['my_name'])
                             .replace('{user_name}', view['opp_name']))

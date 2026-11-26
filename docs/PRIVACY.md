@@ -69,8 +69,12 @@ If you're sitting in a private chat when it locks, Sapphire moves you out first 
 
 Vault membership *is* the privacy flag for prompts. There's no separate "private only" checkbox any more.
 
-- While the vault is unlocked, the prompt editor shows **🗝 Keep in vault**. Tick it to encrypt that prompt; new prompts you create while unlocked go straight into the vault.
+- While the vault is unlocked, the prompt editor shows **🗝 Keep in vault**. Tick it to encrypt that prompt; new prompts you create in the editor while unlocked go straight into the vault.
 - Un-ticking it writes the prompt back out as plaintext, so it asks first.
+- **Unlocked is not the same as visible.** Vault prompts and pieces are read only by private chats and by you in the editor. Every other turn sees what it would see with the vault locked: a scheduled task, a phone call, a satellite, a room seat or a game seat on an ordinary chat, and anything connected over MCP.
+  - An ordinary prompt that wears a vault piece (a vault mood on your everyday persona) runs in an ordinary chat **without that piece**. Nothing is refused and nothing warns; the piece is simply absent there, and present again in a private chat.
+  - An ordinary chat set to a whole vault prompt is still refused, as before.
+  - The AI's prompt tools follow the same rule. In an ordinary chat she can't list, view, wear, edit or delete vault pieces or prompts, and what she creates there is saved as plaintext. If she picks a name the vault already holds, she is told the name is taken.
 - Vault prompts (and any assembled prompt that uses a vault piece) refuse to export — content doesn't leave the vault.
 - Lock the vault and vault prompts vanish from the selector. If one was active, the active prompt falls back to `default`.
 - A chat that still points at a sealed prompt shows **🗝 vault prompt (locked)** where the name would be — chat sidebar, persona editor, trigger editors. The name is never rendered while sealed, and the chat heals back to the real prompt on unlock.
@@ -179,7 +183,11 @@ EXPORT / COMPRESS:
 - Compress requires a local provider; the plaintext JSON backup step is forced off
 
 PROMPTS:
-- Vault membership is the privacy flag; new prompts saved while unlocked go into the vault
+- Vault membership is the privacy flag; new prompts saved in the editor or in a private chat while unlocked go into the vault
+- READER RULE: unlocked vault content is read only by a private chat's turns and by the user in the editor. Any other turn (task, call, satellite, room or game seat on a public chat, MCP) gets the locked-vault view: no vault names, no vault text
+- A public chat's prompt renders without its vault pieces (no refusal, no notice); a public chat set to a whole vault prompt is refused
+- Prompt tools in a public chat: vault items are not listed, viewed, worn, edited or deleted; new items save as plaintext; a name the vault holds answers "taken"
+- A turn on a chat that is not the open one: `prompt_view()` and `prompt_switch()` show that chat's own prompt, never the open chat's
 - Vault prompts and prompts using vault pieces refuse export; locked vault hides them and resets the active prompt to `default`
 - Legacy `privacy_required` prompts still refuse cloud providers until moved into the vault
 - A sealed name never renders: chat sidebar, persona editor and trigger editors show `🗝 vault prompt (locked)` while keeping the stored value, so the chat heals on unlock. Setting a chat or persona to a sealed prompt is refused (409) without naming it

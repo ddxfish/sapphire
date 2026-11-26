@@ -424,11 +424,14 @@ def _status_string() -> str:
 
 
 def _resnapshot(system):
-    """Re-assemble the active prompt and push it into the live chat."""
+    """Re-assemble the active prompt and push it into the live chat —
+    rendered FOR the open chat (the vault's reader rule, core/prompt_vault.py)."""
     from core import prompts
-    prompt_data = prompts.get_current_prompt()
-    content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
-    system.llm_chat.set_system_prompt(content)
+    from core.prompt_crud import live_reading
+    with live_reading(system):
+        prompt_data = prompts.get_current_prompt()
+        content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
+        system.llm_chat.set_system_prompt(content)
 
 
 def _save_and_activate_assembled(system, state=None) -> str:
@@ -497,6 +500,15 @@ def _prompt_view(args):
     from core import prompts
 
     name = args.get('name')
+    if not name and _another_lane("x"):
+        # A turn on another chat (a task, a call, a satellite, a room seat)
+        # asked for "my prompt": that is ITS chat's prompt. This used to show
+        # the open chat's live prompt and piece list to whoever asked - a
+        # private chat's persona, read from a public one (isolation hunt B1).
+        own = (_system().llm_chat.session_manager.get_chat_settings() or {}).get('prompt') or 'default'
+        prompt_data = prompts.get_prompt(own) or prompts.get_prompt('default') or {}
+        content = prompt_data.get('content') or ''
+        return f"[This chat's prompt: {own} ({len(content)} chars)]\n\n{content}", True
     if not name:
         prompt_data = prompts.get_current_prompt()
         content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
@@ -522,6 +534,8 @@ def _prompt_switch(args):
     name = args.get('name')
     if not name:
         current = prompts.get_active_preset_name()
+        if _another_lane("x"):     # this turn's own chat, never the open one's (B1)
+            current = (_system().llm_chat.session_manager.get_chat_settings() or {}).get('prompt') or 'default'
         lines = [f"Current: {current}", "Available prompts:"]
         for n in prompts.list_prompts():
             pdata = prompts.get_prompt(n)
@@ -697,10 +711,25 @@ def _prompt_pieces(args):
                 if prompt_vault.vault_exists() and not prompt_vault.vault_unlocked():
                     return ("(a prompt vault exists and is LOCKED — its pieces are "
                             "hidden until a human unlocks it)")
+                # The reader rule: open, but not for this turn. Same AIX case -
+                # say so, or she hunts for a piece she wore an hour ago.
+                if prompt_vault.vault_unlocked() and not prompt_vault.reader_ok():
+                    return ("(the prompt vault's pieces are hidden in this chat — "
+                            "they are only available in a private chat)")
             except Exception:
                 pass
             return ''
 
+        if not component and _another_lane("x"):
+            # What is WORN is the open chat's live state, and this turn is on
+            # another chat: counts only (isolation hunt B1).
+            lines = ["Component types (what is worn belongs to the open chat; this turn is on another):"]
+            lines += [f"  {c} ({len(comps.get(c, {}))} available)" for c in VALID_COMPONENTS]
+            lines.append("prompt_pieces(action='list', component='X') to see keys.")
+            hint = _vault_hint()
+            if hint:
+                lines.append(hint)
+            return '\n'.join(lines), True
         if not component:
             trans = get_transients()
             lines = ["Component types (active marked, temporary pieces show minutes left):"]

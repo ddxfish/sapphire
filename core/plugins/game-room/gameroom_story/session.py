@@ -263,11 +263,14 @@ def _prompt_is_private(name):
     if not name:
         return False
     try:
+        # FULL views: a privacy answer never depends on who is reading (the
+        # vault's reader rule) - on a closed reader's view a vault prompt is
+        # absent, and absent read as "not private" here.
         from core.prompt_manager import prompt_manager
-        mono = prompt_manager.monoliths.get(name)
+        mono = prompt_manager.full_monoliths().get(name)
         if isinstance(mono, dict):
             return bool(mono.get("privacy_required", False))
-        preset = (getattr(prompt_manager, "scenario_presets", {}) or {}).get(name)
+        preset = prompt_manager.full_scenario_presets().get(name)
         if isinstance(preset, dict):
             return bool(preset.get("_privacy_required", False))
     except Exception as e:
@@ -285,17 +288,24 @@ def _inherits_privacy(entry, chat=None):
     text is private content whatever identity mode it runs in — without
     this, pure story mode registered it unflagged and any public chat
     could wear it to a cloud provider."""
-    if chat:
-        try:
-            from core.api_fastapi import get_system
-            s = get_system().llm_chat.session_manager.get_settings_for(chat)
-            if isinstance(s, dict) and s.get("private_chat"):
-                return True
-        except Exception:
-            pass
+    if _chat_private(chat):
+        return True
     if (entry or {}).get("mode") not in ("local", "combined"):
         return False
     return _prompt_is_private((entry or {}).get("local"))
+
+
+def _chat_private(chat):
+    """Is the session chat private? Unreadable = no (the costume then renders
+    closed and is not flagged; a private chat's own row gate still holds)."""
+    if not chat:
+        return False
+    try:
+        from core.api_fastapi import get_system
+        s = get_system().llm_chat.session_manager.get_settings_for(chat)
+        return bool(isinstance(s, dict) and s.get("private_chat"))
+    except Exception:
+        return False
 
 
 def _register_prompt(story, state, entry, chat):
@@ -329,11 +339,17 @@ def _register_prompt(story, state, entry, chat):
                 f"'{entry['local']}' lives in the encrypted vault and the "
                 f"story engine persists rendered prompts in plaintext. "
                 f"Pick a non-vault prompt, or use 'story' identity mode.")
-    local_ctx = _local_ctx(entry.get("local")) if entry.get("local") else None
-    rendered = render.story_prompt(story, state, prompt_manager.components,
-                                   character=entry.get("character"),
-                                   mode=mode, local_ctx=local_ctx,
-                                   conduct=conduct_for(story))
+    # Rendered FOR the session chat (the vault's reader rule, core/prompt_vault.py):
+    # the costume is a row on that chat and a pack entry every chat can name,
+    # so a public session's render must hold no vault piece, whichever lane
+    # (a tool in a turn, a route, the boot restore) asked for it.
+    from core import prompt_vault
+    with prompt_vault.reading(_chat_private(chat)):
+        local_ctx = _local_ctx(entry.get("local")) if entry.get("local") else None
+        rendered = render.story_prompt(story, state, prompt_manager.components,
+                                       character=entry.get("character"),
+                                       mode=mode, local_ctx=local_ctx,
+                                       conduct=conduct_for(story))
     name = entry.get("prompt_name") or _prompt_name_for(story, mode or "local", chat)
     private = _inherits_privacy(entry, chat=chat)
     # Snapshot→save→register as ONE unit (2026-08-21 hunt, race R2/G): two

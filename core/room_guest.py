@@ -194,9 +194,11 @@ def _dress(system, sess):
     the defaults') toolset, and chatroom_join whatever the toolset says."""
     from core import prompts
     st = sess['settings']
-    pd = prompts.get_prompt(st.get('prompt') or 'default')
-    if not isinstance(pd, dict):
-        pd = prompts.get_prompt('default')
+    from core import prompt_vault
+    with prompt_vault.reading(bool(st.get('private_chat'))):   # rendered FOR this chat (the reader rule)
+        pd = prompts.get_prompt(st.get('prompt') or 'default')
+        if not isinstance(pd, dict):
+            pd = prompts.get_prompt('default')
     sess['system_prompt'] = (pd.get('content', '') if isinstance(pd, dict) else '') or ''
     fm = system.llm_chat.function_manager
     sess['tools'] = fm.resolve_tools(st.get('toolset') or 'none', st.get('extra_toolsets'), add_tools=[TOOL])

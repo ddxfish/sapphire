@@ -419,9 +419,60 @@ class LLMChat:
 
     def set_system_prompt(self, prompt_content: str) -> bool:
         self.current_system_prompt = prompt_content
+        # Which reader this text was rendered for (the vault's reader rule,
+        # core/prompt_vault.py). _live_prompt_for_turn checks it before the
+        # text is sent, so a cache rendered for a private chat never rides a
+        # public turn, whatever set it.
+        from core import prompt_vault
+        self._prompt_reader = prompt_vault.reader_ok()
         return True
 
     def get_system_prompt_template(self) -> Optional[str]:
+        return self.current_system_prompt
+
+    def _live_reader(self) -> bool:
+        """May the live prompt hold vault text? Only when the OPEN chat is
+        private (prompt_crud.live_reader, read off this object's own store)."""
+        return bool((getattr(self.session_manager, 'current_settings', None) or {}).get('private_chat'))
+
+    def _reassemble_live(self):
+        """Re-assemble the live prompt from the current piece state, FOR the
+        open chat. The spice rail runs this from by-name turns too, and those
+        must not decide what the open chat's prompt may hold."""
+        from core import prompts, prompt_vault
+        with prompt_vault.reading(self._live_reader()):
+            prompt_data = prompts.get_current_prompt()
+            content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)
+            self.set_system_prompt(content)
+
+    def _live_prompt_for_turn(self) -> Optional[str]:
+        """The live prompt cache, checked against the vault's reader rule at
+        the one place it is sent from. Three cases, last line of defence:
+        rendered for a private chat and this turn's chat is not (re-render,
+        and if it STILL holds vault text the open chat is private and this
+        turn belongs to another chat: render this turn's own prompt closed);
+        rendered closed and the chat has turned private since (re-render so
+        its vault prompt arrives); otherwise the cache as it is."""
+        try:
+            from core import prompt_vault
+            settings = self.session_manager.get_chat_settings() or {}
+            turn_private = bool(settings.get('private_chat'))
+            mark = bool(getattr(self, '_prompt_reader', False))
+            if mark != turn_private and (mark or prompt_vault.vault_unlocked()):
+                import types
+                from core.prompt_crud import revalidate_active
+                revalidate_active(system=types.SimpleNamespace(llm_chat=self),
+                                  reason="live prompt rendered for another reader")
+                mark = bool(getattr(self, '_prompt_reader', False))
+            if mark and not turn_private:
+                from core import prompts
+                with prompt_vault.reading(False):
+                    data = prompts.get_prompt(settings.get('prompt') or 'default')
+                logger.warning("[VAULT] live prompt holds vault text and this turn's chat "
+                               "is not private - sent this chat's own prompt instead")
+                return (data or {}).get('content', '') if isinstance(data, dict) else ''
+        except Exception as e:
+            logger.error(f"[VAULT] live prompt reader check failed: {e}")
         return self.current_system_prompt
 
     def refresh_spice_if_needed(self):
@@ -432,9 +483,7 @@ class LLMChat:
         # expired ones and re-snapshot so a tried-on mood falls off by itself.
         try:
             if prompts.expire_transients() and prompts.is_assembled_mode():
-                prompt_data = prompts.get_current_prompt()
-                content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)
-                self.set_system_prompt(content)
+                self._reassemble_live()
                 logger.info("[PIECES] Transient piece(s) expired — reassembled prompt")
         except Exception as e:
             logger.error(f"[PIECES] Transient expiry check failed: {e}")
@@ -446,9 +495,7 @@ class LLMChat:
                 # Clear stale spice AND reassemble prompt so AI stops seeing it
                 prompts.clear_spice()
                 if prompts.is_assembled_mode():
-                    prompt_data = prompts.get_current_prompt()
-                    content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)
-                    self.set_system_prompt(content)
+                    self._reassemble_live()
                     logger.info("[SPICE] Spice disabled — cleared and reassembled prompt")
             return False
 
@@ -467,9 +514,7 @@ class LLMChat:
             try:
                 spice_result = prompts.set_random_spice()
                 if prompts.is_assembled_mode():
-                    prompt_data = prompts.get_current_prompt()
-                    content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)
-                    self.set_system_prompt(content)
+                    self._reassemble_live()
                 logger.info(f"[SPICE] Spice refresh completed: {spice_result}")
                 return True
             except Exception as e:
@@ -485,7 +530,7 @@ class LLMChat:
         username = username.replace('{', '').replace('}', '')
         # Per-stream brain override: a stream on a non-active chat uses THAT chat's
         # persona prompt, not the globally-primed active-chat one. Unset → active.
-        prompt_template = self.current_system_prompt or "System prompt not loaded."
+        prompt_template = None
         try:
             from core.chat.stream_brain import get_override
             _o = get_override()
@@ -493,6 +538,8 @@ class LLMChat:
                 prompt_template = _o["system_prompt"] or "System prompt not loaded."
         except Exception:
             pass
+        if prompt_template is None:
+            prompt_template = self._live_prompt_for_turn() or "System prompt not loaded."
         prompt = prompt_template
 
         # Build context parts from chat settings

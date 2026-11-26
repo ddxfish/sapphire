@@ -144,17 +144,19 @@ def is_current_prompt_private():
     if not preset or preset == 'unknown':
         return False
 
-    # Check monoliths
-    if preset in prompt_manager.monoliths:
-        mono = prompt_manager.monoliths[preset]
+    # FULL views: a privacy answer never depends on who is reading. On the
+    # reader's view a vault prompt is absent for a closed reader, and "absent"
+    # read as "not private" here - the provider gate asks this function.
+    monos = prompt_manager.full_monoliths()
+    if preset in monos:
+        mono = monos[preset]
         if isinstance(mono, dict):
             return mono.get('privacy_required', False)
         return False
 
-    # Check scenario presets
-    if preset in prompt_manager.scenario_presets:
-        components = prompt_manager.scenario_presets[preset]
-        return components.get('_privacy_required', False)
+    presets = prompt_manager.full_scenario_presets()
+    if preset in presets:
+        return presets[preset].get('_privacy_required', False)
 
     return False
 
@@ -195,13 +197,18 @@ def get_current_prompt():
     """
     preset = _assembled_state.get("active_preset", "default")
 
-    if preset in prompt_manager.monoliths:
-        mono = prompt_manager.monoliths[preset]
+    # The reader's view: a vault monolith's text is not there for a closed
+    # reader, who gets the assembled state below (the locked-vault world).
+    monos = prompt_manager.monoliths
+    if preset in monos:
+        mono = monos[preset]
         text = mono.get('content', '') if isinstance(mono, dict) else mono
         return {"role": "system", "content": prompt_manager._replace_templates(text)}
 
     # Not a monolith — is it a known scenario preset, or a missing name?
-    if preset != "default" and preset not in prompt_manager.scenario_presets:
+    # (Full views: a name the reader may not see is not a MISSING name.)
+    if preset != "default" and preset not in prompt_manager.full_scenario_presets() \
+            and preset not in prompt_manager.full_monoliths():
         logger.warning(
             f"active_preset='{preset}' not found in monoliths or scenario "
             f"presets — falling back to assembled default. Was it deleted "
@@ -295,6 +302,13 @@ def assemble_prompt():
     rail (core/ghost_messages.py) or, with SPICE_DELIVERY='system', is woven
     in by _get_system_prompt — never here. The prompt stays cacheable.
     """
+    assembled = prompt_manager.assemble_from_components(live_state())
+    return {"role": "system", "content": prompt_manager._replace_templates(assembled)}
+
+
+def live_state():
+    """What the live prompt wears right now: the state plus unexpired timed
+    pieces. One snapshot for the renderer and for the vault check on it."""
     # Snapshot mutable state under lock to prevent iteration crash
     with _state_lock:
         state = {k: (list(v) if isinstance(v, list) else v) for k, v in _assembled_state.items()}
@@ -309,9 +323,7 @@ def assemble_prompt():
                         state.setdefault(comp, []).append(key)
             elif entry[1] > now:
                 state[comp] = entry[0]
-
-    assembled = prompt_manager.assemble_from_components(state)
-    return {"role": "system", "content": prompt_manager._replace_templates(assembled)}
+    return state
 
 
 def is_assembled_mode():
@@ -325,8 +337,9 @@ def is_assembled_mode():
     with "use prompt_pieces" — a lockout with contradictory errors.
     """
     preset = _assembled_state.get("active_preset", "default")
+    # Full view: the mode is a fact about the active prompt, not about who asks.
     return (preset in ("assembled", "default")
-            or preset in prompt_manager.scenario_presets)
+            or preset in prompt_manager.full_scenario_presets())
 
 
 def get_prompt_mode() -> str:
@@ -352,7 +365,10 @@ def apply_scenario(scenario_name) -> bool:
     Returns True on success, False on unknown name / bad shape — callers
     abort activation cleanly on False, keeping the previous prompt live.
     """
-    scenario = prompt_manager.scenario_presets.get(scenario_name)
+    # Full view: this installs piece KEYS, never text. On the reader's view a
+    # missed lane would read a vault preset as "unknown" and the callers hand
+    # the active prompt off to 'default' - a state change from seeing less.
+    scenario = prompt_manager.full_scenario_presets().get(scenario_name)
     if not isinstance(scenario, dict):
         logger.error(f"apply_scenario: unknown scenario '{scenario_name}'")
         return False

@@ -41,8 +41,9 @@ def hidden_prompt_kinds():
     hidden = {n: k for n, k in prompt_packs.get_kinds().items() if k != 'user'}
     if not hidden:
         return hidden
-    shadow = (set(prompt_manager._monoliths) | set(prompt_manager._scenario_presets)
-              | set(prompt_vault.overlay_monoliths()) | set(prompt_vault.overlay_presets()))
+    shadow = set(prompt_manager._monoliths) | set(prompt_manager._scenario_presets)
+    if prompt_vault.reader_ok():     # a vault shadow exists only for a reader who sees it
+        shadow |= set(prompt_vault.overlay_monoliths()) | set(prompt_vault.overlay_presets())
     return {n: k for n, k in hidden.items() if n not in shadow}
 
 
@@ -57,7 +58,7 @@ def visible_components():
     if not kinds:
         return merged
     user = prompt_manager._components
-    vault = prompt_vault.overlay_components()
+    vault = prompt_vault.overlay_components() if prompt_vault.reader_ok() else {}
     out = {}
     for ctype, entries in merged.items():
         drop = {k for k, kind in kinds.get(ctype, {}).items()
@@ -68,18 +69,19 @@ def visible_components():
     return out
 
 
-def _monolith_result(name: str, mono) -> dict:
+def _monolith_result(name: str, mono, vault: bool = False) -> dict:
     if not isinstance(mono, dict):
         mono = {'content': str(mono)}
     return {
         'name': name,
         'type': 'monolith',
         'content': mono.get('content', ''),
-        'privacy_required': mono.get('privacy_required', False)
+        'privacy_required': mono.get('privacy_required', False),
+        'vault': vault
     }
 
 
-def _preset_result(name: str, components: dict) -> dict:
+def _preset_result(name: str, components: dict, vault: bool = False) -> dict:
     privacy_required = components.get('_privacy_required', False)
     # Filter out metadata for assembly
     clean_components = {k: v for k, v in components.items() if not k.startswith('_')}
@@ -88,8 +90,25 @@ def _preset_result(name: str, components: dict) -> dict:
         'type': 'assembled',
         'components': clean_components,
         'content': prompt_manager.assemble_from_components(clean_components),
-        'privacy_required': privacy_required
+        'privacy_required': privacy_required,
+        # 'vault': this TEXT holds vault material (a vault prompt, or a plain
+        # preset wearing a vault piece, rendered for a reader who may see it).
+        # Never folded into privacy_required: that flag is the user's stored
+        # choice and the editor saves it back.
+        'vault': vault or prompt_manager.wears_vault(clean_components)
     }
+
+
+def _withheld_result(name: str, ptype: str) -> dict:
+    """A vault prompt, asked for by a reader who may not see it. The name's
+    type and privacy answer honestly - 24 files read privacy_required off this
+    result, and a None here would read as "not private" at every gate. The
+    text and the piece list stay in the vault."""
+    out = {'name': name, 'type': ptype, 'content': '',
+           'privacy_required': True, 'vault': True, 'withheld': True}
+    if ptype == 'assembled':
+        out['components'] = {}
+    return out
 
 
 def get_prompt(name: str):
@@ -107,17 +126,34 @@ def get_prompt(name: str):
     Lookup order (C-10, Krem's ruling 2026-08-09): USER entries win — even
     across types. Private dicts are checked before the pack-merged views so
     a pack shipping name X of the OTHER type can't shadow the user's X.
+
+    The vault's reader rule (core/prompt_vault.py): the TEXT is rendered for
+    the current reader. Resolving for a turn, wrap the call in
+    `with prompt_vault.reading(<that chat's private flag>):` so the render is
+    judged by the chat it is for. Name, type and privacy_required answer for
+    every reader; a vault prompt asked for by a closed reader comes back
+    'withheld' (no text, still private). 'vault' is True when the returned
+    text holds vault material.
     """
+    from core import prompt_vault
     if name in prompt_manager._monoliths:
         return _monolith_result(name, prompt_manager._monoliths[name])
     if name in prompt_manager._scenario_presets:
         return _preset_result(name, prompt_manager._scenario_presets[name])
 
-    # Pack-shipped entries (merged views minus the user hits above)
-    if name in prompt_manager.monoliths:
-        return _monolith_result(name, prompt_manager.monoliths[name])
-    if name in prompt_manager.scenario_presets:
-        return _preset_result(name, prompt_manager.scenario_presets[name])
+    # Pack and vault entries, as this reader sees them (the user hits are
+    # above). A closed reader sees packs only, the same world as a locked vault.
+    monos = prompt_manager.monoliths
+    presets = prompt_manager.scenario_presets
+    if name in monos or name in presets:
+        vault = prompt_vault.reader_ok() and prompt_vault.vault_has_prompt(name)
+        if name in monos:
+            return _monolith_result(name, monos[name], vault=vault)
+        return _preset_result(name, presets[name], vault=vault)
+    if prompt_vault.vault_has_prompt(name):
+        # It exists, and this reader may not see it.
+        return _withheld_result(name, 'monolith' if name in prompt_vault.overlay_monoliths()
+                                else 'assembled')
 
     if name == 'default':
         # 'default' is the assembled-mode SENTINEL, not a stored name — it
@@ -143,13 +179,53 @@ def get_prompt(name: str):
             'type': 'assembled',
             'components': components,
             'content': prompt_state.assemble_prompt()['content'],
-            'privacy_required': private
+            'privacy_required': private,
+            # timed moods count: they render, so they are part of the text
+            'vault': prompt_manager.wears_vault(prompt_state.live_state())
         }
 
     return None
 
 
+def live_reader(system=None, settings=None) -> bool:
+    """May the LIVE prompt hold vault text? Only when the OPEN chat is
+    private. The live prompt is one process-wide cache and it is re-rendered
+    from threads that are nobody's turn (the file watcher, a lock, a by-name
+    turn's spice rail), so every render of it asks this - never the caller's
+    own reader. `settings`: the chat's snapshot when the caller holds one (a
+    chat switch applies it before anything else reads the store)."""
+    try:
+        if settings is not None and 'private_chat' in settings:
+            return bool(settings.get('private_chat'))
+        if system is None:
+            from core.api_fastapi import get_system
+            system = get_system()
+        sm = system.llm_chat.session_manager
+        return bool((getattr(sm, 'current_settings', None) or {}).get('private_chat'))
+    except Exception:
+        return False
+
+
+def live_reading(system=None, settings=None):
+    """`with live_reading(system):` around any render of the live prompt."""
+    from core import prompt_vault
+    return prompt_vault.reading(live_reader(system, settings))
+
+
 VAULT_LOCKED_MSG = "Vault is locked — unlock the vault to save this item."
+# A writer who may not read the vault (the reader rule, core/prompt_vault.py)
+# met a name the vault holds. Refused: its plaintext copy would shadow the
+# vault's. The words say "taken" and nothing about where.
+VAULT_TAKEN_MSG = "That name is taken — pick another."
+
+
+def _vault_open() -> bool:
+    """May THIS writer use the vault? Unlocked AND an open reader. A public
+    turn's save behaves exactly as it does with the vault locked: before the
+    rule her new piece in a public chat went INTO the vault, where that chat
+    could never see it again, and her edit could overwrite a vault piece."""
+    from core import prompt_vault
+    return prompt_vault.vault_unlocked() and prompt_vault.reader_ok()
 
 
 PIECE_TYPES = ('character', 'location', 'relationship', 'goals', 'format',
@@ -214,7 +290,9 @@ def piece_key_problem(comp_type, key) -> Problem | None:
         return bad
     if ',' in key:
         return Problem("Piece names can't contain commas")
-    if key in prompt_manager.components.get(comp_type, {}):
+    # full view, whoever asks: on the reader's view a vault key looks free to
+    # a public turn, and the plaintext piece it then creates shadows it
+    if key in prompt_manager.full_components().get(comp_type, {}):
         return Problem(f"'{comp_type}/{key}' already exists", TAKEN)
     return None
 
@@ -307,12 +385,16 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
                 return False, f"Component values must be strings or lists (bad: {', '.join(bad)})"
 
         # ── Vault write routing (see docstring) ──
-        if origin == 'vault' and not prompt_vault.vault_unlocked():
+        if origin == 'vault' and not _vault_open():
             logger.warning(f"Refused vault-origin save of '{name}' while locked")
             return False, VAULT_LOCKED_MSG
         in_user = (name in prompt_manager._monoliths
                    or name in prompt_manager._scenario_presets)
-        if not in_user and prompt_vault.vault_unlocked() and origin != 'regular':
+        if not in_user and not _vault_open() and prompt_vault.vault_has_prompt(name):
+            logger.warning("Refused a save over a vault prompt name from a reader "
+                           "who may not see the vault")
+            return False, VAULT_TAKEN_MSG
+        if not in_user and _vault_open() and origin != 'regular':
             from core import prompt_packs
             pack_shadow_edit = (name in prompt_packs.get_sources()
                                 and not prompt_vault.vault_has_prompt(name))
@@ -420,7 +502,7 @@ def delete_prompt(name: str, reason: str = None) -> bool:
         # semantics as packs. Sealed names fall through to not-found.
         if not deleted:
             from core import prompt_vault
-            if prompt_vault.vault_unlocked():
+            if _vault_open():      # the reader rule: only who may see it may delete it
                 for _deleter, _kind in ((prompt_vault.delete_monolith, 'monolith'),
                                         (prompt_vault.delete_preset, 'assembled')):
                     ok, _code = _deleter(name)
@@ -494,11 +576,15 @@ def save_component(comp_type: str, key: str, value: str,
     if not isinstance(value, str):
         return False, "Component value must be a string"
     from core import prompt_vault
-    if origin == 'vault' and not prompt_vault.vault_unlocked():
+    if origin == 'vault' and not _vault_open():
         logger.warning(f"Refused vault-origin piece save '{comp_type}/{key}' while locked")
         return False, VAULT_LOCKED_MSG
     in_user = key in prompt_manager._components.get(comp_type, {})
-    if not in_user and prompt_vault.vault_unlocked() and origin != 'regular':
+    if not in_user and not _vault_open() and prompt_vault.vault_has_piece(comp_type, key):
+        logger.warning("Refused a save over a vault piece key from a reader "
+                       "who may not see the vault")
+        return False, VAULT_TAKEN_MSG
+    if not in_user and _vault_open() and origin != 'regular':
         from core import prompt_packs
         pack_shadow_edit = (prompt_packs.piece_source(comp_type, key) is not None
                             and not prompt_vault.vault_has_piece(comp_type, key))
@@ -550,7 +636,8 @@ def delete_component(comp_type: str, key: str,
         # 'locked'/'not_found' otherwise and we fall through.) User-shadow
         # deletes stay in the branch above and reveal the vault version.
         from core import prompt_vault
-        ok_vault, _vcode = prompt_vault.delete_piece(comp_type, key)
+        # the reader rule: only who may see a vault piece may delete it
+        ok_vault = _vault_open() and prompt_vault.delete_piece(comp_type, key)[0]
         if ok_vault:
             try:
                 from core.event_bus import publish, Events
@@ -888,7 +975,7 @@ def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
                     continue
                 # KEY MEMBERSHIP, never text truthiness: an empty local piece
                 # is still a piece, and "don't overwrite" must keep it.
-                if not overwrite and key in prompt_manager.components.get(comp_type, {}):
+                if not overwrite and key in prompt_manager.full_components().get(comp_type, {}):
                     continue
                 prompt_manager._components.setdefault(comp_type, {})[key] = value
                 written.append((comp_type, key))
@@ -945,7 +1032,6 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
             {"prompt": name}, expected_active=stream_chat)
         return True, f"Activated '{name}' for chat '{stream_chat}' (takes effect next turn)"
 
-    content = data.get('content') if isinstance(data, dict) else str(data)
     _sm = system.llm_chat.session_manager
     # Stamp FIRST (hunt 2026-09-04 S5-08): the old order ran the live
     # recostume, then the refusable write — a refused stamp (vault eviction
@@ -956,14 +1042,19 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
     if not _sm.update_chat_settings({"prompt": name}, expected_active=_active):
         return False, (f"Active chat changed mid-activation — '{name}' not "
                        f"applied")
-    # C-5 still holds: a preset that fails validation aborts with the live
-    # prompt AND tracker untouched — and now restores the stamp it took.
-    if name in getattr(prompt_manager, 'scenario_presets', {}):
-        if not prompt_state.apply_scenario(name):
-            _sm.update_chat_settings({"prompt": _prev}, expected_active=_active)
-            return False, (f"Preset '{name}' failed validation — activation "
-                           f"aborted, previous prompt kept")
-    system.llm_chat.set_system_prompt(content)
+    # The live text is rendered FOR the open chat (the vault's reader rule),
+    # whoever asked: the editor reads the vault, a public chat's prompt does not.
+    with live_reading(system):
+        data = get_prompt(name) or data
+        content = data.get('content') if isinstance(data, dict) else str(data)
+        # C-5 still holds: a preset that fails validation aborts with the live
+        # prompt AND tracker untouched — and now restores the stamp it took.
+        if name in prompt_manager.full_scenario_presets():
+            if not prompt_state.apply_scenario(name):
+                _sm.update_chat_settings({"prompt": _prev}, expected_active=_active)
+                return False, (f"Preset '{name}' failed validation — activation "
+                               f"aborted, previous prompt kept")
+        system.llm_chat.set_system_prompt(content)
     prompt_state.set_active_preset_name(name)
     return True, f"Activated '{name}'"
 
@@ -974,7 +1065,7 @@ def _revalidate_if_active_uses(pairs) -> None:
     kept the old text until the next activation (scout S2, 2026-11-08)."""
     try:
         active = prompt_state.get_active_preset_name()
-        preset = prompt_manager.scenario_presets.get(active) if active else None
+        preset = prompt_manager.full_scenario_presets().get(active) if active else None
         if not isinstance(preset, dict):
             return
         for t, k in pairs:
@@ -1010,7 +1101,7 @@ def revalidate_active(system=None, reason: str = "") -> bool:
         if not name or name == 'unknown':
             return False
 
-        if name in prompt_manager.scenario_presets:
+        if name in prompt_manager.full_scenario_presets():
             if not prompt_state.apply_scenario(name):
                 # Active preset went bad under us (disk edit) — loud handoff
                 # to default, same H3 discipline as the vanished-name case.
@@ -1019,16 +1110,20 @@ def revalidate_active(system=None, reason: str = "") -> bool:
                 prompt_state.set_active_preset_name('default')
                 name = 'default'
 
-        data = get_prompt(name)
-        if not isinstance(data, dict):
-            # Active name vanished from storage — loud handoff to default
-            # (same H3 discipline as delete_prompt).
-            logger.warning(f"[PROMPTS] Active prompt '{name}' no longer resolves — "
-                           f"re-rendering as assembled default")
-            prompt_state.set_active_preset_name('default')
-            data = get_prompt('default')
+        # Rendered FOR the open chat: this runs from the file watcher, a vault
+        # lock and piece saves on any lane, and none of those is the reader.
+        with live_reading(system):
+            data = get_prompt(name)
+            if not isinstance(data, dict):
+                # Active name vanished from storage — loud handoff to default
+                # (same H3 discipline as delete_prompt). A vault prompt the
+                # open chat may not read is NOT this case: it resolves, withheld.
+                logger.warning(f"[PROMPTS] Active prompt '{name}' no longer resolves — "
+                               f"re-rendering as assembled default")
+                prompt_state.set_active_preset_name('default')
+                data = get_prompt('default')
 
-        system.llm_chat.set_system_prompt((data or {}).get('content', '') or '')
+            system.llm_chat.set_system_prompt((data or {}).get('content', '') or '')
         logger.info(f"[PROMPTS] Revalidated active prompt '{name}'"
                     + (f" — {reason}" if reason else ""))
         return True
@@ -1048,7 +1143,9 @@ def piece_usage() -> dict:
     packs + vault overlay. Vault prompts are visible only while unlocked;
     destructive callers must gate on vault state (or the piece-refs hashes)."""
     usage = {}
-    for name, comps in prompt_manager.scenario_presets.items():
+    # full view: the delete tools act on this, and "unused" must be true for
+    # every reader. It carries vault prompt names - editor routes only.
+    for name, comps in prompt_manager.full_scenario_presets().items():
         if not isinstance(comps, dict):
             continue
         for ctype, val in comps.items():
@@ -1444,10 +1541,13 @@ def dangling_refs() -> dict:
     """{prompt_name: [{'type','key'}]} — references to pieces missing from
     the merged component view. Vault prompts join only while unlocked, and
     a LOCKED vault makes plaintext refs to sealed pieces LOOK dangling —
-    destructive callers must refuse while a vault exists and is locked."""
-    comps = prompt_manager.components
+    destructive callers must refuse while a vault exists and is locked.
+    Full views for the same reason: on a closed reader's view every plain
+    preset wearing a vault piece would look dangling, and the strip tool
+    removes what this reports."""
+    comps = prompt_manager.full_components()
     out = {}
-    for name, pcomps in prompt_manager.scenario_presets.items():
+    for name, pcomps in prompt_manager.full_scenario_presets().items():
         if not isinstance(pcomps, dict):
             continue
         bad = []

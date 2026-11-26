@@ -1,12 +1,17 @@
 """Vault isolation hunt 2026-11-23 (tmp/vault-isolation-hunt-20261123.md).
 
-Each test asserts the SECURE behavior and is marked xfail(strict) while the
-bug is open: XFAIL = the leak is proven, and the mark turns into a loud
-failure the day the fix lands (remove the mark then).
+Wave 1 landed 2026-11-26: the READER RULE (core/prompt_vault.py, Krem's
+ruling A). Vault content exists only for a private turn and the person at the
+editor; every other reader sees the locked-vault world. The tests for roots A
+and B now pin that rule. Roots C and D are still open: their tests assert the
+SECURE behavior and stay xfail(strict), so the mark fails loudly the day the
+fix lands (remove the mark then).
 
 Hermetic: the vault is in-memory only (no file), the prompt stores are
 swapped for small dicts and nothing here ever calls a real saver.
 """
+import types
+
 import pytest
 
 import core.api_fastapi  # noqa: F401  (route modules trip circular imports alone)
@@ -57,49 +62,51 @@ def world(tmp_path, monkeypatch):
     pv.stop()
 
 
-# ── Root A: privacy judged from a name, text rendered from elsewhere ──
+# ── Root A: the text a turn gets is rendered FOR that turn's chat ──
 
-@pytest.mark.xfail(strict=True, reason="A1: privacy is read from the preset's "
-                   "flag, never from the pieces it renders")
-def test_a1_plaintext_preset_wearing_a_vault_piece_is_private(world):
-    data = pc.get_prompt('plain')
-    assert SECRET in data['content'], "setup: the vault piece renders"
-    assert data['privacy_required'] is True
-
-
-@pytest.mark.xfail(strict=True, reason="A1: the provider gate judges the same "
-                   "name flag")
-def test_a1_provider_gate_refuses_that_preset_on_a_public_turn(world):
-    from core.chat.llm_providers.resolve import _prompt_gate, PrivacyRefused
-    with pytest.raises(PrivacyRefused):
-        _prompt_gate('plain', private=False)
+def test_a1_plain_preset_wearing_a_vault_piece_renders_clean_for_a_public_turn(world):
+    """Krem's heartbeat case: the public turn runs, without the vault mood,
+    exactly as it would with the vault locked."""
+    with pv.reading(False):
+        data = pc.get_prompt('plain')
+    assert SECRET not in data['content'] and 'You are Sapphire.' in data['content']
+    assert data['vault'] is False and data['privacy_required'] is False
 
 
-@pytest.mark.xfail(strict=True, reason="A2: the 'default' sentinel ignores "
-                   "pieces and the transient overlay")
-def test_a2_default_sentinel_with_a_vault_mood_is_private(world):
+def test_a1_the_same_preset_renders_whole_for_a_private_turn_and_says_so(world):
+    with pv.reading(True):
+        data = pc.get_prompt('plain')
+    assert SECRET in data['content']
+    assert data['vault'] is True, "the text holds vault material: marked"
+    # the stored flag is the user's choice and the editor saves it back
+    assert data['privacy_required'] is False
+
+
+def test_a1_no_lane_set_means_closed(world):
+    assert SECRET not in pc.get_prompt('plain')['content']
+
+
+def test_a2_default_sentinel_with_a_vault_mood(world):
     ps.set_transient_piece('emotions', 'tender', 30)
-    data = pc.get_prompt('default')
-    assert SECRET in data['content'], "setup: the timed mood renders"
-    assert data['privacy_required'] is True
+    with pv.reading(False):
+        assert SECRET not in pc.get_prompt('default')['content']
+    with pv.reading(True):
+        data = pc.get_prompt('default')
+        assert SECRET in data['content'] and data['vault'] is True
 
 
-@pytest.mark.xfail(strict=True, reason="A3: a missing name is judged public "
-                   "while the turn runs on the live default")
-def test_a3_gate_for_a_missing_name_follows_what_actually_runs(world):
-    from core.chat.llm_providers.resolve import _prompt_gate, PrivacyRefused
+def test_a3_a_dead_name_falls_back_to_a_clean_default_on_a_public_turn(world):
+    """The by-name lanes resolve the name, then 'default', both for the chat."""
+    from core.chat.llm_providers.resolve import _prompt_gate
     ps.set_transient_piece('emotions', 'tender', 30)
-    assert pc.get_prompt('gone-prompt') is None, "setup: the name is dead"
-    # chat_streaming falls back to get_prompt('default') for the text
-    assert SECRET in pc.get_prompt('default')['content']
-    with pytest.raises(PrivacyRefused):
-        _prompt_gate('gone-prompt', private=False)
+    with pv.reading(False):
+        assert pc.get_prompt('gone-prompt') is None
+        assert SECRET not in pc.get_prompt('default')['content']
+    _prompt_gate('gone-prompt', private=False)      # passes, and the text is clean
 
 
-# ── Root B: no reader rule ──
+# ── Root B: her tools read the vault only inside a private turn ──
 
-@pytest.mark.xfail(strict=True, reason="B1: her read tools have no check of "
-                   "the calling turn's privacy")
 def test_b1_prompt_pieces_list_hides_vault_pieces_from_a_public_turn(world):
     from core.chat.function_manager import scope_private
     from functions import meta
@@ -109,26 +116,22 @@ def test_b1_prompt_pieces_list_hides_vault_pieces_from_a_public_turn(world):
     assert 'tender' not in text and SECRET[:20] not in text
 
 
-@pytest.mark.xfail(strict=True, reason="B1: same door, full text")
 def test_b1_prompt_pieces_view_refuses_a_vault_piece_on_a_public_turn(world):
     from functions import meta
-    text, _ok = meta._prompt_pieces({'action': 'view', 'component': 'emotions',
-                                     'key': 'tender'})
-    assert SECRET not in text
+    text, ok = meta._prompt_pieces({'action': 'view', 'component': 'emotions',
+                                    'key': 'tender'})
+    assert SECRET not in text and not ok
 
 
-@pytest.mark.xfail(strict=True, reason="B1: prompt_view(name) resolves vault "
-                   "prompts for any caller")
 def test_b1_prompt_view_refuses_a_vault_prompt_on_a_public_turn(world):
     from functions import meta
     ok, _ = pv.set_monolith('private-persona', SECRET)
     assert ok
-    text, _ok = meta._prompt_view({'name': 'private-persona'})
-    assert SECRET not in text
+    text, ok = meta._prompt_view({'name': 'private-persona'})
+    assert SECRET not in text and not ok
+    assert 'private-persona' not in text.split('Available:')[-1], "nor in the list of names"
 
 
-@pytest.mark.xfail(strict=True, reason="B1: the no-arg listing names every "
-                   "vault prompt")
 def test_b1_prompt_switch_listing_hides_vault_names_from_a_public_turn(world):
     from functions import meta
     ok, _ = pv.set_monolith('private-persona', SECRET)
@@ -137,13 +140,251 @@ def test_b1_prompt_switch_listing_hides_vault_names_from_a_public_turn(world):
     assert 'private-persona' not in text
 
 
-@pytest.mark.xfail(strict=True, reason="B4: a public turn can hard-delete a "
-                   "vault piece")
+def test_b1_a_private_turn_still_sees_her_vault(world):
+    """The other half: nothing is taken from the private chat."""
+    from functions import meta
+    with pv.reading(True):
+        text, ok = meta._prompt_pieces({'action': 'view', 'component': 'emotions',
+                                        'key': 'tender'})
+    assert ok and SECRET in text
+
+
+def test_b1_a_turn_on_another_chat_reads_its_own_prompt_not_the_open_chats(world, monkeypatch):
+    """The open chat is private and wears 'plain' with a timed vault mood. A
+    task on the public chat 'desk' asks for "my prompt" and "what is worn"."""
+    from core.chat import stream_brain
+    from functions import meta
+    system = _live(monkeypatch, private=True)
+    sm = system.llm_chat.session_manager
+    sm.get_active_chat_name = lambda: 'bedroom'
+    sm.get_chat_settings = lambda: {'prompt': 'deskprompt', 'private_chat': False}
+    pm._monoliths['deskprompt'] = {'content': 'You are the desk clerk.', 'privacy_required': False}
+    ps._assembled_state['emotions'] = ['tender']
+    token = stream_brain.set_override({'chat': 'desk'})
+    try:
+        text, ok = meta._prompt_view({})
+        assert ok and 'desk clerk' in text
+        assert 'plain' not in text and 'tender' not in text and SECRET not in text
+        assert meta._prompt_switch({})[0].startswith('Current: deskprompt')
+        listing, _ = meta._prompt_pieces({'action': 'list'})
+        assert 'tender' not in listing and 'active:' not in listing
+    finally:
+        stream_brain.reset_override(token)
+
+
+def _tool_door(monkeypatch):
+    """A bare FunctionManager with one tool that reports the vault's reader."""
+    from unittest.mock import patch
+    from core.chat.function_manager import FunctionManager
+    with patch.object(FunctionManager, '__init__', lambda self: None):
+        fm = FunctionManager()
+    fm.execution_map = {'peek': lambda name, args, cfg: (str(pv.reader_ok()), True)}
+    fm._is_local_map = {'peek': True}
+    fm.function_modules, fm._function_module_map = {}, {}
+    fm.system_instance = None
+    monkeypatch.setattr(fm, '_log_tool_call', lambda *a, **k: None)
+    monkeypatch.setattr(fm, '_get_tool_parameters', lambda n: None)
+    return fm
+
+
+def test_b1_the_tool_door_opens_the_vault_from_the_turns_private_flag(world, monkeypatch):
+    """execute_function is the one door every lane's tools pass (chat, tasks,
+    rooms, MCP): it sets the reader from the turn's own flag, both ways."""
+    from core.chat.function_manager import reset_scopes
+    fm = _tool_door(monkeypatch)
+    try:
+        assert fm.execute_function('peek', {}, scopes={'private': False}, allowed_tools=['peek']) == 'False'
+        assert fm.execute_function('peek', {}, scopes={'private': True}, allowed_tools=['peek']) == 'True'
+        assert pv.reader_ok() is False, "and it closes again after the call"
+        reset_scopes()
+        # the MCP door passes no scopes at all: closed (B2)
+        assert fm.execute_function('peek', {}, allowed_tools=['peek']) == 'False'
+        # an editor-opened context does not leak into a public turn's tool
+        with pv.reading(True):
+            assert fm.execute_function('peek', {}, scopes={'private': False}, allowed_tools=['peek']) == 'False'
+    finally:
+        reset_scopes()
+
+
 def test_b4_public_turn_cannot_delete_a_vault_piece(world):
     from functions import meta
     meta._prompt_pieces({'action': 'delete', 'component': 'emotions',
                          'key': 'tender'})
     assert pv.vault_has_piece('emotions', 'tender')
+
+
+def test_b4_public_turn_cannot_shadow_an_unlocked_vault_key(world):
+    """Collision checks use the FULL view: on the reader's view the key looks
+    free, and the plaintext piece she then creates shadows the vault's."""
+    from functions import meta
+    with pv.reading(False):
+        assert pc.piece_key_problem('emotions', 'tender') is not None
+        text, ok = meta._prompt_pieces({'action': 'create', 'component': 'emotions',
+                                        'key': 'tender', 'value': 'shadow'})
+    assert not ok and 'tender' not in pm._components['emotions']
+    assert SECRET not in text
+
+
+def test_the_editor_routes_read_the_vault(world, client):
+    """The person at the screen: the content router opens the reader for its
+    requests (an async dependency - this proves the set reaches the route)."""
+    assert pv.set_monolith('private-persona', SECRET)[0]
+    c, _ = client
+    r = c.get('/api/prompts/components')
+    assert r.status_code == 200, r.text
+    assert r.json()['components']['emotions']['tender'] == SECRET
+    names = {p['name']: p for p in c.get('/api/prompts').json()['prompts']}
+    assert names['private-persona']['vault'] is True
+    assert c.get('/api/prompts/private-persona').json()['data']['content'] == SECRET
+    assert pv.reader_ok() is False, "and nothing stays open after the requests"
+
+
+# ── "sees less" must never become a write or a weaker gate ──
+
+def test_gates_stay_shut_for_a_vault_prompt_on_a_closed_reader(world):
+    """106 places read privacy_required off a resolved prompt. A reader who
+    may not SEE a vault prompt must still be told it is private."""
+    from core.chat.llm_providers.resolve import _prompt_gate, PrivacyRefused
+    assert pv.set_monolith('private-persona', SECRET)[0]
+    assert pv.set_preset('private-preset', {'character': 'sapphire'})[0]
+    with pv.reading(False):
+        for name in ('private-persona', 'private-preset'):
+            data = pc.get_prompt(name)
+            assert data['privacy_required'] is True and SECRET not in data['content']
+            with pytest.raises(PrivacyRefused):
+                _prompt_gate(name, private=False)
+        # the global flag, with a vault prompt active
+        ps._assembled_state['active_preset'] = 'private-preset'
+        pm._active_preset_name = 'private-preset'
+        assert ps.is_current_prompt_private() is True
+        assert ps.is_assembled_mode() is True, "and the mode is a fact, not a view"
+        assert pc.get_prompt('default')['privacy_required'] is True
+        # a taken vault name stays taken
+        assert pc.prompt_name_problem('private-persona') is not None
+
+
+def test_a_private_task_reads_the_vault_and_a_public_one_does_not(world, monkeypatch):
+    from core.continuity.execution_context import ExecutionContext
+    assert pv.set_monolith('private-persona', SECRET)[0]
+
+    def build(settings):
+        ctx = ExecutionContext.__new__(ExecutionContext)
+        ctx.task_settings = settings
+        return ExecutionContext._build_prompt(ctx), ctx._prompt_privacy_required
+
+    text, private = build({'prompt': 'private-persona'})
+    assert private is True and SECRET in text, "held local-only, so it may read"
+    text, private = build({'prompt': 'plain'})
+    assert private is False and SECRET not in text, "the heartbeat case"
+    text, private = build({'prompt': 'plain', 'privacy_required': True})
+    assert private is True and SECRET in text
+
+
+def test_dangling_refs_do_not_depend_on_the_reader(world):
+    """On a closed reader's view 'plain' wears a missing piece. The strip
+    tool removes what this reports, so it reads the full view."""
+    with pv.reading(False):
+        assert pc.dangling_refs() == {}
+        assert pc.piece_usage()['emotions']['tender'] == ['plain']
+
+
+def test_the_ledger_watcher_sees_a_vault_presets_pieces_on_any_lane(world):
+    """An edit to a piece a watched vault preset wears must leave a row,
+    whichever lane made the edit."""
+    from plugins.mindpalace.tools import prompt_audit
+    assert pv.set_preset('private-preset', {'character': 'sapphire', 'emotions': ['happy']})[0]
+    event = {'kind': 'component', 'comp_type': 'emotions', 'key': 'happy'}
+    with pv.reading(False):
+        assert prompt_audit._covers('private-preset', event) is True
+        assert prompt_audit._covers('private-preset', {**event, 'key': 'other'}) is False
+
+
+# ── the live prompt cache ──
+
+class _FakeSM:
+    _is_streaming = False
+
+    def __init__(self, private=False):
+        self.current_settings = {'private_chat': private, 'prompt': 'plain'}
+
+    def get_chat_settings(self):
+        return self.current_settings
+
+    def flush_for_seal(self):
+        return True
+
+    def evict_private_active(self):
+        return None
+
+
+def _live(monkeypatch, private):
+    """A system whose open chat wears 'plain', on the REAL cache methods."""
+    import core.api_fastapi as af
+    from core.chat.chat import LLMChat
+    llm = types.SimpleNamespace(current_system_prompt=None, session_manager=_FakeSM(private))
+    for name in ('set_system_prompt', '_live_reader', '_reassemble_live', '_live_prompt_for_turn'):
+        setattr(llm, name, types.MethodType(getattr(LLMChat, name), llm))
+    system = types.SimpleNamespace(llm_chat=llm)
+    monkeypatch.setattr(af, 'get_system', lambda: system)
+    monkeypatch.setattr(pm, '_active_preset_name', 'plain', raising=False)
+    ps._assembled_state['active_preset'] = 'plain'
+    return system
+
+
+def test_a4_a_public_chats_live_prompt_never_holds_vault_text(world, monkeypatch):
+    """Whoever renders it: the editor (open reader) switching to the chat,
+    the file watcher, a piece save."""
+    system = _live(monkeypatch, private=False)
+    with pv.reading(True):                         # an editor route did this
+        assert pc.revalidate_active(system=system, reason="test")
+    assert SECRET not in system.llm_chat.current_system_prompt
+    assert 'You are Sapphire.' in system.llm_chat.current_system_prompt
+
+
+def test_a_private_chats_live_prompt_keeps_its_vault_text_on_any_lane(world, monkeypatch):
+    """The file watcher's re-render is nobody's turn (closed reader). It must
+    not strip the open private chat's persona."""
+    system = _live(monkeypatch, private=True)
+    assert pv.reader_ok() is False
+    assert pc.revalidate_active(system=system, reason="file watcher")
+    assert SECRET in system.llm_chat.current_system_prompt
+    assert ps.get_active_preset_name() == 'plain', "and no handoff to default"
+
+
+def test_a4_lock_scrubs_vault_text_from_the_live_prompt(world, monkeypatch):
+    system = _live(monkeypatch, private=True)
+    assert pc.revalidate_active(system=system)
+    assert SECRET in system.llm_chat.current_system_prompt, "setup: cache armed"
+    assert pv.lock("user") is True
+    assert not pv.vault_unlocked()
+    assert SECRET not in system.llm_chat.current_system_prompt
+
+
+def test_the_send_point_never_ships_a_cache_rendered_for_another_reader(world, monkeypatch):
+    """The last line: a cache rendered for a private chat, and the chat is
+    public by the time the turn sends (a flip nothing re-rendered for)."""
+    system = _live(monkeypatch, private=True)
+    llm = system.llm_chat
+    assert pc.revalidate_active(system=system)
+    assert SECRET in llm.current_system_prompt
+    llm.session_manager.current_settings['private_chat'] = False
+    assert SECRET not in llm._live_prompt_for_turn()
+    # and the other way: turned private since, so its vault text arrives
+    assert SECRET not in llm.current_system_prompt
+    llm.session_manager.current_settings['private_chat'] = True
+    assert SECRET in llm._live_prompt_for_turn()
+
+
+def test_a7_a_sealed_vault_presets_keys_leave_the_live_state(world, monkeypatch):
+    system = _live(monkeypatch, private=True)
+    assert pv.set_preset('private-preset', {'character': 'sapphire', 'emotions': ['tender']})[0]
+    with pv.reading(True):
+        assert ps.apply_scenario('private-preset')
+    pm._active_preset_name = 'private-preset'
+    assert pv.lock("user") is True
+    assert ps.get_active_preset_name() == 'default'
+    assert 'tender' not in ps._assembled_state.get('emotions', [])
+    assert SECRET not in system.llm_chat.current_system_prompt
 
 
 # ── Root C: writes route by lock state, not by where content came from ──
@@ -174,64 +415,12 @@ def test_c1_private_turn_create_after_the_seal_is_refused(world, monkeypatch):
     try:
         monkeypatch.setattr(pv, '_key', None)  # the seal lands mid-turn
         monkeypatch.setattr(pv, '_data', None)
-        meta._prompt_pieces({'action': 'create', 'component': 'emotions',
-                             'key': 'aftermath', 'value': SECRET})
+        with pv.reading(True):
+            meta._prompt_pieces({'action': 'create', 'component': 'emotions',
+                                 'key': 'aftermath', 'value': SECRET})
     finally:
         scope_private.reset(token)
     assert 'aftermath' not in pm._components.get('emotions', {})
-
-
-# ── A4: the live prompt cache across a lock ──
-
-class _FakeLLM:
-    def __init__(self):
-        self.current_system_prompt = ''
-        self.session_manager = _FakeSM()
-
-    def set_system_prompt(self, text):
-        self.current_system_prompt = text
-        return True
-
-
-class _FakeSM:
-    _is_streaming = False
-    current_settings = {}
-
-    def flush_for_seal(self):
-        return True
-
-    def evict_private_active(self):
-        return None
-
-
-@pytest.fixture
-def live(world, monkeypatch):
-    """The open chat is PUBLIC and wears 'plain'; its prompt was rendered
-    into the live cache while the vault was open (what a chat switch does)."""
-    import types
-    import core.api_fastapi as af
-    system = types.SimpleNamespace(llm_chat=_FakeLLM())
-    monkeypatch.setattr(af, 'get_system', lambda: system)
-    monkeypatch.setattr(pm, '_active_preset_name', 'plain', raising=False)
-    assert ps.apply_scenario('plain')
-    system.llm_chat.set_system_prompt(ps.get_current_prompt()['content'])
-    assert SECRET in system.llm_chat.current_system_prompt, "setup: cache armed"
-    return system
-
-
-@pytest.mark.xfail(strict=True, reason="A4: lock() re-renders only when the "
-                   "active NAME is a vault name")
-def test_a4_lock_scrubs_vault_text_from_the_live_prompt(live):
-    assert pv.lock("user") is True
-    assert not pv.vault_unlocked()
-    assert SECRET not in live.llm_chat.current_system_prompt
-
-
-def test_a4_control_a_rerender_after_the_lock_is_clean(live):
-    """The fix shape works: one revalidate after the key drop cleans it."""
-    assert pv.lock("user") is True
-    assert pc.revalidate_active(system=live, reason="test")
-    assert SECRET not in live.llm_chat.current_system_prompt
 
 
 # ── D1: the seal and a private turn running by name ──
@@ -240,7 +429,6 @@ def test_a4_control_a_rerender_after_the_lock_is_clean(live):
 def store(tmp_path, monkeypatch):
     """Real vault crypto and a real chat store on tmp paths: a private chat
     'secret', and a public chat 'desk' that the pointer sits on."""
-    import types
     from unittest.mock import patch
     import core.chat.history as hist
     import core.api_fastapi as af

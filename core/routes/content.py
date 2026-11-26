@@ -11,11 +11,14 @@ import config
 from core.auth import require_login
 from core.api_fastapi import get_system, _apply_chat_settings, PROJECT_ROOT, reapply_if_active
 from core.event_bus import publish, Events
-from core import prompts
+from core import prompts, prompt_vault
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# The editor's routes: the person at the screen reads the vault while it is
+# unlocked (the reader rule, core/prompt_vault.py). Anything here that renders
+# the LIVE prompt still renders it for the open chat (prompt_crud.live_reading).
+router = APIRouter(dependencies=[Depends(prompt_vault.editor_reader)])
 
 
 def _build_spice_response():

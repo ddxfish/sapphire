@@ -1690,7 +1690,7 @@ class FunctionManager:
             self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
             return _ret(result, False)
 
-        try:
+        def _call():
             # For plugin tools, inject plugin settings (4th arg) + credentials (5th arg)
             plugin_settings = self._get_plugin_settings_for(function_name)
             if plugin_settings is not None:
@@ -1702,13 +1702,20 @@ class FunctionManager:
                 except (ValueError, TypeError):
                     nparams = 5  # assume full signature
                 if nparams >= 5:
-                    raw = executor(function_name, arguments, config, plugin_settings, credentials)
-                elif nparams >= 4:
-                    raw = executor(function_name, arguments, config, plugin_settings)
-                else:
-                    raw = executor(function_name, arguments, config)
-            else:
-                raw = executor(function_name, arguments, config)
+                    return executor(function_name, arguments, config, plugin_settings, credentials)
+                if nparams >= 4:
+                    return executor(function_name, arguments, config, plugin_settings)
+            return executor(function_name, arguments, config)
+
+        try:
+            # The vault's reader rule (core/prompt_vault.py): a tool reads the
+            # vault only inside a private turn. Set HERE, at the one door every
+            # lane's tools pass (chat, tasks, rooms, MCP), from the turn's own
+            # private flag - her read tools used to hand vault text to any turn
+            # while the vault was open (the 2026-11-23 incident).
+            from core import prompt_vault
+            with prompt_vault.reading(scope_private.get()):
+                raw = _call()
             # Plugin convention is (result, success) tuple, but user-made tools
             # (toolmaker output, third-party plugins) often return a bare value.
             # Don't crash with "cannot unpack non-iterable X" — that error string

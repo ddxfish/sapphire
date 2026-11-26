@@ -18,7 +18,8 @@ from core.auth import require_login
 from core import prompt_vault
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+# The person at the vault's own controls reads it (the reader rule).
+router = APIRouter(dependencies=[Depends(prompt_vault.editor_reader)])
 
 _FAIL_DELAY_S = 0.75
 

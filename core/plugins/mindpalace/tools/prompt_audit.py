@@ -70,6 +70,18 @@ def _watchers(cursor):
     return [(n, w) for n, w in rows if w]
 
 
+def _watched_prompt(watched):
+    """The watched prompt's type and piece list, whoever caused the event.
+    Read with the vault OPEN on purpose (the reader rule, core/prompt_vault.py):
+    this is the ledger's bookkeeping, it runs on whatever lane made the edit,
+    and only the type and the piece keys are used here - no text leaves. On
+    that lane's own reader a watched vault preset came back with no piece
+    list, and an edit to a piece it wears left no row."""
+    from core import prompts, prompt_vault
+    with prompt_vault.reading(True):
+        return prompts.get_prompt(watched)
+
+
 def _covers(watched, event):
     """Does this event touch the watched prompt? Unanswerable → True."""
     kind = event.get('kind')
@@ -87,7 +99,7 @@ def _covers(watched, event):
             # is an assembled prompt, take the row — over-log beats a silent
             # gap in the tamper trail.
             if pname in (None, '', 'custom', 'unknown'):
-                p = prompts.get_prompt(watched)
+                p = _watched_prompt(watched)
                 return bool(p) and p.get('type') == 'assembled'
             return False
         if kind == 'vault':
@@ -107,7 +119,7 @@ def _covers(watched, event):
         # "unanswerable" — it's not about her. Never a vacuous None == None.
         if not event.get('comp_type') or not event.get('key'):
             return False
-        p = prompts.get_prompt(watched)
+        p = _watched_prompt(watched)
         if not p:
             return True                      # unknown prompt → over-log
         if p.get('type') != 'assembled':

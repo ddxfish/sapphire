@@ -209,7 +209,11 @@ class ExecutionContext:
         prompt_name = self.task_settings.get("prompt", "sapphire")
         from core import prompts
 
-        prompt_data = prompts.get_prompt(prompt_name)
+        # The privacy answer first, on a closed reader: name, type and
+        # privacy_required are honest for any reader; only the text is held.
+        from core import prompt_vault
+        with prompt_vault.reading(False):
+            prompt_data = prompts.get_prompt(prompt_name)
         # Stashed for _build_scopes/_resolve_provider: a privacy_required
         # prompt must not run on a non-local provider in this lane (there is
         # no private_chat toggle here — local-only IS the guarantee).
@@ -223,6 +227,13 @@ class ExecutionContext:
             bool(self.task_settings.get("privacy_required"))
             or bool(isinstance(prompt_data, dict)
                     and prompt_data.get('privacy_required')))
+        # The vault's reader rule (core/prompt_vault.py): a private task is
+        # held local-only below, so its render may read the vault. A public
+        # task (a heartbeat on a plain preset wearing a vault mood) keeps the
+        # closed render: the same text it would get with the vault locked.
+        if self._prompt_privacy_required:
+            with prompt_vault.reading(True):
+                prompt_data = prompts.get_prompt(prompt_name)
         if prompt_data:
             system_prompt = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
         else:

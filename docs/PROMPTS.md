@@ -96,8 +96,9 @@ This is a dynamic emotion system. With assembled prompts, the AI can add, remove
 Personal or sensitive prompts go in the **vault** — an encrypted store guarded by one passphrase. Vault membership *is* the privacy flag; there's no separate "private only" checkbox.
 
 - Unlock the vault with the 🔒 padlock in the chat sidebar (or Settings → Privacy)
-- While it's unlocked, the prompt editor shows **🗝 Keep in vault** — tick it to encrypt that prompt. New prompts created while unlocked go into the vault automatically
+- While it's unlocked, the prompt editor shows **🗝 Keep in vault** — tick it to encrypt that prompt. New prompts created in the editor while unlocked go into the vault automatically
 - Un-ticking writes the prompt back out as plaintext, so it asks first
+- Only private chats and the editor read the vault, even while it's unlocked. An everyday prompt that wears a vault piece runs in an ordinary chat without that piece (see [PRIVACY.md](PRIVACY.md))
 - Vault prompts (and prompts using vault pieces) can't be exported — content stays inside
 - Lock the vault and they disappear from the selector; if one was active, the active prompt falls back to `default`
 - A chat still pointing at a sealed prompt shows **🗝 vault prompt (locked)** instead of its name — in the chat sidebar, the persona editor, and trigger editors alike. The name itself never leaves the vault, and the chat heals back to the real prompt when you unlock. While it's sealed, saving that name onto any chat is refused ("That prompt is asleep in the locked vault — unlock it, or pick another prompt") so a private prompt's name can't be copied into a public chat by accident
@@ -173,10 +174,11 @@ AI TOOLS FOR PROMPTS (monolith mode only):
 FILES:
 - user/prompts/prompt_pieces.json - assembled components and scenario presets
 - user/prompts/prompt_monoliths.json - monolith prompts
-- user/prompts/prompt_vault.enc - encrypted vault prompts/pieces (merged in only while unlocked)
+- user/prompts/prompt_vault.enc - encrypted vault prompts/pieces (merged in only while unlocked, and only for a private chat's turns and the editor)
 - Prompts view (Persona nav group) to manage via UI
 
 PRIVACY:
-- Vault membership is the privacy flag; new prompts saved while the vault is unlocked go into it
+- Vault membership is the privacy flag; new prompts saved in the editor or a private chat while the vault is unlocked go into it
+- A public chat's turns never read the vault: its prompt renders without vault pieces, and the prompt tools there show no vault items
 - Vault prompts refuse export; locked vault hides them and resets the active prompt to 'default'
 - See docs/PRIVACY.md

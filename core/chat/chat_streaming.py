@@ -495,12 +495,17 @@ class StreamingChat:
                     sess = _given or self.main_chat.session_manager.make_stream_session(_tgt)
                     if sess and not _given:
                         _pn = sess["settings"].get("prompt", "default")
-                        _pd = _prompts.get_prompt(_pn)
-                        if not isinstance(_pd, dict):
-                            # Missing name — run on assembled default this turn
-                            # (heals when the prompt re-registers), never the
-                            # literal "System prompt not loaded."
-                            _pd = _prompts.get_prompt("default")
+                        # Rendered FOR this chat (the vault's reader rule,
+                        # core/prompt_vault.py): a public chat's task, call or
+                        # satellite turn gets no vault text while it is open.
+                        from core import prompt_vault as _pv_rd
+                        with _pv_rd.reading(bool(sess["settings"].get("private_chat"))):
+                            _pd = _prompts.get_prompt(_pn)
+                            if not isinstance(_pd, dict):
+                                # Missing name — run on assembled default this turn
+                                # (heals when the prompt re-registers), never the
+                                # literal "System prompt not loaded."
+                                _pd = _prompts.get_prompt("default")
                         sess["system_prompt"] = (_pd.get("content", "") if isinstance(_pd, dict) else "") or ""
                         sess["tools"] = self.main_chat._resolve_toolset_tools(
                             sess["settings"].get("toolset", "all"),

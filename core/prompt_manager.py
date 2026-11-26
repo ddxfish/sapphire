@@ -618,31 +618,84 @@ class PromptManager:
     # private attrs (_components, _monoliths, _scenario_presets) — the
     # save_* methods persist only those, so pack/vault content can never
     # leak into user/prompts/*.json.
-    @property
-    def components(self):
+    #
+    # TWO views (the vault's reader rule, core/prompt_vault.py, 2026-11-26):
+    #   .components / .scenario_presets / .monoliths — what the CURRENT READER
+    #     may see. The vault joins only for an open reader (a private turn,
+    #     the editor). Every render and every listing reads these.
+    #   full_components() / full_scenario_presets() / full_monoliths() —
+    #     everything unlocked. For bookkeeping that hands no text to a model:
+    #     name-collision checks, usage and dangling-reference indexes, privacy
+    #     and mode answers. A check on the reader's view would call a vault
+    #     key free and let a plaintext copy shadow it.
+    def _merged_components(self, vault_too):
         from core import prompt_packs, prompt_vault
         pack = prompt_packs.overlay_components()
-        vault = prompt_vault.overlay_components()
+        vault = prompt_vault.overlay_components() if vault_too else {}
         merged = {}
         for ctype in set(pack) | set(vault) | set(self._components):
             merged[ctype] = {**pack.get(ctype, {}), **vault.get(ctype, {}),
                              **self._components.get(ctype, {})}
         return merged
 
-    @property
-    def scenario_presets(self):
+    def _merged_presets(self, vault_too):
         from core import prompt_packs, prompt_vault
         return {**prompt_packs.overlay_presets(),
-                **prompt_vault.overlay_presets(),
+                **(prompt_vault.overlay_presets() if vault_too else {}),
                 **self._scenario_presets}
+
+    def _merged_monoliths(self, vault_too):
+        from core import prompt_packs, prompt_vault
+        return {**prompt_packs.overlay_monoliths(),
+                **(prompt_vault.overlay_monoliths() if vault_too else {}),
+                **self._monoliths}
+
+    @staticmethod
+    def _reader_ok():
+        from core import prompt_vault
+        return prompt_vault.reader_ok()
+
+    @property
+    def components(self):
+        return self._merged_components(self._reader_ok())
+
+    @property
+    def scenario_presets(self):
+        return self._merged_presets(self._reader_ok())
 
     @property
     def monoliths(self):
-        from core import prompt_packs, prompt_vault
-        return {**prompt_packs.overlay_monoliths(),
-                **prompt_vault.overlay_monoliths(),
-                **self._monoliths}
-    
+        return self._merged_monoliths(self._reader_ok())
+
+    def full_components(self):
+        return self._merged_components(True)
+
+    def full_scenario_presets(self):
+        return self._merged_presets(True)
+
+    def full_monoliths(self):
+        return self._merged_monoliths(True)
+
+    def wears_vault(self, components) -> bool:
+        """True when rendering this component-key dict for the current reader
+        pulls text out of the vault (a vault piece no user piece shadows).
+        Always False for a closed reader: its render holds none."""
+        from core import prompt_vault
+        if not prompt_vault.reader_ok():
+            return False
+        vault = prompt_vault.overlay_components()
+        if not vault:
+            return False
+        # the renderer's own default: no character key means 'sapphire'
+        worn = {'character': 'sapphire', **(components or {})}
+        for ctype, val in worn.items():
+            keys = val if isinstance(val, list) else [val]
+            for k in keys:
+                if isinstance(k, str) and k in vault.get(ctype, {}) \
+                        and k not in self._components.get(ctype, {}):
+                    return True
+        return False
+
     @property
     def spices(self):
         return self._spices
