@@ -252,7 +252,10 @@ def test_dictated_turns_do_not_refocus_the_composer():
 def test_sidebar_load_rearms_the_hold_after_its_fetches():
     c = _src("views/chat.js")
     ls = _between(c, "async function loadSidebar(", "const settings = settingsResp.status")
-    assert "if (!useOverride && (editableFocused(container.querySelector('.chat-sidebar'))" in ls
+    # the hold is for a refresh of the chat already shown; another chat paints
+    # through, cursor or not (isolation hunt C5, tests/test_vault_write_origin.py)
+    assert "if (!useOverride && chatName === _sbPaintedChat" in ls
+    assert "(editableFocused(container.querySelector('.chat-sidebar'))" in ls
     assert "softSidebar();\n            return;" in ls
 
 

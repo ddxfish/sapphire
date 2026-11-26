@@ -397,11 +397,39 @@ def ensure_prompt_files() -> bool:
             # the prompt file watcher.
             shutil.copyfile(source, target)
             logger.info(f"Bootstrapped {filename} to user/prompts/")
+            if filename == "prompt_pieces.json":
+                _leave_vault_keys_out(target)
         
         return True
     except Exception as e:
         logger.error(f"Failed to ensure prompt files: {e}")
         return False
+
+
+def _leave_vault_keys_out(path):
+    """A fresh prompt_pieces.json beside an EXISTING vault (a restore that
+    brought the vault but not the prompts): stock keys the vault holds a piece
+    for are left out. Seeded as plaintext, the stock copy would shadow the
+    vault's own after unlock (isolation hunt C2, 2026-11-23). The vault is
+    sealed at boot, so this asks its salted key index."""
+    try:
+        from core import prompt_vault
+        if not prompt_vault.vault_exists():
+            return
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
+        dropped = 0
+        for ctype, entries in (data.get('components') or {}).items():
+            if not isinstance(entries, dict):
+                continue
+            for key in [k for k in entries if prompt_vault.sealed_piece(ctype, k) is True]:
+                del entries[key]
+                dropped += 1
+        if dropped:
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+            logger.info(f"Left {dropped} stock piece(s) out of the fresh prompt file: "
+                        f"the vault holds its own under those names")
+    except Exception as e:
+        logger.warning(f"Could not check the vault while seeding prompts: {e}")
 
 
 def ensure_chat_defaults() -> bool:

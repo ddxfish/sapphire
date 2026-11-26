@@ -47,6 +47,9 @@ class EventBus:
         the ring outlives a vault lock and replays to any later tab). Plugin
         publishers can't reach the core name list above, so they must pass
         the flag themselves."""
+        if _names_hidden_chat(data):
+            logger.debug(f"event '{event_type}' dropped — it names a chat sealed in the locked vault")
+            return
         event = {
             "type": event_type,
             "data": data or {},
@@ -256,6 +259,35 @@ class EventBus:
         unaffected; only late-joiner replay is trimmed."""
         with self._lock:
             self._replay_buffer.clear()
+
+
+# A sealed chat does not exist, and that holds on the bus too: no event may
+# name it, to a live tab or into the replay ring. The chat store registers
+# its own "is this chat hidden" answer here (history.ChatSessionManager). A
+# turn that would not stop when the vault locked kept publishing its
+# message_added and ai_typing_end with the private chat's name after the seal
+# had emptied the ring (leak hunt, 2026-11-26).
+_hidden_chat_probe = None
+
+
+def set_hidden_chat_probe(fn):
+    global _hidden_chat_probe
+    _hidden_chat_probe = fn
+
+
+def _names_hidden_chat(data) -> bool:
+    probe = _hidden_chat_probe
+    if probe is None or not isinstance(data, dict):
+        return False
+    for key in ('chat', 'chat_name'):
+        name = data.get(key)
+        if isinstance(name, str) and name:
+            try:
+                if probe(name):
+                    return True
+            except Exception:
+                pass      # an unreadable store is not a reason to stop the bus
+    return False
 
 
 # Singleton instance

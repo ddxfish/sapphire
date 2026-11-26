@@ -225,16 +225,38 @@ VAULT_SEALED_TURN_MSG = ("The vault locked during this turn, so nothing was save
                          "Save it again in this chat once the vault is unlocked.")
 
 
+# Krem's ruling 2026-11-26 (the hunt's ruling 6): a private chat's turn does
+# not change the TEXT of a plaintext piece or prompt. The words it writes came
+# from a private chat, and a plaintext item is shared with every ordinary
+# chat, cloud ones included. Refused with the way forward: a new item, which
+# is saved in the vault. (Which pieces a preset WEARS is keys, not text, and
+# is not refused.)
+SHARED_PIECE_MSG = ("'{piece}' is a shared piece: ordinary chats use it too, and this chat is "
+                    "private, so its text can't be changed from here. Create a new piece "
+                    "(prompt_pieces action='create', another key): it is saved in the vault. "
+                    "Then use that one.")
+SHARED_PROMPT_MSG = ("'{name}' is an ordinary prompt and this chat is private, so its text "
+                     "can't be changed from here. Create a new prompt with prompt_create: "
+                     "it is saved in the vault.")
+
+
 def _private_turn_sealed() -> bool:
     """Is a PRIVATE CHAT's turn writing while the vault's key is gone? Only a
     turn that outlived the seal can be (one that would not stop when the vault
     locked): a new prompt or piece from it used to land in the plaintext
-    store (isolation hunt C1, 2026-11-23). The chat's own flag decides, not
-    the turn's private flag alone: a legacy 🔒 prompt on a public chat runs
-    private with the vault locked, and its saves are plaintext as before.
-    A chat that cannot be read counts as private (fail closed)."""
+    store (isolation hunt C1, 2026-11-23)."""
     from core import prompt_vault
-    if prompt_vault.vault_unlocked() or not prompt_vault.vault_exists():
+    return not prompt_vault.vault_unlocked() and _private_chat_turn()
+
+
+def _private_chat_turn() -> bool:
+    """Is the writer a turn in a PRIVATE CHAT, on an install that has a vault
+    to keep its words in? The chat's own flag decides, not the turn's private
+    flag alone: a legacy 🔒 prompt on a public chat runs its turn private, and
+    its saves are plaintext as before. The person at the editor is not a
+    turn. A chat that cannot be read counts as private (fail closed)."""
+    from core import prompt_vault
+    if not prompt_vault.vault_exists():
         return False
     try:
         from core.chat.function_manager import scope_private
@@ -248,6 +270,22 @@ def _private_turn_sealed() -> bool:
         return bool(sm.get_chat_settings().get('private_chat'))
     except Exception:
         return True
+
+
+# The sealed-key check for pieces (prompt names have theirs in
+# prompt_name_problem). A plaintext piece planted under a key the LOCKED
+# vault holds shadowed the vault's piece after unlock, with no vault badge
+# (isolation hunt C2, 2026-11-23).
+PIECE_ASLEEP_MSG = ("'{piece}' belongs to a piece asleep in the locked vault — "
+                    "unlock it or pick another name")
+
+
+def _piece_asleep(comp_type, key) -> bool:
+    try:
+        from core import prompt_vault
+        return prompt_vault.sealed_piece(comp_type, key) is True
+    except Exception:
+        return False
 
 
 def _vault_open() -> bool:
@@ -325,6 +363,8 @@ def piece_key_problem(comp_type, key) -> Problem | None:
     # a public turn, and the plaintext piece it then creates shadows it
     if key in prompt_manager.full_components().get(comp_type, {}):
         return Problem(f"'{comp_type}/{key}' already exists", TAKEN)
+    if _piece_asleep(comp_type, key):
+        return Problem(PIECE_ASLEEP_MSG.format(piece=f"{comp_type}/{key}"), ASLEEP)
     return None
 
 
@@ -424,6 +464,9 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
         if not in_user and _private_turn_sealed():
             logger.warning("Refused a new prompt from a private turn that outlived the seal")
             return False, VAULT_SEALED_TURN_MSG
+        if prompt_type == 'monolith' and name in prompt_manager._monoliths and _private_chat_turn():
+            logger.warning("Refused a private chat's edit to a plaintext prompt's text")
+            return False, SHARED_PROMPT_MSG.format(name=name)
         if not in_user and not _vault_open() and prompt_vault.vault_has_prompt(name):
             logger.warning("Refused a save over a vault prompt name from a reader "
                            "who may not see the vault")
@@ -444,6 +487,10 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
                     return False, f"Vault save refused ({code})"
                 logger.info(f"Saved {prompt_type} '{name}' (vault)")
                 return True, f"Saved {'monolith' if prompt_type == 'monolith' else 'assembled'} '{name}' (vault)"
+            if prompt_type == 'monolith' and _private_chat_turn():
+                # a built-in prompt: her edit would become a plaintext copy of it
+                logger.warning("Refused a private chat's edit to a built-in prompt's text")
+                return False, SHARED_PROMPT_MSG.format(name=name)
 
         # Mutate + save inside the manager lock: unlocked mutation raced the
         # file watcher's reload() dict REBIND — the write landed in an
@@ -617,10 +664,18 @@ def save_component(comp_type: str, key: str, value: str,
     if not in_user and _private_turn_sealed():
         logger.warning("Refused a new piece from a private turn that outlived the seal")
         return False, VAULT_SEALED_TURN_MSG
+    if in_user and _private_chat_turn():
+        logger.warning("Refused a private chat's edit to a plaintext piece's text")
+        return False, SHARED_PIECE_MSG.format(piece=f"{comp_type}/{key}")
     if not in_user and not _vault_open() and prompt_vault.vault_has_piece(comp_type, key):
         logger.warning("Refused a save over a vault piece key from a reader "
                        "who may not see the vault")
         return False, VAULT_TAKEN_MSG
+    if not in_user and _piece_asleep(comp_type, key):
+        # the funnel's own check: a writer that skipped piece_key_problem
+        # (an update of a key that is not here) still cannot shadow it
+        logger.warning("Refused a new plaintext piece under a sealed vault key")
+        return False, PIECE_ASLEEP_MSG.format(piece=f"{comp_type}/{key}")
     if not in_user and _vault_open() and origin != 'regular':
         from core import prompt_packs
         pack_shadow_edit = (prompt_packs.piece_source(comp_type, key) is not None
@@ -636,6 +691,10 @@ def save_component(comp_type: str, key: str, value: str,
                 pass
             _revalidate_if_active_uses([(comp_type, key)])
             return True, f"Saved {comp_type}/{key} (vault)"
+        if _private_chat_turn():
+            # a built-in piece: her edit would become a plaintext copy of it
+            logger.warning("Refused a private chat's edit to a built-in piece's text")
+            return False, SHARED_PIECE_MSG.format(piece=f"{comp_type}/{key}")
     with prompt_manager._lock:
         prompt_manager._components.setdefault(comp_type, {})[key] = value
         saved = prompt_manager.save_components(reason=reason)
@@ -714,6 +773,14 @@ def is_vault_prompt(name: str) -> bool:
 # move itself is names-only in the ledger (the vault side's own row tells
 # the story); past ledger history of a moved-in prompt is history.
 
+# Move-in used to write straight over a vault item of the same name: with a
+# plaintext copy shadowing it, ticking "in vault" replaced the vault original
+# with the shadow's text (isolation hunt C3, 2026-11-23). The mirror of the
+# move-out refusal below.
+VAULT_HAS_IT_MSG = ("{item} is already in the vault, under this copy. Moving this one in "
+                    "would replace it — rename or delete one of the two first")
+
+
 def _vault_refusal(code: str) -> str:
     """'locked' must surface as VAULT_LOCKED_MSG — move_batch stops the loop
     on that exact string (E3#9)."""
@@ -740,6 +807,9 @@ def move_prompt_to_vault(name: str, publish: bool = True) -> tuple[bool, str]:
     # E3#1): deleting from memory and then failing the plaintext save left a
     # "ghost move" — 🗝 in the UI, plaintext still on disk, restart reverts.
     with prompt_manager._lock:
+        if (name in prompt_manager._monoliths or name in prompt_manager._scenario_presets) \
+                and prompt_vault.vault_has_prompt(name):
+            return False, VAULT_HAS_IT_MSG.format(item=f"'{name}'")
         if name in prompt_manager._monoliths:
             entry = prompt_manager._monoliths[name]
             content = entry.get('content', '') if isinstance(entry, dict) else str(entry)
@@ -828,6 +898,8 @@ def move_piece_to_vault(comp_type: str, key: str, publish: bool = True) -> tuple
     with prompt_manager._lock:
         if key not in prompt_manager._components.get(comp_type, {}):
             return False, f"Piece '{comp_type}/{key}' not found in the regular store"
+        if prompt_vault.vault_has_piece(comp_type, key):
+            return False, VAULT_HAS_IT_MSG.format(item=f"'{comp_type}/{key}'")
         ok, code = prompt_vault.set_piece(comp_type, key,
                                           prompt_manager._components[comp_type][key])
         if not ok:
@@ -997,7 +1069,8 @@ def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
     skips keys already present in the MERGED view (pack pieces count —
     matches the import UI's "existing" notion).
     """
-    wrote, written = 0, []
+    from core import prompt_vault
+    wrote, written, held = 0, [], 0
     with prompt_manager._lock:
         for comp_type, defs in (items or {}).items():
             if comp_type not in PIECE_TYPES or not isinstance(defs, dict):
@@ -1013,6 +1086,13 @@ def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
                 # KEY MEMBERSHIP, never text truthiness: an empty local piece
                 # is still a piece, and "don't overwrite" must keep it.
                 if not overwrite and key in prompt_manager.full_components().get(comp_type, {}):
+                    continue
+                # A key the vault holds (open or sealed) and this store does
+                # not: writing it here would shadow the vault's piece.
+                if key not in prompt_manager._components.get(comp_type, {}) \
+                        and prompt_vault.holds_piece(comp_type, key):
+                    logger.warning("Skipping an imported piece: the vault holds a piece under its key")
+                    held += 1
                     continue
                 prompt_manager._components.setdefault(comp_type, {})[key] = value
                 written.append((comp_type, key))
@@ -1030,7 +1110,8 @@ def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
         except Exception:
             pass
         _revalidate_if_active_uses(written)
-    return True, f"Wrote {wrote} pieces"
+    return True, (f"Wrote {wrote} pieces" + (
+        f"; {held} left out (the vault holds a piece with the same name)" if held else ""))
 
 
 def activate_prompt(name: str, system) -> tuple[bool, str]:
@@ -1345,6 +1426,11 @@ def restore_pieces(items) -> tuple:
             if key in prompt_manager._components.get(ctype, {}):
                 skipped.append({'type': ctype, 'key': key,
                                 'why': 'live piece exists'})
+                continue
+            if prompt_vault.holds_piece(ctype, key):
+                # restored as plaintext it would shadow the vault's piece
+                skipped.append({'type': ctype, 'key': key,
+                                'why': 'a vault piece has this name'})
                 continue
             latest = max(entries, key=lambda it: it.get('deleted_at', 0))
             prompt_manager._components.setdefault(ctype, {})[key] = \

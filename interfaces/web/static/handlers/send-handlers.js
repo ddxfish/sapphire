@@ -7,7 +7,7 @@ import * as Images from '../ui-images.js';
 import { attachDocument } from '../features/doc-bar.js';
 import { dispatch, on, Events } from '../core/event-bus.js';
 import { focusUnlessEditing } from '../shared/dom-guard.js';
-import { getBoundChat } from '../core/bound-chat.js';
+import { getBoundChat, getViewedChat } from '../core/bound-chat.js';
 import { isCommand, run as runCommand } from './commands.js';
 import { onCommandInput, onCommandKey } from './command-menu.js';
 import { openPrivatePicker } from '../shared/private-picker.js';
@@ -24,7 +24,10 @@ import {
     getIsCancelling,
     refresh,
     setHistLen,
-    setSendLabel
+    setSendLabel,
+    getDraftChat,
+    setDraftChat,
+    noteDraft
 } from '../core/state.js';
 
 // This tab's sends still in flight, by ticket (2026-10-08). A send OWNS its
@@ -111,6 +114,10 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
 
     dispatch(Events.USER_SENT, { text: txt });
 
+    // Where these words were written, read before the box empties (which
+    // forgets it). The server refuses a private chat's draft sent into a
+    // public chat (isolation hunt C6); a card's answer was never a draft.
+    const draftChat = fromCard ? null : getDraftChat();
     if (!fromCard) {
         input.value = '';
         input.dispatchEvent(new Event('input'));
@@ -210,6 +217,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         }
     };
     const queueHooks = {
+        draftChat,
         onPrivateGate: () => { ctl.gated = true; },   // the server's gate refused (see onPrivateGate below)
         onTicket: (ticket, chat) => {          // every send: its identity, from the first line
             ctl.ticket = ticket; ctl.chat = chat || null;
@@ -335,6 +343,14 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             if (ctl.state !== 'done') { ctl.state = 'lost'; ctl.follow(); }
             return;
         }
+        if (statusCode === 409 && e.code === 'private_draft') {
+            // Written in a private chat, sent from a public one (the vault
+            // locked under the draft): the words do NOT come back to this
+            // chat's box. The bubble goes; the server's words say why.
+            myBubble?.remove();
+            ui.showToast(e.message, 'warning', 7000);
+            return;
+        }
         if (statusCode === 409) {
             // Server gate (a sealed or missing chat): undo the optimistic
             // paint — text back in the box, bubble gone.
@@ -369,6 +385,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
         if (!fromCard && !input.value) {
             input.value = typed;
             input.dispatchEvent(new Event('input'));
+            if (draftChat) setDraftChat(draftChat);   // it was written THERE, wherever the view is now
         }
         if (attach && sentImages.length) {
             Images.restorePending(sentImages);
@@ -694,9 +711,35 @@ export async function triggerSendWithText(text, { card = false } = {}) {
 }
 
 let _userTypingTimer = null;
+/** The vault changed or the tab was moved to another chat: a draft that was
+ *  started in a private chat the lock has now sealed leaves the box with it.
+ *  Text and staged pictures both. Sealed = the vault is locked and the chat
+ *  list no longer has the draft's chat (the list is the server's own answer;
+ *  a chat that was only archived or deleted keeps its draft). */
+export async function dropSealedDraft() {
+    const origin = getDraftChat();
+    if (!origin) return;     // (the view may not have caught up with the lock yet: ask the server)
+    let sealed = false;
+    try {
+        const [status, list] = await Promise.all([api.fetchStatus(), api.fetchChatList()]);
+        sealed = !!status?.vault?.exists && !status?.vault?.unlocked
+            && !(list?.chats || []).some(c => c.name === origin);
+    } catch { return; }      // unreachable: the server refuses the send itself
+    if (!sealed || getDraftChat() !== origin) return;
+    const { input } = getElements();
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    if (Images.hasPendingUploadImages()) {
+        Images.clearPendingUploadImages();
+        updateImagePreviewArea();
+    }
+    ui.showToast('The vault locked. The unsent message you were writing in a private chat was cleared.', 'info', 7000);
+}
+
 export function handleInput() {
     const { input } = getElements();
     input.parentElement.dataset.replicatedValue = input.value;
+    noteDraft(!!input.value.trim(), getViewedChat());
     onCommandInput(input);
     // Debounced user_typing event for avatar (fire once, not per keystroke)
     if (!_userTypingTimer && input.value.trim()) {

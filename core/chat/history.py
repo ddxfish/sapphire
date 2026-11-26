@@ -1289,6 +1289,13 @@ class ChatSessionManager:
             _pv.set_sealed_rows_probe(self._any_vaulted_rows)
         except Exception as e:
             logger.warning(f"sealed-rows probe registration failed: {e}")
+        # ...and the event bus its answer to "is this chat hidden": an event
+        # that names a sealed chat is never published (core/event_bus.py).
+        try:
+            from core import event_bus as _bus
+            _bus.set_hidden_chat_probe(self.names_sealed_chat)
+        except Exception as e:
+            logger.warning(f"hidden-chat probe registration failed: {e}")
 
         # Migrate any existing JSON files
         self._migrate_json_files()
@@ -3138,6 +3145,27 @@ class ChatSessionManager:
             logger.error(f"repair_chat_rows('{chat_name}') failed: {e}", exc_info=True)
             return False, f"repair failed: {e}"
 
+    def names_sealed_chat(self, chat_name: str) -> bool:
+        """is_chat_hidden for the event bus, which asks on EVERY event that
+        names a chat: no database read per call. The private chats' names are
+        read once per sealed stretch (the set cannot grow while sealed: a
+        private chat needs the key to be born) and dropped when the vault's
+        epoch moves. Per-call connections are this store's known hazard
+        (the close hang), so a hot path must not add them. The active chat is
+        exempt, as everywhere."""
+        if not chat_name or not _vault_sealed() or chat_name == self.active_chat_name:
+            return False
+        from core import prompt_vault
+        now = prompt_vault.epoch()
+        cached = getattr(self, '_sealed_names', None)
+        if cached is None or cached[0] != now:
+            names = frozenset(c['name'] for c in self.list_chat_files(include_hidden=True)
+                              if c.get('private_chat'))
+            if prompt_vault.epoch() != now or not _vault_sealed():
+                return chat_name in names        # it moved under the read: answer, keep nothing
+            cached = self._sealed_names = (now, names)
+        return chat_name in cached[1]
+
     def is_chat_hidden(self, chat_name: str) -> bool:
         """PUBLIC seam for plugins (P3): True when this chat must be treated
         as nonexistent (private + vault sealed). Explicit — plugins must not
@@ -4072,6 +4100,16 @@ class ChatSessionManager:
                                "(streaming?) — staying")
                 return None
             logger.warning(f"[VAULT] active chat was private — evicted to '{target}'")
+            try:
+                # The ring again, here: lock() emptied it at the seal, but an
+                # eviction that had to wait for a turn that would not stop
+                # comes after that turn's own events, and those name the
+                # private chat (the active chat is never "hidden", so the
+                # bus let them through). Leak hunt, 2026-11-26.
+                from core.event_bus import clear_replay as _clear_replay
+                _clear_replay()
+            except Exception:
+                pass
             try:
                 # Server-initiated switch: origin None → every tab follows
                 # (transcript refresh + dropdown adopt). The activate route

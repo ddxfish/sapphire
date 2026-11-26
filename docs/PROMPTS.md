@@ -103,6 +103,7 @@ Personal or sensitive prompts go in the **vault** — an encrypted store guarded
 - Lock the vault and they disappear from the selector; if one was active, the active prompt falls back to `default`
 - A chat still pointing at a sealed prompt shows **🗝 vault prompt (locked)** instead of its name — in the chat sidebar, the persona editor, and trigger editors alike. The name itself never leaves the vault, and the chat heals back to the real prompt when you unlock. While it's sealed, saving that name onto any chat is refused ("That prompt is asleep in the locked vault — unlock it, or pick another prompt") so a private prompt's name can't be copied into a public chat by accident
 - Prompts flagged private before the vault existed still show 🔒 and still refuse cloud providers — move them into the vault when convenient
+- A piece name the locked vault already uses can't be taken by a new plaintext piece ("…asleep in the locked vault — unlock it or pick another name"), and moving an item into the vault never replaces one already there
 
 **Use cases:** Personal diary prompts, sensitive conversations, shared computer scenarios.
 
@@ -181,4 +182,6 @@ PRIVACY:
 - Vault membership is the privacy flag; new prompts saved in the editor or a private chat while the vault is unlocked go into it
 - A public chat's turns never read the vault: its prompt renders without vault pieces, and the prompt tools there show no vault items
 - Vault prompts refuse export; locked vault hides them and resets the active prompt to 'default'
+- prompt_pieces create under a key the locked vault holds is refused ("asleep in the locked vault"): pick another key
+- In a private chat, prompt_pieces edit and prompt_edit refuse a plaintext (shared) item's text: create a new one instead, it is saved in the vault
 - See docs/PRIVACY.md

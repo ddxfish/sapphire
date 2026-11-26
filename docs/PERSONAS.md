@@ -42,7 +42,7 @@ These are starting points. Edit them freely — your changes are saved separatel
 
 Open the chat sidebar and you'll find the **faces strip** — a row of persona avatars just under the chat actions. Click a face to load that persona onto the current chat: prompt, voice, tools, spice set, scene, and scopes all switch at once. The fields below the strip are the chat's live values — the strip and the fields are one form, so anything a persona sets is immediately visible and tweakable right there.
 
-The last cell on the strip is **New...** — it captures the current chat's look and voice (not its scopes) as a new persona. The ↗ button beside the strip jumps to the full Personas view.
+The last cell on the strip is **New...** — it captures the current chat's look and voice (not its scopes) as a new persona. From a private chat the Custom Context is left out, since personas are not encrypted; the notice says so. The ↗ button beside the strip jumps to the full Personas view.
 
 ### Favorites — curating the strip
 

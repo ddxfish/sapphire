@@ -18,6 +18,7 @@ import re
 import threading
 import uuid
 from collections import Counter
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -139,9 +140,39 @@ def _refuse_unreadable_scan(raw, pages):
     raise Refused(f"That PDF has no text and its pages can't be shown. {why or ''}".strip())
 
 
+def _chat_private(chat) -> bool:
+    """Is this chat private? One that cannot be read (sealed, gone, no system
+    yet) counts as private: the embedder gate then keeps its text near."""
+    try:
+        from core.api_fastapi import get_system
+        s = get_system().llm_chat.session_manager.get_settings_for(chat)
+        return True if s is None else bool(s.get('private_chat'))
+    except Exception:
+        return True
+
+
+@contextmanager
+def _for_chat(chat):
+    """Embed inside this: whose document it is. Embedding happens at upload
+    and on the heal thread, never inside a turn, so nothing told the embedder
+    a PRIVATE chat's document was private: its text went to a remote embedder
+    (isolation hunt E2, 2026-11-23). Inside, the work runs as that chat's
+    private turn would, and the embedder's own gate (core/embeddings) keeps
+    the text on this machine or its network: a far embedder gives None,
+    keyword search only, exactly as for a memory saved in a private chat."""
+    from core.chat.function_manager import scope_private
+    token = scope_private.set(True) if _chat_private(chat) else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            scope_private.reset(token)
+
+
 def _embed(chunks, report=None):
     """[(blob, provider, dim)] one per chunk, (None, None, None) where embedding
-    isn't possible: the document is stored anyway and keyword search still finds it."""
+    isn't possible: the document is stored anyway and keyword search still finds it.
+    Call it inside _for_chat(chat)."""
     empty = (None, None, None)
     embedder = _kb()._get_embedder()
     if not chunks or not embedder or not embedder.available:
@@ -178,9 +209,11 @@ def add(chat, filename, raw, still_there=None) -> dict:
     if len(chunks) > EMBED_BATCH:
         from core.notify import progress
         with progress(f"Reading {name}", source='core', key=f'document-{name}', done_title=f"{name} is ready") as p:
-            stamps = _embed(chunks, p.update)
+            with _for_chat(chat):
+                stamps = _embed(chunks, p.update)
     else:
-        stamps = _embed(chunks)
+        with _for_chat(chat):
+            stamps = _embed(chunks)
 
     # The original goes to disk BEFORE the swap: a full disk refuses a scan with the
     # old copy untouched. A name of its own: two uploads of one file don't collide.
@@ -293,8 +326,20 @@ def _heal_later(chat):
     with _heal_lock:
         if chat in _healing:
             return
+        if chat in _kept_near:
+            # a private chat whose text the embedder may not have: keyword
+            # search is its steady state, not something to retry every turn
+            # (a different embedder gets its one try)
+            try:
+                if _kept_near[chat] == getattr(_kb()._get_embedder(), 'provider_id', None):
+                    return
+            except Exception:
+                return
         _healing.add(chat)
     threading.Thread(target=_heal, args=(chat,), daemon=True, name='documents-heal').start()
+
+
+_kept_near = {}     # chat → the embedder (provider id) that was refused its text
 
 
 def _heal(chat):
@@ -312,8 +357,14 @@ def _heal(chat):
             rows = cur.fetchall()
         if not rows:
             return
-        stamps = _embed([r[1] for r in rows])
+        with _for_chat(chat):
+            stamps = _embed([r[1] for r in rows])
         done = [(*s, r[0]) for r, s in zip(rows, stamps) if s[0] is not None]
+        with _heal_lock:
+            if not done and _chat_private(chat):
+                _kept_near[chat] = active
+            else:
+                _kept_near.pop(chat, None)
         if done:
             with kb._get_connection() as conn:
                 conn.executemany('UPDATE knowledge_entries SET embedding = ?, embedding_provider = ?, '

@@ -18,7 +18,7 @@ import { setInstanceColor } from './features/logo.js';
 import { refreshInitData } from './shared/init-data.js';
 import { initUserProfile, refreshProfileBadge } from './features/user-profile.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
-import { setupImageHandlers } from './handlers/send-handlers.js';
+import { setupImageHandlers, dropSealedDraft } from './handlers/send-handlers.js';
 import { setupImageModal } from './ui-images.js';
 import * as eventBus from './core/event-bus.js';
 import { getInitData } from './shared/init-data.js';
@@ -728,7 +728,8 @@ function initEventBus() {
         // forceAdopt (vault hunt R7): a lock/unlock repaint must adopt the
         // server's real active — the adopt=false path could re-synthesize a
         // sealed chat's RAW name into the select/header in a two-tab storm.
-        if (data?.action === 'vault_changed') populateChatDropdown({ forceAdopt: true });
+        // then: a draft written in a chat the lock just sealed leaves the box
+        if (data?.action === 'vault_changed') { populateChatDropdown({ forceAdopt: true }); dropSealedDraft(); }
         refreshAndUpdateScene();
     });
     eventBus.on(eventBus.Events.TOOLSET_CHANGED, refreshAndUpdateScene);
@@ -812,6 +813,7 @@ function initEventBus() {
             await refresh(false);
             ui.forceScrollToBottom();   // a different chat: land at its bottom, not the old chat's keepTop (D3-B3)
             await updateScene();
+            dropSealedDraft();          // moved off a chat the vault just sealed: its draft goes too
         }
         populateChatDropdown();
     });

@@ -7,7 +7,7 @@ import tempfile
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 
 import config
@@ -98,8 +98,12 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         # speak(), but file-mode calls generate_audio_data directly — and the
         # browser's non-streaming TTS path ships chat response text through
         # here. Same posture as the vault routes: 403, never 401.
+        # `chat`: the chat whose reply this is. Without it the gate judged the
+        # ACTIVE chat: a private room or game on screen with the pointer on a
+        # public chat sent its reply text to a cloud voice (isolation hunt
+        # E4, 2026-11-23). The browser names the chat on its screen.
         from core.voice_privacy import tts_gate_reason
-        _gate = tts_gate_reason()
+        _gate = tts_gate_reason(_gate_settings_for(system, data.get('chat')))
         if _gate:
             raise HTTPException(status_code=403, detail=_gate)
         # Optional per-request voice/pitch/speed (browser task-TTS): the
@@ -162,6 +166,29 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         )
     else:
         raise HTTPException(status_code=400, detail="Invalid output_mode")
+
+
+def _stt_gate_for(system, chat=None) -> str:
+    """The STT privacy gate for words about to be spoken into `chat` (the
+    chat on the caller's screen, when it names one) and into the chat voice
+    lands in (history.landing_chat). Either one private with a transcriber
+    that is not local refuses. A chat that cannot be read fails CLOSED."""
+    from core.voice_privacy import stt_gate_reason
+    from core.chat.history import landing_chat
+    sm = system.llm_chat.session_manager
+    named = (str(chat or '')).strip()
+    if named:
+        gate = stt_gate_reason(_gate_settings_for(system, named))
+        if gate:
+            return gate
+    try:
+        landing = landing_chat(sm)
+    except Exception:
+        landing = None
+    if landing and landing != named:
+        return stt_gate_reason(_gate_settings_for(system, landing))
+    # no landing to ask (a store without one): the effective chat, as before
+    return '' if landing else stt_gate_reason(sm.get_chat_settings())
 
 
 def _gate_settings_for(system, chat):
@@ -512,7 +539,8 @@ async def tts_voices_post(request: Request, _=Depends(require_login), system=Dep
 # =============================================================================
 
 @router.post("/api/transcribe")
-async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=Depends(require_login), system=Depends(get_system)):
+async def handle_transcribe(request: Request, audio: UploadFile = File(...), chat: str = Form(None),
+                            _=Depends(require_login), system=Depends(get_system)):
     """Transcribe audio to text."""
     check_endpoint_rate(request, 'transcribe', max_calls=20, window=60)
 
@@ -523,8 +551,11 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
     # Voice privacy gate (vault v1.1): private chat + cloud STT = the mic
     # audio would leave the machine. 403 with the reason — the mic button
     # surfaces it as a toast.
-    from core.voice_privacy import stt_gate_reason
-    gate = stt_gate_reason(system.llm_chat.session_manager.get_chat_settings())
+    # Judged on the chat the words are FOR, never the pointer alone: the chat
+    # on the tab's screen (`chat`, a room or game bound by name) and the chat
+    # voice lands in. The open chat public with a private room on screen sent
+    # the audio to a cloud transcriber (isolation hunt E3, 2026-11-23).
+    gate = _stt_gate_for(system, chat)
     if gate:
         raise HTTPException(status_code=403, detail=gate)
 

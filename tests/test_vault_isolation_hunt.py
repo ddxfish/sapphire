@@ -8,9 +8,11 @@ and B now pin that rule.
 Wave 2 landed the same day: the VAULT LEASE (core/prompt_vault.py). A private
 chat's turn holds the vault open from begin_stream until its rows are written;
 a decision to lock stops those turns and seals once they are gone, the idle
-lock waits for them (D1, D4, C1, D2). C2 and C3 are still open: their tests
-assert the SECURE behavior and stay xfail(strict), so the mark fails loudly
-the day the fix lands (remove the mark then).
+lock waits for them (D1, D4, C1, D2).
+
+Wave 3, same day: the sealed-key index for pieces and the move-in refusal
+(C2, C3). The other writers and the web doors (C4 to C7) are pinned in
+tests/test_vault_write_origin.py. No expected-fail proofs are left here.
 
 Hermetic: the vault is in-memory only (no file), the prompt stores are
 swapped for small dicts and nothing here ever calls a real saver.
@@ -395,21 +397,33 @@ def test_a7_a_sealed_vault_presets_keys_leave_the_live_state(world, monkeypatch)
 
 # ── Root C: writes route by lock state, not by where content came from ──
 
-@pytest.mark.xfail(strict=True, reason="C2: pieces have no sealed-key check")
-def test_c2_new_piece_cannot_shadow_a_sealed_vault_key(world, monkeypatch):
+def _seal(monkeypatch):
+    """Lock the in-memory vault the way a real one locks: its sidecar index
+    was written while it was open, then the key and the text go."""
+    monkeypatch.setattr(pv, '_piece_salt', None)
+    monkeypatch.setattr(pv, '_piece_hashes', set())
+    monkeypatch.setattr(pv, '_own_hashes', None)
+    with pv._lock:
+        pv._reconcile_refs_locked()
     monkeypatch.setattr(pv, '_key', None)      # sealed: the vault still
     monkeypatch.setattr(pv, '_data', None)     # holds emotions/tender
     pv.VAULT_PATH.write_bytes(b'x')            # "a vault exists"
-    assert pc.piece_key_problem('emotions', 'tender') is not None
 
 
-@pytest.mark.xfail(strict=True, reason="C3: move-in never checks the vault "
-                   "already holds the key")
+def test_c2_new_piece_cannot_shadow_a_sealed_vault_key(world, monkeypatch):
+    from core.name_problem import ASLEEP
+    _seal(monkeypatch)
+    bad = pc.piece_key_problem('emotions', 'tender')
+    assert bad is not None and bad.code == ASLEEP and bad.status == 409
+    assert pc.piece_key_problem('emotions', 'brand-new') is None
+
+
 def test_c3_move_in_does_not_overwrite_the_vault_original(world):
     pm._components['emotions']['tender'] = 'plaintext shadow'
-    ok, _msg = pc.move_piece_to_vault('emotions', 'tender', publish=False)
+    ok, msg = pc.move_piece_to_vault('emotions', 'tender', publish=False)
     assert pv.overlay_components()['emotions']['tender'] == SECRET
-    assert not ok
+    assert not ok and 'already in the vault' in msg
+    assert pm._components['emotions']['tender'] == 'plaintext shadow', "nothing is lost on either side"
 
 
 def _sealed_private_turn(monkeypatch, chat_private=True):
@@ -455,15 +469,80 @@ def test_c1_a_private_prompt_on_a_public_chat_still_saves_while_locked(world, mo
     assert ok and pm._components['emotions']['calm'] == 'You feel calm.'
 
 
-def test_c1_an_existing_plaintext_piece_can_still_be_edited(world, monkeypatch):
+# ── Ruling 6 (Krem, 2026-11-26): a private chat's turn does not change the
+#    TEXT of a plaintext piece or prompt; it is told to make a new one ──
+
+def _private_chat_turn(monkeypatch, chat_private=True):
+    """A turn in a private chat, vault open (the file exists, as in life)."""
+    import core.api_fastapi as af
+    pv.VAULT_PATH.write_bytes(b'vault')
+    sm = types.SimpleNamespace(get_chat_settings=lambda: {'private_chat': chat_private})
+    monkeypatch.setattr(af, 'get_system', lambda: types.SimpleNamespace(
+        llm_chat=types.SimpleNamespace(session_manager=sm)))
+
+
+def _as_private_turn(fn):
     from core.chat.function_manager import scope_private
     token = scope_private.set(True)
     try:
-        _sealed_private_turn(monkeypatch)
-        ok, _ = pc.save_component('emotions', 'happy', 'You feel very happy.')
+        with pv.reading(True):
+            return fn()
     finally:
         scope_private.reset(token)
-    assert ok
+
+
+def test_r6_a_private_chat_cannot_rewrite_a_shared_plaintext_piece(world, monkeypatch):
+    from functions import meta
+    _private_chat_turn(monkeypatch)
+    out = _as_private_turn(lambda: meta._prompt_pieces(
+        {'action': 'edit', 'component': 'emotions', 'key': 'happy', 'value': SECRET}))
+    assert pm._components['emotions']['happy'] == 'You feel happy.', "the shared text is untouched"
+    assert 'shared piece' in str(out) and "action='create'" in str(out), "she is told the way forward"
+
+
+def test_r6_and_the_way_forward_works(world, monkeypatch):
+    from functions import meta
+    _private_chat_turn(monkeypatch)
+    _as_private_turn(lambda: meta._prompt_pieces(
+        {'action': 'create', 'component': 'emotions', 'key': 'joy', 'value': SECRET}))
+    assert pv.overlay_components()['emotions']['joy'] == SECRET, "the new piece is in the vault"
+    assert 'joy' not in pm._components['emotions']
+    # ...and a piece that is already in the vault is hers to edit
+    ok, msg = _as_private_turn(lambda: pc.save_component('emotions', 'tender', SECRET + ' v2'))
+    assert ok and msg.endswith('(vault)')
+
+
+def test_r6_a_private_chat_cannot_rewrite_a_plaintext_prompts_text(world, monkeypatch):
+    pm._monoliths['everyday'] = {'content': 'You help.', 'privacy_required': False}
+    _private_chat_turn(monkeypatch)
+    ok, msg = _as_private_turn(lambda: pc.save_prompt('everyday', {'type': 'monolith', 'content': SECRET}))
+    assert not ok and 'ordinary prompt' in msg and 'prompt_create' in msg
+    assert pm._monoliths['everyday']['content'] == 'You help.'
+
+
+def test_r6_wearing_a_piece_on_a_plaintext_preset_is_still_allowed(world, monkeypatch):
+    """Which pieces a preset wears is keys, not text."""
+    _private_chat_turn(monkeypatch)
+    ok, _ = _as_private_turn(lambda: pc.save_prompt('plain', {
+        'type': 'assembled', 'components': {'character': 'sapphire', 'emotions': ['happy']}}))
+    assert ok and pm._scenario_presets['plain']['emotions'] == ['happy']
+
+
+def test_r6_does_not_touch_the_editor_a_public_chat_or_an_install_with_no_vault(world, monkeypatch):
+    from core.chat.function_manager import scope_private
+    _private_chat_turn(monkeypatch)
+    assert pc.save_component('emotions', 'happy', 'edited by the person')[0], "the editor is not a turn"
+    _private_chat_turn(monkeypatch, chat_private=False)      # a private PROMPT on a public chat
+    assert _as_private_turn(lambda: pc.save_component('emotions', 'happy', 'legacy private turn'))[0]
+    _private_chat_turn(monkeypatch)
+    pv.VAULT_PATH.unlink()                                   # no vault at all: nowhere else to put it
+    monkeypatch.setattr(pv, '_key', None)
+    monkeypatch.setattr(pv, '_data', None)
+    token = scope_private.set(True)
+    try:
+        assert pc.save_component('emotions', 'happy', 'no vault here')[0]
+    finally:
+        scope_private.reset(token)
 
 
 # ── D1: the seal and a private turn running by name ──

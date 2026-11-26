@@ -594,6 +594,12 @@ async function _loadPluginAccordions(container, init) {
 }
 
 let _sbPaintSeq = 0;
+// The chat the sidebar's controls currently SHOW. A control's value belongs
+// to this chat, whatever the picker says by now: after a vault lock moved the
+// tab to a public chat, a focused Custom Context box kept the private chat's
+// text (the editing hold below skipped the repaint) and the next keystroke
+// saved it onto the public chat (isolation hunt C5, 2026-11-23).
+let _sbPaintedChat = null;
 
 async function loadSidebar(overrideSettings = null, overrideChat = null) {
     const container = document.getElementById('view-chat');
@@ -650,11 +656,18 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
         // fetches above. Don't paint under them — re-arm the soft refresh and
         // let focusout / the save's kick catch up (D1#2, 2026-09-08). The
         // chat-activated override paint carries the user's own switch: direct.
-        if (!useOverride && (editableFocused(container.querySelector('.chat-sidebar'))
-                             || !!saveTimer || _saveInFlight > 0)) {
+        // The hold is for a REFRESH of the chat already shown. A different
+        // chat paints through, cursor or not: what is on screen is the other
+        // chat's (its pending save keeps its own chat and values).
+        if (!useOverride && chatName === _sbPaintedChat
+                && (editableFocused(container.querySelector('.chat-sidebar'))
+                    || !!saveTimer || _saveInFlight > 0)) {
             softSidebar();
             return;
         }
+        // Painting another chat takes more than one step (an await below):
+        // until the last value is in, the controls are a mix and save nothing.
+        if (chatName !== _sbPaintedChat) _sbPaintedChat = null;
 
         const settings = settingsResp.status === 'fulfilled' ? settingsResp.value.settings : {};
         ui.setCurrentPersona(settings.persona || null);
@@ -818,6 +831,7 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
         renderPersonaStrip(container, settings, init);
 
         // Inject plugin-registered accordions
+        _sbPaintedChat = chatName;      // every control above now shows THIS chat
         await _loadPluginAccordions(container, init);
 
         // Restore each accordion's open/closed state from localStorage.
@@ -865,6 +879,15 @@ function debouncedSave(container, keys = []) {
     // between schedule and fire must not change what the gesture meant.
     const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
     const chatNow = chatSelect?.value || null;
+    if (_sbPaintedChat !== chatNow) {
+        // The controls still show another chat (its repaint has not landed):
+        // this gesture's value is that chat's, not the one on the picker.
+        // Saved nowhere; the repaint puts the right values under the hand.
+        console.warn(`[SIDEBAR] change dropped — the sidebar shows '${_sbPaintedChat}', the chat is '${chatNow}'`);
+        ui.showToast('This chat\'s settings were still loading. Try that again.', 'info', 3000);
+        loadSidebar();
+        return;
+    }
     if (saveTimer && pendingSaveChatName && chatNow !== pendingSaveChatName) {
         // The chat moved under an armed window (a remote switch, an
         // eviction). The old chat's sub-second patch is dropped rather than
@@ -1122,7 +1145,11 @@ function initPersonaStrip(container) {
             try {
                 const res = await createFromChat(name.trim());
                 if (res?.name) {
-                    ui.showToast(`Persona "${res.name}" created`, 'success');
+                    if ((res.left_out || []).includes('custom_context')) {
+                        ui.showToast(`Persona "${res.name}" created without this chat's Custom Context: the chat is private and personas are not encrypted. Paste it into the persona if you want it there.`, 'info', 9000);
+                    } else {
+                        ui.showToast(`Persona "${res.name}" created`, 'success');
+                    }
                     // The pending slot survives a Personas view that hasn't
                     // been opened yet (its listener registers on first show);
                     // the event alone was lost and personas[0] got edited.

@@ -743,11 +743,45 @@ class PromptManager:
                         # confuses the file watcher.
                         shutil.copyfile(src, self.USER_DIR / fname)
                 self.reload(audit_reason='reset to factory defaults')
+                self._drop_vault_held()
             logger.info("Prompts reset to factory defaults")
             return True
         except Exception as e:
             logger.error(f"Failed to reset prompts: {e}")
             return False
+
+    def _drop_vault_held(self):
+        """Caller holds _lock, right after a factory copy. A stock name the
+        person moved INTO the vault came back as plaintext with the copy and
+        shadowed the vault's own (plaintext wins the merge): the private
+        version silently reverted to stock (merge_defaults skips these the
+        same way; isolation hunt C2, 2026-11-23). Works sealed too: pieces
+        by the vault's salted key index, prompts by its referenced names."""
+        try:
+            from core import prompt_vault
+            sealed_names = set() if prompt_vault.vault_unlocked() else set(prompt_vault.refs_names())
+            pieces = [(t, k) for t, entries in self._components.items()
+                      for k in entries if prompt_vault.holds_piece(t, k)]
+            for t, k in pieces:
+                del self._components[t][k]
+            held = lambda n: prompt_vault.vault_has_prompt(n) or n in sealed_names   # noqa: E731
+            presets = [n for n in self._scenario_presets if held(n)]
+            for n in presets:
+                del self._scenario_presets[n]
+            monos = [n for n in self._monoliths if held(n)]
+            for n in monos:
+                del self._monoliths[n]
+            if pieces:
+                self.save_components(reason='reset: names the vault holds stay in the vault', audit=False)
+            if presets:
+                self.save_scenario_presets(reason='reset: names the vault holds stay in the vault', audit=False)
+            if monos:
+                self.save_monoliths(reason='reset: names the vault holds stay in the vault', audit=False)
+            if pieces or presets or monos:
+                logger.info(f"Reset left {len(pieces)} piece(s) and {len(presets) + len(monos)} "
+                            f"prompt(s) to the vault's own copies")
+        except Exception as e:
+            logger.warning(f"Reset could not check the vault for held names: {e}")
 
     def merge_defaults(self, backup_dir=None):
         """Additive merge: add missing items from core defaults without touching existing ones.

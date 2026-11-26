@@ -63,6 +63,16 @@ export const setIsCancelling = (val) => { isCancelling = val; };
 export const releaseOwnership = () => { currentAbortController = null; isCancelling = false; };
 export const getPromptPrivacyRequired = () => promptPrivacyRequired;
 export const setPromptPrivacyRequired = (val) => { promptPrivacyRequired = val; };
+// The composer's draft remembers the chat it was started in. A draft typed
+// in a private chat stayed in the box after the vault locked, and Enter sent
+// it to the public chat the tab had been moved to (isolation hunt C6).
+let draftChat = null;
+export const getDraftChat = () => draftChat;
+export const setDraftChat = (chat) => { draftChat = chat || null; };
+export const noteDraft = (hasDraft, chat) => {
+    if (!hasDraft) draftChat = null;
+    else if (!draftChat) draftChat = chat || null;
+};
 export const getPrivateGate = () => privateGate;
 export const setPrivateGate = (val) => { privateGate = !!val; };
 export const getConvo = () => convMode;

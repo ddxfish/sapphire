@@ -1203,9 +1203,18 @@ async def create_persona_from_chat(request: Request, _=Depends(require_login), s
         raise HTTPException(status_code=400, detail="Name required")
 
     chat_settings = system.llm_chat.session_manager.get_chat_settings()
+    # Personas are one plaintext file, shown in every chat. A private chat's
+    # Custom Context is words typed in private: it does not ride along (it
+    # used to be copied out with no notice; isolation hunt C7, 2026-11-23).
+    # The person can paste it into the persona themselves; the page says so.
+    left_out = []
+    if chat_settings.get("private_chat") and (chat_settings.get("custom_context") or "").strip():
+        chat_settings = {k: v for k, v in chat_settings.items() if k != "custom_context"}
+        left_out.append("custom_context")
     if not persona_manager.create_from_settings(name, chat_settings):
         raise HTTPException(status_code=409, detail="Persona already exists or invalid name")
-    return {"status": "success", "name": persona_manager._sanitize_name(name)}
+    return {"status": "success", "name": persona_manager._sanitize_name(name),
+            "left_out": left_out}
 
 
 # =============================================================================

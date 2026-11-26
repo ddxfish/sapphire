@@ -63,6 +63,8 @@ _refs = {}             # {name: "monolith"|"preset"} — referenced names only
 _refs_loaded = False
 _piece_salt = None     # random hex salt for the piece-refs hashes (sidecar)
 _piece_hashes = set()  # salted sha256 of plaintext piece keys vault presets use
+_own_hashes = None     # salted sha256 of the vault's OWN piece keys; None = sidecar predates it
+_epoch = 0             # bumped at every lock and unlock: what a per-seal cache is keyed on
 
 
 # ── the reader rule ──
@@ -245,6 +247,12 @@ def vault_unlocked() -> bool:
         return _key is not None
 
 
+def epoch() -> int:
+    """Changes whenever the vault locks or unlocks. Anything computed for one
+    sealed (or open) stretch is stale once this moves."""
+    return _epoch
+
+
 def vault_status() -> dict:
     return {"exists": vault_exists(), "unlocked": vault_unlocked()}
 
@@ -393,7 +401,7 @@ def setup(passphrase) -> tuple:
 def unlock(passphrase) -> tuple:
     """(ok, code) — code '' | 'no_vault' | 'wrong_key' | 'corrupt'.
     Corrupt files are quarantined (renamed .bad-<stamp>), never swallowed."""
-    global _key, _salt, _data, _defer_timer
+    global _key, _salt, _data, _defer_timer, _epoch
     if vault_unlocked():
         touch()
         return True, ''
@@ -420,6 +428,7 @@ def unlock(passphrase) -> tuple:
         return False, 'corrupt'
     with _lock:
         _key, _salt = key, salt
+        _epoch += 1
         # A waiting idle seal's limit must die here — firing after a
         # successful unlock would re-seal a vault the user just opened.
         if _defer_timer is not None:
@@ -572,7 +581,7 @@ def lock(reason="", wait=False) -> bool:
     key drops once it is gone or STOP_WAIT_S has passed. wait=True is the
     idle timer's: it returns False with the vault still open and seals when
     the last turn ends."""
-    global _key, _salt, _data, _timer, _defer_timer, _sealing, _pending
+    global _key, _salt, _data, _timer, _defer_timer, _sealing, _pending, _epoch
     with _seal_mutex:
         with _lock:
             if _key is None:
@@ -605,6 +614,7 @@ def lock(reason="", wait=False) -> bool:
                 # Best-effort key destruction: drop every reference (Python
                 # can't zero immutable bytes in place).
                 _key = _salt = _data = None
+                _epoch += 1
                 # a turn that did not stop holds nothing now: the key it
                 # was holding open is gone
                 _leases.clear()
@@ -665,7 +675,7 @@ def destroy() -> tuple:
     a key with no rows is harmless). No passphrase asked — the person who
     needs this is the one who lost it. (ok, code) — '' | 'no_vault' |
     'busy' | 'purge_failed' | 'delete_failed'."""
-    global _refs, _refs_loaded, _piece_salt, _piece_hashes
+    global _refs, _refs_loaded, _piece_salt, _piece_hashes, _own_hashes
     if not vault_exists():
         return False, 'no_vault'
     lock(reason="deleting")       # stop private turns, flush, evict, hand off — the normal seal
@@ -692,7 +702,7 @@ def destroy() -> tuple:
             logger.error(f"[VAULT] delete: file removal failed: {e}")
             return False, 'delete_failed'
         _refs, _refs_loaded = {}, True
-        _piece_salt, _piece_hashes = None, set()
+        _piece_salt, _piece_hashes, _own_hashes = None, set(), None
     logger.warning(f"[VAULT] deleted by the user ({n} private chat(s) removed)")
     _audit_row({'item': 'vault', 'action': 'deleted'})
     _publish("vault_changed")
@@ -1207,12 +1217,12 @@ def delete_preset(name) -> tuple:
 # ── references index (in-use names ONLY — ruling C amendment) ──
 
 def _load_refs_locked():
-    global _refs, _refs_loaded, _piece_salt, _piece_hashes
+    global _refs, _refs_loaded, _piece_salt, _piece_hashes, _own_hashes
     if _refs_loaded:
         return
     _refs_loaded = True
     _refs = {}
-    _piece_salt, _piece_hashes = None, set()
+    _piece_salt, _piece_hashes, _own_hashes = None, set(), None
     if not REFS_PATH.exists():
         return
     try:
@@ -1227,6 +1237,9 @@ def _load_refs_locked():
             hashes = data.get('piece_refs', [])
             if isinstance(hashes, list):
                 _piece_hashes = {h for h in hashes if isinstance(h, str)}
+            own = data.get('piece_keys')
+            if isinstance(own, list):
+                _own_hashes = {h for h in own if isinstance(h, str)}
     except Exception as e:
         logger.error(f"[VAULT] refs index unreadable — starting empty: {e}")
 
@@ -1238,6 +1251,8 @@ def _save_refs_locked() -> bool:
         if _piece_salt is not None:
             out["piece_salt"] = _piece_salt
             out["piece_refs"] = sorted(_piece_hashes)
+            if _own_hashes is not None:
+                out["piece_keys"] = sorted(_own_hashes)
         tmp = REFS_PATH.with_suffix('.json.tmp')
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(out, f, indent=2, ensure_ascii=False)
@@ -1298,7 +1313,7 @@ def refs_reconcile(referenced=None) -> bool:
 
 
 def _reconcile_refs_locked(referenced=None) -> bool:
-    global _piece_salt, _piece_hashes
+    global _piece_salt, _piece_hashes, _own_hashes
     _load_refs_locked()
     valid = set(_data['monoliths']) | set(_data['scenario_presets'])
     keep = {k: v for k, v in _refs.items()
@@ -1311,11 +1326,19 @@ def _reconcile_refs_locked(referenced=None) -> bool:
     if _piece_salt is None:
         _piece_salt = os.urandom(16).hex()
     new_hashes = {_hash_piece(_piece_salt, t, k) for t, k in _piece_pairs_locked()}
-    if keep == _refs and new_hashes == _piece_hashes:
+    # The vault's OWN piece keys, hashed the same way: the sealed-key check
+    # (sealed_piece). Prompts had one through the names above; pieces had
+    # none, so seven writers could plant a plaintext piece under a sealed
+    # vault key, and after unlock the plaintext copy won the merge with no
+    # vault badge (isolation hunt C2, 2026-11-23).
+    new_own = {_hash_piece(_piece_salt, t, k)
+               for t, entries in _data.get('components', {}).items() for k in entries}
+    if keep == _refs and new_hashes == _piece_hashes and new_own == _own_hashes:
         return True
     _refs.clear()
     _refs.update(keep)
     _piece_hashes = new_hashes
+    _own_hashes = new_own
     return _save_refs_locked()
 
 
@@ -1341,6 +1364,28 @@ def _piece_pairs_locked():
                 if isinstance(k, str) and k and k not in vault_pieces.get(ctype, {}):
                     pairs.add((ctype, k))
     return pairs
+
+
+def sealed_piece(ctype, key):
+    """Does the LOCKED vault hold a piece under this key? True/False from the
+    sidecar's salted hashes (nothing readable is stored: only someone who
+    already has the key can ask about it). None = no answer here: the vault
+    is unlocked (ask vault_has_piece), or its sidecar predates this index and
+    one unlock writes it."""
+    with _lock:
+        if _key is not None:
+            return None
+        _load_refs_locked()
+        if _piece_salt is None or _own_hashes is None:
+            return None
+        return _hash_piece(_piece_salt, ctype, key) in _own_hashes
+
+
+def holds_piece(ctype, key) -> bool:
+    """The vault holds a piece under this key, in either lock state. What a
+    plaintext writer asks before it takes a key that is not in its own store:
+    a plaintext copy under a vault key shadows the vault's piece."""
+    return vault_has_piece(ctype, key) or sealed_piece(ctype, key) is True
 
 
 def piece_ref_pairs():

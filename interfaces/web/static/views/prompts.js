@@ -1390,7 +1390,10 @@ async function duplicateDefinition(type, key) {
     const newName = prompt(`Duplicate "${key}" as:`, key + '-copy');
     if (!newName?.trim() || newName.trim() === key) return;
     try {
-        const res = await saveComponent(type, newName.trim(), text, null, undefined, { create: true });
+        // the copy of a vault piece says so (as duplicatePrompt does): unstamped,
+        // a vault that locked while this editor still held the text wrote the
+        // copy out in plaintext
+        const res = await saveComponent(type, newName.trim(), text, null, pieceOrigin(type, key), { create: true });
         noteVaultRouted(type, newName.trim(), res);
         if (!components[type]) components[type] = {};
         components[type][newName.trim()] = text;

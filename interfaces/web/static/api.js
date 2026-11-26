@@ -527,7 +527,9 @@ const _streamTurn = async (body, { onChunk, onComplete, onError, signal = null,
             return;
         }
         const err = await res.json().catch(() => ({}));
-        return onError(new Error(wordsOf(err, res.status)), res.status);
+        const refused = new Error(wordsOf(err, res.status));
+        refused.code = err?.code || null;
+        return onError(refused, res.status);
     }
     const handlers = {
         onChunk,
@@ -715,6 +717,9 @@ export const streamChat = (text, onChunk, onComplete, onError, signal = null, pr
     if (files && files.length > 0) body.files = files;
     const viewed = getViewedChat();
     if (viewed) body.chat = viewed;   // the chat on screen, never wherever the pointer moved (hunt 21)
+    // where the words were written: the server refuses a private chat's draft
+    // sent into a public one (routes/chat.py)
+    if (queueHooks?.draftChat) body.draft_chat = queueHooks.draftChat;
     return _streamTurn(body, { onChunk, onComplete, onError, signal, onToolStart, onToolEnd, onStreamStarted, onIterationStart,
                                onQueued: queueHooks?.onQueued || null, onQueuedDropped: queueHooks?.onQueuedDropped || null,
                                onMerged: queueHooks?.onMerged || null, onTicket: queueHooks?.onTicket || null,
@@ -735,6 +740,10 @@ export const fetchAudio = async (text, signal = null, opts = null) => {
         // opts: {voice, pitch, speed} — task-TTS carries the task's values in
         // the event payload because global voice is restored before we fetch.
         const body = { text, output_mode: 'file' };
+        // whose reply this is: the server's privacy gate judges THAT chat (a
+        // private room on screen, the pointer on a public chat), not the pointer
+        const said = opts?.chat || getViewedChat();
+        if (said) body.chat = said;
         if (opts?.voice) body.voice = opts.voice;
         if (opts?.pitch != null) body.pitch = opts.pitch;
         if (opts?.speed != null) body.speed = opts.speed;
@@ -755,6 +764,10 @@ export const fetchAudio = async (text, signal = null, opts = null) => {
 export const postAudio = async (blob) => {
     const form = new FormData();
     form.append('audio', blob, 'recording.wav');
+    // the chat these words are for (the one on screen): the server will not
+    // send a private chat's audio to a transcriber off this machine
+    const viewed = getViewedChat();
+    if (viewed) form.append('chat', viewed);
     // the server's words stand (core/routes/tts.py transcribe says each case)
     return await fetchWithTimeout('/api/transcribe', { method: 'POST', body: form }, 120000);
 };

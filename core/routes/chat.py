@@ -131,6 +131,36 @@ async def handle_chat(request: Request, _=Depends(require_login), system=Depends
     return payload
 
 
+PRIVATE_DRAFT_MSG = ("That message was written in a private chat, so it was not sent "
+                     "here. Unlock the vault and send it there.")
+
+
+def _private_draft_elsewhere(sm, draft_chat, target) -> bool:
+    """Was a draft written in the private chat `draft_chat` sent into a
+    different, PUBLIC chat? `target`: the chat named on the send, None = the
+    active one. Private to private passes (the private picker moves a draft
+    between private chats)."""
+    try:
+        active = sm.get_active_chat_name() or ''
+        dest = target or active
+        if not dest or draft_chat == dest:
+            return False
+        if sm.is_chat_hidden(draft_chat):
+            came_private = True
+        elif not sm.chat_exists(draft_chat):
+            return False                      # a deleted chat's draft is just a draft
+        else:
+            s = sm.get_chat_settings() if draft_chat == active else sm.read_chat_settings(draft_chat)
+            came_private = s is None or bool(s.get('private_chat'))
+        if not came_private:
+            return False
+        d = sm.get_chat_settings() if dest == active else sm.read_chat_settings(dest)
+        return not bool((d or {}).get('private_chat'))
+    except Exception as e:
+        logger.warning(f"[CHAT-STREAM] draft origin check failed (letting the send's own gates decide): {e}")
+        return False
+
+
 @router.post("/api/chat/stream")
 async def handle_chat_stream(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Streaming chat endpoint (SSE)."""
@@ -165,6 +195,16 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                                 status_code=409)
         if _sm.read_chat_settings(chat) is None:
             return JSONResponse({"error": f"Chat '{chat}' not found."}, status_code=404)
+
+    # The composer says which chat its words were written in. Written in a
+    # private chat and sent into a public one is refused: the vault locked
+    # under a draft, the tab was moved to a public chat, and Enter sent the
+    # private words there, cloud-eligible (isolation hunt C6, 2026-11-23).
+    # A sealed chat counts as private; so does one that cannot be read.
+    draft_chat = str(data.get('draft_chat') or '').strip() or None
+    if draft_chat and _private_draft_elsewhere(system.llm_chat.session_manager, draft_chat, chat):
+        logger.warning("[CHAT-STREAM] refused: a private chat's draft sent into a public chat")
+        return JSONResponse({"error": PRIVATE_DRAFT_MSG, "code": "private_draft"}, status_code=409)
 
     # Inbox (2026-10-06, wave I-2): a typed turn WAITS ITS TURN instead of
     # being refused. The response opens at once; if the chat is busy its first

@@ -50,7 +50,7 @@ You can tell a private chat by the glow on the chat area border, the 🗝 next t
 |------|--------------|
 | **Local models only** | Auto mode only picks providers ticked *Local / private server*. Pinning a cloud provider refuses the turn with a message. |
 | **Local tools only** | Any tool that reaches the network refuses and tells the AI why — including the ones that feel personal but hand text to a service: email, phone calls, Telegram, the plugin store. Tools that declare no locality at all (many older plugins predate the flag) are blocked too, fail-closed — if your unflagged plugins only talk to local hardware, **Settings > Privacy > "allow tools with no locality flag"** lets them run; explicitly network tools stay blocked regardless. |
-| **Voice stays local** | Cloud STT and TTS refuse — you get a short notice instead of speech. The check follows the chat the speech belongs to, so a background turn (a scheduled task, a voice session) is judged on *its* chat, not on whichever chat you happen to have open. |
+| **Voice stays local** | Cloud STT and TTS refuse — you get a short notice instead of speech. The check follows the chat the speech belongs to, so a background turn (a scheduled task, a voice session) is judged on *its* chat, not on whichever chat you happen to have open. The same goes for the microphone and the wake word: they are judged on the chat your words are for (a private room on screen, the chat voice lands in), and a reply is judged on the chat that wrote it. |
 | **Embeddings stay local** | A memory saved in a private chat is not sent to an embedder off this machine or your local network. It is saved without one, and search falls back to keywords for it. A local embedder works as usual. |
 | **Encrypted at rest** | Messages, chat settings, tool images, and plugin data are stored as AES-256-GCM values (`@enc1:` prefixed) under the vault's key. |
 | **Invisible when sealed** | Lock the vault and the chat is gone from the picker, Chat Manager, chat search, and the API — it answers exactly like a chat that never existed. |
@@ -82,11 +82,20 @@ Vault membership *is* the privacy flag for prompts. There's no separate "private
   - An ordinary prompt that wears a vault piece (a vault mood on your everyday persona) runs in an ordinary chat **without that piece**. Nothing is refused and nothing warns; the piece is simply absent there, and present again in a private chat.
   - An ordinary chat set to a whole vault prompt is still refused, as before.
   - The AI's prompt tools follow the same rule. In an ordinary chat she can't list, view, wear, edit or delete vault pieces or prompts, and what she creates there is saved as plaintext. If she picks a name the vault already holds, she is told the name is taken.
+  - **In a private chat she can't rewrite your everyday pieces.** A piece or prompt that is not in the vault is shared with every ordinary chat, so its text can't be changed from a private chat: she is told to create a new one, which is saved in the vault. She can still choose which pieces a prompt wears, and she can edit anything already in the vault. You can edit everything in the prompt editor, as always.
 - Vault prompts (and any assembled prompt that uses a vault piece) refuse to export — content doesn't leave the vault.
 - Lock the vault and vault prompts vanish from the selector. If one was active, the active prompt falls back to `default`.
 - A chat that still points at a sealed prompt shows **🗝 vault prompt (locked)** where the name would be — chat sidebar, persona editor, trigger editors. The name is never rendered while sealed, and the chat heals back to the real prompt on unlock.
 - While it's sealed, that name can't be written onto *any* chat: the save is refused with *"That prompt is asleep in the locked vault — unlock it, or pick another prompt."* This is what stops a private prompt's name from being copied onto a public chat when the vault locks under you.
 - Older prompts flagged before the vault existed still show a 🔒 and still refuse cloud providers. Move them into the vault when convenient.
+- **A piece's name is kept for it while the vault is locked.** Creating, renaming, importing or restoring a piece under a name the locked vault already uses is refused: *"…belongs to a piece asleep in the locked vault — unlock it or pick another name."* Otherwise the new plaintext piece would hide the vault's own after you unlock. A factory reset leaves those names alone for the same reason. (This starts working after the first unlock on this version.)
+- **Moving something into the vault never replaces what is there.** If the vault already holds an item with that name, the move is refused and both copies stay as they are; rename or delete one first.
+
+**When the vault locks under you**
+
+- A message you were writing in a private chat is cleared from the box. If it is sent anyway, the server refuses it: words written in a private chat are not sent into an ordinary one.
+- The chat sidebar repaints for the chat you were moved to, even with the cursor still in Custom Context. A change made while the sidebar still shows another chat's values is not saved.
+- **New…** persona from a private chat leaves that chat's Custom Context out, and says so. Personas are one unencrypted file shown in every chat; paste the text into the persona yourself if you want it there.
 
 See [PROMPTS.md](PROMPTS.md) for prompt authoring itself.
 
@@ -149,6 +158,7 @@ Plugin authors: see [Private chats & `privacy_aware`](plugin-author/hooks.md#pri
 ## Honest limits
 
 - **No vault means no encryption.** If you never create a vault, a chat marked private still refuses cloud models and network tools — but it isn't encrypted and it doesn't hide. Create the vault first. (Chats marked private before you had a vault are swept in automatically at the next unlock.)
+- **Documents attached to a private chat are not encrypted.** The file and its extracted text sit in plaintext on disk (`user/documents/` and the knowledge database), and they stay there while the vault is locked. The files are only as private as your disk.
 - **Chat names are plaintext at rest** in the database. Content, settings, and images encrypt; the name does not. Keep names neutral.
 - **Nothing decrypts while locked** — not the app, not a tool, not you. That's the point, and it's also why there's no recovery.
 - **Old backups and old exports** made while a chat was public stay plaintext.
@@ -179,6 +189,8 @@ PRIVATE CHATS:
 - Enforcement: local-only LLM providers, network tools refuse, cloud STT/TTS refuse, a remote embedder is skipped (the memory saves unembedded, search uses keywords)
 - At rest: message rows, chat settings, tool images, and plugin chat data stored as `@enc1:` AES-256-GCM under a chat data key wrapped inside the vault frame
 - Chat NAMES stay plaintext at rest
+- Chat DOCUMENTS of a private chat: plaintext at rest (`user/documents/`, knowledge db)
+- Speech gates judge the chat the words belong to: `/api/transcribe` takes `chat` (the chat on screen) and also checks the landing chat; the wake word checks the landing chat; `/api/tts` file mode takes `chat` (the chat that wrote the reply). A chat that cannot be read fails closed
 - NO vault = pre-vault meaning: local-only enforcement, no encryption, no hiding. Legacy private chats are encrypted by a sweep at the next unlock
 
 WHILE SEALED (vault exists + locked):
@@ -197,9 +209,14 @@ PROMPTS:
 - READER RULE: unlocked vault content is read only by a private chat's turns and by the user in the editor. Any other turn (task, call, satellite, room or game seat on a public chat, MCP) gets the locked-vault view: no vault names, no vault text
 - A public chat's prompt renders without its vault pieces (no refusal, no notice); a public chat set to a whole vault prompt is refused
 - Prompt tools in a public chat: vault items are not listed, viewed, worn, edited or deleted; new items save as plaintext; a name the vault holds answers "taken"
+- Prompt tools in a PRIVATE chat: new items go into the vault; vault items edit normally; the TEXT of a plaintext piece or monolith is not yours to change there. WHAT YOU SEE: "'emotions/x' is a shared piece: ordinary chats use it too... Create a new piece" (or "...is an ordinary prompt... Create a new prompt with prompt_create"). Do that: create under another key, then `set` it. `set` / `remove` on any preset still work
 - A turn on a chat that is not the open one: `prompt_view()` and `prompt_switch()` show that chat's own prompt, never the open chat's
 - Vault prompts and prompts using vault pieces refuse export; locked vault hides them and resets the active prompt to `default`
 - Legacy `privacy_required` prompts still refuse cloud providers until moved into the vault
+- SEALED PIECE KEYS: `user/prompts/vault_refs.json` holds salted hashes of the vault's own piece keys (no names, no text). While locked, a NEW piece under such a key is refused in every writer: your `prompt_pieces create`, rename, import, trash restore, factory reset, first-run seeding. WHAT YOU SEE: "'emotions/x' belongs to a piece asleep in the locked vault — unlock it or pick another name". Pick another key; do not retry
+- Move-in refuses when the vault already holds the name (never overwrites the vault's copy)
+- A typed message carries the chat it was written in (`draft_chat`); written in a private chat and sent into a public one is refused (409 `private_draft`)
+- Persona from a private chat (`/api/personas/from-chat`): `custom_context` is left out, the response lists it in `left_out`
 - A sealed name never renders: chat sidebar, persona editor and trigger editors show `🗝 vault prompt (locked)` while keeping the stored value, so the chat heals on unlock. Setting a chat or persona to a sealed prompt is refused (409) without naming it
 
 BACKUPS:
