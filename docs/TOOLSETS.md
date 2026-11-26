@@ -9,7 +9,7 @@ Named groups of tools so you don't have to switch between memory and web for exa
 | `limited_web` | **Factory default for new chats.** `ask_user`, light web (search, fetch, image search), her browser (`browser_*`, `open_stage`), memory, entities, self-sheet, ledger, goals, library documents and images, `search_help_docs` |
 | `default` | Lean baseline used by background workers — the agent persona and the agents plugin point here. Web research, memory, entities, goals, notepad, help docs, `get_time` |
 | `work` | Research and productivity — `ask_user`, web research and images, goals, notepad, help docs |
-| `smarthome` | `ask_user` plus Home Assistant control (scenes, lights, climate, areas) |
+| `smarthome` | `ask_user` plus the three device tools: a Home Assistant's lights, scenes and climate, and every other device |
 | `personality` | Self-modification — `ask_user`, `slash_command`, prompt editing, prompt pieces, voice, model/toolset switching, memory, self-sheet, goals, `search_help_docs` |
 
 New chats start on `limited_web` (set in the chat defaults); `default` is deliberately lean so agents and scheduled tasks don't carry a heavy tool surface. A tool from a disabled plugin (the browser tools, for one) is simply absent until you enable the plugin. You can create your own toolsets that combine tools from any modules.
@@ -59,7 +59,7 @@ BUILT-IN TOOLSETS:
 - limited_web: factory NEW-CHAT default — ask_user, web_search, get_website, web_view_images, browser_open/look/act/tabs/console, open_stage, save/search/get_recent/update/delete_memory, list_entities, read_self, update_self, read_ledger, create/list/update_goal, read_document, memory_view_image, local_view_images, memory_save_image, search_help_docs
 - default: lean baseline for background workers/agents — web research, memory, list_entities, goals, notepad, search_help_docs, get_time
 - work: ask_user, web research + web_view_images, memory_view_image, local_view_images, goals, notepad, search_help_docs
-- smarthome: ask_user + Home Assistant control (scenes, lights, climate, areas)
+- smarthome: ask_user + device_list, device_status, device_action (a Home Assistant is a device)
 - personality: self-modification — ask_user, slash_command, prompt tools, set_voice, switch_model/switch_toolset (gated), list_tools, get_time, memory, read_self/update_self, goals, search_help_docs
 
 - Plus the two reserved names `all` (everything loaded, minus hidden tools) and `none`

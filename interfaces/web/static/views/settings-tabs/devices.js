@@ -5,7 +5,9 @@
 // driver knowledge. Add asks what is being added (one card per type), then
 // only what that type needs to work (the fields its driver marks `setup`),
 // then opens the device window. The window's first tab is Status, then one
-// tab per capability. The page saves with its own buttons (selfSaving).
+// tab per capability. A hub (many things behind one device, a Home Assistant)
+// has one Things tab in place of those. The page saves with its own buttons
+// (selfSaving).
 //
 // A device is online or offline, nothing else (core/devices/health.py
 // believes; the page only reads). A probe in flight pulses the dot and never
@@ -631,6 +633,97 @@ function mountActions(el, device, cap) {
     });
 }
 
+// ---- a hub's things: everything behind it, on one tab ------------------------
+// By room: what each thing is doing, a tick for "Sapphire may use this", and a
+// Try with the actions of its kind. The user's own Try always runs. The ticks
+// save with the window's Save; returns the reader of the ticks that changed.
+
+function mountThings(el, device) {
+    const kinds = Object.fromEntries((device.capabilities || []).filter(c => c.things).map(c => [c.capability, c]));
+    const things = device.things || [];
+    const rooms = [...new Set(things.map(t => t.room))].sort((a, b) => !a - !b || a.localeCompare(b));
+    const row = t => `
+        <div class="dev-thing" data-thing="${esc(t.id)}" data-find="${esc(`${t.name} ${t.call} ${t.kind} ${t.room}`.toLowerCase())}"
+             style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+            <input type="checkbox" class="dev-thing-may" ${t.locked ? '' : 'checked'} title="Sapphire may use this">
+            <div style="flex:2;min-width:0">
+                <div>${esc(t.name)} <span class="text-muted" style="font-size:var(--font-xs)">${esc(t.kind)}</span></div>
+                <div class="setting-help"><code>${esc(t.call)}</code> <span class="dev-thing-now"></span></div>
+            </div>
+            <select class="dev-thing-act" style="flex:1;min-width:84px">${
+                Object.keys(kinds[t.kind]?.actions || {}).map(a => `<option>${esc(a)}</option>`).join('')}</select>
+            <input type="text" class="dev-thing-value" style="flex:1;min-width:0">
+            <button type="button" class="btn-action dev-thing-try">Try</button>
+        </div>`;
+    el.innerHTML = `
+        <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:12px">
+            <div class="setting-help" style="margin-bottom:8px">${things.length
+                ? 'Everything behind this device. A tick lets Sapphire use the thing, and Save keeps the ticks. Your own Try always runs. The grey name is what she calls it.'
+                : 'Nothing is known to be behind it yet. Test now on the Status tab asks it.'}</div>
+            ${things.length > 12 ? '<input type="text" class="dev-thing-find" placeholder="Find a thing, a room or a kind" style="width:100%;margin-bottom:4px">' : ''}
+            <pre class="dev-try-out" hidden style="white-space:pre-wrap;max-height:160px;overflow:auto;background:var(--bg-secondary,#1a1b2e);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:8px;font-size:var(--font-sm,13px)"></pre>
+            <div class="dev-try-pics" style="margin-top:8px"></div>
+            ${rooms.map(room => `<div class="dev-thing-room"><div style="font-weight:600;margin:14px 0 6px">${esc(room || 'No room')}</div>
+                ${things.filter(t => t.room === room).map(row).join('')}</div>`).join('')}
+        </div>`;
+    const out = el.querySelector('.dev-try-out');
+    const pics = el.querySelector('.dev-try-pics');
+    const rowOf = id => [...el.querySelectorAll('.dev-thing')].find(r => r.dataset.thing === id);
+    const hint = r => {
+        const a = kinds[things.find(t => t.id === r.dataset.thing)?.kind]?.actions?.[r.querySelector('.dev-thing-act').value];
+        r.querySelector('.dev-thing-value').placeholder = a?.values || (a?.example ? 'for example ' + a.example : '');
+    };
+    el.querySelectorAll('.dev-thing').forEach(hint);
+    // what each is doing is asked of the hub itself, here and after every Try
+    const tellNow = async () => {
+        try {
+            const res = await call('GET', `/${encodeURIComponent(device.id)}/things`);
+            for (const t of res.things || []) {
+                const span = rowOf(t.id)?.querySelector('.dev-thing-now');
+                if (span) span.textContent = t.now ? '· ' + t.now : '';
+            }
+        } catch { /* the Status tab says why */ }
+    };
+    tellNow();
+    el.addEventListener('change', e => { if (e.target.matches('.dev-thing-act')) hint(e.target.closest('.dev-thing')); });
+    el.addEventListener('input', e => {
+        if (!e.target.matches('.dev-thing-find')) return;
+        const want = e.target.value.trim().toLowerCase();
+        el.querySelectorAll('.dev-thing').forEach(r => { r.style.display = r.dataset.find.includes(want) ? 'flex' : 'none'; });
+        el.querySelectorAll('.dev-thing-room').forEach(g => {
+            g.style.display = [...g.querySelectorAll('.dev-thing')].some(r => r.style.display !== 'none') ? '' : 'none'; });
+    });
+    el.addEventListener('click', async e => {
+        const btn = e.target.closest('.dev-thing-try');
+        if (!btn) return;
+        const r = btn.closest('.dev-thing');
+        const t = things.find(x => x.id === r.dataset.thing);
+        const action = r.querySelector('.dev-thing-act').value;
+        btn.disabled = true;
+        out.hidden = false; out.textContent = 'Running...';
+        pics.replaceChildren();
+        try {
+            const wait = kinds[t.kind]?.actions?.[action]?.wait || 0;
+            const res = await call('POST', `/${encodeURIComponent(device.id)}/run`, {
+                capability: t.id, action, value: r.querySelector('.dev-thing-value').value,
+            }, Math.max(30, wait + 15) * 1000);
+            out.textContent = (res.ok ? '' : 'FAILED\n') + res.text;
+            pics.replaceChildren(...(res.images || []).map(img => {
+                const pic = document.createElement('img');
+                pic.src = `data:${img.media_type};base64,${img.data}`;
+                pic.alt = 'What the device saw';
+                pic.style.cssText = 'max-width:100%;border-radius:6px;border:1px solid var(--border)';
+                return pic;
+            }));
+            setTimeout(tellNow, 800);          // a lamp on a slow radio says its new state a moment later
+        } catch (err) { out.textContent = 'FAILED\n' + err.message; }
+        btn.disabled = false;
+    });
+    // only the ticks the user changed: a thing this window did not touch is never written
+    return () => Object.fromEntries(things.map(t => [t.id, rowOf(t.id)?.querySelector('.dev-thing-may').checked])
+        .filter(([id, may]) => may !== undefined && may === things.find(t => t.id === id).locked));
+}
+
 // The ways this device is reached. The first that can do a thing does it, so
 // the order is the user's. Every change here is saved at once.
 const addable = device => {
@@ -705,6 +798,7 @@ async function openDevice(id, tab, opts = {}) {
     const body = modal.element.querySelector('#dev-modal');
     let schema = [];
     let bindings = [];
+    let readThings = null;    // a hub's Things tab: the ticks the user changed
     let root = null;      // a fresh element per draw, so old listeners die with it
 
     // Each list poll brings this device's state too: the window shows it without asking.
@@ -729,7 +823,10 @@ async function openDevice(id, tab, opts = {}) {
             slots.push({ tab: 'Connections', mount: el => mountConnections(el, device, after) });
         for (const b of bindings) slots.push({ tab: b.tab, mount: el => mountBindings(el, b) });
         for (const cap of device.capabilities || [])
-            slots.push({ tab: tabFor(cap), mount: el => mountActions(el, device, cap) });
+            if (!cap.things) slots.push({ tab: tabFor(cap), mount: el => mountActions(el, device, cap) });
+        readThings = null;
+        if ((device.capabilities || []).some(c => c.things))
+            slots.push({ tab: 'Things', mount: el => { readThings = mountThings(el, device); } });
         root = document.createElement('div');
         body.replaceChildren(root);
         renderSettingsForm(root, schema, built.values, { slots });
@@ -770,7 +867,7 @@ async function openDevice(id, tab, opts = {}) {
         try {
             const res = await call('PUT', `/${encodeURIComponent(device.id)}`, {
                 label: form['device.label'], location: form['device.location'] || '',
-                enabled: form['device.enabled'], parts, locked,
+                enabled: form['device.enabled'], parts, locked, allow: readThings?.(),
             }, 90000);          // a wake word goes to the board last and it restarts on it: longer than a plain save
             showToast(res.warning || 'Saved', res.warning ? 'warning' : 'success');
             const fresh = (await call('GET', `/${encodeURIComponent(device.id)}`)).device;

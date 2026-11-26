@@ -183,25 +183,12 @@ Pixels only reach the model if the provider is known to accept them — tick **V
 | `device_status` | devices.py | One device right now: online/offline, readings, abilities |
 | `device_action` | devices.py | Use a device; `device_action(device)` alone lists its actions |
 
-Satellites, IP cameras, KDE Connect phones and other device plugins act through these three — see [DEVICES.md](DEVICES.md).
+Satellites, IP cameras, KDE Connect phones, a Home Assistant and other device plugins act through these three — see [DEVICES.md](DEVICES.md). The thirteen `ha_*` tools are gone since Home Assistant 2.0.0: `device_action("home", "pole-lamp", "set", "40")`.
 
 ### Integrations
 
 | Tool | Module | What it does |
 |------|--------|--------------|
-| `ha_list_scenes_and_scripts` | homeassistant.py | List HA scenes/scripts |
-| `ha_activate` | homeassistant.py | Run scene or script |
-| `ha_list_areas` | homeassistant.py | List home areas |
-| `ha_area_light` | homeassistant.py | Set area brightness |
-| `ha_area_color` | homeassistant.py | Set area RGB color |
-| `ha_get_thermostat` | homeassistant.py | Get thermostat reading |
-| `ha_set_thermostat` | homeassistant.py | Set target temperature |
-| `ha_list_lights_and_switches` | homeassistant.py | List controllable devices |
-| `ha_set_light` | homeassistant.py | Control specific light |
-| `ha_set_switch` | homeassistant.py | Toggle switch on/off |
-| `ha_notify` | homeassistant.py | Send phone notification |
-| `ha_house_status` | homeassistant.py | Home status snapshot |
-| `ha_get_camera_image` | homeassistant.py | Grab a camera snapshot |
 | `get_inbox` | email_tool.py | List a folder (inbox, sent, drafts, archive, spam, trash) |
 | `read_email` | email_tool.py | Read email by id, with attachments |
 | `search_emails` | email_tool.py | Search the mailbox |
@@ -339,7 +326,7 @@ TOOL MODULES:
 - sapphire-store: store_browse, store_install(slug) — installs AND enables immediately. claude-code: activate_plugin
 - coding-harness: read_file, write_file, edit_file, list_files, search_files, run_command (paths relative to its working directory)
 - blender: blender_scene, blender_code, blender_see. github: github_repo, github_file, github_issue, github_search
-- homeassistant.py: ha_list_scenes_and_scripts, ha_activate, ha_list_areas, ha_area_light, ha_area_color, ha_get_thermostat, ha_set_thermostat, ha_list_lights_and_switches, ha_set_light, ha_set_switch, ha_notify, ha_house_status, ha_get_camera_image
+- homeassistant: no tools of its own. Its house is a device: device_action(home) lists every thing, device_action(home, <thing or room>, <action>, <value>) runs one
 - clock plugin: get_time, set_timer, set_stopwatch, set_alarm
 - agents.py (core): agent_list, agent_peek, agent_spawn, agent_action — kinds come from plugins (`llm` from the agents plugin, `claude_code` from the claude-code plugin)
 - schedule_tool.py: schedule_task

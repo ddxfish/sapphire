@@ -18,14 +18,18 @@ export async function fetchDevices() {
     } catch { return []; }
 }
 
-async function fetchCapabilities(deviceId) {
+async function fetchDevice(deviceId) {
     try {
         const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`);
-        if (!r.ok) return [];
-        const data = await r.json();
-        return (data.device?.capabilities || []).filter(c => !c.error);
-    } catch { return []; }
+        if (!r.ok) return {};
+        return (await r.json()).device || {};
+    } catch { return {}; }
 }
+
+// A hub (a Home Assistant) has things behind it: the Capability box then names
+// one of its things, or a room, which means the lights in it (engine.aim).
+const ROOM_KIND = 'light';
+const callName = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 
 /**
  * @param {Object} t - task (t.device_action = {device, capability, action, value} or empty)
@@ -77,9 +81,16 @@ export function wireDeviceAction(modal, t) {
     const valInput = modal.querySelector('#ed-dev-value');
     const help = modal.querySelector('#ed-dev-help');
     let caps = [];
+    let things = [];
+    // the capability whose actions the pick takes: its own, its thing's kind, or a room's lights
+    const capOf = () => {
+        const kind = things.find(t => t.id === capSel.value)?.kind
+            || (things.some(t => t.room && callName(t.room) === capSel.value) ? ROOM_KIND : capSel.value);
+        return caps.find(c => c.capability === kind);
+    };
 
     const fillActions = (want) => {
-        const cap = caps.find(c => c.capability === capSel.value);
+        const cap = capOf();
         const actions = Object.entries(cap?.actions || {}).filter(([, a]) => !a.danger);
         actSel.innerHTML = '<option value="">—</option>' + actions.map(([name]) =>
             `<option value="${_esc(name)}" ${want === name ? 'selected' : ''}>${_esc(name)}</option>`).join('');
@@ -87,7 +98,7 @@ export function wireDeviceAction(modal, t) {
         showAction();
     };
     const showAction = () => {
-        const cap = caps.find(c => c.capability === capSel.value);
+        const cap = capOf();
         const a = cap?.actions?.[actSel.value];
         if (!a) { help.textContent = cap?.help || ''; valField.style.display = 'none'; return; }
         help.textContent = a.help || '';
@@ -96,9 +107,17 @@ export function wireDeviceAction(modal, t) {
         valField.style.display = hint ? '' : 'none';
     };
     const fillCaps = async (wantCap, wantAct) => {
-        caps = devSel.value ? await fetchCapabilities(devSel.value) : [];
-        capSel.innerHTML = '<option value="">—</option>' + caps.map(c =>
-            `<option value="${_esc(c.capability)}" ${wantCap === c.capability ? 'selected' : ''}>${_esc(c.label || c.capability)}</option>`).join('');
+        const device = devSel.value ? await fetchDevice(devSel.value) : {};
+        caps = (device.capabilities || []).filter(c => !c.error);
+        things = device.things || [];
+        wantCap = things.find(t => t.call === wantCap)?.id || wantCap;      // saved by the name she types: the same thing
+        const opt = (value, label) => `<option value="${_esc(value)}" ${wantCap === value ? 'selected' : ''}>${_esc(label)}</option>`;
+        const rooms = [...new Set(things.filter(t => t.kind === ROOM_KIND && t.room).map(t => t.room))].sort();
+        capSel.innerHTML = '<option value="">—</option>'
+            + caps.filter(c => !c.things).map(c => opt(c.capability, c.label || c.capability)).join('')
+            + (rooms.length ? `<optgroup label="Rooms: the ${ROOM_KIND}s in one">${rooms.map(r => opt(callName(r), r)).join('')}</optgroup>` : '')
+            + caps.filter(c => c.things).map(c => `<optgroup label="${_esc(c.label || c.capability)}">${
+                things.filter(t => t.kind === c.capability).map(t => opt(t.id, t.name + (t.room ? ' - ' + t.room : ''))).join('')}</optgroup>`).join('');
         capSel.disabled = !caps.length;
         if (devSel.value && !caps.length) help.textContent = 'This device describes nothing to run yet.';
         fillActions(wantAct);

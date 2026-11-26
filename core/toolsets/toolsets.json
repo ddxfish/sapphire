@@ -83,18 +83,9 @@
     "emoji": "🏠",
     "functions": [
       "ask_user",
-      "ha_list_scenes_and_scripts",
-      "ha_activate",
-      "ha_list_areas",
-      "ha_area_light",
-      "ha_area_color",
-      "ha_get_thermostat",
-      "ha_set_thermostat",
-      "ha_list_lights_and_switches",
-      "ha_set_light",
-      "ha_set_switch",
-      "ha_notify",
-      "ha_house_status",
+      "device_list",
+      "device_status",
+      "device_action",
       "library",
       "read_document"
     ]

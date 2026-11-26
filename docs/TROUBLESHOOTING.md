@@ -482,30 +482,25 @@ Full proxy triage lives in NETWORK.md's Quick Troubleshooting. Fail-closed remin
 
 ## Home Assistant Issues
 
-**Connection test failing**
-- Verify URL includes port (e.g., `http://192.168.1.50:8123`)
-- Check Home Assistant is running and accessible from this machine
-- Try the URL in a browser first
+A Home Assistant is a device (System > Devices). Its Status tab says what is wrong in words.
 
-**"401 Unauthorized" error, or a "too short" token warning**
-- Token is invalid, expired, or cut off (HA tokens are ~180+ characters)
-- Create a new Long-Lived Access Token in your HA profile and copy the whole string
+**The device is offline**
+- The address needs its port (e.g., `http://192.168.1.50:8123`). Try it in a browser on this machine
+- "refused the access token": make a new Long-Lived Access Token in your HA profile and enter the whole string on the Status tab
 
-**Entity not found**
-- Check exact spelling (entity_id or friendly name)
-- Entity may be blacklisted - check blacklist patterns
-- Use `ha_list_lights_and_switches` to see available entities
+**The old `ha_*` tools are gone**
+- Since 2.0.0 she uses `device_action`. The house you had set up became the device `home` at the first start, once Home Assistant answered. If it did not, add it: + Add Device > Home
+- A toolset of your own that listed `ha_*` tools needs `device_list`, `device_status` and `device_action` in their place
 
-**Notifications not sending**
-- Find your service in HA: Developer Tools → Actions → search "notify"
-- Enter just the service name without "notify." prefix
-- Example: `mobile_app_pixel_7` not `notify.mobile_app_pixel_7`
-- Make sure HA companion app is installed on your phone
+**She says a thing is locked**
+- Tick it on the device's Things tab and Save. Locks, covers, alarms, cameras and phones start unticked
 
-**HA tools not available**
-- Add Home Assistant functions to your active toolset
-- Check Settings → Plugins → Home Assistant is configured
-- Test connection before trying to use tools
+**"is not answering Home Assistant right now"**
+- Home Assistant itself cannot reach that thing (unplugged, out of range). It shows as unavailable in Home Assistant too
+
+**A thing is missing, or has an old name**
+- The list is asked again every two minutes, and at once after Save
+- Hidden things, and readings like power and energy, are left out on purpose
 
 ## Performance Issues
 

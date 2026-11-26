@@ -30,6 +30,14 @@
 # driver's status() answered 'takes', names like "screen.flip"). A config
 # field that names one (`takes`) is shown only on a device that takes it. A
 # part without the key takes everything: a device that never said.
+# A part of a HUB (its driver's manifest says "things": true) may hold
+# "things": what the hub said is behind it (its driver's status() answered
+# 'things'): [{"id", "name", "kind", "room"}]. id is the driver's own handle
+# and never changes. kind is one of the driver's capabilities, and a thing
+# takes that kind's actions. She names a thing in the capability argument,
+# by a name made here from its own (things()), or a room, which means the
+# lights in it. "allow" holds the user's own ticks, {thing id: bool}: may
+# she use it. A thing without a tick follows its kind (locked_by_default).
 # The file kept its place when the engine moved into core, so no device list
 # ever had to be migrated. Secrets never sit in a row. They live in
 # secret_store.py under "<driver>.<field>".
@@ -55,6 +63,9 @@ MAX_PICTURE = 12 * 1024 * 1024       # characters of base64 in one picture
 PICTURE_TYPES = ('image/jpeg', 'image/png', 'image/webp')
 LOCKABLE = ('power', 'camera', 'screen', 'mic', 'storage', 'ptz', 'sms', 'wake')    # these carry a "Sapphire may use this" switch (wake: its install restarts the board, 2026-10-19)
 MAX_FOUND = 64           # things one driver may report as found
+MAX_THINGS = 400         # things one hub may have behind it
+ROOM_KIND = 'light'      # a room named in place of a thing means the things of this kind in it
+AWAY = 'unavailable'     # what a hub's driver says of a thing it cannot reach right now (states())
 ALL = 'all'              # the composite device: her voice on every device that can speak
 RESERVED = ('found', ALL, 'firmware', 'provision', 'here', 'flash')   # names a device may not have: the routes and `all` use them
 CLEAR = '__CLEAR__'
@@ -623,6 +634,86 @@ def _learn_takes(row, part, said):
     _write(step)
 
 
+def _learn_things(row, part, spec, said):
+    """Keep what a hub said is behind it. A thing of a kind its driver does
+    not know is left out. Written only when the list changed."""
+    if not spec.get('things') or not isinstance(said, (list, tuple)):
+        return
+    kept, seen = [], set()
+    for t in said:
+        ident = str(t.get('id') or '').strip()[:120] if isinstance(t, dict) else ''
+        if not ident or ident in seen or _slug(t.get('kind')) not in spec['capabilities']:
+            continue
+        seen.add(ident)
+        kept.append({'id': ident, 'name': ' '.join(str(t.get('name') or ident).split())[:60],
+                     'kind': _slug(t.get('kind')), 'room': _place(t.get('room'))[:40]})
+        if len(kept) >= MAX_THINGS:         # the driver names what matters first
+            break
+    kept.sort(key=lambda t: (t['kind'], t['name'].lower(), t['id']))
+    if kept == part.get('things'):
+        return
+    part['things'] = kept
+
+    def step(table):
+        mine = _part(table.get(row['id']) or {}, part['driver'])
+        if mine is not None:
+            mine['things'] = kept
+    _write(step)
+    logger.info(f"[DEVICES] {row['id']}: it has {len(kept)} thing(s) behind it")
+
+
+def _call_name(text):
+    """The name she types for a thing or a room: 'Pole Lamp' -> 'pole-lamp'."""
+    return re.sub(r'[^a-z0-9]+', '-', _slug(text)).strip('-')[:60]      # a name's whole length: a cut made twins of 'urn:uuid:... MainStream' and '... Motion' (2026-11-26)
+
+
+def things(row):
+    """Everything behind this device's hubs: [{'id', 'name', 'kind', 'room',
+    'call', 'driver', 'locked'}]. call is what she types, made from the name.
+    A name used twice, or one that is also a room or a kind, gets its kind
+    added, then a number. locked = she may not use it: the user's tick, or
+    with none, what its kind starts as."""
+    out, kinds = [], set()
+    for part in row.get('parts', []):
+        spec = _registry().get_driver(part.get('driver')) or {}
+        if not spec.get('things'):
+            continue
+        kinds |= set(spec['capabilities'])
+        allow = part.get('allow') if isinstance(part.get('allow'), dict) else {}
+        shut = spec.get('locked_by_default') or []
+        for t in part.get('things') or []:
+            out.append(dict(t, driver=part['driver'], locked=not allow.get(t['id'], t['kind'] not in shut)))
+    names = [_call_name(t['name']) or _call_name(t['id']) or 'thing' for t in out]
+    taken = kinds | {_call_name(t['room']) for t in out if t['room']}
+    used = set()
+    for t, name in zip(out, names):
+        call = f"{name}-{t['kind']}" if names.count(name) > 1 or name in taken else name
+        base, n = call, 2
+        while call in used or call in taken:
+            call, n = f"{base}-{n}", n + 1
+        used.add(call)
+        t['call'] = call
+    return out
+
+
+def aim(row, name):
+    """What she named in the capability argument of a hub: {'kind', 'things',
+    'room'}, or None. A thing by the name things() gave it or by its id; a
+    room, which is the ROOM_KIND things in it."""
+    every = things(row)
+    want, raw = _call_name(name), str(name or '').strip().lower()
+    if not every or not want:
+        return None
+    one = next((t for t in every if t['call'] == want), None) or next((t for t in every if t['id'].lower() == raw), None)
+    if one:
+        return {'kind': one['kind'], 'things': [one], 'room': ''}
+    room = next((t['room'] for t in every if _call_name(t['room']) == want), '')
+    if room:
+        return {'kind': ROOM_KIND, 'room': room,
+                'things': [t for t in every if t['room'] == room and t['kind'] == ROOM_KIND]}
+    return None
+
+
 def taken(field, part):
     """False for a field that names something (`takes`) this device said it does not take."""
     takes = part.get('takes')
@@ -706,16 +797,21 @@ def add(device_id, label, driver_id, config=None, location=''):
 
 
 def update(device_id, label=None, enabled=None, parts=None, new_id=None, location=None,
-           locked=None, order=None, poke=True):
+           locked=None, order=None, poke=True, allow=None):
     """Change a device. parts: {driver: submitted config}. order: its
     connections' drivers, first to last (the first that has a capability is
     the one that does it). locked: what she
     may not use. A map {capability: bool} changes only the capabilities it
     names, so a switch the page did not show is never touched (a device that
     was off showed none, and saving it opened every lock, 2026-09-28). A list
-    is the whole truth. Returns (row, failed secret fields)."""
+    is the whole truth. allow: a hub's things she may use, {thing id: bool};
+    only the things it names change. Returns (row, failed secret fields)."""
     row = get(device_id)
     device_id = row['id']
+    for ident, may in (allow.items() if isinstance(allow, dict) else ()):
+        for part in row['parts']:
+            if any(t['id'] == ident for t in part.get('things') or []):
+                part['allow'] = dict(part.get('allow') or {}, **{ident: bool(may)})
     if isinstance(locked, dict):
         names = set(_shut(row))
         for name, shut in locked.items():
@@ -1077,6 +1173,7 @@ def public(row):
                       'unreadable': unreadable})
     return {'id': row['id'], 'label': row.get('label', row['id']),
             'location': _place(row.get('location')), 'locked': locked(row),
+            'things': things(row),
             'enabled': bool(row.get('enabled', True)), 'parts': parts,
             'fingerprint': str(row.get('fingerprint') or '')}      # the chip's MAC, from the flasher
 
@@ -1104,6 +1201,7 @@ def describe(row):
                         'driver': part['driver'], 'actions': {}, 'error': f"driver error: {e}",
                         'lockable': False, 'locked': False})
             continue
+        hub = bool(spec.get('things'))     # its kinds are not locked whole: each thing has a tick of its own
         for cap in capabilities(part, spec):
             if not isinstance(told.get(cap), dict):
                 continue            # this device does not have it (self-describing drivers)
@@ -1131,7 +1229,8 @@ def describe(row):
                         # 'Status' = with the device's health (a phone's pair and unpair)
                         'tab': str(info.get('tab') or '')[:40],
                         'driver': part['driver'], 'actions': actions, 'error': '',
-                        'lockable': cap in LOCKABLE, 'locked': cap in shut})
+                        'things': hub,
+                        'lockable': cap in LOCKABLE and not hub, 'locked': cap in shut and not hub})
     return out
 
 
@@ -1170,6 +1269,7 @@ def _probe(row):
             entry['online'] = bool(told.get('online'))
             _learn(row, part, spec, told.get('has'))
             _learn_takes(row, part, told.get('takes'))
+            _learn_things(row, part, spec, told.get('things'))
             entry['detail'] = secrets.scrub(str(told.get('detail') or ''))[:300]
             readings = told.get('readings')
             if isinstance(readings, dict):
@@ -1360,6 +1460,105 @@ def _screen(row, caps, only=None):
     return text if only or len(text) <= SCREEN else build(MOST)
 
 
+# --- a hub: what she reads -----------------------------------------------------
+
+def doing(row):
+    """What a hub's things are doing right now, asked of its driver
+    (states(device, config, secrets) -> {thing id: words}). {} from a driver
+    that cannot say, and for a hub believed offline: nothing waits on it."""
+    view = _health().view(row['id'])
+    if view['ts'] and not view['online']:
+        return {}
+    out = {}
+    for part in row.get('parts', []):
+        if not part.get('things'):
+            continue
+        try:
+            mod, _ = _driver(part['driver'], part.get('plugin', ''))
+            if not callable(getattr(mod, 'states', None)):
+                continue
+            secrets = _part_secrets(row['id'], part['driver'])
+            told = mod.states(_brief(row), dict(part.get('config') or {}), secrets)
+            for k, v in (told.items() if isinstance(told, dict) else ()):
+                out[str(k)] = secrets.scrub(' '.join(str(v).split()))[:60]
+        except Exception as e:
+            logger.warning(f"[DEVICES] {row['id']}: {part['driver']} could not say how its things are: {e}")
+    return out
+
+
+def _run_one(row, t, c):
+    """One example call for a thing: an action with an example first."""
+    acts = [(n, a) for n, a in c['actions'].items() if _hers(a)]
+    n, a = next(((n, a) for n, a in acts if a['example']), acts[0] if acts else ('', {}))
+    return _call(*([row['id'], t['call']] + ([n] if n else []) + ([a['example']] if a.get('example') else [])))
+
+
+def _house(row, caps, room='', only=None):
+    """What she reads for a hub. device_action(hub) is all of it: each kind
+    with its actions, then its things by room, each with what it is doing
+    now. A room named is that room; a kind named (only) is that kind, with
+    what each action does. Kept under SCREEN characters: first without what
+    the things are doing, then rooms as a count (a room is one more call)."""
+    st = _health().view(row['id'])
+    every = [t for t in things(row)
+             if (not room or t['room'] == room) and (not only or t['kind'] == only['capability'])]
+    mine, shut = [t for t in every if not t['locked']], [t for t in every if t['locked']]
+    now = doing(row) if mine else {}
+    away = [t for t in mine if now.get(t['id']) == AWAY]       # said once at the end, not in every room
+    kinds = [c for c in ([only] if only else caps) if c.get('things')]
+    head = f"{_head(row, st)}, " + (f"checked {_age(st['ts'])}" if st['ts'] else 'not checked yet')
+    readings = [f"{k} {v}" for p in st['parts'] for k, v in p['readings'].items()][:READINGS]
+    pick = next(((t, c) for c in kinds for t in mine if t['kind'] == c['capability'] and c['actions']), None)
+    # how a hub is used, said FIRST: its kinds below look like capabilities, and are not what she names
+    how = (f"Name a thing where a capability would stand: {_run_one(row, *pick)}."
+           + ('' if room else f" A room's name there means its {ROOM_KIND}s.")) if pick else ''
+
+    def build(live, names):
+        out = [head, '  ' + ' · '.join(readings) if readings else '', how]
+        if room:
+            out.append(f"{_call_name(room)}: the room {room}. With an action, its {ROOM_KIND}s.")
+        for c in kinds:
+            here = [t for t in mine if t['kind'] == c['capability'] and not (live and t in away)]
+            if not here and not only:
+                continue                    # nothing of this kind she can use right now: not taught
+            verbs = ', '.join(f"{n} {a['values']}".strip() for n, a in c['actions'].items() if _hers(a))
+            out.append(_block(row, c, MAX_ROWS + 1) if only else f"Each {c['capability']} takes {verbs}:")
+            places = sorted({t['room'] for t in here}, key=lambda r: (not r, r.lower()))
+            for place in places:
+                group = [t for t in here if t['room'] == place]
+                said = ', '.join(t['call'] + (f"={now[t['id']]}" if live and t['id'] in now else '') for t in group)
+                if not names and place and not room:
+                    said = f"{len(group)}"
+                elif not names and len(group) > 30:        # in no room: the first few, and where the rest are
+                    said = (', '.join(t['call'] for t in group[:30])
+                            + f" ... {len(group) - 30} more: {_call(row['id'], c['capability'])}")
+                out.append('  ' + (f"{_call_name(place)}: " if place and not room else '') + said)
+        out += [_block(row, c, MOST) for c in caps if not c.get('things') and not only and not room]
+        if not every:
+            out.append('  (nothing here yet)')
+        if live and away:
+            out.append(f"Not answering now: {', '.join(t['call'] for t in away)}")
+        if shut:
+            out.append(f"Locked ({LOCKED_NOTE}): {', '.join(t['call'] for t in shut)}")
+        if not names:
+            out.append(f"A room's things by name: {_call(row['id'], '<room>')}")
+        return '\n'.join(x for x in out + [_down_note(st)] if x)
+    for live, names in ((True, True), (False, True), (False, False)):
+        text = build(live, names)
+        if len(text) <= SCREEN or room:
+            break
+    return text
+
+
+def _thing(row, cap, t):
+    """One thing of a hub: what it is, what it is doing now, what it takes."""
+    now = doing(row).get(t['id'])
+    what = f"{t['call']}: {t['name']}, a {t['kind']}" + (f" in {t['room']}" if t['room'] else '') + f" ({row['id']})"
+    lock = f"Locked: {LOCKED_NOTE}." if t['locked'] else ''
+    return '\n'.join(x for x in (what + (f". Now: {now}" if now else ''), lock, _block(row, cap, MAX_ROWS + 1),
+                                 '' if t['locked'] else f"Run one: {_run_one(row, t, cap)}") if x)
+
+
 def _result(told, secrets):
     """What an action answered: text, or {'text', 'images'} when it took
     pictures. The text is scrubbed of secrets. Pictures are checked, never
@@ -1523,22 +1722,49 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
     except DeviceError as e:
         return str(e), False
     caps = describe(row)
+    hub = any(c.get('things') for c in caps)      # things sit behind it: she names one where a capability would stand
 
     cap_name = _slug(capability)
     if not cap_name:
-        return _screen(row, caps), True
+        return (_house(row, caps) if hub else _screen(row, caps)), True
     cap = next((c for c in caps if c['capability'] == cap_name), None)
+    target = None
+    if not cap and hub:
+        target = aim(row, capability)
+        cap = target and next((c for c in caps if c.get('things') and c['capability'] == target['kind']), None)
     if not cap:
-        return f"'{row['id']}' has no '{capability}'.\n{_screen(row, caps)}", False
+        near = [t['call'] for t in things(row) if _call_name(capability) in t['call']][:8] if hub else []
+        if near:
+            return f"'{row['id']}' has no '{capability}'. Close: {', '.join(near)}.", False
+        return f"'{row['id']}' has no '{capability}'.\n{_house(row, caps) if hub else _screen(row, caps)}", False
     if cap['error']:
         return f"{row['id']} / {cap_name}: {cap['error']}", False
     if cap['locked'] and not owner:
         return f"'{cap_name}' on '{row['id']}' is locked: {LOCKED_NOTE}.", False
 
     act = _slug(action)
-    if not act:
+    brief = _brief(row)
+    if cap.get('things'):
+        if not target:                      # a kind named, not a thing: nothing to act on
+            said = _house(row, caps, only=cap)
+            return (f"Name the {cap_name} itself where '{cap_name}' stands.\n{said}", False) if act else (said, True)
+        named = _call_name(target['room']) or target['things'][0]['call']
+        if not act:
+            return (_house(row, caps, room=target['room']) if target['room']
+                    else _thing(row, cap, target['things'][0])), True
+        if act not in cap['actions']:
+            return f"A {cap['capability']} has no action '{action}'.\n{_block(row, cap, MAX_ROWS + 1)}", False
+        usable = [t for t in target['things'] if owner or not t['locked']]
+        if not target['things']:
+            return f"There is no {ROOM_KIND} in {target['room']}.\n{_house(row, caps, room=target['room'])}", False
+        if not usable:
+            return f"'{named}' on '{row['id']}' is locked: {LOCKED_NOTE}.", False
+        cap_name = cap['capability']
+        brief = dict(brief, room=target['room'],
+                     things=[{k: t[k] for k in ('id', 'name', 'kind', 'room', 'call')} for t in usable])
+    elif not act:
         return _screen(row, caps, only=cap), True
-    if act not in cap['actions']:
+    elif act not in cap['actions']:
         return f"'{cap_name}' has no action '{action}'.\n{_screen(row, caps, only=cap)}", False
     if not _hers(cap['actions'][act]) and not owner:
         return f"'{act}' on '{row['id']}' is for the person at {PAGE} only.", False
@@ -1547,7 +1773,7 @@ def run(device_id=None, capability=None, action=None, value=None, owner=False):
     try:
         mod, spec = _driver(part['driver'], part.get('plugin', ''))
         secrets = _part_secrets(row['id'], part['driver'])
-        told, ok = mod.run(_brief(row), cap_name, act, '' if value is None else str(value),
+        told, ok = mod.run(brief, cap_name, act, '' if value is None else str(value),
                            dict(part.get('config') or {}), secrets,
                            _call_tool_for(spec['plugin_name'], spec.get('uses_tools') or ()))
         if ok and owner and cap_name in ('firmware', 'power', 'storage', 'wake'):

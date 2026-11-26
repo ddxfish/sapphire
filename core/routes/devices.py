@@ -96,7 +96,7 @@ def update_device(device_id, body):
     row, failed = e.update(device_id, label=body.get("label"), enabled=body.get("enabled"),
                            parts=body.get("parts"), new_id=body.get("new_id"),
                            location=body.get("location"), locked=body.get("locked"),
-                           order=body.get("order"), poke=False)
+                           order=body.get("order"), poke=False, allow=body.get("allow"))
     problems = e.tell(row) if row.get("enabled", True) else []
     e.look_soon(row["id"])             # after the telling, never before (a probe mid-save sent the wake word under the save)
     return _saved(row, failed, problems)
@@ -216,6 +216,14 @@ def flash_call(name, *args):
         return getattr(f, name)(*args)
     except f.FlashError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def things_now(device_id):
+    """A hub's things for its tab on the page, each with what it is doing now."""
+    e = _engine()
+    row = e.get(device_id)
+    now = e.doing(row) if row.get("enabled", True) else {}
+    return {"things": [dict(t, now=now.get(t["id"], "")) for t in e.things(row)]}
 
 
 def run_action(device_id, body):
@@ -435,6 +443,12 @@ async def devices_disconnect(device_id: str, driver_id: str, request: Request, _
 async def devices_test(device_id: str, request: Request, _=Depends(require_login)):
     _open(request, write=True)
     return await _do(test_device, device_id)
+
+
+@router.get("/api/devices/{device_id}/things")
+async def devices_things(device_id: str, request: Request, _=Depends(require_login)):
+    _open(request)
+    return await _do(things_now, device_id)
 
 
 @router.post("/api/devices/{device_id}/run")

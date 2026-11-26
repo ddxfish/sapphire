@@ -17,6 +17,9 @@
 #                  in the device row.
 #   presence       true = its things come and go, and the driver has tend()
 #                  (core/devices/presence.py keeps it told)
+#   things         true = a HUB: many things sit behind one device (a home's
+#                  lights and switches). Its capabilities are the KINDS of
+#                  thing; its status() names the things (engine.things)
 
 import json
 import logging
@@ -113,6 +116,7 @@ def register_driver(driver_id, spec, plugin_name, builtin=False):
                 'config_schema': schema,
                 'locked_by_default': locked,
                 'presence': spec.get('presence') is True,
+                'things': spec.get('things') is True,
                 # its device calls Sapphire with its own key: the address it
                 # calls from becomes its `url` (engine.learned)
                 'learns_address': spec.get('learns_address') is True,

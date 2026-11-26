@@ -322,7 +322,7 @@ curl -H "x-webhook-secret: YOUR_SECRET_HERE" \
 Path: ha-motion-detected
 Method: POST
 Message: "Motion was detected. Check the camera and tell me what you see."
-Toolset: homeassistant
+Toolset: smarthome
 ```
 
 ---

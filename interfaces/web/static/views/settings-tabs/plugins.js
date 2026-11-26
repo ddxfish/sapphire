@@ -64,7 +64,7 @@ const DANGER_PLUGINS = {
             'The AI can control lights, switches, thermostats, and scenes',
             'The AI can read presence data (who is home)',
             'The AI can trigger HA scripts which may have broad permissions',
-            'Locks and covers are blocked by default — review your blacklist',
+            'Locks, covers, alarms, cameras and phones start locked. Each thing has its own switch in Devices',
         ],
         buttonLabel: 'Enable Home Assistant',
     },

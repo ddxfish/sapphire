@@ -473,6 +473,9 @@ class ContinuityScheduler:
             raise ValueError(f"'{row['id']}' is turned off in Settings > Devices")
         caps = engine.describe(row)
         cap = next((c for c in caps if c["capability"] == clean["capability"]), None)
+        if not cap or cap.get("things"):            # a hub: the capability names one of its things, or a room
+            target = engine.aim(row, clean["capability"])
+            cap = target and next((c for c in caps if c["capability"] == target["kind"]), None)
         if not cap:
             raise ValueError(f"'{clean['device']}' has no '{clean['capability']}'")
         if cap.get("error"):

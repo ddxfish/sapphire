@@ -4,7 +4,7 @@ Teach Sapphire to use a machine or a gadget. **Devices** is part of core: it own
 
 Anything can be a device: a thermostat, a television, a robot arm. If your code can reach it, Sapphire can use it, and it gets the same page, the same three tools and the same help as every built-in device.
 
-Reference drivers: **`core/plugins/ssh`** (stored logins, user-written commands), the MIDI plugin (two device types, every action runs one of the plugin's own tools; the synth it talks to is a profile, not code), and the three that ship inside core, `core/devices/drivers/satellite.py`, `computer.py` and `sapphire.py` (another Sapphire).
+Reference drivers: **`core/plugins/ssh`** (stored logins, user-written commands), `core/plugins/homeassistant` (a hub: one device, a house of things behind it), the MIDI plugin (two device types, every action runs one of the plugin's own tools; the synth it talks to is a profile, not code), and the three that ship inside core, `core/devices/drivers/satellite.py`, `computer.py` and `sapphire.py` (another Sapphire).
 
 ## What Sapphire sees
 
@@ -165,6 +165,7 @@ restart is needed.
 | `config_schema` | no | Per-device fields, in the [settings field shape](settings.md#field-schema). Up to 64. Two keys only device fields have: `was` (the field's old key, so a renamed field carries its saved value over) and `default_unless` (`{"takes": "<capability>", "value": ...}`: a different default for a board that has that capability) |
 | `locked_by_default` | no | Capabilities Sapphire may not use until the user allows it. See Power below |
 | `presence` | no | `true`: its things come and go, and the driver is kept told. See Things that come and go |
+| `things` | no | `true`: a hub. Many things sit behind one device, and she names one where a capability would stand. See A hub |
 | `learns_address` | no | `true`: the device calls Sapphire with its own key, and the address it calls from becomes its `url` (see SATELLITE-PROTOCOL.md, "Its own address is learned") |
 
 `devices` is a list. One plugin may bring several device types, each with its
@@ -617,6 +618,81 @@ and answers "The board is not plugged in." when there is none.
 - **Start nothing at import.** A thread that starts when your module loads
   runs in tests, and runs when no device exists. `tend` is where things start.
 
+## A hub: many things behind one device
+
+A Home Assistant, a light bridge, a radio gateway: one address, and dozens of
+things behind it. Making each a device would bury the device list. A **hub**
+is one device, and its things are named in the call:
+
+```
+device_action("home")                              the whole house
+device_action("home", "pole-lamp", "set", "40")    a thing stands where the capability would
+device_action("home", "living-room", "set", "+20") a room is its lights
+```
+
+Reference driver: `core/plugins/homeassistant`.
+
+**The manifest** says `"things": true`. Its `capabilities` are the KINDS of
+thing (`light`, `switch`, `lock`), and `describe()` gives each kind its
+actions, as for any capability. `locked_by_default` names the kinds whose
+things start as not hers.
+
+**`status()` names the things:**
+
+```python
+return {"online": True, "detail": "...", "has": ["light", "switch"],
+        "things": [{"id": "light.pole", "name": "Pole Lamp", "kind": "light", "room": "Living Room"}]}
+```
+
+| Key | What it is |
+|---|---|
+| `id` | Your own handle for the thing. It must never change: the user's ticks and scheduled tasks are kept by it |
+| `name` | What the user called it. Core makes the name she types from it (`pole-lamp`) |
+| `kind` | One of your capabilities. The thing takes that kind's actions |
+| `room` | Where it is, or empty |
+
+Core keeps the list with the device (up to 400, so name what matters first),
+also while the hub is offline. A status that names no `things` changes
+nothing. Listing can be slow: keep the list a couple of minutes and answer
+from that, as the reference driver does.
+
+**`run()` is handed the things** in `device["things"]`: one for a thing she
+named, several for a room (`device["room"]` is its name then). `capability`
+is their kind. A room means the things of kind `light` in it. Only things she
+may use arrive.
+
+```python
+def run(device, capability, action, value, config, secrets, call_tool):
+    ids = [t["id"] for t in device["things"]]
+```
+
+**`states(device, config, secrets)`**, optional, answers `{thing id: "on 60%"}`:
+what each thing is doing right now, in a few words. Core asks it when she
+looks at the hub, a room or a thing, and for the page. `"unavailable"` is the
+word for a thing the hub cannot reach: core lists those once, at the end.
+
+### What core does for a hub
+
+- **Names.** `pole-lamp` from `Pole Lamp`. A name used twice, or one that is
+  also a room or a kind, gets its kind added (`hall-light`, `hall-switch`).
+  She may also use the thing's `id`.
+- **Screens.** The hub: each kind with its actions, then its things by room
+  with what each is doing. A room, a kind, or one thing when she names it. A
+  house too big for one screen is told as rooms with a count.
+- **One tab.** The device window has a Things tab in place of a tab per
+  capability: every thing by room, a Try, and a tick for "Sapphire may use
+  this". The kinds carry no switch of their own.
+- **Ticks.** Kept per thing id. A thing never ticked follows its kind. An
+  unticked thing is still named to her, as locked.
+- **Tasks.** A scheduled Device task may name a thing or a room.
+
+### Rules for a hub
+
+- **Say when nothing happened.** A hub often accepts an order for a thing it
+  cannot reach. Look, and answer with a failure, never "sent".
+- **A timeout is not a success.** Say that it may still have happened, and
+  that she should look before sending it again.
+
 ## Drivers that ship inside core
 
 Three drivers live in `core/devices/drivers/` because every install should have
@@ -645,7 +721,7 @@ These work in any plugin's settings schema.
 
 ## Reference for AI
 
-- Manifest: `capabilities.devices: [{driver, label?, kind?, icon?, module, capabilities[], config_schema[]?, locked_by_default[]?, learns_address?, presence?}]`. `kind` groups drivers in the add picker and as connections of one device; left out, kind = label (a row of its own). Registered by the loader into `core/devices/registry.py`; unregistered on unload. Bad declarations are skipped with a log line, never a failed load.
+- Manifest: `capabilities.devices: [{driver, label?, kind?, icon?, module, capabilities[], config_schema[]?, locked_by_default[]?, learns_address?, presence?, things?}]`. `kind` groups drivers in the add picker and as connections of one device; left out, kind = label (a row of its own). Registered by the loader into `core/devices/registry.py`; unregistered on unload. Bad declarations are skipped with a log line, never a failed load.
 - Module functions: `describe(device, config) -> {capability: {label, help, actions: {name: {help, example, values?, owner?, danger?, wait?}}}}`, `status(device, config, secrets) -> {online, detail, readings?, has?, takes?}`, optional `apply(device, config, secrets)` (after a save; raise `DeviceError` to be heard), `run(device, capability, action, value, config, secrets, call_tool) -> (text, ok)`, optional `validate(config) -> (config, error)`, optional `options(device, config, key) -> [{value, label}]` for a dynamic select (below).
 - A select whose choices are the device's own: `{"key", "type": "select", "dynamic": true}` in `config_schema`, and the module's `options(device, config, key)`; `device` carries `has`, `takes` and `fingerprint`. The satellite driver's `wake_model` offers the wake words of the family that board runs, from `core.wakeword.library`. The stored value is always among the choices, so a save round-trips when the driver cannot say. A field with `takes` (`"takes": "wake.model"`) shows only on a device whose `status()` answered that name in `takes`.
 - Engine: `core/devices/engine.py`, loaded on first use. Tools: `functions/devices.py`. Rows in `user/plugin_state/devices.json` under key `devices`: `{id, label, location, enabled, created, fingerprint?, locked: [capability], parts: [{driver, plugin, config, has?, takes?}]}` (`fingerprint` = a board's chip MAC). `locked` = what she may not use; only capabilities in `engine.LOCKABLE` (power, camera, screen, mic, storage, ptz, sms, wake) can be locked; `engine.run(..., owner=True)` is the user's own button and passes the lock. Secrets in `core/devices/secret_store.py` under `<driver>.<field>`.
@@ -658,5 +734,6 @@ These work in any plugin's settings schema.
 - Sound format: `voice.fit(audio, kind, plays)` and `voice.wanted(plays)`. numpy and soundfile only. Going down in rate it low-pass filters first.
 - After a save: `engine.tell(row)` calls each part's `apply` and returns problems in words; the routes put them in the save's `warning`. `voice.clock()` = `{now, tz}` (POSIX zone from `/etc/localtime`'s footer) rides on the events stream's `connected` line.
 - Routes (`core/routes/devices.py`; a login session or a Bearer API token, which runs as the owner): `GET|POST /api/devices`, `GET|PUT|DELETE /api/devices/{id}`, `POST /api/devices/{id}/test`, `POST /api/devices/{id}/run`, `GET /api/devices/found/{driver}?device=`, `POST /api/devices/{id}/connections`, `DELETE /api/devices/{id}/connections/{driver}`, `POST /api/devices/provision`, `GET /api/devices/here`, `/api/devices/flash/*`, `GET /api/devices/firmware[/{board}/{part}]`, `PUT /api/devices/firmware/sources`, `POST /api/devices/firmware/own`, `GET /api/devices/face-feed`, `PUT /api/devices/face-feed/source` (which avatar is her face on screens; 422 unknown), `GET|DELETE /api/devices/{id}/screen/stream`, `POST /api/devices/{id}/screen/frame`; the IR library `/api/ir/*` (`core/routes/ir.py`); with the device's own key: `/api/devices/{id}/voice|wake|room|text|press|ask|chats|chat|history|events`. Scheduled Device tasks run as the owner too (locks and owner-only actions pass; `danger` actions cannot be scheduled). Limits: 240 reads and 60 writes a minute. `PUT` takes `locked` as a map `{capability: bool}` that changes only what it names (a list replaces the whole set). `found` is a reserved device name.
+- Hub (`"things": true`): `status()` may answer `things: [{id, name, kind, room}]`; `engine._learn_things` keeps it on the part (`parts[].things`, `MAX_THINGS` 400, kinds outside the manifest dropped). `engine.things(row)` adds `call` (the name she types, `_call_name`, clashes get `-<kind>` then a number), `driver` and `locked`. `engine.aim(row, name)` resolves the capability argument: a thing by call or id, or a room (`ROOM_KIND` = light). `run()` puts the usable targets in `device['things']` and the room in `device['room']`. Ticks: `parts[].allow = {thing id: bool}`, set by `update(allow=...)` (`PUT /api/devices/{id}` `allow`); no tick = unlocked unless the kind is in `locked_by_default`. A hub's kinds are never `lockable`. Screens: `engine._house` (hub, room, kind), `engine._thing`; live words from the driver's optional `states()` through `engine.doing(row)`, also `GET /api/devices/{id}/things`. The scheduler's `_check_device_action` accepts a thing or a room.
 - Presence: `core/devices/presence.py`, started after the plugin scan (`sapphire.py`), stopped before plugin services. Manifest `"presence": true` plus optional module functions `discover(config) -> [{id, name, kind}]`, `watch(changed, stopped)`, `tend(device, config, secrets, present, leaving)`. `tend` is level triggered: called on a poke (watcher, device saved, plugin loaded), on the 15 s heartbeat, and once with `leaving=True, present=[]` when the device is disabled or removed, the plugin unloads (`presence.release(plugin)`, called by the loader before it unregisters the drivers) or the app stops. One keeper thread, one watcher thread per driver with an enabled device, tends on a pool of 4, never two at once for one device. Pokes are gathered for 0.3 s.
 - Filter: a `config_schema` field of `"type": "found"` (one per driver). Stored in the part's config as `{all: bool, only: [{id, name}]}`. `engine.found(driver, config)` cleans what `discover` returns (64 at most; a thing may carry `note` and `actions: [{do, label}]`). `engine.passing(spec, config, things)` applies the filter. `"many": false` keeps one. `engine.setup_found(driver, thing_id, action, config)` runs the module's `setup()` for a thing's button: `POST /api/devices/found/{driver}/do` `{id, do, config?}`.

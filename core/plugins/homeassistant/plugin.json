@@ -1,15 +1,50 @@
 {
   "name": "homeassistant",
   "short_display_name": "Home Assistant",
-  "version": "1.0.0",
-  "description": "Home Assistant — lights, switches, scenes, thermostat, notifications",
+  "version": "2.0.0",
+  "description": "A Home Assistant as a device: its lights, switches, scenes, thermostat, covers, locks, cameras, sensors and phones, each by name or by room. Adds the device type for Settings > Devices.",
   "author": "sapphire",
   "icon": "🏠",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "default_enabled": true,
   "managed_hide": true,
+  "settingsUI": "none",
   "capabilities": {
-    "tools": ["tools/homeassistant.py"]
+    "hooks": {"plugins_ready": "hooks/ready.py"},
+    "devices": [
+      {
+        "driver": "homeassistant",
+        "label": "Home Assistant",
+        "kind": "Home",
+        "icon": "🏠",
+        "module": "device_driver.py",
+        "things": true,
+        "capabilities": ["light", "switch", "climate", "scene", "script", "cover", "lock", "fan", "media", "camera", "alarm", "sensor", "notify"],
+        "locked_by_default": ["cover", "lock", "camera", "alarm", "notify"],
+        "config_schema": [
+          {
+            "key": "url",
+            "type": "string",
+            "label": "Address",
+            "default": "http://homeassistant.local:8123",
+            "placeholder": "http://homeassistant.local:8123",
+            "help": "Where your Home Assistant answers, with its port.",
+            "tab": "Status",
+            "setup": true
+          },
+          {
+            "key": "token",
+            "type": "string",
+            "widget": "password",
+            "secret": true,
+            "label": "Long-lived access token",
+            "help": "In Home Assistant: your profile, Security, Long-lived access tokens, Create token. Stored scrambled. Never shown again.",
+            "tab": "Status",
+            "setup": true
+          }
+        ]
+      }
+    ]
   }
 }

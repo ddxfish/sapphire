@@ -646,14 +646,7 @@ What a plugin declares in its manifest. See [plugin-author/routes.md](plugin-aut
 
 ### Home Assistant Plugin
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/api/webui/plugins/homeassistant/defaults` | Get HA default settings |
-| POST | `/api/webui/plugins/homeassistant/test-connection` | Test HA connection |
-| POST | `/api/webui/plugins/homeassistant/test-notify` | Test HA notification |
-| PUT | `/api/webui/plugins/homeassistant/token` | Save HA token |
-| GET | `/api/webui/plugins/homeassistant/token` | HA token status |
-| POST | `/api/webui/plugins/homeassistant/entities` | Fetch HA entities |
+No routes of its own since 2.0.0. A Home Assistant is a device: `/api/devices` adds, tests and runs it, and `GET /api/devices/{id}/things` lists what is behind it, each with what it is doing now.
 
 ### Email Plugin
 

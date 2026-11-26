@@ -12,6 +12,7 @@ Sapphire itself.
 | Hardware synth, MIDI keyboard | the MIDI plugin | Instruments she plays and hears |
 | Phone (KDE Connect) | the KDE Connect plugin | A phone running the KDE Connect app: shares to her chat, its texts, a notification from her, battery |
 | Another Sapphire | Sapphire | A second Sapphire on your network, reached through her MCP door |
+| Home Assistant | the Home Assistant plugin | A whole house behind one device: its lights, switches, scenes, thermostat and more, each by name or by room |
 
 Any plugin can bring more types. A type appears when its plugin is enabled.
 
@@ -834,6 +835,52 @@ Everything stays on your network. The phone's certificate is pinned at
 pairing; a phone that comes back with another one is refused until it is
 paired again. **Unpair** forgets it.
 
+## Home Assistant
+
+One device for the whole house. + Add Device > **Home**, then its address
+(`http://homeassistant.local:8123`) and a long-lived access token (in Home
+Assistant: your profile, Security, Long-lived access tokens). Add a second
+house the same way under another name.
+
+Everything the house has sits behind the device as a **thing**: lights,
+switches, the thermostat, scenes, scripts, covers, locks, fans, media players,
+cameras, alarms, the sensors worth reading (temperature, humidity, doors,
+motion, who is home) and the phones it can notify. Power meters, update
+switches and what you hid in Home Assistant are left out.
+
+**The Things tab** lists them by room, each with what it is doing now.
+
+- The tick is **Sapphire may use this**. Locks, covers, alarms, cameras and
+  phones start unticked. An unticked thing is still named to her, as locked,
+  so she can tell you why she cannot.
+- **Try** runs an action yourself, ticked or not.
+- The grey name is what she calls the thing. It is made from the thing's own
+  name in Home Assistant, so rename it there.
+
+She names a thing, or a room, in place of a capability:
+
+```
+device_action("home")                              the whole house: rooms, things, what each is doing
+device_action("home", "pole-lamp", "set", "40")    one light to 40%
+device_action("home", "living-room", "set", "+20") a room is its lights
+device_action("home", "thermostat", "set", "76")
+device_action("home", "evening", "run")            a scene
+```
+
+A light's `set` takes a brightness, a step (`+20`), a color (`blue`, `warm`,
+`2700k`, `#ff8800`), or a brightness then a color. An order to a thing Home
+Assistant cannot reach fails in words; it is never called done.
+
+A scheduled Device task picks a thing or a room the same way, with no AI in
+the loop: lights off at 23:00.
+
+**Coming from the old plugin (1.x).** The house you had set up becomes the
+device `home` by itself at the first start, once Home Assistant answers. What
+your blacklist blocked is unticked, and the phone you had picked for
+notifications is ticked. If you had taken locks or covers off the blacklist,
+tick them again. The thirteen `ha_*` tools are gone; a toolset of your own
+that listed them needs the three device tools.
+
 ## Hosted Sapphire
 
 Devices are switched off on a hosted Sapphire. It has no home network to reach.
@@ -860,5 +907,6 @@ DEVICES (core/devices/, page System > Devices):
 - Phone: battery read · share send|list · sms conversations|read|send "<number or name> | <words>" · notify ping|find · contacts find.
 - MIDI keyboard: sound instrument|loudness|on|off · notes play "C4 E4 G4 C5:2 bpm=120"|loop|listen [s]|stop. Hardware synth: sound voice|effect · notes play|loop|listen|stop.
 - Another Sapphire: chat ask|tell · tools <her tool> <words fill args in order>. A question from a Sapphire cannot ask one back.
+- Home Assistant (a hub): device_action(home) = every thing by room with its state. A thing's or a room's name stands where the capability would; a room = its lights. light on|off|toggle|set "<0-100|+N|-N> [color]" · switch, fan on|off|toggle · climate set <temp>|mode <mode> · scene, script run · cover open|close|stop|set · lock lock|unlock · media play|pause|stop|next|previous|volume · camera look · alarm arm|disarm · sensor read · notify ping <words>. "Locked" things = the user's tick on its Things tab. "not answering" = Home Assistant cannot reach it; do not retry.
 - IR names come from the IR library (core/ir/library.py resolve); an unknown name answers with the known list.
 - Wire: docs/SATELLITE-PROTOCOL.md. Drivers: docs/plugin-author/devices.md.
