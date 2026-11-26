@@ -113,7 +113,8 @@ The door speaks `initialize`, `ping`, `tools/list` and `tools/call`; notificatio
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | POST | `/api/perception/{chat}` | `{frames: [{data, media_type}], text, source}`: what she should see next for `chat` (a game board, an mpv watcher). Latest wins; frames are model-only for the next unprompted turn, never persisted. 404 for an unknown or sealed chat |
-| GET | `/api/cadence/{chat}` | The cadence record for `chat`: `armed, mode (event\|timer), paused, next_in, last_at, skips, pending, fired, every, pokes, ttl_in` (event mode fires on every Nth poke). Arming is the room host plugin's business (`/api/plugin/game-room/room/cadence/*`) |
+| POST | `/api/cadence/{chat}/hold` | `{held, ttl?}`: stop her timer's clock where it is, or let it run again. A lease of `ttl` seconds (10-300, default 60) the holder renews; nothing is saved, so a holder that died lets go. On release she waits what was left (30 s at least). A pending moment still fires. Returns the record |
+| GET | `/api/cadence/{chat}` | The cadence record for `chat`: `armed, mode (event\|timer), paused, held, next_in, last_at, skips, pending, fired, every, pokes, ttl_in` (event mode fires on every Nth poke). Arming is the room host plugin's business (`/api/plugin/game-room/room/cadence/*`) |
 
 ### Slash Commands
 
@@ -998,5 +999,5 @@ COMMON PATTERNS:
 - Toolsets: /api/toolsets (not /api/abilities — legacy name removed)
 - Most endpoints return JSON
 - 200/201 success, 202 queued/notification, 204 nothing live, 400 validation, 401 not logged in, 403 CSRF/vault passphrase/webhook secret, 404 not found (or hidden/sealed), 409 conflict (sealed chat, inbox refusal, existing vault, switch in flight), 413 too large, 429 rate limited, 503 system not ready
-- Perception: POST /api/perception/{chat} {frames, text, source} deposits what she sees next; GET /api/cadence/{chat} reads the cadence record
+- Perception: POST /api/perception/{chat} {frames, text, source} deposits what she sees next; GET /api/cadence/{chat} reads the cadence record; POST /api/cadence/{chat}/hold {held} stops her timer where it is (a lease, renewed by the holder)
 - Slash commands: GET /api/commands, POST /api/commands/run {line} (?chat=); see SLASH-COMMANDS.md

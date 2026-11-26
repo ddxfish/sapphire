@@ -14,6 +14,7 @@ Type `/` at the start of a message in the chat box and a menu of commands opens.
 |---|---|
 | `/compact` | Opens the compress dialog: summarize older history, keep the recent tail. See [CHATS.md](CHATS.md#compress--summarize-old-history) |
 | `/compact-daily [tokens]` | Summarizes history into one labelled summary per day for the last few days (below) |
+| `/extract-daily [tokens]` | Saves this chat's finished days to memory as day summaries and leaves the chat as it is; for old chats (below) |
 | `/context` | What's filling this chat's context, biggest first. See [CONTEXT.md](CONTEXT.md) |
 | `/status` | This chat's persona, prompt, model, toolset, size, context use and private flag |
 | `/prompt` | Shows the prompt the next turn would send |
@@ -61,6 +62,19 @@ There is no built-in timer: a scheduled task runs it ([CONTINUITY.md](CONTINUITY
 
 The compact starts when the task's turn ends. That turn is part of the new day, so it stays raw until the next night.
 
+### /extract-daily
+
+For a chat that `/compact-daily` would empty: one from months ago, or any chat you want to keep whole. It writes the same day summaries, one per finished day of the whole chat however old, and saves them to memory (Mind → Daily) under each day's own date. **The chat is not changed.** It needs the Mind Palace.
+
+- **It reports first.** `/extract-daily` alone only says what it would do: how many days, from when to when, which model writes them and which memory scope they go to. The report ends with the line that starts it. That line works for ten minutes, for that chat, and only while the chat still matches the report.
+- **One entry per chat per day.** A day this chat has already given is left alone, so running it twice adds nothing and rewrites nothing. So is a day `/compact-daily` already summarized in this chat. Two chats that both have February 10 give two entries for that date, side by side, each naming its chat. Nothing is merged or overwritten.
+- **Saved as it goes.** Each day is kept the moment it is written, oldest first. If it fails or you stop it (`/extract-daily stop`), the days so far stay and the next run takes up from there.
+- **Left out:** today (it has not ended), and an older plain `/compact` summary, which covers many days under one date.
+- **A day you deleted** in Mind → Daily can be extracted again while its turns are still in the chat.
+- It uses the chat's own model, persona and memory scope, so set those on an old chat before you run it. Size per day and the wording are `/compact-daily`'s: `/extract-daily 4K`, and the day summary instructions. Try the wording on one day first with **Mind → Daily → Dry run**.
+- It is refused for private chats, rooms, game chats and chats with memory none, and it shares the one compress job slot.
+- A chat from before scheduled turns were labelled reads its automatic turns as yours, so an old day may say "you asked me to" about a nightly task.
+
 Compacting more than one chat? Give each task its own time, a few minutes apart. Only one compress job runs at a time, so two tasks at the same minute collide and the second one is refused that night.
 
 ---
@@ -85,11 +99,12 @@ A plugin can add its own commands (`capabilities.commands`). They're yours to ty
 
 SLASH COMMANDS (core/commands.py): typed at the start of a chat message; menu on '/'; '//text' = literal slash; chat view only (not the room composer). Routes: GET /api/commands, POST /api/commands/run {line} (?chat=).
 
-USER COMMANDS: /compact, /compact-daily [tokens], /context, /status, /prompt, /continue, /retry, /replay, /remove N, /undo, /trim, /repair, /help [command]. /compact, /trim not on game chats; /compact-daily, /remove and /undo are refused in chat rooms ("…doesn't work in a chat room yet"), on a game or story chat ("…doesn't work on a game's chat") and during a live phone call.
+USER COMMANDS: /compact, /compact-daily [tokens], /extract-daily [tokens], /context, /status, /prompt, /continue, /retry, /replay, /remove N, /undo, /trim, /repair, /help [command]. /compact, /trim not on game chats; /compact-daily, /remove and /undo are refused in chat rooms ("…doesn't work in a chat room yet"), on a game or story chat ("…doesn't work on a game's chat") and during a live phone call.
 
-YOUR TOOL: slash_command(command) — only /remove N and /compact-daily are yours (ai=True). Toolset membership is the permission (ships in `personality`).
+YOUR TOOL: slash_command(command) — only /remove N, /compact-daily and /extract-daily are yours (ai=True). Toolset membership is the permission (ships in `personality`).
 - /remove N: runs after your turn ends; removes the N turns before this one AND this turn (the request and your reply go too). To undo the last exchange, /remove 1. Only when the user asks. The user is notified; /undo restores. Stopping the turn drops it. One pending at a time. Refused in agent runs.
 - /compact-daily [tokens]: one summary pair per FINISHED day for the last COMPACT_DAILY_DAYS (5) days; days start at DAY_START_HOUR (4); today stays raw. Days already summarised are left alone (a second run the same day = "Nothing new", no LLM spend); days older than the window roll off the chat. About 2K tokens a day by default (500-20K), quiet days shorter. Runs after your turn, in the background, on the chat's own model and persona; a JSON backup first unless the chat is private (private = a local provider only). Write-last: if the chat changed mid-job or the summaries came out bigger than the source, it fails and the chat is untouched. Refused in rooms, game chats, live calls, and while a reply is still running.
+- /extract-daily [tokens]: every FINISHED day of this chat that is still raw turns, however old, written as a day summary and saved to the daily layer of the chat's memory scope under that day's date. The chat is NOT changed (no pairs, no backup, nothing rolls off). Two steps: the bare command reports (days, range, model, scope) and ends with the exact line that starts it; that line works for 10 minutes, for that chat, while the chat still matches the report. Yours starts when your turn ends. One entry per chat per day: days this chat already gave, or that /compact-daily summarized here, are skipped; another chat's same date is a second entry. Each day is kept as it is written; `/extract-daily stop` ends it after the current day and a rerun continues. Today and plain /compact summaries are left out. Refused: private, room, game, memory scope none, palace off, another compress job running.
 - Pair shape: user row `[Day summary: Monday, November 2, 2026 (N messages)]` + assistant row = the summary, first person as you; rows carry compressed, compressed_day (YYYY-MM-DD).
 - After a daily compact the Mind Palace keeps each new day's summary in the chat's memory scope (layer daily, see MEMORY.md): a day that rolls off the chat is still reachable with search_memory(layer='daily') or get_recent_memories(layer='daily', day='YYYY-MM-DD').
 - Summary wording: the compress instructions plus the day wording, both edited by the user in Settings > Tools > Daily Compact (rooms use fixed ones). A day's summary never includes tool results, only that a tool ran; for /compact, results of tool calls made with a private_key are withheld.

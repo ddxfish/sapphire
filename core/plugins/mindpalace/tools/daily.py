@@ -270,6 +270,11 @@ def record_chat(chat, sm=None, pt=None) -> dict:
         return {'days': [], 'scope': None, 'skipped': why}
     exported = sm.export_chat(chat)
     pairs = day_pairs((exported or {}).get('messages'))
+    if pairs:
+        # One entry per chat per day: a day /extract-daily already took from
+        # this chat is not recorded again when the daily compact reaches it.
+        held = extracted_days(sm, chat)
+        pairs = [p for p in pairs if p['day'] not in held]
     if not pairs:
         return {'days': [], 'scope': scope, 'skipped': ''}
     with _lock:
@@ -277,6 +282,72 @@ def record_chat(chat, sm=None, pt=None) -> dict:
             return {'days': [], 'scope': None, 'skipped': 'switched off'}
         days, why = _record(pt, sm, scope, chat, settings, pairs)
     return {'days': days, 'scope': None if why and not days else scope, 'skipped': why}
+
+
+# ─── /extract-daily: the keeper (core/chat/compress.py, set_day_keeper) ──────
+#
+# Core reads a chat of any age and writes its days; these three say whether
+# the chat's days are kept, which it has already given, and keep one. Which
+# days a chat has given lives WITH the chat (plugin_chat_data), so it follows
+# a rename and goes when the chat goes: {ISO day: source}. A day counts as
+# given only while its rows are still in memory, so a day the person deleted
+# in Mind > Daily can be extracted again.
+
+EXTRACT_KEY = 'days_extracted'
+
+
+def extract_scope(sm, chat):
+    """(scope, '') when this chat's days are kept, else (None, why)."""
+    if _stopping or not enabled():
+        return None, "keeping each day's summary is switched off (Mind > Settings)"
+    scope, _, why = chat_scope(sm, chat)
+    return scope, why
+
+
+def extracted_days(sm, chat, pt=None) -> set:
+    """The ISO days /extract-daily took from this chat that are still kept.
+    Unreadable = none: the worst case is a day summarized twice, and the
+    one-row-per-piece index plus the global `have` still stand."""
+    try:
+        given = sm.plugin_data_get('mindpalace', chat, EXTRACT_KEY, None)
+        if not isinstance(given, dict) or not given:
+            return set()
+        pt = pt or _pt()
+        if not pt._ensure_db():
+            return set()
+        with pt._get_connection() as conn:
+            live = {r[0] for r in conn.execute(
+                "SELECT DISTINCT source FROM chunks WHERE layer = 'daily' AND source IS NOT NULL")}
+        return {day for day, src in given.items() if src in live}
+    except Exception as e:
+        logger.warning(f"[DAILY] a chat's extracted days could not be read: {e}")
+        return set()
+
+
+def keep_extracted(sm, chat, day, pt=None) -> str:
+    """Keep one extracted day ({day, at, text, persona, messages}). '' when
+    kept, else why not. The chat's note is written first: a note whose day
+    then fails to record points at rows that are not there, which reads as
+    not given. The other order could keep a day the chat has no note of, and
+    the next run would keep it twice."""
+    if _stopping or not enabled():
+        return 'the daily layer is switched off'
+    pt = pt or _pt()
+    scope, settings, why = chat_scope(sm, chat)
+    if scope is None:
+        return why
+    pair = {**day, 'extracted': True}
+    with _lock:
+        if _stopping:
+            return 'the daily layer is switched off'
+        if pair['day'] in extracted_days(sm, chat, pt):
+            return ''                           # this chat already gave that day: one entry per chat per day
+        given = sm.plugin_data_get('mindpalace', chat, EXTRACT_KEY, None)
+        given = dict(given) if isinstance(given, dict) else {}
+        given[pair['day']] = source_of(pair)
+        sm.plugin_data_put('mindpalace', chat, EXTRACT_KEY, given)
+        days, why = _record(pt, sm, scope, chat, settings, [pair])
+    return '' if days else (why or 'it is already kept, or was deleted in Mind > Daily')
 
 
 def _record(pt, sm, scope, chat, settings, pairs):
@@ -402,6 +473,8 @@ def _write_day(cur, pt, scope, chat, pair, src, pieces, writer, now, md):
             meta['persona'] = pair['persona']
         if pair['messages'] is not None:
             meta['messages'] = pair['messages']
+        if pair.get('extracted'):
+            meta['extracted'] = True        # by /extract-daily: the turns are still in the chat
         cur.execute(
             'INSERT OR IGNORE INTO chunks (layer, scope, content, label, favorite, meta, created, '
             "updated, chunk_index, source) VALUES ('daily', ?, ?, ?, 0, ?, ?, ?, ?, ?)",
@@ -705,6 +778,8 @@ def start(boot=True):
     _stopping = False
     bus.off([Events.CHAT_COMPRESSED], _on_compressed)       # a reused module: never two listeners
     bus.on([Events.CHAT_COMPRESSED], _on_compressed)
+    from core.chat import compress
+    compress.set_day_keeper(sys.modules[__name__])          # /extract-daily keeps its days here
     if boot and 'pytest' not in sys.modules:
         threading.Thread(target=_boot, daemon=True, name='palace-daily-boot').start()
 
@@ -718,6 +793,10 @@ def stop():
         from core.event_bus import Events, get_event_bus
         bus = get_event_bus()
         bus.off([Events.CHAT_COMPRESSED], _on_compressed)
+        from core.chat import compress
+        if compress._day_keeper is sys.modules.get(__name__):
+            compress.set_day_keeper(None)
+            compress.stop_extract()                         # a running extract ends after its day
     except Exception as e:
         logger.debug(f"[DAILY] listener not removed: {e}")
     if _lock.acquire(timeout=10):
@@ -919,9 +998,35 @@ def parse_span(text, today=None):
         whole = _month(t, today)
         if whole:
             return whole, None
+        bare = re.sub(r'^(?:on |the )+', '', t)     # "on february 10th", "the 10th of february 2026"
+        if bare != t:
+            d = date.fromisoformat(bare) if re.fullmatch(_ISO, bare) else _month_day(bare, today)
+            if d:
+                return one(d)
     except (ValueError, OverflowError):
         return None, f"'{text}' is not a real date. day takes {SPAN_FORMS}."
     return None, f"Could not read day '{text}'. day takes {SPAN_FORMS}."
+
+
+_MONTH_ALT = '|'.join(sorted(_MONTH_WORDS, key=len, reverse=True))
+_NAMED_DAY = re.compile(
+    rf'(?<![\w-])(?:{_ISO}'
+    rf'|(?:{_MONTH_ALT})\.? \d{{1,2}}(?:st|nd|rd|th)?(?:,? \d{{4}})?'
+    rf'|\d{{1,2}}(?:st|nd|rd|th)? (?:of )?(?:{_MONTH_ALT})\.?(?:,? \d{{4}})?)(?![\w-])')
+
+
+def find_day(text, today=None):
+    """The one date a free text names outright ("what happened february 10th
+    2026", "2026-02-10 pendant"), or None. For a search whose date was typed
+    into the query: she names the day in her own words and `day` stays empty.
+    Only a date written as a date, never "yesterday" or "last week": those
+    words are ordinary prose in a search. Two different dates name no one day."""
+    found = set()
+    for m in _NAMED_DAY.finditer(' '.join(str(text or '').lower().split())):
+        span, _ = parse_span(m[0], today)
+        if span and span[0] == span[1]:
+            found.add(span[0])
+    return found.pop() if len(found) == 1 else None
 
 
 def span_bounds(span):
@@ -1250,6 +1355,27 @@ def recent_text(scope, count=10, private_key=None, span=None, pt=None) -> str:
                 + "\nRead one with its own date as day, or find a part with "
                   "search_memory(layer='daily', query=..., day=...).")
     return out + kept
+
+
+def day_text(scope, span, private_key=None, pt=None, count=10) -> str:
+    """The days of a span, whole and in order (recent_text), or '' when none
+    is kept there for this reader. Never raises: it rides on another read."""
+    try:
+        pt = pt or _pt()
+        with pt._get_connection() as conn:
+            if not _sources(conn.cursor(), pt, scope, private_key, span, 1):
+                return ''
+        text = recent_text(scope, count=count, private_key=private_key, span=span, pt=pt)
+        return '' if text.startswith('No days recorded') else text
+    except Exception as e:
+        logger.warning(f"[DAILY] day read skipped: {e}")
+        return ''
+
+
+def named_day(query, scope, private_key=None, pt=None) -> str:
+    """The day a search query names by its date, whole, or ''."""
+    d = find_day(query)
+    return day_text(scope, span_bounds((d, d)), private_key, pt) if d else ''
 
 
 def span_hint(scope, span, private_key=None, pt=None) -> str:

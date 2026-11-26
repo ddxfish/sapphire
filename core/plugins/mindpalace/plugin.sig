@@ -2,7 +2,7 @@
   "plugin": "mindpalace",
   "version": "1.2.0",
   "files": {
-    "README.md": "sha256:4e1a033ae21509d2c77fd9855932e77bf147da278c54ac9b073624dda4c38d5d",
+    "README.md": "sha256:15ee5fb070f901dbbc7b573898a4dd91fd87afb3f30f2f013e3a8b1faf76dac9",
     "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
     "hooks/ready.py": "sha256:1a1379c1ff05c86fd6347c4bb9d0cd86775c7a105668e01d4bac22cea1c11519",
     "plugin.json": "sha256:1df9316b75e295c8eeff655609cfafbf8e266759802beb1bc05b2d492964145b",
@@ -21,7 +21,7 @@
     "templates/place.json": "sha256:83c59537759fe88af58a8e4444b8adfb087e0fde59dbaed2d2bdd98372c7e09e",
     "templates/thing.json": "sha256:6482cd81a39b832618c3147336d65b10241b006b96167694aacfb1e9bcf133a5",
     "tests/conftest.py": "sha256:922ab5bd47c78f75f1cbcf75958b2d33e7562eaf0c4a16b7cff4cde35ce33dc1",
-    "tests/test_daily.py": "sha256:feb52792cff4bfd75b7434dddd626ded83d0455a7e59a4c766b5a0516811643c",
+    "tests/test_daily.py": "sha256:e12bd45be9d49ef763f49147ad297c1721dd9e3cd397f06e2eb7d2f8ccc5edc6",
     "tests/test_dynamics.py": "sha256:4e558fe86c1c0912bb5c4b735e054c2366dcef3d7f59827e3fe15d7d8a7872a1",
     "tests/test_engine_switch.py": "sha256:11beca373a140314e88eb0014ab2e06c215126c0fac794d4b8ef783f3b9d68eb",
     "tests/test_geonames.py": "sha256:e12a63a71b7d869cab315ef8e622bef3ae2ccb514879ece2bac43ee140fd8836",
@@ -59,7 +59,7 @@
     "tests/test_vault_privacy_p3.py": "sha256:49eb6614f2471f0bd6b9240d8fd407da6527ab15ed75b06511b8ef2cbf100303",
     "tests/test_view_images.py": "sha256:bbc32fcca27e3393e9798cfbf5c1904938999b7187e0fc098f523ea962ccd438",
     "tests/test_wake_ledger.py": "sha256:9dc86e8994e1c05b0d7e134a952850409be701897335589349ca80038ebd7209",
-    "tools/daily.py": "sha256:beee37a9333b05a980024aa3762b561dff2f14e911fd47d217b72a30d64d14a2",
+    "tools/daily.py": "sha256:5ecbd4b87d64d425ce6143f560f0b290ab41e12e24fadfdf31507c898dbcc8f0",
     "tools/dynamics.py": "sha256:71fb926e557a7660a35014ecbfb211760f4a3e536a35337565d570fa580e0fa6",
     "tools/geonames.py": "sha256:9b8b185fd41c715ca6969cd6194d2742f1098d4ee0a4ee2ffe244abe26636045",
     "tools/goal_tools.py": "sha256:8804486f961e6aa4d4e2c48287a44233e1c7996ef2ceeb9a9c1032401c5a83eb",
@@ -72,7 +72,7 @@
     "tools/library.py": "sha256:b764b1827812163da3974b251be8ccc8bf21dc75f0025085dc30d68a7955738c",
     "tools/library_tools.py": "sha256:512d6767f0230885903091f933c597c8300db2b22c44cf1c616a7201b7fd1a8b",
     "tools/metadata.py": "sha256:357e88459b5ef59bb2333b087fd68a2006ff5ac61b0a9cb885c6469f776e9972",
-    "tools/palace_tools.py": "sha256:0a8701ecbc43f0baa392812b29102024eb4b42030454488f390ca2510da41989",
+    "tools/palace_tools.py": "sha256:a18cf5490febaf274e3fd47e57d86e3790f95b2fc11a21bf53c60c5c82d61726",
     "tools/prompt_audit.py": "sha256:2576970f0a653a5ff8487dc897fcae6d7c6abad19f261f0058b3358072a82a09",
     "tools/self_tools.py": "sha256:3faa5ef58f2a852fee32bc6025abe2917a759c76683e8b219ccbd6b077dfdd42",
     "tools/spider.py": "sha256:28a770e9611fa8874a6fd24f0f0d751330b74db0a0d58ebe2cc4a1ad6922ed2b",
@@ -80,5 +80,5 @@
     "tools/temporal.py": "sha256:4c89314cda5e3419f4ac7925d0d9fa7353198473c79d7e7afc226246c101ab13",
     "tools/vision_embed.py": "sha256:92606694c777e20a36ed2e6000d32f099f0fe3a3320cd7b94a504f9f4dcae2fc"
   },
-  "signature": "1JeymbiRoCAFjA6USVWFJ+oNIhcUEynrx6rJMO63gUp/pDJdpByPpUFZgk4ueGz6pc34Jb5qwSq/0PGjp+/xDw=="
+  "signature": "O/+zZFcYPNU9OXJTrgT416rOIudZCmQ1QDxigsAAkaCqvJepLF5hLYnqIsuCgi6gXf9qShOIo65KlIoOU4nPAw=="
 }

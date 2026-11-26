@@ -72,9 +72,16 @@ class SM:
         self.rows = rows
         self.settings = {'memory_scope': S, 'llm_primary': CLOUD, 'llm_model': 'opus', **settings}
         self.exports = 0
+        self.data = {}
 
     def read_chat_settings(self, chat):
         return self.settings
+
+    def plugin_data_get(self, plugin, chat, key, default=None):
+        return self.data.get((plugin, chat, key), default)
+
+    def plugin_data_put(self, plugin, chat, key, value):
+        self.data[(plugin, chat, key)] = json.loads(json.dumps(value))
 
     def export_chat(self, chat):
         self.exports += 1
@@ -660,8 +667,11 @@ def test_day_narrows_every_layer_and_points_at_the_days_when_only_they_hold_it()
     text, ok = _ask('search_memory', query='garage', day='soonish')
     assert not ok
     daily.record_chat('main', SM(_pair('2026-11-02', 'a day')))
-    text, ok = _ask('get_recent_memories', day='2026-11-02')            # no memory that day, but the day is kept
-    assert ok and text.startswith("No memories stored for day '2026-11-02'.") and "layer='daily'" in text
+    # No memory that day, but the day is kept. It was a line pointing at a
+    # second call; one date now brings the day itself (2026-11-25).
+    text, ok = _ask('get_recent_memories', day='2026-11-02')
+    assert ok and text.startswith('[daily] Mon 2026-11-02') and 'a day' in text
+    assert text.endswith("No memories stored for day '2026-11-02'.")
     assert "layer='daily'" not in _ask('get_recent_memories', day='2026-11-09')[0]
     # One memory saved that day used to come back alone, as if it were the day.
     pt._save_memory('one small note', S)
@@ -669,6 +679,8 @@ def test_day_narrows_every_layer_and_points_at_the_days_when_only_they_hold_it()
         conn.execute("UPDATE chunks SET created = '2026-11-02T16:00:00+00:00' WHERE content = 'one small note'")
         conn.commit()
     text, ok = _ask('get_recent_memories', day='2026-11-02')
+    assert ok and text.index('[daily] Mon 2026-11-02') < text.index('one small note')
+    text, ok = _ask('get_recent_memories', day='2026-11')               # a span: the door line, as before
     assert ok and 'one small note' in text and "Your days hold that date too" in text
     text, ok = _ask('search_memory', query='garage', layer='knowledge', day='yesterday')
     assert ok and 'day was not applied' in text
@@ -1424,3 +1436,120 @@ def test_a_days_file_with_a_broken_identity_is_skipped_not_a_crash():
     out = transfer.import_data(body={'scope': 'elsewhere', 'expect_layer': 'daily', 'data': bad})
     assert out['success'] and out['imported'] == 1 and out['skipped'] == 1
     assert 'hidden by its meta' in daily.recent_text('elsewhere', span=daily.span_bounds(daily.parse_span('2026-11-09')[0]))
+
+
+# ─── /extract-daily: the keeper (core/chat/compress.py hands it each day) ────
+
+def _day(day, text, at=None):
+    return {'day': day, 'at': at or f'{day}T23:30:00.5', 'text': text, 'persona': 'sapphire', 'messages': 8}
+
+
+def test_an_extracted_day_is_kept_under_its_own_date_once_per_chat():
+    """A chat from February, extracted in November: the day is filed under
+    February 10, says which chat it came from, and a second run of the same
+    chat neither doubles it nor rewrites it."""
+    sm = SM([])
+    assert daily.extract_scope(sm, 'old') == (S, '')
+    assert daily.keep_extracted(sm, 'old', _day('2026-02-10', 'We fixed the pendant.')) == ''
+    (row,) = _rows()
+    meta = json.loads(row[7])
+    assert row[4] == '2026-02-10' and row[5].startswith('2026-02-1') and row[11] == S
+    assert meta['extracted'] is True and meta['chat'] == 'old' and meta['messages'] == 8
+    assert daily.extracted_days(sm, 'old') == {'2026-02-10'}
+    assert daily.keep_extracted(sm, 'old', _day('2026-02-10', 'Another wording.', at='2026-11-25T10:00:00')) == ''
+    assert [r[1] for r in _rows()] == ['We fixed the pendant.']
+
+
+def test_two_chats_with_the_same_day_are_two_entries_side_by_side():
+    """Never one overwriting the other, never merged into one text."""
+    assert daily.keep_extracted(SM([]), 'old-a', _day('2026-02-10', 'In chat A we fixed the pendant.')) == ''
+    assert daily.keep_extracted(SM([]), 'old-b', _day('2026-02-10', 'In chat B we planned the garden.',
+                                                      at='2026-02-10T23:31:00')) == ''
+    assert len({r[2] for r in _rows()}) == 2
+    text, ok = _ask('get_recent_memories', layer='daily', day='february 10th 2026')
+    assert ok and 'fixed the pendant' in text and 'planned the garden' in text
+    assert "chat 'old-a'" in text and "chat 'old-b'" in text
+
+
+def test_the_daily_compact_does_not_record_a_day_extract_already_took():
+    sm = SM(_pair('2026-02-10', 'The compact wrote it again.') + _pair('2026-02-11', 'A new day.'))
+    assert daily.keep_extracted(sm, 'main', _day('2026-02-10', 'Extracted first.')) == ''
+    assert daily.record_chat('main', sm)['days'] == ['2026-02-11']
+    assert sorted(r[1] for r in _rows()) == ['A new day.', 'Extracted first.']
+    other = SM(_pair('2026-02-10', 'Another chat, the same date.', at='2026-02-10T23:45:00'))
+    assert daily.record_chat('other', other)['days'] == ['2026-02-10']    # the note is this chat's own
+
+
+def test_a_day_deleted_by_hand_can_be_extracted_again():
+    sm = SM([])
+    daily.keep_extracted(sm, 'old', _day('2026-02-10', 'A summary the person did not like.'))
+    with pt._get_connection() as conn:
+        assert daily.forget(conn.cursor(), S, [r[2] for r in _rows()]) == 1
+        conn.commit()
+    assert daily.extracted_days(sm, 'old') == set()
+    assert daily.keep_extracted(sm, 'old', _day('2026-02-10', 'Written again.', at='2026-11-25T10:00:00')) == ''
+    assert [r[1] for r in _rows()] == ['Written again.']
+
+
+def test_a_private_chats_days_are_never_extracted():
+    sm = SM([], private_chat=True)
+    assert daily.extract_scope(sm, 'p') == (None, 'private chat')
+    assert daily.keep_extracted(sm, 'p', _day('2026-02-10', 'x')) == 'private chat'
+    assert not _rows() and not sm.data
+
+
+def test_the_palace_registers_as_the_keeper_and_leaves_as_one():
+    from core.chat import compress
+    daily.start(boot=False)
+    try:
+        assert compress._day_keeper is daily
+    finally:
+        daily.stop()
+    assert compress._day_keeper is None
+
+
+# ─── A day asked for by its date, in her own words ───────────────────────────
+
+@pytest.mark.parametrize('said', ['february 10th 2026', 'on february 10th 2026', 'the 10th of february 2026',
+                                  'On Feb 10, 2026', 'on 2026-02-10', 'Tuesday, February 10, 2026'])
+def test_a_date_reads_with_on_or_the_in_front(said):
+    assert daily.parse_span(said)[0] == (date(2026, 2, 10), date(2026, 2, 10))
+
+
+@pytest.mark.parametrize('text,day', [
+    ('what happened february 10th 2026', date(2026, 2, 10)),
+    ('2026-02-10 pendant', date(2026, 2, 10)),
+    ('the pendant, on the 10th of Feb 2026?', date(2026, 2, 10)),
+    ('What did we do on Feb. 10, 2026', date(2026, 2, 10)),
+    ('pendant wake bug', None),
+    ('what did we do yesterday', None),                 # prose, not a date written as a date
+    ('between 2026-02-10 and 2026-02-12', None),        # two dates name no one day
+    ('march of the penguins', None),
+    ('we may 5x the speed', None),
+    ('build 2026-02-100', None),
+])
+def test_the_one_date_a_search_names(text, day):
+    assert daily.find_day(text) == day
+
+
+def test_a_date_typed_into_a_search_picks_that_day():
+    """She says "february 10th 2026" in the query and leaves `day` empty. No
+    summary holds those words, so the search found nothing."""
+    daily.keep_extracted(SM([]), 'old', _day('2026-02-10', LONG))
+    text, ok = _ask('search_memory', query='february 10th 2026', layer='daily')
+    assert ok and LONG in text and '[daily] Tue 2026-02-10' in text
+    text, ok = _ask('search_memory', query='what happened on February 10th, 2026')
+    assert ok and 'The day you named' in text and LONG in text
+    text, ok = _ask('search_memory', query='what happened on March 3rd 2026')      # no such day kept
+    assert ok and 'The day you named' not in text
+    text, ok = _ask('search_memory', query='pendant', day='2026-02-10', layer='daily')
+    assert ok and 'pendant wake bug' in text                                        # day= is as it was
+
+
+def test_one_date_without_a_layer_reads_the_day_then_its_memories():
+    """It was the memories saved that day plus a line telling her to call again."""
+    daily.keep_extracted(SM([]), 'old', _day('2026-02-10', LONG))
+    text, ok = _ask('get_recent_memories', day='February 10 2026')
+    assert ok and LONG in text and 'Your days hold that date too' not in text
+    text, ok = _ask('get_recent_memories', day='2026-02-09..2026-02-11')            # a range: the door line, as before
+    assert ok and LONG not in text and 'Your days hold that date too' in text

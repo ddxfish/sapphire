@@ -172,7 +172,7 @@ TOOLS = [
             "name": "search_memory",
             "description": "Semantic + full-text search across all memory layers. layer='knowledge' searches the library; "
                            "results show [doc N] ids that read_document opens. layer='daily' searches the "
-                           "summaries of past days.",
+                           "summaries of past days. A date in the query (February 10 2026) brings that day's summary.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -198,8 +198,8 @@ TOOLS = [
                     },
                     "day": {
                         "type": "string",
-                        "description": "Only memories from then: 2026-11-02, 2026-11-02..2026-11-09, "
-                                       "yesterday, last week, last month"
+                        "description": "Only memories from then: 2026-11-02, February 10 2026, "
+                                       "2026-11-02..2026-11-09, yesterday, last week, last month"
                     },
                     "depth": {
                         "type": "integer",
@@ -221,7 +221,8 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Most recent memories. layer='daily': an index of past days; add day to read those days whole.",
+            "description": "Most recent memories. With day set to one date: that day's summary, then the memories "
+                           "saved on it. layer='daily': an index of past days; add day to read those days whole.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -236,8 +237,8 @@ TOOLS = [
                     },
                     "day": {
                         "type": "string",
-                        "description": "Only memories from then: 2026-11-02, 2026-11-02..2026-11-09, "
-                                       "yesterday, last week, last month"
+                        "description": "Only memories from then: 2026-11-02, February 10 2026, "
+                                       "2026-11-02..2026-11-09, yesterday, last week, last month"
                     },
                     "label": {
                         "type": "string",
@@ -2504,6 +2505,12 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
             # Days read as days, never as loose pieces (tools/daily.py: the
             # sizing rule and the door to a whole day).
             from plugins.mindpalace.tools import daily
+            if span is None:
+                # A date typed into the query picks that day: "february 10th
+                # 2026" is no word of any summary, and the search found nothing.
+                whole = daily.named_day(query, scope, private_key, pt=sys.modules.get(__name__))
+                if whole:
+                    return whole, True
             return daily.search_text(query, scope, limit=limit, private_key=private_key,
                                      labels=labels, span=span, depth=depth,
                                      pt=sys.modules.get(__name__)), True
@@ -2515,6 +2522,14 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                 return '', []
             if not _days:
                 from plugins.mindpalace.tools import daily
+                if span is None:
+                    # The same in an all-layer search: the search runs as it
+                    # always did (the date may be what a memory is ABOUT), and
+                    # the day it names comes along whole when one is kept.
+                    whole = daily.named_day(query, scope, private_key, pt=sys.modules.get(__name__))
+                    if whole:
+                        _days.append(("📅 The day you named (a summary, not the memories themselves):\n" + whole, []))
+                        return _days[0]
                 lines, seeds = daily.search(query, scope, private_key, labels, span,
                                             pt=sys.modules.get(__name__))
                 # The door line names arguments only her own tools take: the
@@ -2797,14 +2812,21 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                         hparams + [floor, count]).fetchall())
             except Exception as e:
                 logger.warning(f"[MINDPALACE] hidden-row count skipped: {e}")
-        hint = ''
+        hint = whole = ''
         if span and not layer and not wake:
             from plugins.mindpalace.tools import daily
-            hint = daily.span_hint(scope, span, private_key, pt=sys.modules.get(__name__))
+            if span[2] == span[3] and not labels:
+                # One date asked for: the day itself, whole, ahead of the
+                # memories saved on it. It was a hint line and a second call.
+                whole = daily.day_text(scope, span, private_key, pt=sys.modules.get(__name__))
+            if whole:
+                whole += "\n\n"
+            else:
+                hint = daily.span_hint(scope, span, private_key, pt=sys.modules.get(__name__))
         if not rows:
             notes = ((f" in layer '{layer}'" if layer else "") + (f" with labels '{label}'" if labels else "")
                      + (f" for day '{day}'" if span else ""))
-            return f"No memories stored{notes}." + hint + hidden_note, True
+            return whole + f"No memories stored{notes}." + hint + hidden_note, True
         if trim:
             def cut(text):
                 text = ' '.join(str(text).split())
@@ -2813,7 +2835,7 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
                 return (text[:trim].rsplit(' ', 1)[0] or text[:trim]) + '…'
             rows = [(r[0], cut(r[1]), *r[2:]) for r in rows]
         results = [_format_chunk(*r) for r in rows]
-        return (f"Recent {len(rows)} memories:\n" + "\n".join(results)
+        return (whole + f"Recent {len(rows)} memories:\n" + "\n".join(results)
                 + (("\n" + hint.strip()) if hint else '') + hidden_note), True
     except Exception as e:
         logger.error(f"[MINDPALACE] Error getting recent memories: {e}")

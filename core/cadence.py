@@ -9,6 +9,9 @@ streams it live, Stop works, other tabs mirror). Turn-based games never arm.
 One organ, one ticker thread, per-chat records. Rules:
   - a record is ARMED by a room (or a plugin) with a TTL and kept alive by
     its keepalive; the tab dying = the record expiring = silence
+  - a HOLD stops the timer's clock where it is (a paused film, the shelf):
+    a lease the holder renews, kept on the record only, so a dead holder
+    means the clock runs again; a pending moment still comes through
   - never two turns on one chat: her own live stream on that chat = skip,
     and the gap STRETCHES toward max after repeated skips
   - frames come from the perception inbox at fire time (latest wins) and
@@ -76,6 +79,28 @@ def _gap(rec, stretch=False):
     if stretch and rec['skips']:
         g = min(hi, g * (1 + 0.5 * rec['skips']))
     return g
+
+
+HOLD_TTL = 60.0          # a hold's lease: its holder renews it, or the clock runs again
+HOLD_FLOOR_S = 30.0      # the least she waits after a hold ends (or min_s, when that is shorter)
+
+
+def _set_next(rec, gap):
+    """Her next timer turn, `gap` seconds on. While the clock is held that is
+    what is left on it when it runs again."""
+    if rec.get('held_until'):
+        rec['held_left'] = float(gap)
+    else:
+        rec['next_at'] = _now() + gap
+
+
+def _release(rec):
+    """End a hold: the clock runs again with what was left on it."""
+    left = rec.get('held_left')
+    rec['held_until'] = rec['held_left'] = None
+    if rec['mode'] == 'timer':
+        floor = min(HOLD_FLOOR_S, float(rec['min_s']))
+        rec['next_at'] = _now() + max(floor, left if left is not None else _gap(rec))
 
 
 def visible_text(text):
@@ -179,6 +204,7 @@ def arm(chat, *, mode='timer', min_s=60, max_s=180, paused=False, send_frames=Fa
                 'running': False, 'next_at': None, 'fired': 0, 'pokes': 0,
             }
         range_changed = (not fresh) and (rec.get('min_s') != min_s or rec.get('max_s') != max_s or rec.get('mode') != mode)
+        resumed = (not fresh) and rec.get('paused') and not paused
         rec.update({
             'mode': mode, 'min_s': max(1.0, float(min_s)), 'max_s': max(1.0, float(max_s)),
             'paused': bool(paused), 'send_frames': bool(send_frames),
@@ -187,7 +213,9 @@ def arm(chat, *, mode='timer', min_s=60, max_s=180, paused=False, send_frames=Fa
             'owner': owner, 'prompt': prompt, 'speak': speak, 'title': title,
         })
         if mode == 'timer' and (fresh or range_changed or rec['next_at'] is None):
-            rec['next_at'] = _now() + _gap(rec)
+            _set_next(rec, _gap(rec))
+        elif mode == 'timer' and resumed and rec['next_at'] < _now():
+            _set_next(rec, _gap(rec))               # resumed through the spine (the gear): a fresh gap, as pause() gives
         if mode == 'event':
             rec['next_at'] = None
     logger.info(f"[CADENCE] armed '{chat}': {mode} {min_s}-{max_s}s"
@@ -216,6 +244,30 @@ def pause(chat, paused=True):
         rec['paused'] = bool(paused)
         if not paused and rec['mode'] == 'timer' and rec['next_at'] is not None and rec['next_at'] < _now():
             rec['next_at'] = _now() + _gap(rec)     # resume = a fresh gap, not an instant turn
+    return status(chat)
+
+
+def hold(chat, on=True, ttl=HOLD_TTL):
+    """Stop the timer's clock where it is, or let it run again. For a holder
+    that knows there is nothing to say about right now (a paused film, the
+    shelf between films): unlike pause() this is nobody's setting. It lives
+    on the record alone, as a lease of `ttl` seconds the holder renews, so a
+    holder that died lets go by itself. On release she waits what was left
+    on her clock (HOLD_FLOOR_S at least), not a turn the instant the film
+    plays. A hold stops the TIMER only: a pending moment (the credits) still
+    fires at its floor, and a person's own turn never asks the organ.
+    Returns status(), None when the chat isn't armed."""
+    with _lock:
+        rec = _records.get(chat)
+        if not rec:
+            return None
+        if on:
+            if not rec.get('held_until'):
+                nxt = rec['next_at']
+                rec['held_left'] = max(0.0, nxt - _now()) if nxt is not None else None
+            rec['held_until'] = _now() + max(1.0, float(ttl or HOLD_TTL))
+        elif rec.get('held_until'):
+            _release(rec)
     return status(chat)
 
 
@@ -254,7 +306,7 @@ def touch(chat):
         rec['last_at'] = _now()
         rec['skips'] = 0
         if rec['mode'] == 'timer':
-            rec['next_at'] = _now() + _gap(rec)
+            _set_next(rec, _gap(rec))
     return status(chat)
 
 
@@ -268,11 +320,12 @@ def status(chat):
 
 def _status_locked(rec):
     chat, nxt = rec['chat'], rec['next_at']
+    held = bool(rec.get('held_until'))
     return {
-            'armed': True, 'chat': chat, 'mode': rec['mode'], 'paused': rec['paused'],
+            'armed': True, 'chat': chat, 'mode': rec['mode'], 'paused': rec['paused'], 'held': held,
             'min_s': rec['min_s'], 'max_s': rec['max_s'], 'send_frames': rec['send_frames'],
             'frames_per_tick': rec['frames_per_tick'], 'every': rec['every'], 'pokes': rec['pokes'],
-            'next_in': (max(0.0, nxt - _now()) if (nxt and not rec['paused']) else None),
+            'next_in': (max(0.0, nxt - _now()) if (nxt and not rec['paused'] and not held) else None),
             'last_at': rec['last_at'], 'skips': rec['skips'], 'running': rec['running'],
             'pending': bool(rec['pending']), 'fired': rec['fired'],
             'ttl_in': max(0.0, rec['ttl_until'] - _now()),
@@ -482,7 +535,8 @@ def run_turn(chat, text, images=None, speak=None, source='cadence', on_event=Non
     _pub(Events.VOICE_TURN_END, {"message_id": mid, "chat": chat, "foreign": foreign,
                                     "text": final,
                                     "speak": (speak if (final and not errored) else None),
-                                    "source": source, "dropped": dropped, "why": why, "tools": list(tools)})
+                                    "source": source, "dropped": dropped, "why": why, "tools": list(tools),
+                                    "error": str(errored)[:300] if errored else ''})
     if errored:
         raise RuntimeError(errored)
     if speak == 'speakers' and final:
@@ -541,18 +595,21 @@ def _fire(rec):
                 rec['skips'] = 0
                 rec['pending'] = None
                 rec['fired'] += 1
-                rec['next_at'] = (_now() + _gap(rec)) if rec['mode'] == 'timer' else None
+                if rec['mode'] == 'timer':
+                    _set_next(rec, _gap(rec))
+                else:
+                    rec['next_at'] = None
     except ChatBusy:
         with _lock:
             if _records.get(chat) is rec:
                 rec['skips'] += 1
-                rec['next_at'] = _now() + _gap(rec, stretch=True)
+                _set_next(rec, _gap(rec, stretch=True))
         logger.info(f"[CADENCE] '{chat}' busy — skipped ({rec['skips']}), gap stretched")
     except Exception as e:
         logger.warning(f"[CADENCE] turn on '{chat}' failed: {e}")
         with _lock:
             if _records.get(chat) is rec:
-                rec['next_at'] = _now() + _gap(rec)
+                _set_next(rec, _gap(rec))
                 rec['pending'] = None
     finally:
         with _lock:
@@ -565,6 +622,8 @@ def _due(rec, now):
     since = now - (rec['last_at'] or 0)
     if rec['pending'] and since >= rec['min_s']:
         return True
+    if rec.get('held_until'):
+        return False                                # the timer is held; only a moment comes through
     return rec['mode'] == 'timer' and rec['next_at'] is not None and now >= rec['next_at']
 
 
@@ -577,6 +636,9 @@ def _tick():
                 del _records[chat]
                 logger.info(f"[CADENCE] '{chat}' expired (no keepalive) — disarmed")
                 continue
+            if rec.get('held_until') and now >= rec['held_until']:
+                _release(rec)                       # the holder stopped renewing: her clock runs again
+                logger.info(f"[CADENCE] '{chat}': hold lapsed — her clock runs again")
             if _due(rec, now):
                 rec['running'] = True
                 fire.append(rec)

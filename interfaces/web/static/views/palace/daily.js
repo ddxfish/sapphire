@@ -198,7 +198,7 @@ function paint(list, forScope) {
     list.innerHTML = `${clock}
         ${_days.length
             ? `<div class="palace-chunk-list">${_days.map(dayCard).join('')}</div>`
-            : `<div class="mind-empty">${_search ? 'No days match' : 'No day summaries in this scope yet. Type /compact-daily in a chat that uses this scope: each finished day gets a summary, and it is kept here. To do it every night, schedule a task that runs /compact-daily a few minutes after the day-start hour (docs: Slash commands, "Every night"). Keeping them can be switched off in Mind › Settings › Memories.'}</div>`}
+            : `<div class="mind-empty">${_search ? 'No days match' : 'No day summaries in this scope yet. Type /compact-daily in a chat that uses this scope: each finished day gets a summary, and it is kept here. To do it every night, schedule a task that runs /compact-daily a few minutes after the day-start hour (docs: Slash commands, "Every night"). For an old chat, or one to keep whole, /extract-daily saves its days here and leaves the chat as it is. Keeping them can be switched off in Mind › Settings › Memories.'}</div>`}
         ${_days.length < _total
             ? `<div class="palace-more-wrap"><button class="mind-btn" id="pal-daily-more">Load more (${_total - _days.length} older)</button></div>`
             : ''}`;

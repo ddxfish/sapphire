@@ -1,3 +1,5 @@
+# 2.16.8 - Post push fixes
+- added /extract-daily command to create daily memories without a compact
 # 2.16.7 - Forever Memory
 - using /compact-daily adds yesterday's compact to forever memory
 - forever memory can be spidered via entities and dates

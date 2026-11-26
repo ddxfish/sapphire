@@ -270,6 +270,102 @@ def _compact_daily(chat, args, by):
                                f'per finished day (about {tokens} tokens each); today stays as it is.'}
 
 
+EXTRACT_GO_SECONDS = 600
+_extract_seen = {}      # chat -> (when, what the report said): go needs that report first
+
+
+def _extract_daily(chat, args, by):
+    """This chat's finished days into memory as day summaries, the chat left as
+    it is (core/chat/compress.py, extract). The bare command only reports what
+    it would do. `go` starts it, and only after a report for this chat that
+    still holds. go is not in the help line on purpose: the report is where
+    the word is learned, so whoever types it has read what they start."""
+    import time
+    from core.chat import compress
+    from core.personas import persona_manager
+    sm = _sm()
+    words = args.lower().split()
+    if words == ['stop']:
+        ok = compress.stop_extract()
+        return {'ok': ok, 'say': 'Stopping after the day being written. The days already saved stay.' if ok
+                else 'No extract is running.'}
+    go = 'go' in words
+    tokens, size = DAILY_TOKENS, ''.join(w for w in words if w != 'go')
+    if size:
+        m = _TOKENS_RE.fullmatch(size)
+        tokens = int(m[1]) * (1000 if m[2] else 1) if m else 0
+        if not 500 <= tokens <= 20000:
+            return {'ok': False, 'say': f"/extract-daily takes a size per day from 500 to 20K tokens, like 4K, not '{args}'."}
+    try:
+        plan = compress.extract_plan(sm, chat)
+    except ValueError as e:
+        return {'ok': False, 'say': str(e)}
+    settings, days = plan['settings'], plan['days']
+    left = []
+    if plan['held']:
+        left.append(f"{plan['held']} day{'s' if plan['held'] != 1 else ''} already kept in memory "
+                    f"{'are' if plan['held'] != 1 else 'is'} left alone.")
+    if plan['today']:
+        left.append('Today is left out until it ends.')
+    if plan['blends']:
+        left.append(f"{plan['blends']} older compress summar{'ies are' if plan['blends'] != 1 else 'y is'} left out: "
+                    f"one covers more than a day.")
+    if not days:
+        return {'ok': True, 'say': ' '.join(['No finished day of this chat is waiting to be saved.'] + left)}
+    first, last = days[0][0].isoformat(), days[-1][0].isoformat()
+    seen = (len(days), first, last, plan['scope'])
+    again = f"/extract-daily go{' ' + size.upper() if size else ''}"
+    if not go:
+        _extract_seen[chat] = (time.monotonic(), seen)
+        model = ' / '.join(x for x in (settings.get('llm_primary') or 'auto', settings.get('llm_model') or '') if x)
+        return {'ok': True, 'say': ' '.join([
+            f"{len(days)} finished day{'s' if len(days) != 1 else ''} of this chat "
+            f"{'are' if len(days) != 1 else 'is'} not in memory yet: "
+            + (first if first == last else f"{first} to {last}") + '.',
+            f"{'Each' if len(days) != 1 else 'It'} would be summarized by this chat's model ({model}), "
+            f"at most about {tokens} tokens a day, "
+            f"and saved to the memory scope '{plan['scope']}'. The chat itself is not changed."]
+            + left + [f"To start: {again}"])}
+    at, was = _extract_seen.get(chat) or (0, None)
+    if was != seen or time.monotonic() - at > EXTRACT_GO_SECONDS:
+        return {'ok': False, 'say': 'First see what it would do: /extract-daily. Then go.' if was is None or was == seen
+                else 'This chat has changed since that report. See it again: /extract-daily.'}
+    persona = settings.get('persona') or ''
+    if persona and not persona_manager.exists(persona):
+        persona = ''
+
+    def _start():
+        _extract_seen.pop(chat, None)
+        return compress.start_extract_job(
+            sm, chat, provider_key=settings.get('llm_primary') or 'auto',
+            model=settings.get('llm_model') or '', target_tokens=tokens, persona=persona)
+
+    started = (f"Saving {len(days)} day{'s' if len(days) != 1 else ''} to memory in the background, oldest first. "
+               f"Each is kept as it is written. /extract-daily stop ends it early.")
+    if by == 'user':
+        if sm.is_streaming(chat):
+            return {'ok': False, 'say': f'Wait for the reply to finish, then {again}.'}
+        ok, err = _start()
+        return {'ok': ok, 'say': started if ok else err}
+
+    if has_deferred(chat):
+        return {'ok': False, 'say': 'A command is already waiting for this turn to end.'}
+
+    def _apply():
+        ok, err = _start()
+        logger.info(f"[COMMANDS] AI /extract-daily: {'started' if ok else err}")
+        if not ok:
+            # The refusal's own words name the chat that holds the slot, which
+            # may be a private one: never those.
+            busy = compress.get_job_status().get('running')
+            _tell(chat, 'AI could not start saving days to memory: ' + (
+                'a compact was still running. Nothing was queued; run it again later.' if busy
+                else 'see the log.'), 'error')
+
+    defer(chat, _apply)
+    return {'ok': True, 'say': 'When this turn ends: ' + started[0].lower() + started[1:]}
+
+
 def _dialog(name, games=True):
     """The dialog does the rest: its route holds every rule. A game's transcript is
     the tale and its journal points into it, so Chat Manager offers no trim or
@@ -325,6 +421,9 @@ def _context(chat, args, by):
 register('compact', _dialog('compact', games=False), description='summarize older history (opens the compress dialog)')
 register('compact-daily', _compact_daily, args='[tokens]', ai=True,
          description='summarize history into one labelled summary per day for the last few days, today left as it is (default 2K tokens a day at most, e.g. /compact-daily 4K)')
+register('extract-daily', _extract_daily, args='[tokens]', ai=True,
+         description="save this chat's finished days to memory as day summaries, the chat left as it is, old chats too; "
+                     "it first reports what it would do and how to start")
 register('context', _context, description="what's taking up this chat's context, biggest first")
 register('continue', _action('continue'), description='keep writing the last reply')
 register('help', _help, args='[command]', description='list the slash commands')

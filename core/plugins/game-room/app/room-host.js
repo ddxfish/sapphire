@@ -1109,6 +1109,7 @@ function paintCadence(me) {
     const moments = (me.spec.moments || []).join(', ');
     if (c.paused) label = 'her turns paused';
     else if (c.running) label = 'her turn…';
+    else if (c.held) label = 'her turns: waiting';      // a board holds her clock (core cadence.hold): a paused film
     else if (c.mode === 'event') {
         // every-N with the game's own word: "her turn every 3rd wave (1/3)"
         const noun = me.spec.event, count = c.pokes ? ` (${c.pokes}/${c.every})` : '';

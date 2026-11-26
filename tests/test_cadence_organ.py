@@ -743,3 +743,83 @@ def test_a_failed_turn_raises_the_cause_in_words():
     cadence._system = sysobj
     with patch('core.cadence.publish'), pytest.raises(RuntimeError, match='^ValueError: the stream broke$'):
         cadence.run_turn('c', 'cue')
+
+
+# ── the hold: a holder stops the timer's clock (a paused film) ──────────────
+
+def test_hold_freezes_the_clock_and_release_gives_back_what_was_left(monkeypatch):
+    monkeypatch.setattr(cadence.random, 'uniform', lambda lo, hi: lo)
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)
+    rec = cadence._records['c']
+    rec['next_at'] = cadence._now() + 70
+    st = cadence.hold('c', True)
+    assert st['held'] is True and st['next_in'] is None
+    rec['next_at'] = cadence._now() - 500                  # a long pause: the old moment came and went
+    assert not cadence._due(rec, cadence._now())           # held: the timer does not fire
+    st = cadence.hold('c', False)
+    assert st['held'] is False and 69 <= st['next_in'] <= 70
+    assert cadence.hold('nobody', True) is None
+
+
+def test_hold_release_never_lands_a_turn_on_the_play_button():
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)
+    cadence._records['c']['next_at'] = cadence._now() + 2  # paused two seconds before her turn
+    cadence.hold('c', True)
+    st = cadence.hold('c', False)
+    assert cadence.HOLD_FLOOR_S - 1 <= st['next_in'] <= cadence.HOLD_FLOOR_S
+    cadence.arm('d', mode='timer', min_s=5, max_s=5)       # a fast room: the floor is its own min gap
+    cadence._records['d']['next_at'] = cadence._now() + 1
+    cadence.hold('d', True)
+    assert 4 <= cadence.hold('d', False)['next_in'] <= 5
+
+
+def test_a_hold_is_a_lease_and_the_keepalive_does_not_undo_it(monkeypatch):
+    monkeypatch.setattr(cadence.random, 'uniform', lambda lo, hi: lo)
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)
+    cadence._records['c']['next_at'] = cadence._now() + 50
+    cadence.hold('c', True, ttl=60)
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)   # the room's keepalive
+    assert cadence.status('c')['held'] is True
+    cadence.hold('c', True, ttl=60)                        # the holder's renewal keeps what was left
+    assert cadence._records['c']['held_left'] <= 50
+    cadence._records['c']['held_until'] = cadence._now() - 1   # the holder died
+    monkeypatch.setattr(cadence.threading, 'Thread', MagicMock())
+    cadence._tick()
+    st = cadence.status('c')
+    assert st['held'] is False and 49 <= st['next_in'] <= 50
+
+
+def test_a_moment_comes_through_a_hold_and_a_touch_waits_inside_it(monkeypatch):
+    monkeypatch.setattr(cadence.random, 'uniform', lambda lo, hi: lo)
+    cadence.arm('c', mode='timer', min_s=100, max_s=100)
+    rec = cadence._records['c']
+    cadence.hold('c', True)
+    cadence.poke('c', 'the credits', force=True)
+    assert cadence._due(rec, cadence._now())               # no last turn: the moment fires, held or not
+    rec['pending'] = None
+    cadence.touch('c')                                     # the person spoke while the film was paused
+    assert rec['held_left'] == 100 and cadence.status('c')['next_in'] is None
+    assert 99 <= cadence.hold('c', False)['next_in'] <= 100
+
+
+def test_arm_resuming_from_a_pause_rolls_a_fresh_gap(monkeypatch):
+    monkeypatch.setattr(cadence.random, 'uniform', lambda lo, hi: lo)
+    cadence.arm('c', mode='timer', min_s=100, max_s=100, paused=True)
+    cadence._records['c']['next_at'] = cadence._now() - 5  # her moment passed while paused
+    st = cadence.arm('c', mode='timer', min_s=100, max_s=100, paused=False)   # the gear's checkbox, via the keepalive
+    assert st['next_in'] > 90
+
+
+def test_a_failed_turn_says_so_on_the_end_event():
+    seen = []
+    system = MagicMock()
+    stream = MagicMock()
+    stream.chat_stream.side_effect = RuntimeError('connection refused')
+    system.llm_chat.begin_stream.return_value = (stream, 'sid', 'c')
+    system.llm_chat.session_manager.get_settings_for.return_value = {}
+    cadence._system = system
+    with patch.object(cadence, 'publish', lambda ev, data=None: seen.append((ev, data))):
+        with pytest.raises(RuntimeError):
+            cadence.run_turn('c', 'cue')
+    end = [d for ev, d in seen if ev == cadence.Events.VOICE_TURN_END][0]
+    assert end['error'] and end['text'] == ''

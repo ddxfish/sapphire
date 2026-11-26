@@ -85,6 +85,7 @@ Composer /help /status
 /retry /continue /replay
 /remove /trim /compact
 /compact-daily day summaries
+/extract-daily old chats
 /undo her last /remove
 slash_command: toolset only
 /prompt /repair

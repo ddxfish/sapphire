@@ -484,3 +484,150 @@ def test_a_timestamp_the_clock_cannot_place_is_no_day_not_a_crash():
     got = compress.day_of('0001-01-01T00:00:00+00:00')          # raises OSError inside on Windows: None there
     assert got is None or isinstance(got, date)
     assert compress.day_of('not a time') is None and compress.day_of(None) is None
+
+
+# ─── /extract-daily: a chat's days into memory, the chat left as it is ───────
+
+class Keeper:
+    """The memory side's contract (the palace's tools/daily.py), in memory."""
+
+    def __init__(self):
+        self.held, self.scope, self.why, self.kept, self.fail_on = set(), 'sapph', '', [], None
+
+    def extract_scope(self, sm, chat):
+        return self.scope, self.why
+
+    def extracted_days(self, sm, chat):
+        return set(self.held)
+
+    def keep_extracted(self, sm, chat, day):
+        if day['day'] == self.fail_on:
+            return 'the daily layer of this scope is full'
+        self.kept.append(day)
+        return ''
+
+
+class PublicSM(FakeSM):
+    """No replace_messages, no backup door: an extract that wrote the chat would crash here."""
+
+    def read_chat_settings(self, chat):
+        return {'persona': 'sapphire'}
+
+
+@pytest.fixture
+def keeper(monkeypatch):
+    k = Keeper()
+    monkeypatch.setattr(compress, '_day_keeper', k)
+    monkeypatch.setattr('config.DAY_START_HOUR', 4, raising=False)
+    monkeypatch.setattr(compress, 'publish', lambda *a, **k: pytest.fail('an extract changes no chat: no event'))
+    monkeypatch.setattr(compress, '_write_backup', lambda *a, **k: pytest.fail('an extract leaves no backup'))
+    compress._extract_stop.clear()
+    return k
+
+
+def _old_chat():
+    """February: two turns on the 10th, a plain compress summary and a turn on
+    the 11th, a day pair for the 12th, a turn on the 13th. And today."""
+    blend = {'timestamp': '2026-02-11T09:00:00', 'compressed': True}
+    return (_turn('2026-02-10T12:00:00', 1) + _turn('2026-02-10T18:00:00', 2)
+            + [{'role': 'user', 'content': '[Compressed history: 40 messages]', **blend},
+               {'role': 'assistant', 'content': 'a blend of many days', **blend}]
+            + _turn('2026-02-11T12:00:00', 3) + _pair('2026-02-12') + _turn('2026-02-13T12:00:00', 4)
+            + _turn(datetime.now().isoformat(), 5))
+
+
+def test_the_window_drops_an_old_chat_and_no_window_keeps_its_days():
+    """Why /extract-daily exists: on a chat from February the daily compact's
+    window holds nothing, so every turn rolled off and no day was written."""
+    rows = _turn('2026-02-10T12:00:00', 1) + _turn('2026-02-11T12:00:00', 2)
+    windowed = compress.daily_plan(rows, days=5, start_hour=4, now=NOW)
+    assert not windowed['raw'] and windowed['dropped'] == 2
+    whole = compress.daily_plan(rows, days=None, start_hour=4, now=NOW)
+    assert sorted(whole['raw']) == [date(2026, 2, 10), date(2026, 2, 11)] and whole['dropped'] == 0
+
+
+def test_the_extract_plan_is_the_finished_days_not_kept_yet(keeper):
+    plan = compress.extract_plan(PublicSM(_old_chat()), 'c')
+    assert [(d.isoformat(), len(rows)) for d, rows in plan['days']] == [
+        ('2026-02-10', 4), ('2026-02-11', 2), ('2026-02-13', 2)]
+    assert 'a blend of many days' not in str(plan['days'])             # covers many days: it is no day's turn
+    assert (plan['scope'], plan['held'], plan['blends'], plan['today']) == ('sapph', 0, 1, True)
+
+    keeper.held = {'2026-02-10'}                                        # this chat already gave that day
+    late = _old_chat() + _turn('2026-02-12T23:00:00', 6)                # raw turns on a day the compact summarized
+    plan = compress.extract_plan(PublicSM(late), 'c')
+    assert [d.isoformat() for d, _ in plan['days']] == ['2026-02-11', '2026-02-13'] and plan['held'] == 2
+
+
+def test_the_extract_plan_refuses_what_memory_does_not_keep(keeper, monkeypatch):
+    keeper.scope, keeper.why = None, 'private chat'
+    with pytest.raises(ValueError, match='not kept in memory: private chat'):
+        compress.extract_plan(PublicSM(_old_chat()), 'c')
+    monkeypatch.setattr(compress, '_day_keeper', None)
+    with pytest.raises(ValueError, match='Mind Palace'):
+        compress.extract_plan(PublicSM(_old_chat()), 'c')
+
+
+def test_an_extract_hands_each_day_to_memory_and_never_writes_the_chat(keeper, monkeypatch):
+    p = Provider()
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: p)
+    sm = PublicSM(_old_chat())
+    before = [dict(m) for m in sm.rows]
+    seen = []
+    report = compress._extract_chat(sm, 'c', 'auto', '', 2000, 'sapphire', on_progress=seen.append)
+    assert [(d['day'], d['text'], d['messages'], d['persona']) for d in keeper.kept] == [
+        ('2026-02-10', 'sum', 4, 'sapphire'), ('2026-02-11', 'sum', 2, 'sapphire'), ('2026-02-13', 'sum', 2, 'sapphire')]
+    assert all(d['at'] for d in keeper.kept) and seen == ['day 1/3', 'day 2/3', 'day 3/3']
+    assert 'Tuesday, February 10, 2026' in p.prompts[0] and 'u1' in p.prompts[0] and 'u3' not in p.prompts[0]
+    assert 'tight prose' in p.prompts[0]                                # the day wording, as the daily compact writes it
+    assert (report['days'], report['of'], report['stopped'], report['first'], report['last']) == (
+        3, 3, False, '2026-02-10', '2026-02-13')
+    assert sm.rows == before
+
+
+def test_a_failed_extract_keeps_the_days_before_it_and_says_so(keeper, monkeypatch):
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: Provider())
+    keeper.fail_on = '2026-02-11'
+    with pytest.raises(RuntimeError, match=r'2026-02-11 was not kept: .* \(1 of 3 days were saved before this'):
+        compress._extract_chat(PublicSM(_old_chat()), 'c', 'auto', '', 2000)
+    assert [d['day'] for d in keeper.kept] == ['2026-02-10']
+
+
+def test_a_stopped_extract_ends_after_the_day_it_was_writing(keeper, monkeypatch):
+    class Stopper(Provider):
+        def chat_completion(self, msgs, generation_params=None):
+            compress._extract_stop.set()                                # /extract-daily stop, mid-day
+            return super().chat_completion(msgs, generation_params)
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: Stopper())
+    report = compress._extract_chat(PublicSM(_old_chat()), 'c', 'auto', '', 2000)
+    assert (report['days'], report['of'], report['stopped']) == (1, 3, True)
+    assert [d['day'] for d in keeper.kept] == ['2026-02-10']            # the day being written is kept
+
+
+def test_an_extract_with_every_day_kept_spends_nothing(keeper, monkeypatch):
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: pytest.fail('no provider for a no-op'))
+    keeper.held = {'2026-02-10', '2026-02-11', '2026-02-13'}
+    with pytest.raises(compress.NothingToCompress):
+        compress._extract_chat(PublicSM(_old_chat()), 'c', 'auto', '', 2000)
+
+
+def test_the_extract_job_holds_the_one_slot_and_ends_with_its_count(keeper, monkeypatch):
+    import time
+    from core import notify
+    began, ended = [], []
+    monkeypatch.setattr(notify, 'begin', lambda title, **k: began.append((title, k.get('go'))) or 7)
+    monkeypatch.setattr(notify, 'tick', lambda *a, **k: None)
+    monkeypatch.setattr(notify, 'finish', lambda rid, **k: ended.append(k))
+    monkeypatch.setattr(compress, 'make_provider', lambda *a, **k: Provider())
+    assert compress.stop_extract() is False                             # nothing is running
+    ok, err = compress.start_extract_job(PublicSM(_old_chat()), 'c', provider_key='auto', model='',
+                                         target_tokens=2000, persona='sapphire')
+    assert ok, err
+    for _ in range(100):
+        if compress.get_job_status().get('done'):
+            break
+        time.sleep(0.02)
+    status = compress.get_job_status()
+    assert status['ok'] is True and status['mode'] == 'extract' and status['result']['days'] == 3
+    assert began == [("Saving a chat's days to memory", {'view': 'layer-daily'})]
+    assert ended == [{'title': '3 days saved to memory'}] and len(keeper.kept) == 3

@@ -9,6 +9,8 @@
 #             COMPACT_DAILY_DAYS calendar days (days start at DAY_START_HOUR);
 #             earlier runs' pairs pass through, older days roll off, and today
 #             stays raw until it ends (one pair per day, never a split day).
+#   extract — /extract-daily: the same day summaries for a chat of any age,
+#             handed to memory instead; the chat is not written (below).
 # target_tokens is the approximate total size of the compressed output
 # (whole, chunked) or of each day's summary (daily).
 #
@@ -500,7 +502,7 @@ def _stamped_day(rows) -> Optional[date]:
         return None
 
 
-def daily_plan(head: List[Dict[str, Any]], days: int, start_hour: int,
+def daily_plan(head: List[Dict[str, Any]], days: Optional[int], start_hour: int,
                now: Optional[datetime] = None) -> Dict[str, Any]:
     """Sort head into what a daily compact keeps and what it summarizes. Pure.
 
@@ -510,11 +512,12 @@ def daily_plan(head: List[Dict[str, Any]], days: int, start_hour: int,
     its day by its first timestamp, else the turn before's day. Today's raw
     turns are never summarized: a day still running would get a second pair
     from the next run (Sapphire, 2026-11-06). Anything older than the window
-    rolls off, raw or summarized.
+    rolls off, raw or summarized. days=None: no window, so nothing rolls off
+    (/extract-daily and the dry run read a chat of any age).
     kept: [(day, index, rows)]  raw: {day: (index, rows)}  today: [(day, index, rows)]
     dropped: turns."""
     today = day_of((now or datetime.now()).isoformat(), start_hour)
-    first = today - timedelta(days=max(1, days) - 1)
+    first = date.min if days is None else today - timedelta(days=max(1, days) - 1)
     kept, raw, today_rows, dropped, last = [], {}, [], 0, None
     for start, end in turn_spans(head):
         rows = head[start:end]
@@ -691,8 +694,9 @@ def _preview_days(session_manager, chat_name: str):
     if chat_settings.get("mode") in ("room", "game"):
         raise ValueError("A room's or a game's chat is not compacted by day, so there is nothing to try on it")
     import config
-    plan = daily_plan(exported["messages"], _int_setting(config, "COMPACT_DAILY_DAYS", 5, 1, 365),
-                      _int_setting(config, "DAY_START_HOUR", 4, 0, 23))
+    # No window: an old chat's days can be tried too. Inside it they read as
+    # dropped, and the dialog said every turn was already a day summary.
+    plan = daily_plan(exported["messages"], None, _int_setting(config, "DAY_START_HOUR", 4, 0, 23))
     days = {day: (rows, True) for day, (_, rows) in plan["raw"].items()}
     for day, _, turn in plan["today"]:
         days.setdefault(day, ([], False))[0].extend(turn)
@@ -745,6 +749,132 @@ def preview_day(session_manager, chat_name: str, provider_key: str, model: str,
             "messages": len(rows), "text": text, "tokens_est": count_tokens(text)}
 
 
+# ── extract: a chat's days into memory, the chat left as it is ─────────────
+#
+# /extract-daily. /compact-daily keeps a window of days and lets the rest roll
+# off, so on an old chat it removes every turn and keeps no day. This reads
+# the whole chat, writes one summary per finished day exactly as the daily
+# compact would, and hands each to the keeper as it is written. The chat is
+# never written. Core owns the reading and the summarizing; what is kept, and
+# which days a chat has already given, is the keeper's (the Mind Palace's
+# daily layer registers itself: tools/daily.py).
+
+_day_keeper = None
+_extract_stop = threading.Event()
+
+
+def set_day_keeper(keeper) -> None:
+    """keeper.extract_scope(sm, chat) -> (scope or None, why);
+    keeper.extracted_days(sm, chat) -> the ISO days of this chat already kept;
+    keeper.keep_extracted(sm, chat, day) -> '' or why it was not kept.
+    None: no memory keeps days (the palace is off or unloading)."""
+    global _day_keeper
+    _day_keeper = keeper
+
+
+def extract_plan(session_manager, chat_name: str) -> Dict[str, Any]:
+    """What /extract-daily would do with this chat. No model call, nothing
+    written. days: [(day, rows)] oldest first, the finished days still raw
+    turns that are not kept yet. One entry per chat per day: a day this chat
+    has already given (extracted before, or summarized by /compact-daily) is
+    counted in `held` and left alone. A plain compress summary covers many
+    days under one timestamp, so it is no day's turn: left out, counted in
+    `blends`. Today is still running: `today` says it was left out."""
+    keeper = _day_keeper
+    if keeper is None:
+        raise ValueError("Days are kept by the Mind Palace, and it is not on.")
+    exported = session_manager.export_chat(chat_name)
+    if exported is None:
+        raise ValueError(f"Chat '{chat_name}' not found")
+    try:
+        chat_settings = session_manager.read_chat_settings(chat_name)
+    except Exception:
+        chat_settings = None
+    if chat_settings is None:
+        raise ValueError("The chat's settings could not be read just now. Try again.")
+    scope, why = keeper.extract_scope(session_manager, chat_name)
+    if scope is None:
+        raise ValueError(f"This chat's days are not kept in memory: {why}.")
+    import config
+    plan = daily_plan(exported["messages"], None, _int_setting(config, "DAY_START_HOUR", 4, 0, 23))
+    held = set(keeper.extracted_days(session_manager, chat_name)) | {d.isoformat() for d, _, _ in plan["kept"]}
+    def blend(m):
+        return bool(m.get("compressed")) and not m.get("compressed_day")
+    days, skipped, blends = [], 0, 0
+    for day, (_, rows) in sorted(plan["raw"].items()):
+        own = [m for m in rows if not blend(m)]
+        blends += sum(1 for m in rows if blend(m) and m.get("role") == "assistant")
+        if not any(m.get("role") in ("user", "assistant") for m in own):
+            continue
+        if day.isoformat() in held:
+            skipped += 1
+            continue
+        days.append((day, own))
+    return {"settings": chat_settings, "scope": scope, "days": days, "held": skipped,
+            "blends": blends, "today": bool(plan["today"])}
+
+
+def _extract_chat(session_manager, chat_name: str, provider_key: str, model: str,
+                  target_tokens: int, persona: str = "", on_progress=None) -> Dict[str, Any]:
+    plan = extract_plan(session_manager, chat_name)
+    days = plan["days"]
+    if not days:
+        raise NothingToCompress("No days to save: every finished day of this chat is already kept in memory")
+    keeper = _day_keeper
+    instructions, wording = load_instructions(), load_instructions(daily=True)
+    provider = make_provider(provider_key, model, conversation=chat_name)   # a private chat was refused by the keeper
+    saved = []
+    for i, (day, rows) in enumerate(days):
+        if _extract_stop.is_set():
+            break
+        if on_progress:
+            on_progress(f"day {i + 1}/{len(days)}")
+        try:
+            pair = compress_messages(rows, "whole", provider, int(target_tokens), instructions=instructions,
+                                     persona=persona, day=day, daily_instructions=wording)
+            # Kept the moment it is written: a long chat is hours of model
+            # work, and a failure at day 150 must not cost the 149 before it.
+            why = keeper.keep_extracted(session_manager, chat_name, {
+                "day": day.isoformat(), "at": pair[0]["compressed_at"],
+                "text": _text_of(pair[1].get("content")).strip(), "persona": persona, "messages": len(rows)})
+            if why:
+                raise RuntimeError(f"{day.isoformat()} was not kept: {why}")
+        except Exception as e:
+            raise RuntimeError(f"{e} ({len(saved)} of {len(days)} days were saved before this; "
+                               f"/extract-daily takes up where it stopped)") from e
+        saved.append(day.isoformat())
+    return {"chat": chat_name, "mode": "extract", "days": len(saved), "of": len(days),
+            "stopped": len(saved) < len(days), "first": saved[0] if saved else None,
+            "last": saved[-1] if saved else None}
+
+
+def stop_extract() -> bool:
+    """Ask a running extract to end after the day it is writing. The days
+    already saved stay. False: no extract is running."""
+    with _job_lock:
+        if not (_job.get("running") and _job.get("mode") == "extract"):
+            return False
+    _extract_stop.set()
+    return True
+
+
+def start_extract_job(session_manager, chat_name: str, *, provider_key: str, model: str,
+                      target_tokens: int, persona: str = ""):
+    """Start the background extract. It holds the compress job's one slot: two
+    jobs would be two streams on one model. Returns (ok, error)."""
+    def done(report):
+        n, of = report["days"], report["of"]
+        return (f"Stopped: {n} of {of} days saved to memory" if report["stopped"]
+                else f"{n} day{'s' if n != 1 else ''} saved to memory")
+
+    def work(on_progress):
+        _extract_stop.clear()
+        return _extract_chat(session_manager, chat_name, provider_key, model, target_tokens,
+                             persona, on_progress=on_progress)
+    return _start_job(session_manager, chat_name, "extract", work, begin="Saving a chat's days to memory",
+                      done=done, failed="Saving days to memory failed", go={'view': 'layer-daily'})
+
+
 def get_job_status() -> Dict[str, Any]:
     with _job_lock:
         return dict(_job)
@@ -754,6 +884,21 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
                        provider_key: str, model: str, target_tokens: int,
                        keep_last_turns: int, backup: bool, persona: str = ""):
     """Start the one-at-a-time background compress. Returns (ok, error)."""
+    def work(on_progress):
+        return _compress_chat(session_manager, chat_name, mode, provider_key, model, target_tokens,
+                              keep_last_turns, backup, on_progress=on_progress, persona=persona)
+    return _start_job(
+        session_manager, chat_name, mode, work, begin=f"Compressing a chat ({mode})",
+        done=lambda r: f"Chat compressed: {r.get('messages_before')} to {r.get('messages_after')} messages",
+        failed='Chat compression failed', go={'view': 'chat-manage'},
+        after=lambda r: publish(Events.CHAT_COMPRESSED, {"chat_name": chat_name, "report": r}))
+
+
+def _start_job(session_manager, chat_name: str, mode: str, work, *, begin: str, done, failed: str,
+               go: Dict[str, Any], after=None):
+    """The one background job at a time (compress, extract). work(on_progress)
+    returns the report; done(report) is the finished row's title; after(report)
+    runs once it has ended well. Returns (ok, error)."""
     global _job
     with _job_lock:
         if _job.get("running"):
@@ -770,7 +915,7 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
         _priv = _read is None or bool(_read.get("private_chat"))    # unreadable: a private chat's until shown otherwise
     except Exception:
         _priv = True
-    nid = _notify.begin(f"Compressing a chat ({mode})", key='compress', go={'view': 'chat-manage'})
+    nid = _notify.begin(begin, key='compress', go=go)
 
     def _run():
         def on_progress(msg):
@@ -779,19 +924,15 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
             _notify.tick(nid, text=msg)
 
         try:
-            report = _compress_chat(session_manager, chat_name, mode,
-                                    provider_key, model, target_tokens,
-                                    keep_last_turns, backup,
-                                    on_progress=on_progress, persona=persona)
+            report = work(on_progress)
             with _job_lock:
                 _job.update({"running": False, "done": True, "ok": True,
                              "result": report,
                              "finished": datetime.now().isoformat()})
             logger.info(f"Compress '{chat_name}' done: {report}")
-            _notify.finish(nid, title=f"Chat compressed: {report.get('messages_before')} to "
-                                      f"{report.get('messages_after')} messages")
-            publish(Events.CHAT_COMPRESSED, {"chat_name": chat_name,
-                                             "report": report})
+            _notify.finish(nid, title=done(report))
+            if after:
+                after(report)
         except NothingToCompress as e:
             # Done, with nothing written and nothing published. The words name
             # no chat, so a private chat's row may carry them.
@@ -803,7 +944,7 @@ def start_compress_job(session_manager, chat_name: str, *, mode: str,
                              "finished": datetime.now().isoformat()})
         except Exception as e:
             logger.exception(f"Compress '{chat_name}' failed")
-            _notify.finish(nid, failed=True, title='Chat compression failed',
+            _notify.finish(nid, failed=True, title=failed,
                            body='See the log.' if _priv else str(e))
             with _job_lock:
                 _job.update({"running": False, "done": True, "ok": False,

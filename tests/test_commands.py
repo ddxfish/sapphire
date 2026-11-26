@@ -387,8 +387,8 @@ def test_page_actions_leave_the_history_alone_and_she_cannot_call_them(sm, name)
     assert sm.rows == before
 
 
-def test_she_has_remove_and_compact_daily_only():
-    assert set(commands.ai_commands()) == {'remove', 'compact-daily'}
+def test_she_has_remove_and_the_two_day_commands_only():
+    assert set(commands.ai_commands()) == {'remove', 'compact-daily', 'extract-daily'}
 
 
 def test_a_command_with_no_args_refuses_them(sm):
@@ -565,3 +565,92 @@ def test_the_undo_copy_goes_with_the_chat(store):
     store.delete_chat('s')
     store.create_chat('s')
     assert store.undo_turn_cut('s')[0] == 0
+
+
+# ─── /extract-daily: report first, then go ───────────────────────────────────
+
+@pytest.fixture
+def extract(sm, monkeypatch):
+    from datetime import date
+    state = SimpleNamespace(jobs=[], plan={
+        'settings': {'llm_primary': 'claude', 'llm_model': 'opus'}, 'scope': 'sapph',
+        'days': [(date(2026, 2, 10), []), (date(2026, 2, 11), [])], 'held': 1, 'blends': 2, 'today': True})
+    monkeypatch.setattr('core.chat.compress.extract_plan', lambda sm_, chat: state.plan)
+    monkeypatch.setattr('core.chat.compress.start_extract_job',
+                        lambda sm_, chat, **k: state.jobs.append(k) or (True, ''))
+    commands._extract_seen.clear()
+    return state
+
+
+def test_extract_daily_only_reports_until_go(sm, extract):
+    out = commands.run('/extract-daily', 'c')
+    assert out['ok'] and not extract.jobs
+    for words in ('2 finished days', '2026-02-10 to 2026-02-11', "memory scope 'sapph'", 'claude / opus',
+                  'The chat itself is not changed', '1 day already kept in memory is left alone',
+                  'Today is left out', '2 older compress summaries are left out', 'To start: /extract-daily go'):
+        assert words in out['say'], words
+    out = commands.run('/extract-daily go', 'c')
+    assert out['ok'] and 'Saving 2 days to memory' in out['say'] and '/extract-daily stop' in out['say']
+    assert extract.jobs == [{'provider_key': 'claude', 'model': 'opus', 'target_tokens': 2000, 'persona': ''}]
+    assert not commands.run('/extract-daily go', 'c')['ok'] and len(extract.jobs) == 1     # one report, one go
+
+
+def test_extract_daily_go_needs_the_report_it_is_going_on(sm, extract, monkeypatch):
+    out = commands.run('/extract-daily go', 'c')                        # never reported
+    assert not out['ok'] and 'First see what it would do' in out['say'] and not extract.jobs
+    commands.run('/extract-daily', 'c')
+    extract.plan = {**extract.plan, 'days': extract.plan['days'][:1]}   # the chat changed since
+    out = commands.run('/extract-daily go', 'c')
+    assert not out['ok'] and 'changed since that report' in out['say'] and not extract.jobs
+    commands.run('/extract-daily', 'c')
+    monkeypatch.setattr(commands, 'EXTRACT_GO_SECONDS', -1)             # the report went stale
+    assert not commands.run('/extract-daily go', 'c')['ok'] and not extract.jobs
+    commands.run('/extract-daily', 'other')                             # a report for another chat
+    monkeypatch.setattr(commands, 'EXTRACT_GO_SECONDS', 600)
+    assert commands.run('/extract-daily go', 'other')['ok'] and len(extract.jobs) == 1
+
+
+def test_extract_daily_takes_a_size_and_hides_go_from_the_help(sm, extract):
+    out = commands.run('/extract-daily 4k', 'c')
+    assert 'about 4000 tokens' in out['say'] and 'To start: /extract-daily go 4K' in out['say']
+    assert commands.run('/extract-daily go 4K', 'c')['ok'] and extract.jobs[0]['target_tokens'] == 4000
+    assert not commands.run('/extract-daily lots', 'c')['ok'] and not commands.run('/extract-daily go 21K', 'c')['ok']
+    line = next(c for c in commands.all_commands() if c['name'] == 'extract-daily')
+    assert line['args'] == '[tokens]' and ' go' not in line['description']     # the report is where go is learned
+
+
+def test_extract_daily_says_why_it_cannot_and_when_nothing_waits(sm, extract, monkeypatch):
+    extract.plan = {**extract.plan, 'days': []}
+    out = commands.run('/extract-daily', 'c')
+    assert out['ok'] and 'No finished day of this chat is waiting' in out['say'] and 'To start' not in out['say']
+
+    def refuse(sm_, chat):
+        raise ValueError("This chat's days are not kept in memory: private chat.")
+    monkeypatch.setattr('core.chat.compress.extract_plan', refuse)
+    out = commands.run('/extract-daily', 'c')
+    assert not out['ok'] and 'private chat' in out['say']
+
+
+def test_extract_daily_stop(sm, extract, monkeypatch):
+    monkeypatch.setattr('core.chat.compress.stop_extract', lambda: True)
+    assert 'days already saved stay' in commands.run('/extract-daily stop', 'c')['say']
+    monkeypatch.setattr('core.chat.compress.stop_extract', lambda: False)
+    assert not commands.run('/extract-daily stop', 'c')['ok']
+
+
+def test_her_extract_daily_reports_then_waits_for_her_turn(sm, extract):
+    assert not commands.run('/extract-daily go', 'c', by='ai')['ok']    # she sees the report first too
+    assert 'To start: /extract-daily go' in commands.run('/extract-daily', 'c', by='ai')['say']
+    out = commands.run('/extract-daily go', 'c', by='ai')
+    assert out['ok'] and out['say'].startswith('When this turn ends: saving 2 days')
+    assert not extract.jobs and commands.has_deferred('c')
+    commands.finish_turn(sm, 'c')
+    assert len(extract.jobs) == 1
+
+
+def test_a_reply_still_running_holds_the_persons_go(sm, extract):
+    commands.run('/extract-daily', 'c')
+    sm.streaming = True
+    assert not commands.run('/extract-daily go', 'c')['ok'] and not extract.jobs
+    sm.streaming = False
+    assert commands.run('/extract-daily go', 'c')['ok']                 # the report still stands
