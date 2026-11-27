@@ -716,6 +716,11 @@ def context(chat, query, level='normal', tools=True, window=0, sees=True):
     return _render_excerpts(chat, whole, scans, blind, query, room, tools, count_tokens)
 
 
+# Closes the row: providers fold it into the person's row that follows, so
+# without it their words read as the tail of the last document.
+END = "[End of reference documents]"
+
+
 def _render_whole(whole, scans, blind):
     head = ["[Reference Documents]", "Attached to this chat, shown in full:"]
     head += [f"- {n}" for n, _, _ in whole] + [f"- {n} (scanned, {p} pages, as pictures)" for _, n, p in scans] + blind
@@ -732,7 +737,7 @@ def _render_whole(whole, scans, blind):
             if why:
                 notes.append(f"{name}: {why}")
     body = [f"--- {name} ---\n{text}" for name, text, _ in whole]
-    return '\n\n'.join(['\n'.join(head)] + body + notes), pics
+    return '\n\n'.join(['\n'.join(head)] + body + notes + [END]), pics
 
 
 def _render_excerpts(chat, whole, scans, blind, query, room, tools, count_tokens):
@@ -781,4 +786,4 @@ def _render_excerpts(chat, whole, scans, blind, query, room, tools, count_tokens
             flush()
         run.append(i)
     flush()
-    return '\n\n'.join(out), []
+    return '\n\n'.join(out + [END]), []

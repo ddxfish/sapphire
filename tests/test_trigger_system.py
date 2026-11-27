@@ -511,8 +511,17 @@ class TestExecutorEventData:
         with patch('core.continuity.execution_context.ExecutionContext.run', return_value="ok") as mock_run:
             executor.run(task, event_data='{"first_name": "Bob", "text": "hello"}')
             msg = mock_run.call_args[0][0]
-            assert "Respond casually." in msg
-            assert "Bob: hello" in msg
+            # the task's own words are labeled as the app's and closed; the
+            # event's text (its sender may be the person) rides after, outside
+            own, event = msg.split("\n[End of task message]\n\n")
+            assert own == '[Task "Test Daemon" (daemon); not typed by the user]\nRespond casually.'
+            assert event.endswith("Bob: hello") and "not typed by the user" not in event
+
+    def test_event_with_no_instructions_is_the_event_alone(self):
+        """Nothing of the task's own to label: the row is the event's text."""
+        from core.continuity.executor import ContinuityExecutor
+        assert ContinuityExecutor._message({"name": "t", "type": "daemon", "initial_message": "  ",
+                                            "_event_text": ">>> Bob: hello"}) == ">>> Bob: hello"
 
     def test_no_event_data_uses_initial_message(self):
         from core.continuity.executor import ContinuityExecutor
@@ -548,7 +557,7 @@ class TestExecutorEventData:
         with patch('core.continuity.execution_context.ExecutionContext.run', return_value="Hi") as mock_run:
             executor.run(task)
             msg = mock_run.call_args[0][0]
-            assert msg == "Say hello."
+            assert msg == '[Task "Normal Task"; not typed by the user]\nSay hello.\n[End of task message]'
 
 
 # ============================================================================

@@ -32,7 +32,8 @@ scope_rag:       ContextVar       = ContextVar('scope_rag',       default=None)
 scope_private:   ContextVar[bool] = ContextVar('scope_private',   default=False)
 
 # Save-time provenance context for tool executors ({chat, persona, model,
-# channel} dict or None). Not a scope — setting=None keeps it out of
+# channel} dict or None; a task's run adds `task` = {id, type, event, n}:
+# which task, its type, whether an event set this run off, and the run). Not a scope — setting=None keeps it out of
 # apply_scopes, sidebar dropdowns, persona inheritance, continuity task
 # fields, and the force-None closure. Registry membership is what buys it
 # snapshot/restore, so it survives Starlette's per-yield context resets on

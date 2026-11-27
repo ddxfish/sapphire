@@ -115,10 +115,12 @@ def test_quiet_rides_the_card_and_the_message(quiet, monkeypatch):
     t = s.list_tasks()[0]
     assert 64 < t['quiet_min'] < 66 and t['idle_fires_now'] == 0 and t['idle_next_min'] == 60
     from core.continuity.executor import ContinuityExecutor
-    msg = ContinuityExecutor._message({'initial_message': "They've been quiet for {quiet}. Check in?"})
-    assert msg == "They've been quiet for 1 h 5 min. Check in?"
+    msg = ContinuityExecutor._message({'name': 'b', 'type': 'heartbeat',
+                                       'initial_message': "They've been quiet for {quiet}. Check in?"})
+    assert msg == ('[Task "b" (heartbeat); not typed by the user]\n'
+                   "They've been quiet for 1 h 5 min. Check in?\n[End of task message]")
     quiet(None)
-    assert ContinuityExecutor._message({'initial_message': 'quiet {quiet}'}) == 'quiet a while'
+    assert 'quiet a while' in ContinuityExecutor._message({'initial_message': 'quiet {quiet}'})
 
 
 def test_its_runtime_state_is_never_planted():

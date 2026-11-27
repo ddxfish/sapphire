@@ -1,19 +1,33 @@
 {
   "plugin": "browser",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "files": {
-    "README.md": "sha256:3ed91e0b6a316b6cc5f6b65d58f6f54f8d12caf3c3d99c594887d170000f2dc7",
-    "app/index.js": "sha256:2bb3e649786842c45a4a0ed6aeb0c142a797d45c4d3bda588304ce73b3c0d36c",
+    "README.md": "sha256:9cc36eadf725c7eb8d92e6b8410b786449016d2425fff08ead17dadba2403a4d",
+    "app/index.js": "sha256:5db855bfb7f6f37eccc284955e6a82b2a1de53bcc2e712563091971e67b268b5",
+    "bridge.py": "sha256:f149fba4a388fa446e6b64a475ecf4253cbbedb80f3d9ed796effd85c93a93e9",
     "chromium.py": "sha256:8f04a36e3d9fa97711c994aa1e79c615bb30dbecdcb9c50939f7b5b22fc4cc01",
     "daemon.py": "sha256:f3436ab565783f67ebe8eaa7190d343a1a12d63e8abaf44532b05004264af288",
+    "device_driver.py": "sha256:35302e5e006bba047ab51b265459884f9ef977703e5e0a7b8233dcc820e3225a",
     "egress.py": "sha256:78458ee3436ced55a9c03b0d2b96dfcfb73f2e5fc64ffb53a9f32a8c612344eb",
-    "engine.py": "sha256:6e589f1083e00c9c1d8c795b66af4f09e6da8359627f0b2ae3d89ee34304d674",
-    "plugin.json": "sha256:44325a53482096475d613d0241fe381714e0fb9047fc224a8b2a8c9bcc955d39",
+    "engine.py": "sha256:1ebe62042b44824d7f09b73a6f3742711dbfd79cb2b30b24d995a4db144755df",
+    "extension/manifest.json": "sha256:b027b8d964a03717d10fc3852996518d3ad07e14a4ff7d28424bac5f871c44fe",
+    "extension/pipe.html": "sha256:a0b513cc441c8a76642b687f1ac22e587540034b5ba1f5186652bb33cd3edc20",
+    "extension/pipe.js": "sha256:aa374431e0cabb8b561d8a905211d4916d1d5f3e237d49b07dfa3e4988c4c239",
+    "extension/popup.css": "sha256:1de1044af8c7279828affc2d88c5261a3db0f02db379f6c192f4b4f089097dc0",
+    "extension/popup.html": "sha256:4900321c51b49701fea04392ce1f4044e5a50cfddd0ce88023ebef460efcbac3",
+    "extension/popup.js": "sha256:73f249317daae7689384427ca5cef992d8a4f048ec78aeca8e61dbda94277afb",
+    "extension/worker.js": "sha256:826eacd91438919a5754cd5d09e22b42704141478002c4e64a0b10db695c6481",
+    "plugin.json": "sha256:6d5cd8d8d14cfbfe1d70461a4f4249535eb2ba3181fc028a459c6d5679e8a5d1",
     "reader.py": "sha256:c4ca796d885381ba30a7e8db4235caa2d5f69fa27f01a8d2f29310e2cdcddb3c",
+    "routes/extension.py": "sha256:73f73f246a843d45637e6d3ff464191c6a34a655f4399fd39507bf657e2a699d",
+    "routes/pair.py": "sha256:e1fb5846f13e65e0ed3e8710355afafcdcabf9dae3b830aba3adc07131322f53",
+    "routes/pipe.py": "sha256:ef55d92815a96af0466a310e938f63c73c39a63a9d826fad372bfa79978bd8ff",
     "routes/view.py": "sha256:fe5469347a6a6773926b50e167deb11e9a3d828981857625ce474c409de44260",
     "screen.py": "sha256:c8657dfc0bfc3021bd0021673ee8af43210e8d334e1b0b96d5b06d413af6d924",
+    "tests/test_browser_bridge.py": "sha256:d6e628f53e7141d85744edb2bb1e29da53dab1bb7772a14c2d1a8618cff5ebc2",
     "tests/test_browser_plugin.py": "sha256:73e3c83d56c7131e2c8829df8838835ef4ce77aa53e952db9f98f11531598ca3",
-    "tools/browser.py": "sha256:7db6c133773c1d04bde18bdcad2e51af4e4f52e4fab6182ad4a0adccfb0bb78a"
+    "tools/browser.py": "sha256:90bac24cf7879a581c5f50f00f2f05af7a66efda8b38a021a0e07251ae5846fa",
+    "web/main.js": "sha256:c69ff67480e83c26396147bfd2710a095d78fedf3384f88f53889ff492d4e352"
   },
-  "signature": "pwBm4aUxtThC8FzHYEUCbborCBWm/PigHdn7K/6E3lw+RZcXYYH1DoJN2x9WvVuQega0D3dcb3chMQVi5hMeAg=="
+  "signature": "QmChTdX+v4PzygUEfjVd3wmFqF4izFgVXYx2/W7H+zh9y3qRf3AisM0eDkayFpaYlIcER2raQLkyCaxHH6/tCQ=="
 }

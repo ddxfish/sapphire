@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sapphire</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header>
+  <img src="icons/48.png" alt="" width="24" height="24">
+  <div>
+    <div id="status"><span id="dot"></span><span id="words">...</span></div>
+    <div id="detail" class="muted"></div>
+  </div>
+</header>
+
+<section id="asksec" hidden>
+  <div id="askwords"></div>
+  <div class="row">
+    <div class="grow"></div>
+    <button type="button" id="askno">Cancel</button>
+    <button type="button" id="askyes" class="go">OK</button>
+  </div>
+</section>
+
+<section id="pairsec" hidden>
+  <div class="row">
+    <div id="pairwords" class="grow"></div>
+    <button type="button" id="pair">Pair this browser</button>
+  </div>
+</section>
+
+<section>
+  <label for="mode">What Sapphire may use</label>
+  <div class="seg" id="mode">
+    <button type="button" data-mode="off">Nothing</button>
+    <button type="button" data-mode="shared">Shared tabs</button>
+    <button type="button" data-mode="all">All tabs</button>
+  </div>
+  <div class="muted" id="modehelp"></div>
+</section>
+
+<section id="heresec">
+  <div class="row">
+    <div id="here" class="grow"></div>
+    <button type="button" id="share"></button>
+  </div>
+  <div class="row" id="heldrow" hidden>
+    <div class="grow" id="heldwords"></div>
+    <button type="button" id="release">Let go now</button>
+  </div>
+</section>
+
+<details id="setup">
+  <summary>Connection</summary>
+  <label for="server">Sapphire's address, as you open her in this browser</label>
+  <div class="row">
+    <input id="server" type="text" spellcheck="false" autocomplete="off" placeholder="https://192.168.1.50:8073" class="grow">
+    <button type="button" id="save">Save</button>
+  </div>
+  <label for="code">Pairing code</label>
+  <div class="row">
+    <input id="code" type="password" readonly class="grow">
+    <button type="button" id="copy">Copy</button>
+  </div>
+  <div class="muted">The easy way: open your Sapphire in a tab and press this button there. By hand: in Sapphire, Settings &gt; Devices &gt; Add device &gt; Browser, and paste this code. It is a key: anyone who has it can pose as this browser to your Sapphire.</div>
+  <div class="row">
+    <button type="button" id="retry">Connect now</button>
+    <button type="button" id="unpair" title="Forget this Sapphire. The pairing code changes, so the old pairing cannot be used again.">Unpair this browser</button>
+  </div>
+</details>
+
+<details>
+  <summary>Sites never shared</summary>
+  <textarea id="never" rows="4" spellcheck="false" placeholder="mybank.com&#10;mail.example.com"></textarea>
+  <div class="row"><div class="grow muted">One per line. Subdomains count too.</div><button type="button" id="saveNever">Save</button></div>
+</details>
+
+<div id="note" class="muted"></div>
+<script src="popup.js"></script>
+</body>
+</html>

@@ -16,10 +16,9 @@ if [ -z "${MESSAGE:-}" ]; then
     exit 1
 fi
 
-# Prepend header so Sapphire knows this is Claude Code, not the user typing
-FULL_MESSAGE="[Claude Code via terminal — not the user]
----
-$MESSAGE"
+# The task lane labels its own row from the task's name (executor._message):
+# [Task "Claude Code via terminal"; not typed by the user] ... [End of task message]
+FULL_MESSAGE="$MESSAGE"
 
 # Always fresh login — CSRF token must come from the same session.
 # Two-stage CSRF: the login form has its own token; after login the session
@@ -75,7 +74,7 @@ if not s:
           json.dumps(raw)[:200], file=sys.stderr)
     sys.exit(3)
 body = {
-    "name": "claude-code-msg",
+    "name": "Claude Code via terminal",
     "type": "task",
     "enabled": True,
     "schedule": "0 0 31 2 *",

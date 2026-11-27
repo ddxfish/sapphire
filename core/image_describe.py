@@ -75,8 +75,13 @@ def _clip(image_bytes: bytes) -> str:
     return vibes.describe(image_bytes)
 
 
-def _vlm(key: str, image_bytes: bytes, private: bool) -> str:
-    """The provider's literal caption, or '' when it cannot (every reason logged)."""
+def ask(key: str, image_bytes: bytes, prompt: str, *, private: bool, max_tokens: int = MAX_TOKENS) -> tuple[str, str, str]:
+    """One question about one image, put to the model line `key`, outside any chat.
+    Returns (answer, who answered, why not): the answer is '' when there is none and
+    `why not` then says it in words. Nothing is logged here; the caller knows what the
+    question was for. Being asked IS the statement that this line can see (as with the
+    describer): vision is forced on for the one call. `private` = a non-local line is
+    refused."""
     from core.chat.llm_providers import get_generation_params
     from core.chat.llm_providers.resolve import ProviderRefused, display_name, providers_config, resolve
     cfg = providers_config()
@@ -88,20 +93,18 @@ def _vlm(key: str, image_bytes: bytes, private: bool) -> str:
         sel = resolve(key, '', private=private, prompt_name=None, timeout=TIMEOUT,
                       health='skip', require_images=True, cfg=cfg)
     except ProviderRefused as e:
-        logger.warning(f"[DESCRIBE] {display_name(key)} refused ({e}) — CLIP instead")
-        return ''
+        return '', display_name(key), f'refused ({e})'
     data, media_type = prepare(image_bytes)
     messages = [{'role': 'user', 'content': [
-        {'type': 'text', 'text': PROMPT},
+        {'type': 'text', 'text': prompt},
         {'type': 'image', 'data': base64.b64encode(data).decode('ascii'), 'media_type': media_type},
     ]}]
-    params = {**get_generation_params(sel.key, sel.effective_model, cfg), 'max_tokens': MAX_TOKENS,
+    params = {**get_generation_params(sel.key, sel.effective_model, cfg), 'max_tokens': max_tokens,
               'disable_thinking': True}
     try:
         response = sel.provider.chat_completion(messages, None, params)
     except Exception as e:
-        logger.warning(f"[DESCRIBE] {sel.display_name} failed ({e}) — CLIP instead")
-        return ''
+        return '', sel.display_name, f'failed ({e})'
     # A describer that reasons first must not hand its scratch work over as the
     # caption (2026-09-27: GLM Flash's think block rode into the chat): thinking
     # is asked off, stripped if it comes anyway, and a reply that was ALL
@@ -109,10 +112,16 @@ def _vlm(key: str, image_bytes: bytes, private: bool) -> str:
     from core import think
     text = '' if getattr(response, 'content_is_reasoning', False) is True \
         else think.strip(getattr(response, 'content', '') or '')
+    return (text, sel.display_name, '') if text else ('', sel.display_name, 'returned nothing')
+
+
+def _vlm(key: str, image_bytes: bytes, private: bool) -> str:
+    """The provider's literal caption, or '' when it cannot (every reason logged)."""
+    text, who, why = ask(key, image_bytes, PROMPT, private=private)
     if not text:
-        logger.warning(f"[DESCRIBE] {sel.display_name} returned nothing — CLIP instead")
+        logger.warning(f"[DESCRIBE] {who} {why} \u2014 CLIP instead")
         return ''
-    return f"Image (described by {sel.display_name}; the replying model could not see it): {text}"
+    return f"Image (described by {who}; the replying model could not see it): {text}"
 
 
 def describe(image_bytes: bytes, *, private: bool | None = None) -> str:

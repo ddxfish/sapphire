@@ -77,7 +77,7 @@ def test_run_tells_the_model_what_was_removed(monkeypatch):
                           "images": [{"data": fake, "media_type": "image/png"},
                                      {"data": GOOD_B64, "media_type": "image/png"}]})
     ex.run({"name": "t", "initial_message": "reply", "chat_target": ""}, event_data=payload)
-    assert "(An attached image was removed before it reached you: could not be processed" in seen["initial_message"]
+    assert "(An attached image was removed before it reached you: could not be processed" in seen["_event_text"]
     assert len(seen["_event_images"]) == 1          # the good one still rides
 
 

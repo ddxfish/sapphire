@@ -1,4 +1,11 @@
-# 2.16.8 - Post push fixes
+# 2.16.9 - Browser Plugin
+- Added plumbing in core for Sapphire browser plugin to control Chromium browsers
+- Interacts directly with user's Chrome/Brave
+- Ghost messages have an end label now
+# 2.16.8 - Privacy Hardening
+- Vault and private mode has increased isolation
+- Tools, devices, daemons, heartbeats isolated from private chats
+- API keys not able to access private chats
 - added /extract-daily command to create daily memories without a compact
 # 2.16.7 - Forever Memory
 - using /compact-daily adds yesterday's compact to forever memory

@@ -50,6 +50,8 @@ def test_envelope_header_present_when_contributing(monkeypatch):
     assert out is not None
     assert out.startswith(ghost_messages._ENVELOPE_HEADER)
     assert "testplug: Time: 12:00" in out
+    # closed: providers fold this row into the person's row that follows it
+    assert out.endswith("\n" + ghost_messages._ENVELOPE_FOOTER)
 
 
 def test_non_string_dict_ghost_text_does_not_crash(monkeypatch):

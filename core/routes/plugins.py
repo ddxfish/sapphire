@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import logging
 from pathlib import Path
 from typing import Optional
@@ -2585,30 +2586,59 @@ async def plugin_socket(websocket: WebSocket, plugin_name: str, path: str):
     settings)`. The handler runs as its own task so unloading the plugin can
     cancel it (plugin_loader._unregister_sockets). Close codes: 4401 not
     logged in, 4404 no such socket, 4429 the plugin's sockets are full,
-    4410 the plugin went away mid-socket."""
+    4410 the plugin went away mid-socket.
+
+    A socket the plugin marked "door": "device" is opened by a paired device
+    instead: no session, a proof made with that device's key, checked before
+    anything is read from the caller (core/devices/door.py). Its handler also
+    gets `device=<id>`. Every refusal there is the same 4401, and its reason
+    carries this machine's clock so an honest device can correct its own.
+    While such a socket is open its device is looked at again every few
+    seconds: switched off, removed or given a new key, the socket closes 4401."""
     from core.auth import require_login_ws
     from core.plugin_loader import plugin_loader
 
-    if not await require_login_ws(websocket):
+    extra, chosen, proven = {}, None, None
+    came_by = plugin_loader.get_socket_door(plugin_name, path)
+    if came_by == 'device':
+        from core.auth import get_client_ip
+        from core.devices import door
+        offered = websocket.scope.get('subprotocols') or []
+        chosen = door.NAME if door.NAME in offered else None
+        proven = await asyncio.to_thread(door.prove, plugin_name, path, offered, get_client_ip(websocket))
+        if not proven:
+            await websocket.accept(subprotocol=chosen)
+            await websocket.close(code=4401, reason=f"t={int(time.time())}")
+            return
+        extra['device'] = proven[0]
+    elif not await require_login_ws(websocket):
         return                                           # closed 4401 inside
-    handler = plugin_loader.get_socket_handler(plugin_name, path)
-    await websocket.accept()
-    if handler is None:
+    handler, door_now = plugin_loader.get_socket(plugin_name, path)
+    await websocket.accept(subprotocol=chosen)
+    if handler is None or door_now != came_by:           # gone, or the plugin reloaded with another door mid-handshake
         await websocket.close(code=4404)
         return
     loop = asyncio.get_running_loop()
-    task = loop.create_task(handler(websocket, settings=plugin_loader.get_plugin_settings(plugin_name)))
+    task = loop.create_task(handler(websocket, settings=plugin_loader.get_plugin_settings(plugin_name), **extra))
     if not plugin_loader.socket_opened(plugin_name, task, loop, SOCKETS_PER_PLUGIN):
         task.cancel()
         await websocket.close(code=4429)
         return
     code = 1000
+    unpaired = []
+
+    async def still_paired():                            # an open device socket ends with its device's welcome
+        while await asyncio.to_thread(door.still, plugin_name, *proven):
+            await asyncio.sleep(door.RECHECK)
+        unpaired.append(True)
+        task.cancel()
+    watch = loop.create_task(still_paired()) if proven else None
     try:
         await task
     except asyncio.CancelledError:
         if not task.cancelled():
             raise                                        # the server itself is stopping
-        code = 4410
+        code = 4401 if unpaired else 4410
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -2616,6 +2646,8 @@ async def plugin_socket(websocket: WebSocket, plugin_name: str, path: str):
         code = 1011
     finally:
         plugin_loader.socket_closed(plugin_name, task)
+        if watch:
+            watch.cancel()
         if not task.done():
             task.cancel()
     try:

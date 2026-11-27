@@ -8,12 +8,15 @@ import copy
 import json
 import logging
 import threading
+import uuid
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Dict, Any
 from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
+
+TASK_END = "[End of task message]"      # closes the label _message puts on a task's own words
 
 
 # Module-level ContextVar holding the parsed event_data dict that triggered
@@ -267,16 +270,20 @@ class ContinuityExecutor:
         # a concurrent UI edit of this task would otherwise produce incoherent
         # merged settings (new persona name + old toolset, etc.)
         task = copy.deepcopy(task)
+        # What this run is, for a tool that opens to some runs and not others
+        # (a person's own browser: scheduled tasks, never one a message set
+        # off). Rides tool_context as `task`; stamped here, on the run's own
+        # copy, so nothing stored or posted can say it.
+        from core.continuity.scheduler import task_type
+        task["_run"] = {"id": str(task.get("id") or ""), "type": task_type(task),
+                        "event": event_data is not None, "n": uuid.uuid4().hex[:12]}
 
         # For event-triggered tasks, build message from instructions + event data
         _ev_token = None
         if event_data is not None:
-            event_display = self._format_event_data(event_data)
-            instructions = task.get("initial_message", "").strip()
-            if instructions:
-                task["initial_message"] = f"{instructions}\n\n{event_display}"
-            else:
-                task["initial_message"] = event_display
+            # The event's text (a person's Telegram line, an email) rides after
+            # the task's own message, outside its label: see _message.
+            task["_event_text"] = self._format_event_data(event_data)
 
             # Plugin-supplied images (payload["images"]). Validated here at the
             # trust boundary; saved to the chat DB + sent to vision models at the
@@ -291,7 +298,7 @@ class ContinuityExecutor:
                 if _img_notes:
                     # The model is told what it didn't get, in the user turn, so
                     # "what's in the picture?" gets an honest answer. 2026-10-02.
-                    task["initial_message"] += "".join(
+                    task["_event_text"] += "".join(
                         f"\n(An attached image was removed before it reached you: {n})" for n in _img_notes)
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -408,6 +415,7 @@ class ContinuityExecutor:
             "max_parallel_tools": task.get("max_parallel_tools"),
             "context_limit": task.get("context_limit"),
             "system_append": task.get("system_append"),
+            "task_run": task.get("_run"),
         }
         missing_scopes = []
         for setting_key in scope_setting_keys():
@@ -492,15 +500,31 @@ class ContinuityExecutor:
 
     @staticmethod
     def _message(task):
-        """The task's message, with {quiet} filled: how long the person has
-        been quiet, app-wide (core/idle.py) - "1 h 5 min", or "a while" when
-        it isn't known."""
-        msg = task.get("initial_message", "Hello.")
-        if isinstance(msg, str) and "{quiet}" in msg:
+        """The user row a task sends. Its own message goes under the house
+        label (inbox.header: who wrote it, not typed by the user) and is closed,
+        so she can tell a task's turn from a person's; it is saved that way.
+        An event's text follows outside the label: its sender may be the person.
+        {quiet} is filled with how long the person has been quiet, app-wide
+        (core/idle.py) - "1 h 5 min", or "a while" when it isn't known."""
+        event = task.get("_event_text")
+        msg = task.get("initial_message", "Hello." if event is None else "")
+        if not isinstance(msg, str):
+            return msg
+        if "{quiet}" in msg:
             from core import idle
             mins = idle.minutes(None, person=True)
             msg = msg.replace("{quiet}", idle.words(mins) if mins is not None else "a while")
-        return msg
+        parts = []
+        if msg.strip():
+            from core.chat import inbox
+            from core.continuity.scheduler import task_type
+            kind = task_type(task)
+            name = task.get("name") or task.get("id") or "unnamed"
+            head = inbox.header(f'Task "{name}"', '' if kind == 'task' else kind)
+            parts.append(f"{head}\n{msg.strip()}\n{TASK_END}")
+        if event:
+            parts.append(event)
+        return "\n\n".join(parts)
 
     def _fail(self, result, task, prefix, e):
         """One failure's words: logged, on the result, and to the UI."""

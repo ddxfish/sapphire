@@ -25,8 +25,8 @@ system prompt, and `ghost_inject` never fired for a task). Cache placement:
 ## The envelope
 
 Every ghost message is a single **user-role** message inserted **right before the
-new user turn**, opening with a sentinel header and one attributed line per
-contribution:
+new user turn**, opening with a sentinel header, one attributed line per
+contribution, and a closing line:
 
 ```
 [System context from Sapphire's own app — not written by the user]
@@ -34,10 +34,14 @@ contribution:
 - Spice: Speak a little more warmly this reply.
 - (operator): You're on a phone call — reply briefly, it's spoken aloud.
 - weather: Light rain in the user's area.
+[End of system context]
 ```
 
 - The header is `_ENVELOPE_HEADER` in `core/ghost_messages.py`. It is the sentinel
   the Claude provider looks for to find the cache boundary — do not change it lightly.
+- The closer is `_ENVELOPE_FOOTER`. Providers fold consecutive user rows into one
+  turn, so without it the person's own message read as more app context. It only
+  closes the envelope: what follows may be documents, a task's message or the person.
 - Built-in `(core)` lines (Time, Spice) render bare (they self-label).
 - The per-chat operator box renders `- (operator): …`.
 - Each plugin's line renders `- <plugin_name>: …` — attribution is **automatic and
@@ -51,7 +55,7 @@ puppetry.
 
 **Message order** in the LLM payload: `[system, *history, ghost, documents?, new-user]`
 (assembled in `_build_base_messages`). The documents row, with its pictures, rides only
-when the chat has attached documents. If nothing contributes, no ghost message is
+when the chat has attached documents, and closes itself the same way (`[End of reference documents]`). If nothing contributes, no ghost message is
 sent at all.
 
 ---
@@ -264,6 +268,7 @@ Per-turn ephemeral context rail: one user-role message inserted right before the
 
 ENVELOPE:
 - Header sentinel: "[System context from Sapphire's own app — not written by the user]" (_ENVELOPE_HEADER, core/ghost_messages.py)
+- Closing line: "[End of system context]" (_ENVELOPE_FOOTER); the row is folded into the next user row, the closer is where the app's text stops
 - One attributed line per source; attribution is runner-enforced (no label spoofing)
 
 SOURCES:

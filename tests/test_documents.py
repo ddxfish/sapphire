@@ -157,6 +157,7 @@ def test_small_file_arrives_whole(store):
     docs.add('c', 'code.py', b'def broken():\n    return 1/0\n')
     text, pics = docs.context('c', 'what is wrong', 'normal')
     assert text.startswith('[Reference Documents]')
+    assert text.endswith(docs.END)      # closed: the person's row is folded in right after it
     assert '1/0' in text and 'in full' in text and pics == []
 
 
@@ -173,6 +174,7 @@ def test_big_file_gets_excerpts_within_budget_and_says_how_to_get_more(store):
     from core.chat.budget import count_tokens
     docs.add('c', 'big.txt', _long_text(needle="the serial number is XK-4471"))
     text, _ = docs.context('c', 'XK-4471', 'light')
+    assert text.endswith(docs.END)
     assert 'XK-4471' in text and 'read_attachment' in text and 'part' in text
     assert count_tokens(text) < docs.LEVELS['light'] * 1.25
 

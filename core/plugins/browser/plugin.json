@@ -1,8 +1,8 @@
 {
   "name": "browser",
   "short_display_name": "Browser",
-  "version": "0.3.0",
-  "description": "Her own Chromium: she opens pages, reads them as text, clicks, types and takes screenshots. MCP callers get a browser of their own.",
+  "version": "0.4.0",
+  "description": "Her own Chromium: she opens pages, reads them as text, clicks, types and takes screenshots. MCP callers get a browser of their own. With the Sapphire extension in your own Brave or Chrome (a Browser device in Settings > Devices), she can also work in the tabs you share from it.",
   "author": "sapphire",
   "icon": "🌐",
   "priority": 50,
@@ -12,7 +12,30 @@
   "capabilities": {
     "tools": ["tools/browser.py"],
     "daemon": {"entry": "daemon.py"},
-    "sockets": [{"path": "view", "handler": "routes/view.py:view"}],
+    "sockets": [{"path": "view", "handler": "routes/view.py:view"},
+                {"path": "pipe", "handler": "routes/pipe.py:pipe", "door": "device"}],
+    "routes": [{"method": "GET", "path": "extension.zip", "handler": "routes/extension.py:download"},
+               {"method": "GET", "path": "extension", "handler": "routes/extension.py:where"},
+               {"method": "POST", "path": "pair", "handler": "routes/pair.py:pair"},
+               {"method": "POST", "path": "unpair", "handler": "routes/pair.py:unpair"}],
+    "devices": [
+      {
+        "driver": "browser",
+        "label": "Browser (your own)",
+        "kind": "Browser",
+        "icon": "🌐",
+        "module": "device_driver.py",
+        "capabilities": ["browser"],
+        "comes_and_goes": true,
+        "config_schema": [
+          {"key": "socket_key", "type": "string", "widget": "password", "secret": true, "setup": true,
+           "label": "Pairing code",
+           "help": "The easy way needs no code: with the Sapphire extension in that browser, open Sapphire there, press the extension's toolbar button and Pair this browser. By hand: the extension's button, Connection, Copy, and paste it here. Get the extension from Apps > Browser. The code is a key and is stored scrambled."},
+          {"key": "tasks", "type": "boolean", "default": false, "label": "Scheduled tasks may use this browser",
+           "help": "Off: she works in this browser only in a turn you started yourself (typed, spoken, or from a device). On: a task that runs on a schedule (a scheduled task or a heartbeat) may use it too, while you are away, in the tabs that browser shares. Never a task that a message, mail or a webhook sets off, never an agent, and never an MCP caller. The rules for your browser stay the same."}
+        ]
+      }
+    ],
     "app": {"label": "Browser", "icon": "🌐", "nav": false, "places": ["apps", "stage"],
             "description": "Watch her browser live and browse together: your clicks and typing go into her tab"},
     "settings": [

@@ -373,6 +373,7 @@ class ExecutionContext:
                                 or self.task_settings.get('model')),
                          provider=getattr(self, 'provider_key', None),
                          toolset=self.task_settings.get('toolset'),
+                         task=self.task_settings.get('task_run'),
                          channel='continuity')
 
         return snapshot_all_scopes()

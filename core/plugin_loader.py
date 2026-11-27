@@ -332,6 +332,7 @@ class PluginLoader:
         # Socket registry: {plugin_name: {path: async handler}}, and the live
         # handler tasks per plugin as {task: loop} so unload can end them
         self._sockets: Dict[str, dict] = {}
+        self._socket_doors: Dict[str, dict] = {}       # {plugin: {path: 'device'}}; a path not here has the login door
         self._live_sockets: Dict[str, dict] = {}
         # Daemon event source registry: {plugin_name: [source_defs]}
         self._event_sources: Dict[str, list] = {}
@@ -2913,8 +2914,12 @@ class PluginLoader:
         """Register WebSocket handlers declared in the manifest:
         [{"path": "view", "handler": "routes/view.py:view"}] -> /ws/plugin/<name>/view.
         A handler is `async def view(websocket, settings)`; core has already
-        checked the login and the Origin and accepted the socket."""
+        checked the login and the Origin and accepted the socket.
+        An entry with "door": "device" is opened by a paired device's key
+        instead of a login (core/devices/door.py); its handler is
+        `async def pipe(websocket, settings, device)`."""
         found = {}
+        doors = {}
         ns_cache = {}
         if not isinstance(sockets, list):
             logger.warning(f"[PLUGINS] {name}: capabilities.sockets must be a list")
@@ -2928,6 +2933,13 @@ class PluginLoader:
             if not path or not ref:
                 logger.warning(f"[PLUGINS] {name}: socket missing path or handler")
                 continue
+            door = sock.get("door")
+            if door not in (None, "device"):           # an unknown door is no door: never the login one by default
+                logger.warning(f"[PLUGINS] {name}: socket '{path}' names an unknown door {door!r}; skipped")
+                continue
+            if path in found:                          # one path, one door: a second entry would swap the handler behind it
+                logger.warning(f"[PLUGINS] {name}: socket '{path}' is declared twice; the second is skipped")
+                continue
             file_path, _, func_name = ref.rpartition(":") if ":" in ref else (ref, "", "handle")
             handler = self._load_handler(plugin_dir, file_path, func_name, ns_cache=ns_cache)
             if not handler:
@@ -2937,16 +2949,20 @@ class PluginLoader:
                 logger.warning(f"[PLUGINS] {name}: socket handler '{ref}' must be async def")
                 continue
             found[path] = handler
+            if door:
+                doors[path] = door
             logger.debug(f"[PLUGINS] Registered socket: /ws/plugin/{name}/{path}")
         if found:
             with self._lock:
                 self._sockets[name] = found
+                self._socket_doors[name] = doors
 
     def _unregister_sockets(self, name: str):
         """Drop a plugin's socket handlers and end its live sockets: a
         disabled or reloading plugin never keeps old code on an open socket."""
         with self._lock:
             self._sockets.pop(name, None)
+            self._socket_doors.pop(name, None)
             live = self._live_sockets.pop(name, {})
         for task, loop in live.items():
             try:
@@ -2959,6 +2975,19 @@ class PluginLoader:
     def get_socket_handler(self, plugin_name: str, path: str) -> Optional[Callable]:
         with self._lock:
             return (self._sockets.get(plugin_name) or {}).get(path.strip("/"))
+
+    def get_socket_door(self, plugin_name: str, path: str) -> Optional[str]:
+        """'device' when a paired device's key opens this socket; None = a login does."""
+        with self._lock:
+            return (self._socket_doors.get(plugin_name) or {}).get(path.strip("/"))
+
+    def get_socket(self, plugin_name: str, path: str) -> Tuple[Optional[Callable], Optional[str]]:
+        """(handler, door) of a socket, read together: the door a caller came
+        through is checked against the handler it is about to be handed."""
+        with self._lock:
+            path = path.strip("/")
+            return ((self._sockets.get(plugin_name) or {}).get(path),
+                    (self._socket_doors.get(plugin_name) or {}).get(path))
 
     def socket_opened(self, plugin_name: str, task, loop, cap: int) -> bool:
         """Count a live socket's handler task in; False when the plugin is at its cap."""

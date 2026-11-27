@@ -824,7 +824,7 @@ class LLMChat:
             return documents.context(chat_name, query, level, tools=tools, window=window, sees=sees)
         except Exception as e:
             logger.error(f"[RAG] Failed to get context: {e}", exc_info=True)
-            return f"[Reference Documents]\nThis chat's documents failed to load: {e}", []
+            return f"[Reference Documents]\nThis chat's documents failed to load: {e}\n[End of reference documents]", []
 
     def chat(self, user_input: str, on_event=None):
         """Blocking consumer of THE turn engine (chat_streaming.chat_stream).

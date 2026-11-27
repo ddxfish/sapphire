@@ -74,7 +74,7 @@ def prompt(lib, monkeypatch):
 
 def test_she_is_told_her_animations_only_when_this_chats_persona_has_clips(prompt, lib, tmp_path, monkeypatch):
     clips(tmp_path, "sapphire", "idle.mp4", "wave.mp4", "dance.mp4")
-    monkeypatch.setattr(lib, "persona_of", lambda chat=None, s=None: {"hers": "sapphire"}.get(chat, "rook"))
+    monkeypatch.setattr(lib, "persona_of", lambda chat=None, s=None: {"hers": "sapphire"}.get(chat, "nobody"))
     ev = types.SimpleNamespace(chat_name="hers", context_parts=[])
     prompt.prompt_inject(ev)
     assert len(ev.context_parts) == 1

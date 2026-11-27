@@ -208,6 +208,43 @@ async def view(websocket, settings):
 - A socket handler file is its own namespace, separate from your routes'
   files; share state through `sys.modules` ([Sharing state between files](#sharing-state-between-files)).
 
+### A socket a device opens
+
+A device that calls in on its own (a browser extension, a board) has no login
+session. Mark its socket and core lets the device in by its own key:
+
+```json
+"sockets": [{"path": "pipe", "handler": "routes/pipe.py:pipe", "door": "device"}]
+```
+
+```python
+async def pipe(websocket, settings, device):     # device = the id of the device that proved itself
+    ...
+```
+
+- The device must be one of YOUR plugin's [device drivers](devices.md), enabled,
+  with a secret field named `socket_key` holding `<key id>.<key>` (4 to 32 and
+  at least 32 characters; letters, digits, `-`, `_`). The device makes both and
+  the user pastes them in when adding it. Core never mints one.
+- The caller offers two WebSocket subprotocols: `sapphire-device` and a proof,
+  `sapphire.v1.<key id>.<unix seconds>.<nonce>.<hex HMAC-SHA256>`, signed with
+  the key over `<plugin>/<path>\n<key id>\n<seconds>\n<nonce>`. The key never
+  crosses the wire. A proof opens this one socket, once, within 5 minutes of
+  its timestamp.
+- Nothing is read from the caller before the proof is checked. Every refusal
+  is the same: accepted, then closed 4401 with the reason `t=<server unix
+  seconds>`, so a device with a wrong clock can correct it and try once more.
+  30 proofs a minute per key id and address.
+- While the socket is open core looks at the device every 20 seconds:
+  disabled, removed, or given a new code, the socket closes 4401.
+- A login session does not open such a socket, and a proof does not open a
+  login socket. Any other `door` value: the entry is skipped. One path may be
+  declared once.
+- Devices are off on a hosted Sapphire, so this door is too.
+
+The reference is the Browser plugin: `core/plugins/browser/routes/pipe.py`
+and the extension's `pipe.js`.
+
 ## Reference for AI
 
 - Declare: `capabilities.routes` = `[{method: GET|POST|PUT|DELETE (default GET), path (supports {param}, single-segment match only), handler: "file.py:function" (default function: handle), media: bool (optional; a file door for <video>/<audio>/<img> — its GETs skip the rate meter)}]`. Mounted at `/api/plugin/{plugin_name}/{path}`.
@@ -220,3 +257,4 @@ async def view(websocket, settings):
 - Routes register on load, drop on unload, re-register on hot reload.
 - Route, hook and socket files are exec'd, one namespace per file and per capability (handlers in the same file share it; a file used as both hook and route runs twice with separate state): not importable, no relative imports, no module state shared across files. Share state via a named module in `sys.modules` (the webcam plugin: `_sapphire_webcam_state`). Tool files are installed in sys.modules as `plugins.<name>.tools.<file>`.
 - Sockets: `capabilities.sockets` = `[{path, handler: "file.py:async_fn"}]` -> `/ws/plugin/{plugin_name}/{path}`; handler `async def fn(websocket, settings)` gets an ACCEPTED Starlette WebSocket; core does login+Origin, cap 8/plugin (4429), 4404 unknown, 4410 on plugin unload (handler task cancelled), 1011 on raise. No bearer, no CSRF header.
+- Device socket: entry `"door": "device"` -> handler `async def fn(websocket, settings, device)`; no session: `core/devices/door.py` `prove()` checks subprotocols `sapphire-device` + `sapphire.v1.<kid>.<unix s>.<nonce>.<hex hmac-sha256(key, "<plugin>/<path>\n<kid>\n<s>\n<nonce>")>` against the enabled device of this plugin whose secret `socket_key` is `<kid>.<key>` (key >= 32 chars); window 300 s, single use, 30/min per (address, kid); refusal = accept + close 4401 reason `t=<now>`; `door.still()` rechecked every 20 s on the open socket (4401); unknown `door` or a path declared twice = entry skipped; `plugin_loader.get_socket(name, path)` -> (handler, door).

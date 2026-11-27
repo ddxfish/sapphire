@@ -23,6 +23,16 @@ Your AI doesn't have to wait for you to talk first. Continuity lets Sapphire wak
 3. AI responds using whatever prompt, tools, and voice you configured
 4. Optionally speaks the response out loud via TTS
 
+The message is labeled for her, so she can tell a task's turn from you typing. You don't add tags yourself:
+
+```
+[Task "Morning check" (heartbeat); not typed by the user]
+Good morning! Anything on the calendar?
+[End of task message]
+```
+
+In a named chat that is also what the chat shows and keeps. A task set off by an event (a Telegram message, an email, a webhook) puts the event's text after the closing line, outside the label: only the task's own words are marked as the app's.
+
 The **Chat Name** field decides where that happens. Name a chat and the task runs inside it with saved history—she remembers previous runs, and you can read the conversation later. The UI never switches chats on its own. Leave it blank and the task runs in an invisible, ephemeral background context that leaves no chat behind.
 
 **A task can skip the AI entirely.** The editor's **Runs** radio has two settings: **Chat** (the default, everything above) and **Device**. A Device task runs one device action from [Settings > Devices](DEVICES.md) on its schedule with no model in the loop — back up to a satellite's SD card every Sunday at 4 AM, or a folder on a USB stick nightly. Pick the device, the capability and the action from what the device offers; the message and AI sections hide because nobody reads them. Actions that ask for an "I UNDERSTAND" on the Devices page (formatting a card) are never offered on a schedule. The device's answer becomes the task's last response; a failed run shows the same error toast as any other task.
@@ -150,7 +160,7 @@ KEY FIELDS:
 - active_hours_start/end: hour integers; cron matches outside the window are skipped; overnight wrap supported (e.g. 20→4)
 - chat_target: blank = ephemeral background, named = persistent chat history (never switches the UI); '__locked__' = display mask for a private chat sealed in the locked vault (saving keeps the real target)
 - persona: persona name; resolved at run time to fill prompt/voice/toolset/model/scopes
-- initial_message: what the AI receives when the task fires
+- initial_message: what the AI receives when the task fires; sent and saved as `[Task "<name>" (<type>); not typed by the user]` / the message / `[End of task message]` (the type is left out for a plain task). An event's text follows after the closing line, unlabeled. Built in `ContinuityExecutor._message`
 - inject_datetime: true = the date and time ride the per-turn ghost note in front of the task's message (never the system prompt, so a cached prompt stays cached); the old value 'date' means the same as true
 - tts_enabled: server speakers; browser_tts: an open browser tab instead; voice / pitch / speed: overrides (0.5-2.0, null = current default)
 - privacy_required: local providers only; auto-set when the pinned prompt requires privacy

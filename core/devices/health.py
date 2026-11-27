@@ -125,12 +125,16 @@ def told(device_id, result):
 def _tell(device_id, online):
     """A flip as a row in the notification center (core/notify.py): offline is
     a warning (a yellow count); back online is info, the log, so a boot where
-    every device answers stays quiet. One row per device, re-fired in place."""
+    every device answers stays quiet. One row per device, re-fired in place.
+    A device whose every driver says it comes and goes (a browser) is never a
+    warning: closed is how it spends the night."""
     try:
         from core import notify
         row = _engine().get(device_id) or {}
         name = row.get('name') or device_id
-        notify.notify(f"{name} is {'online' if online else 'offline'}", 'info' if online else 'warning',
+        specs = [_engine()._registry().get_driver(p.get('driver')) or {} for p in row.get('parts', [])]
+        ordinary = bool(specs) and all(s.get('comes_and_goes') for s in specs)
+        notify.notify(f"{name} is {'online' if online else 'offline'}", 'info' if online or ordinary else 'warning',
                       key=f"device:{device_id}", go={'view': 'settings', 'tab': 'devices'})
     except Exception as e:
         logger.debug(f"[DEVICES] notify for {device_id} failed: {e}")

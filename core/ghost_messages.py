@@ -32,6 +32,7 @@ Design:
         - Time: Tuesday, May 8, 8:55 PM
         - Spice: Speak more urgently in this reply.
         - weather: Light rain in user's area.
+        [End of system context]
 
     The envelope is the consent surface. The assistant CAN see who is speaking
     (per-line plugin attribution), so a ghost asking it to argue against the
@@ -80,6 +81,10 @@ logger = logging.getLogger(__name__)
 # especially next to images. Plain words now: what it is, who wrote it.
 # Same consent design — attribution per line, nothing hidden.
 _ENVELOPE_HEADER = "[System context from Sapphire's own app — not written by the user]"
+# Closes the envelope. Providers fold this row into the user row that follows
+# it, so without a closer the person's own words read as more app context.
+# A pure closer: what follows may be documents, a task's cue or the person.
+_ENVELOPE_FOOTER = "[End of system context]"
 
 
 def _datetime_contribution() -> Optional[str]:
@@ -239,7 +244,7 @@ def build_ghost_message(
             body_lines.append(f"- {text}")
         else:
             body_lines.append(f"- {label}: {text}")
-    return _ENVELOPE_HEADER + "\n" + "\n".join(body_lines)
+    return "\n".join([_ENVELOPE_HEADER, *body_lines, _ENVELOPE_FOOTER])
 
 
 def is_ghost_message(content: str) -> bool:

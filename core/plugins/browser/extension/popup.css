@@ -1,0 +1,32 @@
+:root { color-scheme: light dark; --line: #8884; --accent: #2f6fd6; }
+body { font: 13px/1.4 system-ui, sans-serif; width: 340px; margin: 0; padding: 12px; }
+[hidden] { display: none !important; }
+header { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+#status { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+#dot { width: 9px; height: 9px; border-radius: 50%; background: #999; display: inline-block; }
+#dot.online { background: #2e9d57; }
+#dot.connecting, #dot.lost { background: #d9a520; }
+#dot.refused, #dot.unreachable { background: #cf4a3c; }
+section, details { border-top: 1px solid var(--line); padding: 10px 0; }
+summary { cursor: pointer; font-weight: 600; }
+label { display: block; font-weight: 600; margin: 8px 0 4px; }
+section > label:first-child { margin-top: 0; }
+.muted { opacity: .72; font-size: 12px; margin-top: 4px; }
+.row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.grow { flex: 1; min-width: 0; }
+#here { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+input[type=text], input[type=password], textarea { box-sizing: border-box; width: 100%; padding: 5px 7px;
+  border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+textarea { resize: vertical; }
+button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit;
+  font: inherit; cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+.seg { display: flex; }
+.seg button { flex: 1; border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+#asksec { border: 1px solid var(--accent); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+#note { min-height: 1.2em; }

@@ -12,6 +12,13 @@
 # no downloads, no service workers, no typing into password fields, no js.
 # Her network goes through egress.py, the proxy that enforces the address rule.
 # Chromium starts on the first call and a lane closes after it sits idle.
+#
+# A third kind, `ext-<device>`, is a PERSON'S own browser, paired in Devices:
+# nothing is launched, Playwright attaches to bridge.py's relay and the
+# extension there drives the tabs that person shares. Always railed, whatever
+# the switch says: it holds their real logins. No proxy of ours is in its
+# path, so its address rule is checked here (person_blocked) and by the
+# extension. Closing such a lane only lets go of their tabs.
 import asyncio
 import collections
 import ipaddress
@@ -24,7 +31,7 @@ import time
 import weakref
 from urllib.parse import urlsplit
 
-from . import chromium, egress
+from . import bridge, chromium, egress
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +40,7 @@ ACTION_MS = 8000           # one click / fill / wait
 NAV_MS = 30000             # one navigation
 VIEWPORT = {'width': 1280, 'height': 800}
 HER = 'sapphire'
+EXT = 'ext-'               # + a device id: that person's own browser (bridge.py)
 
 _loop = None
 _thread = None
@@ -42,6 +50,7 @@ _locks = {}                # name -> asyncio.Lock: one start, close or wipe of a
 _busy = collections.Counter()   # name -> calls using it now (using())
 _stopped = False           # shutdown() ran: refuse calls until allow()
 _start_lock = threading.Lock()
+_hands = {}                # chat -> the person's browser that chat's turns are in (absent: her own browser)
 settings = {}              # the plugin's settings, refreshed by every tool call
 _egress = {}               # lane name -> its proxy server (egress.py): every lane's traffic goes through one
 _socks = None              # the SOCKS upstream as last read (None = not read since a settings change)
@@ -71,6 +80,9 @@ class Lane:
         self.viewed_at = 0.0           # when a tool last read it
         self.read = None               # (page, document id) her refs came from (tools/browser.py _view)
         self.dialog = ''               # the last alert/confirm a page raised, until her next look says it
+        self.bridge = None             # an ext lane: the relay to that person's browser
+        self.browser = None            # ...and Playwright's connection to it
+        self.tab_ids = weakref.WeakKeyDictionary()   # ...and which of their tabs each page is
         self.watched = weakref.WeakSet()
         self.crashed = weakref.WeakSet()
         for p in ctx.pages:
@@ -122,6 +134,9 @@ class Lane:
 
     def tab(self):
         if self.page is None or self.page.is_closed() or self.page in self.crashed:
+            if self.bridge:                # their browser: never slide onto another of their tabs unasked
+                self.page = None
+                return None
             open_ = [p for p in self.ctx.pages if not p.is_closed() and p not in self.crashed]
             self.page = open_[-1] if open_ else None
         return self.page
@@ -178,6 +193,13 @@ def run(coro_fn, *args, timeout=CALL_TIMEOUT):
         raise TimeoutError(f"the browser took longer than {timeout}s")
 
 
+def post(fn, *args):
+    """Run the plain function fn(*args) on the engine's loop, in the order
+    posted, without waiting (the pipe's frames, routes/pipe.py)."""
+    _ensure()
+    _loop.call_soon_threadsafe(fn, *args)
+
+
 async def call(coro_fn, *args, timeout=CALL_TIMEOUT):
     """run() for a caller on another asyncio loop (the viewer's socket): awaits
     instead of blocking that loop."""
@@ -204,6 +226,7 @@ def shutdown():
     global _loop, _thread, _pw, _stopped
     with _start_lock:
         _stopped = True
+        _hands.clear()
         loop, thread = _loop, _thread
     if thread and thread.is_alive():
         try:
@@ -234,6 +257,7 @@ async def _close_all():
         for srv in _egress.values():
             srv.close()
         _egress.clear()
+        await bridge.close_all()                   # every paired browser's pipe
     finally:
         if _pw:                                    # stopping the driver takes any Chromium still up with it
             try:
@@ -261,8 +285,8 @@ async def _close(name):
 async def _close_now(name):
     lane = _lanes.pop(name, None)
     if lane:
-        try:
-            await asyncio.wait_for(lane.ctx.close(), 15)
+        try:                                       # a person's browser: disconnect only, their tabs stay
+            await asyncio.wait_for(lane.browser.close() if lane.browser else lane.ctx.close(), 15)
         except Exception as e:
             logger.warning(f"[BROWSER] closing {name}: {e!r}")
         logger.info(f"[BROWSER] lane '{name}' closed")
@@ -273,6 +297,9 @@ async def using(name, fn, *args):
     window-switch relaunch leave a lane alone while anything is using it."""
     _busy[name] += 1
     try:
+        if name.startswith(EXT):                   # a person's browser has ONE tab in hand: one call at a time there
+            async with _lock(name + ':use'):
+                return await fn(name, *args)
         return await fn(name, *args)
     finally:
         _busy[name] -= 1
@@ -320,7 +347,117 @@ def _is_self(url):
 
 
 def guarded(name):
-    return name == HER and bool(settings.get('guard_rails', True))
+    return name.startswith(EXT) or (name == HER and bool(settings.get('guard_rails', True)))
+
+
+def hand(chat):
+    """The lane this chat's turns use now: her own browser, or the person's
+    she switched to there. Per chat: a switch in one chat never moves another
+    chat's turns into a person's browser."""
+    return _hands.get(chat, HER)
+
+
+SCHEDULED = ('task', 'heartbeat')                  # task types the clock starts; never one an event sets off
+
+
+def turn():
+    """(who, '') for a turn that may reach a person's browser, (None, what
+    started it) otherwise. `who` is the chat when a PERSON started the turn
+    (they typed, spoke, or used a device), and ('task', id, run) for a run of
+    a scheduled task, which may() lets in only where the person switched that
+    on. A person's browser holds their logins: never an agent, a task a
+    message or a webhook set off, or a turn a message from outside started (a
+    text, Discord, mail, another Sapphire). What cannot be told gets nothing."""
+    try:
+        from core.chat.function_manager import tool_context
+        ctx = tool_context.get() or {}
+        from core import mcp_server
+        if mcp_server.answering.get():
+            return None, 'a message over MCP'
+        if ctx.get('channel'):
+            run = ctx.get('task')
+            run = run if isinstance(run, dict) else {}
+            if run.get('id') and run.get('n') and run.get('type') in SCHEDULED and run.get('event') is False:
+                return ('task', run['id'], run['n']), ''
+            return None, 'an agent, or a task that a message or a webhook set off'
+        chat = ctx.get('chat')
+        if not chat:
+            return None, 'something that is not a chat turn'
+        from core import idle
+        from core.api_fastapi import get_system
+        writing = [s for s in get_system().llm_chat.streams_for_chat(chat) if not s.llm_done]
+        if len(writing) != 1:
+            return None, 'a turn that cannot be told apart'
+        source = getattr(writing[0], 'turn_source', None)
+        if idle.is_person(source):
+            return chat, ''
+        return None, f"a machine turn ({str(source).split(':', 1)[0]})"
+    except Exception as e:
+        logger.warning(f"[BROWSER] could not tell who started the turn ({type(e).__name__})")
+        return None, 'a turn that cannot be told apart'
+
+
+TASKS = 'tasks'                                    # the Browser device's switch (plugin.json)
+
+
+def may(who, device):
+    """True when the turn `who` (turn()'s first answer) may use this paired
+    browser: a person's own turn always; a scheduled task's run only while
+    'Scheduled tasks may use this browser' is on for that device. Read from
+    the device each time, so switching it off stops a run at its next call."""
+    if who is None:
+        return False
+    if not isinstance(who, tuple):
+        return True
+    try:
+        from core.devices import engine as devices
+        row = devices.rows().get(device) or {}
+        return any(p.get('driver') == 'browser' and (p.get('config') or {}).get(TASKS) is True
+                   for p in row.get('parts', []) if isinstance(p, dict)) and row.get('enabled', True) is not False
+    except Exception as e:
+        logger.warning(f"[BROWSER] could not read {device}'s tasks switch ({type(e).__name__})")
+        return False
+
+
+def refused(who, started_by, label):
+    """The words for a turn that may not use this paired browser."""
+    if isinstance(who, tuple):
+        return (f"{label} is the user's own browser. A scheduled task may use it only while they have "
+                f"'Scheduled tasks may use this browser' switched on for it (Settings > Devices), and it is off.")
+    return (f"{label} is the user's own browser: it can be used only in a turn they started themselves "
+            f"(typed, spoken, or from a device), or by a scheduled task where they switched that on. "
+            f"This turn was started by {started_by}.")
+
+
+def up(name):
+    """The lane if it is running; never starts it."""
+    return _lanes.get(name)
+
+
+class _Free:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def one_at_a_time(name, inside):
+    """The lock using() holds for a person's lane, for a call that came in on
+    another lane and reaches over (a switch into their browser from her own).
+    `inside` is the lane the call is already running on: its lock is held."""
+    return _Free() if name == inside else _lock(name + ':use')
+
+
+def take_hand(chat, name):
+    if name == HER:
+        _hands.pop(chat, None)
+        return
+    if isinstance(chat, tuple):                    # a task's hand lasts one run: its earlier runs' are forgotten,
+        runs = [k for k in _hands if isinstance(k, tuple)]          # and so is all but the newest few of any task
+        for old in [k for k in runs if k[1] == chat[1]] + runs[:-20]:
+            _hands.pop(old, None)
+    _hands[chat] = name
 
 
 _RULES = (('guard_rails', True), ('self_login', False))
@@ -354,6 +491,8 @@ async def _drop_tunnels():
 async def _rules_changed():
     await _drop_tunnels()
     for lane in list(_lanes.values()):
+        if lane.bridge:
+            continue                               # a person's browser: its cookies are theirs
         try:
             await _sync_login(lane)
         except Exception as e:
@@ -363,9 +502,10 @@ async def _rules_changed():
 async def lane(name):
     """The lane, launched if needed, its self-login synced to the switch."""
     async with _lock(name):                        # two callers never launch one profile twice
-        have = await _lane(name)
+        have = await (_person_lane(name) if name.startswith(EXT) else _lane(name))
     have.used = time.monotonic()
-    await _sync_login(have)
+    if not have.bridge:
+        await _sync_login(have)
     return have
 
 
@@ -420,6 +560,113 @@ async def _lane(name):
         have.watch(page)
         have.page = page
     return have
+
+
+# --- a person's own browser (bridge.py) ------------------------------------------
+
+async def _person_lane(name):
+    """The lane on a paired browser: attach to its relay; nothing is launched
+    and no tab is opened. The tab she last held there is taken again."""
+    global _pw
+    device = name[len(EXT):]
+    b = bridge.get(device)
+    have = _lanes.get(name)
+    if have and have.bridge is not b:              # that browser reconnected: the old attachment is dead
+        await _close_now(name)
+        have = None
+    if b is None or b.closed:
+        raise NotReady(f"{device}'s browser is not connected right now.")
+    if not b.info.get('v'):                        # its hello carries what the rails need (her own address there)
+        raise NotReady(f"{device}'s browser is still connecting; try again in a moment.")
+    if have is None:
+        if _pw is None:
+            from playwright.async_api import async_playwright
+            _pw = await async_playwright().start()
+        b.blocked = lambda url, local_ok, b=b: person_blocked_now(b, url, local_ok)
+        relay = await b.start()
+        try:
+            browser = await _pw.chromium.connect_over_cdp(relay)
+        except Exception as e:                     # the error names the relay's address, which is a secret path
+            logger.warning(f"[BROWSER] could not attach to {device}'s browser: {type(e).__name__}")
+            raise NotReady(f"{device}'s browser is not connected right now.") from None
+        ctx = browser.contexts[0]
+        ctx.set_default_timeout(ACTION_MS)
+        ctx.set_default_navigation_timeout(NAV_MS)
+        have = _lanes[name] = Lane(name, ctx, True, True)
+        have.bridge, have.browser = b, browser
+        logger.info(f"[BROWSER] lane '{name}' attached to that browser")
+        if b.last is not None:
+            try:
+                await person_take(have, b.last)
+            except Exception:
+                b.last = None                      # closed, or no longer shared
+    return have
+
+
+async def person_take(lane, tab):
+    """Her hand on one of their tabs: the extension's debugger goes on it and
+    Playwright gets a page, which becomes the tab in hand."""
+    b = lane.bridge
+    await b.take(tab)
+    for _ in range(100):
+        for page in lane.ctx.pages:
+            if not page.is_closed() and await tab_id(lane, page) == tab:
+                lane.page, b.last = page, tab
+                bridge.remember(b.name, tab)
+                return page
+        await asyncio.sleep(0.05)
+    raise RuntimeError("that tab did not open to me")
+
+
+async def tab_id(lane, page):
+    """Which of their tabs this page is (the relay knows a page by its target)."""
+    if page not in lane.tab_ids:
+        side = await lane.ctx.new_cdp_session(page)
+        try:
+            info = await side.send('Target.getTargetInfo')
+        finally:
+            try:
+                await side.detach()
+            except Exception:
+                pass
+        lane.tab_ids[page] = lane.bridge.tab_of(info['targetInfo']['targetId'])
+    return lane.tab_ids[page]
+
+
+def _origin(url):
+    u = urlsplit(url or '')
+    try:
+        return (u.scheme, (u.hostname or '').lower().rstrip('.'), u.port or (443 if u.scheme == 'https' else 80))
+    except ValueError:
+        return None
+
+
+def person_blocked_now(b, url, local_ok=False):
+    """Why she may not be at `url` in a person's browser, judged without
+    asking any resolver (the tab list uses this for every tab), or ''."""
+    u = urlsplit(url or '')
+    if u.scheme in ('about', 'data', 'blob'):
+        return ''
+    if u.scheme not in ('http', 'https'):
+        return f"{u.scheme or 'such'}: pages are off limits"
+    mine = _origin(b.info.get('origin'))
+    if mine and mine[1] and _origin(url) == mine and not settings.get('self_login'):
+        return "that is this Sapphire's own page, which needs the 'Log in to this Sapphire' switch"
+    if not local_ok and _is_local_name(u.hostname or ''):
+        return f"{u.hostname} is a local network address, which they would have to share by hand"
+    return ''
+
+
+async def person_blocked(b, url, local_ok=False):
+    """person_blocked_now, then the name is resolved here like her own lane's
+    are (never when SOCKS is to resolve names: this machine must not hear them)."""
+    why = person_blocked_now(b, url, local_ok)
+    u, origin = urlsplit(url or ''), _origin(url)
+    if why or local_ok or not origin or u.scheme not in ('http', 'https') or (_remote_dns() and _upstream()):
+        return why
+    if (await host_check(origin[1], origin[2]))[0]:
+        return f"{u.hostname} is a local network address, which they would have to share by hand"
+    return ''
 
 
 async def _launch(path, kw):
@@ -556,12 +803,16 @@ def _remote_dns():
     return bool(getattr(config, 'SOCKS_REMOTE_DNS', False))
 
 
+LOCAL_SUFFIXES = ('.localhost', '.local', '.lan', '.internal', '.intranet', '.private', '.corp', '.home', '.box',
+                  '.localdomain', '.home.arpa')
+
+
 def _is_local_name(host):
-    h = (host or '').lower().strip('[]')
+    h = (host or '').lower().strip('[]').rstrip('.')       # "nas.lan." is nas.lan
     try:
         return not ipaddress.ip_address(h).is_global
     except ValueError:
-        return h == 'localhost' or h.endswith(('.local', '.lan', '.home.arpa')) or '.' not in h
+        return h == 'localhost' or h.endswith(LOCAL_SUFFIXES) or '.' not in h
 
 
 try:

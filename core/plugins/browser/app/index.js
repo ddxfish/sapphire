@@ -5,6 +5,9 @@
 // in her page's own pixels (the state's width x height). Touch: a drag
 // scrolls, a tap clicks. Her lane only; the network rails still hold.
 
+import { fetchWithTimeout } from '/static/shared/fetch.js';
+import { showModal, escapeHtml } from '/static/shared/modal.js';
+
 let cleanupFn = null;
 
 const CSS = `
@@ -29,6 +32,29 @@ const CSS = `
 .bv-type input { flex: 1; min-width: 0; padding: 5px 8px; }
 @container (max-width: 560px) { .bv-chip, .bv-wide { display: none; } .bv-addr { flex-basis: 140px; } }
 `;
+
+// The extension for the user's own browser: the few steps to load and pair it, for a
+// browser on this computer. (A page cannot link to brave://extensions, so it is copied.)
+async function extensionHelp() {
+    let info = {};
+    try { info = await fetchWithTimeout('/api/plugin/browser/extension', {}, 10000) || {}; } catch (e) { /* the steps still show */ }
+    const copy = (text) => `<div style="margin:2px 0 6px"><code style="user-select:all;word-break:break-all">${escapeHtml(text)}</code> `
+        + `<button type="button" class="bv-copy" data-copy="${escapeHtml(text)}">Copy</button></div>`;
+    const steps = [
+        `Open a new tab and go to:${copy(navigator.brave ? 'brave://extensions' : 'chrome://extensions')}`,
+        'Turn on <b>Developer mode</b> (top right).',
+        `Press <b>Load unpacked</b> and pick this folder:${copy(String(info.path || 'core/plugins/browser/extension in the Sapphire folder'))}`,
+        'Come back to Sapphire. Press the puzzle-piece icon in the toolbar, then <b>Sapphire</b>, then <b>Pair this browser</b>.',
+        'Press <b>Allow</b> here in Sapphire.',
+    ];
+    showModal('Use Sapphire in this browser', [{ type: 'html', value:
+        `<ol style="margin:0;padding-left:22px;line-height:1.9">${steps.map((t) => `<li>${t}</li>`).join('')}</ol>` }], null);
+    for (const b of document.querySelectorAll('.bv-copy')) {
+        b.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; } catch (_) { b.textContent = 'Select it and copy'; }
+        });
+    }
+}
 
 function el(tag, attrs = {}, ...kids) {
     const n = document.createElement(tag);
@@ -63,7 +89,10 @@ export async function render(container) {
             btn('⟳', 'Reload', () => send({ t: 'nav', what: 'reload' })),
             form, chip,
             el('button', { type: 'button', title: 'Clear browser profile: every login, site data, history and cache', onclick: forget },
-                '\u{1F9F9}', el('span', { class: 'bv-wide' }, ' Clear browser profile'))),
+                '\u{1F9F9}', el('span', { class: 'bv-wide' }, ' Clear browser profile')),
+            el('button', { type: 'button', onclick: extensionHelp,
+                title: 'Let her work in your own Brave or Chrome, in the tabs you share from it: how to get the Sapphire extension and pair it.' },
+                '\u{1F9E9}', el('span', { class: 'bv-wide' }, ' Extension for your browser'))),
         tabs, note, stage,
         el('form', { class: 'bv-type', onsubmit: (e) => { e.preventDefault(); if (typeBox.value) send({ t: 'text', text: typeBox.value }); typeBox.value = ''; } },
             typeBox, el('button', { type: 'submit' }, 'Type')));

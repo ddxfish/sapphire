@@ -109,3 +109,20 @@ def test_stop_ends_the_keeper(rig):
     assert until(lambda: 'pi' in rig.asked)
     health.stop()
     assert until(lambda: not health._keeper.is_alive())
+
+
+def test_a_device_that_comes_and_goes_is_never_an_offline_warning():
+    # a browser someone closes at night: offline is ordinary, so the log, not a yellow count
+    specs = {'browser': {'comes_and_goes': True}, 'ssh': {}}
+    rows = {'brave': {'id': 'brave', 'parts': [{'driver': 'browser'}]},
+            'desk': {'id': 'desk', 'parts': [{'driver': 'ssh'}]},
+            'both': {'id': 'both', 'parts': [{'driver': 'browser'}, {'driver': 'ssh'}]}}
+    e = types.SimpleNamespace(get=rows.get, _registry=lambda: types.SimpleNamespace(get_driver=specs.get))
+    said = []
+    with patch.object(health, '_engine', lambda: e), \
+         patch('core.notify.notify', lambda text, level, **kw: said.append((text, level))):
+        for name in rows:
+            health._tell(name, False)
+        health._tell('desk', True)
+    assert said == [('brave is offline', 'info'), ('desk is offline', 'warning'),
+                    ('both is offline', 'warning'), ('desk is online', 'info')]

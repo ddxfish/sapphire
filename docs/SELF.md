@@ -201,6 +201,7 @@ Webcam
 Screenshot
 Own Chromium browser
 Browse together viewer
+User's browser, paired
 MIDI synth music
 3D avatar
 ### Life

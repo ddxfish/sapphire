@@ -36,7 +36,7 @@ No login needed:
 A browser session sends `X-CSRF-Token` on every POST/PUT/PATCH/DELETE. It must equal the session's token, which the server stamps into the page it serves (there is no API to fetch it). A missing or wrong token is **403** "This page is out of date. Reload it and try again." `/login` and `/setup` carry it as the form field `csrf_token`. Bearer-token callers have no cookie and need no CSRF header.
 
 ### WebSockets
-`/ws/conversation` and `/ws/plugin/{plugin}/{path}` accept the session cookie only (no Bearer), and the `Origin` must match `Host`. A refused handshake is accepted and closed with **4401**. `/ws/conversation` also closes 4409 (local conversation mode is on) and 4500 (the session could not start). Plugin sockets also close 4404 (no such socket), 4429 (that plugin already holds 8), 4410 (the plugin unloaded), 1011 (its handler crashed).
+`/ws/conversation` and `/ws/plugin/{plugin}/{path}` accept the session cookie only (no Bearer), and the `Origin` must match `Host`. A refused handshake is accepted and closed with **4401**. One exception: a plugin socket declared for a device (`"door": "device"`, today the Browser plugin's `pipe`) takes no session; a paired device opens it with a signed proof in the WebSocket subprotocol ([plugin-author/routes.md](plugin-author/routes.md#a-socket-a-device-opens)). `/ws/conversation` also closes 4409 (local conversation mode is on) and 4500 (the session could not start). Plugin sockets also close 4404 (no such socket), 4429 (that plugin already holds 8), 4410 (the plugin unloaded), 1011 (its handler crashed).
 
 ### Status codes
 - **401**: no login on an `/api/*` route, or a persona key used on one.
@@ -577,7 +577,7 @@ What a plugin declares in its manifest. See [plugin-author/routes.md](plugin-aut
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET/POST/PUT/DELETE | `/api/plugin/{plugin}/{path}` | The plugin's own HTTP routes. Session login, or a Bearer matching the key the plugin keeps in `user/plugin_state/{plugin}_mcp_key.json`. A non-object JSON body arrives as `{}`; 404 no such route |
-| WS | `/ws/plugin/{plugin}/{path}` | The plugin's own WebSocket (`capabilities.sockets`). Session cookie + same origin; 8 per plugin; close codes under [WebSockets](#websockets) |
+| WS | `/ws/plugin/{plugin}/{path}` | The plugin's own WebSocket (`capabilities.sockets`). Session cookie + same origin, or a paired device's proof for a socket declared `"door": "device"`; 8 per plugin; close codes under [WebSockets](#websockets) |
 
 ### Store (read-only proxy of sapphireblue.dev catalog)
 
@@ -933,7 +933,7 @@ AUTH:
 - Bearer auth needs no CSRF token
 - Persona key (token made with `persona`): works ONLY at /mcp; on any other route it counts as no key (401 on /api/*)
 - Open (no login): GET /api/health; /api/events/webhook/{path} (the task's own secret, when it has one: a webhook with none is open); /login, /setup (form CSRF, 5/60s per IP); /favicon.ico; static mounts /static /user-assets /user-fonts /core-widgets; the 12 device doors /api/devices/{id}/{wake,voice,room,text (POST+GET),press,ask,chats,chat,face/shown,history,events} (device key as Bearer)
-- WebSockets /ws/conversation and /ws/plugin/{plugin}/{path}: session cookie only + Origin == Host; refused = close 4401
+- WebSockets /ws/conversation and /ws/plugin/{plugin}/{path}: session cookie only + Origin == Host; refused = close 4401. A plugin socket with manifest `"door": "device"` (browser/pipe): no session, a paired device's HMAC proof in the subprotocol (core/devices/door.py)
 - 429 buckets per session/IP: chat 30/min, TTS 30/min, transcribe 20, plugin routes 60 GET/30 other, devices 240 reads/60 writes
 - 401 = not logged in on /api/* (a persona key there too); 307 = no login on a page route OR on /mcp → /login, and before setup every route → /setup; 403 = a refusal by rule (CSRF, a wrong passphrase / password / webhook secret, managed mode, the privacy gate), never "not logged in"
 

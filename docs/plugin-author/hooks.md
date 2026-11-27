@@ -629,6 +629,7 @@ When ghost contributions exist for a turn, the runner builds a single envelope a
 - Spice: Speak more urgently in this reply.
 - weather: Light rain in user's area.
 - calendar: User has a meeting in 15 minutes.
+[End of system context]
 ```
 
 Each line is attributed to the plugin that contributed it. The opener tells the assistant unambiguously that the content is operator metadata, not the user. The assistant can choose to weave the context naturally, mention it explicitly, or refuse to comply with any individual line.

@@ -7,6 +7,7 @@ import * as api from '../api.js';
 import { getViewedChat } from '../core/bound-chat.js';
 
 const HEADER = '[System context';
+const FOOTER = '[End of system context';
 let initialized = false;
 let seq = 0;
 
@@ -29,7 +30,7 @@ export async function refreshGhostLast() {
         if (r.private) return paint('(private chat: not kept)', null);
         if (r.ghost === null) return paint('(no turn since Sapphire started)', null);
         if (!r.ghost) return paint('(the last turn carried no ghost)', r.at);
-        const body = r.ghost.split('\n').filter(l => !l.startsWith(HEADER)).join('\n');
+        const body = r.ghost.split('\n').filter(l => !l.startsWith(HEADER) && !l.startsWith(FOOTER)).join('\n');
         paint(body, r.at);
     } catch {
         if (mine === seq) paint('(could not load)', null);

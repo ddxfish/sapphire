@@ -88,7 +88,7 @@ Image tools from the palace (`memory_view_image`, `local_view_images`, `memory_s
 | `browser_open` | Open a page and read it |
 | `browser_look` | Read the current page again |
 | `browser_act` | One action on the page (click, type, ...), then read it again |
-| `browser_tabs` | List / switch / close tabs |
+| `browser_tabs` | List / switch / close tabs. With your own browser paired (a Browser device, [Devices](DEVICES.md#your-own-browser)), the list also shows the tabs you share from it, and a switch to one puts the other five tools in that tab |
 | `browser_console` | What the pages logged: console messages, page errors, failed requests |
 | `browser_js` | Run a JavaScript expression in the current tab |
 
@@ -310,7 +310,7 @@ TOOL MODULES:
 - No save_person, save_knowledge, search_knowledge, delete_knowledge on the Mind Palace — facts on people go in save_memory(layer='entities', entity=...), long-form in layer='knowledge'
 - documents.py: read_attachment, search_attachments — auto-added to a turn whenever the chat has documents (docs bar not off)
 - web.py: web_search, get_website(url, show_image_urls?=false|true|only), get_wikipedia, research_topic, get_site_links, web_view_images(query? | url?, count?=6, page?=1, view?=true)
-- browser plugin: browser_open, browser_look, browser_act, browser_tabs, browser_console, browser_js
+- browser plugin: browser_open, browser_look, browser_act, browser_tabs, browser_console, browser_js. A paired browser of the user's (device kind Browser): browser_tabs list shows its tabs as `<device>:N`; `switch index="<device>:N"` moves your hand there, `switch index=N` back; `new index="<device>"` opens a tab there. Always railed there; only in a turn the user started, or a scheduled task's run when the user switched that on for the device; browser_open never navigates over the user's own tab; you close only tabs you opened
 - mindpalace library_tools.py: library, read_document, memory_view_image(query? + count? | document_id | image_id=img:<id>, private_key?), local_view_images(paths? | folder?, page?, count?), memory_save_image(source, topic, caption?, private_key?) — source = img:<id> | doc:<N> | /abs/path | URL; every image-returning tool appends an '(image img:<id>)' receipt line
 - webcam: capture_webcam. screenshot: get_screenshot. sd-server: generate_image. comfyui: comfy_generate, comfy_list_workflows
 - Images: IMAGE_MEMORY_TURNS (default 3: turns an image stays in view; 0 = arrival turn only); a model with no vision gets a caption (Settings › Images, IMAGE_DESCRIBE_ENGINE: clip, or one of the user's models); '[image not sent: this model has no vision]' = that provider's vision flag is off. WEB_IMAGES_SAFESEARCH (off), IMAGE_UPLOAD_MAX_WIDTH (1920).

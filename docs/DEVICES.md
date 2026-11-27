@@ -841,6 +841,122 @@ Everything stays on your network. The phone's certificate is pinned at
 pairing; a phone that comes back with another one is refused until it is
 paired again. **Unpair** forgets it.
 
+## Your own browser
+
+Your Brave or Chrome, on this machine or any other that can open Sapphire's
+page, becomes a device. Sapphire then reads and uses the tabs you share from
+it, with the logins that browser has: your mail, a shop's basket, a page
+behind a login she could never reach from her own browser. Needs the
+**Browser** plugin on. Chromium browsers only (Brave, Chrome, Edge, Vivaldi);
+not Firefox.
+
+Set it up once:
+
+1. Apps > Browser > **Extension for your browser** lists the steps for a
+   browser on the same computer as Sapphire: it loads the extension straight
+   from her folder (the path is shown, with a Copy button), so it updates with
+   her. For a browser on another computer, open
+   `/api/plugin/browser/extension.zip` on her address to download it, and
+   unzip it somewhere it can stay.
+2. In that browser open `brave://extensions` (or `chrome://extensions`), turn
+   on **Developer mode**, press **Load unpacked** and pick that folder. After
+   a Sapphire update, press the reload arrow on the extension there.
+3. Open Sapphire in a tab of that browser and press the extension's toolbar
+   button there (Brave and Chrome keep a new extension under the puzzle-piece
+   icon). It says the tab is a Sapphire: press **Pair this browser**.
+4. Sapphire asks on her page. Give the browser a name and press **Allow**.
+   It is a device now, and the extension connects within a few seconds.
+
+To undo it: the extension's button, **Connection**, **Unpair this browser**.
+The browser forgets her and its old pairing can never be used again. Pressed
+on her page, she also offers to remove the device; pressed anywhere else, the
+device stays in Settings > Devices until you delete it.
+
+By hand, when that does not fit: in the extension's popup, under
+**Connection**, type Sapphire's address as you open her in that browser,
+**Save**, and **Copy** the pairing code; then Add Device > **Browser** and
+paste it.
+
+If Sapphire uses her own certificate (the default), that browser must have
+accepted it once: opening her page in a tab there and clicking through the
+warning does it, so pairing from her page needs nothing more.
+
+What she may use is decided in the extension, in your browser:
+
+- **Nothing**: disconnected. The device reads offline.
+- **Shared tabs** (the default): only tabs in the tab group named "Sapphire",
+  and tabs she opens herself (they join that group). **Share this tab** in the
+  popup puts the tab you are on into the group; dragging a tab into the group
+  does the same.
+- **All tabs**: every tab, with the exceptions below.
+- Never, in any mode: sites on your **Sites never shared** list, private
+  windows, browser pages like settings, and pages on your own network unless
+  you shared that tab with **Share this tab** (it asks first).
+
+While she holds a tab, the browser shows its own bar: "Sapphire Browser Bridge
+started debugging this browser". That bar is how you know she is there.
+**Cancel** on it takes her out at once and switches the extension to Nothing.
+She lets go by herself when she has not used the browser for the Browser
+plugin's idle time (15 minutes), and the bar goes away. The extension's button
+shows how many tabs she holds, and **Let go now** releases them.
+
+How she uses it: `browser_tabs` lists her own tabs and yours (`desk:1`,
+`desk:2`), a switch to one of yours puts her other browser tools in that tab,
+and a switch to one of her own takes her back. In your browser:
+
+- Her guard rails are always on, whatever the Browser plugin's switch says: no
+  typing into password fields, no JavaScript of her own, no going to an address
+  on your network, and page text is data to her, never instructions.
+- `browser_open` never loads a page over a tab of yours. It opens a new tab.
+  She can close only the tabs she opened.
+- A download that starts within a few seconds of her click, typing or
+  navigation is cancelled, so her clicks put no file on your disk. A download
+  of your own in those same seconds is cancelled with it.
+- She reads the page as its own script could. She cannot read cookies, saved
+  passwords, other sites' storage, or files on your disk. The browser's
+  network log (which carries cookies and the forms you post) is never turned
+  on for her.
+- A frame inside a shared page that comes from a never-shared site or from
+  your own network is not read. (A frame from the same site as the page is.)
+- Every read, picture and action is cleared first, by Sapphire's own address
+  rule and by the extension, which judges the tab by where it is at that
+  moment. A tab that moved somewhere off limits leaves her hand.
+- This Sapphire's own page is off limits to her there unless the Browser
+  plugin's **Log in to this Sapphire** switch is on.
+- Only a turn YOU started reaches it: you typed, spoke, or used a device. An
+  agent, or a turn that a message from outside started (a text, Discord, mail,
+  another Sapphire), never sees your browser or its tabs, and neither does an
+  MCP caller. Private chats have no browser tools at all.
+- Scheduled tasks stay out too, unless you let them in: open the device in
+  Settings > Devices, its **Browser** tab, and turn on **Scheduled tasks may
+  use this browser**. Then a task that runs on a schedule (a scheduled task or
+  a heartbeat, and **Run now** on one) may use the tabs that browser shares
+  while you are away. A task that a message, mail or a webhook sets off never
+  may, switch or no switch. Every rule above still holds for a task, and the
+  browser must be open with its extension connected. Each run starts in her
+  own browser and switches over like she does in a chat. Turn the switch off
+  and a run is out at its next browser call.
+- Being in your browser belongs to the chat where she switched there. Another
+  chat's turns stay in her own browser.
+
+What she reads goes to the model of the chat she is in. With a cloud model,
+that company sees the page. Share accordingly.
+
+The pairing code is a key, stored scrambled like every device secret.
+Whoever has it can pose as that browser to your Sapphire and feed her pages;
+they cannot reach your browser with it, because your browser is the one that
+dials. **New code** in the extension makes a fresh one (paste it into the
+device again). Switching the device off, removing it, or changing its code
+closes the connection within 20 seconds.
+
+One honest limit: "a page on your own network" is judged by its address. The
+extension knows the usual forms (192.168.x.x, `.local`, `.lan`, a bare name),
+and Sapphire also looks the name up on her own machine. A public-looking name
+that only YOUR network points at a local machine can pass both.
+
+Not there yet: Firefox, the Chrome Web Store (so no Developer mode), and
+pairing with one click from Sapphire's own page.
+
 ## Home Assistant
 
 One device for the whole house. + Add Device > **Home Assistant**, then its address
@@ -915,6 +1031,7 @@ DEVICES (core/devices/, page System > Devices):
 - This computer: sound set|read|up|down|mute|unmute|outputs|use · screen look · power restart|shutdown|sleep · storage backup|list.
 - SSH machine: ssh <premade> [value]; run <command> only with Allow any command · power · storage backup|list.
 - IP camera: camera look [sharp] · ptz move <dir> [1-100]|zoom in|out [1-100]|goto <place>|stop.
+- Browser (the user's own Brave/Chrome with the Sapphire extension; needs the Browser plugin): browser tabs = the tabs there you may use. The work is done with the browser_ tools: browser_tabs list shows them as `<device>:N`, switch index="<device>:N" puts browser_look/act/open in that tab, switch index=N returns to your own browser, new index="<device>" opens a tab there. Rails always on there. Only in a turn the user started (typed, spoke, a device): in an agent or a turn a message from outside started, that browser and its tabs are not shown and a switch is refused. A scheduled task or heartbeat run (never one an event set off) may use it only while the user has that device's "Scheduled tasks may use this browser" on; the refusal names the switch, and each run starts in your own browser. The switch into it belongs to the chat (or the run) it was made in. Offline = that browser is closed or its extension is on Nothing: ordinary, not a fault.
 - Phone: battery read · share send|list · sms conversations|read|send "<number or name> | <words>" · notify ping|find · contacts find.
 - MIDI keyboard: sound instrument|loudness|on|off · notes play "C4 E4 G4 C5:2 bpm=120"|loop|listen [s]|stop. Hardware synth: sound voice|effect · notes play|loop|listen|stop.
 - Another Sapphire: chat ask|tell · tools <her tool> <words fill args in order>. A question from a Sapphire cannot ask one back.
