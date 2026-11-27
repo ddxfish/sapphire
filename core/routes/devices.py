@@ -320,6 +320,45 @@ async def devices_face_feed_source(request: Request, _=Depends(require_login)):
     return avatar_feed.status()
 
 
+@router.get("/api/avatar_feed/door")
+async def avatar_door_status(_=Depends(require_login)):
+    """Her face in a browser (core/avatar_door): who is her face, and who watches here."""
+    from core import avatar_door, avatar_feed
+    seat = avatar_feed._seat()
+    return {"source": avatar_feed.source(), "seat": seat, "offered": avatar_feed.offered(), **avatar_door.status()}
+
+
+@router.get("/api/avatar_feed/stream")
+async def avatar_door_stream(request: Request, sound: int = 1, _=Depends(require_login)):
+    """Her face and voice as slices, for shared/face-player.js. Held open while a viewer watches."""
+    import queue as _queue
+    from core import avatar_door
+    viewer = avatar_door.join(sound=bool(sound))
+
+    async def body():
+        try:
+            beat = avatar_door._pack({"kind": "beat"})
+            while not await request.is_disconnected():
+                try:
+                    yield await asyncio.to_thread(viewer.get, 1.0)
+                except _queue.Empty:
+                    yield beat                              # a quiet door still shows it is open
+        finally:
+            avatar_door.leave(viewer)
+
+    return StreamingResponse(body(), media_type="application/octet-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/api/avatar_feed/stop")
+async def avatar_door_stop(request: Request, _=Depends(require_login)):
+    """A tap on her face: her source drops the rest of that reply ({"sid": its stream id})."""
+    check_endpoint_rate(request, "avatar_door:stop", max_calls=WRITES_PER_MIN)
+    from core import avatar_feed
+    sid = str((await _body(request)).get("sid") or "")
+    return {"stopped": await asyncio.to_thread(avatar_feed.stop, sid)}
+
+
 @router.get("/api/devices/here")
 async def devices_here(request: Request, _=Depends(require_login)):
     _open(request)

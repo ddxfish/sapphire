@@ -22,7 +22,8 @@ none does.
 
 Lifted from FlashHead's screens.py (its playout clock, pushers and one-stream
 builders, with the reasons they are shaped this way). FlashHead moves onto this
-next; a webcam and a browser door are outputs to come and take the same slices.
+next. Her browser viewers take the same slices through core/avatar_door.py (2026-11-27);
+a webcam is an output to come.
 """
 import collections
 import io
@@ -31,6 +32,8 @@ import logging
 import struct
 import threading
 import time
+
+from core import avatar_door
 
 logger = logging.getLogger(__name__)
 
@@ -216,12 +219,45 @@ def release(name):
             return
         old, _hub = _hub, None
     old.close()
+    avatar_door.tell("gone", why=f"{name} let her face go")
     logger.info(f"[avatar_feed] {name} let her face go")
+
+
+_bodies = {}                    # avatar name -> fn(chat) -> bool: "the body this chat shows is mine"
+
+
+def body_claim(name, fn):
+    """An avatar plugin says which chats show ITS body (the video avatar: a chat whose persona has
+    clips). `fn(chat name) -> bool`; None takes the claim back (the plugin unloads)."""
+    if fn is None:
+        _bodies.pop(name, None)
+    else:
+        _bodies[name] = fn
+
+
+def body_for(chat):
+    """The avatar plugin whose body that chat shows, when one claims it; None when none does
+    (the 3D avatar's, as ever). Two avatars read the same `<<avatar: name>>` tag and each
+    tells her its own list: only the one whose body the chat shows should."""
+    for name, fn in list(_bodies.items()):
+        try:
+            if fn(chat):
+                return name
+        except Exception as e:
+            logger.info(f"[avatar_feed] {name} could not say whose body a chat shows ({e})")
+    return None
 
 
 def source():
     h = _hub
     return h.name if h else None
+
+
+def stop(sid=""):
+    """A viewer stopped her (a tap on her face in a browser): the source drops the rest of that
+    reply, as a stop at a board does. True when it dropped something."""
+    h = _hub
+    return bool(h and h.stop_source(str(sid or "")))
 
 
 def _mine(name):
@@ -233,12 +269,15 @@ def _bytes(b):
     return b if isinstance(b, bytes) else b.tobytes() if hasattr(b, "tobytes") else bytes(b)
 
 
-def packet(name, kind, frames, fps, pcm=b"", sr=24000, sid="", device="", taken=False, fresh=False):
+def packet(name, kind, frames, fps, pcm=b"", sr=24000, sid="", device="", taken=False, fresh=False, focus=None):
     """A slice: `frames` (a list of JPEG bytes) evenly across it at `fps`, `pcm` (16-bit
     mono at `sr`) her voice for the same span or empty. `kind`: speech | idle. `device`:
     the board whose reply this is (it alone plays the voice); `taken`: a browser or a
     call already plays it. `fresh`: this slice does not follow the last one (she paused: the
-    source drew nothing meanwhile), so it starts now, not as a late continuation. False
+    source drew nothing meanwhile), so it starts now, not as a late continuation. `focus`:
+    where her face is in these frames, (centre x, centre y, height) as fractions of the
+    picture: a source that draws more than her face (her whole body) says so, and a small
+    screen that fills its glass frames her head and shoulders (see _window). False
     when the source is not her face or the slice is not one."""
     h = _mine(name)
     if not h:
@@ -258,8 +297,16 @@ def packet(name, kind, frames, fps, pcm=b"", sr=24000, sid="", device="", taken=
         if _rarely(h.refused):
             logger.warning(f"[avatar_feed] a slice from {name} refused ({e}), {h.refused} so far")
         return False
-    h.put(("packet", {"kind": kind, "fps": fps, "sr": sr, "sid": str(sid or ""),
-                      "device": str(device or ""), "taken": bool(taken), "fresh": bool(fresh)}, frames, pcm))
+    head = {"kind": kind, "fps": fps, "sr": sr, "sid": str(sid or ""),
+            "device": str(device or ""), "taken": bool(taken), "fresh": bool(fresh)}
+    try:
+        if focus is not None:
+            cx, cy, size = (float(v) for v in focus)
+            h.focus = (min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy)), min(1.0, max(0.02, size)))   # the newest: her face moves slowly
+    except (TypeError, ValueError):
+        pass
+    avatar_door.give(head, frames, pcm)                 # her browser viewers, as it comes: their player has its own clock
+    h.put(("packet", head, frames, pcm))
     return True
 
 
@@ -268,6 +315,7 @@ def flush(name, sid=""):
     what the source still hands in of it is not played."""
     h = _mine(name)
     if h:
+        avatar_door.tell("flush", sid=str(sid or ""))
         h.put(("flush", str(sid or "")))
 
 
@@ -351,6 +399,7 @@ class _Hub:
         self.beats = {}                          # device id -> the beat its glass paints at
         self.modes = {}                          # device id -> talking | always (a board set Off is not among the boards)
         self.claims = {}                         # device id -> the reply whose voice its stream carries (claim())
+        self.focus = None                        # where her face is in the source's picture (packet(focus=)), when it draws more than her face
         self.dirty = False                       # a nudge came while a look was out: look again when it lands
         self.looked, self.looking = None, False
         self.waking = None                       # when she was woken with no word yet
@@ -680,6 +729,23 @@ class _Playout:
                     p.give(frame)
 
 
+FOCUS_ZOOM = 3.0                # a framed face: the window is this many faces tall (her head and shoulders)
+
+
+def _window(focus, sw, sh, w, h):
+    """The part of a (sw, sh) picture a (w, h) screen shows when the source said where her face
+    is: a window of the screen's shape, FOCUS_ZOOM faces tall, her face a little above its
+    middle, pushed back inside the picture where it would leave it. (left, top, right, bottom)."""
+    cx, cy, size = focus
+    wh = min(float(sh), FOCUS_ZOOM * size * sh)
+    ww = wh * w / h
+    if ww > sw:
+        ww, wh = float(sw), sw * h / w
+    left = min(max(0.0, cx * sw - ww / 2), sw - ww)
+    top = min(max(0.0, cy * sh + 0.12 * wh - wh / 2), sh - wh)
+    return round(left), round(top), round(left + ww), round(top + wh)
+
+
 def _side(hub, side):
     want = hub.face_px          # a smaller face than the glass's square: every link of the board's chain scales with pixels
     return want // 16 * 16 if 64 <= want < side else side
@@ -726,7 +792,10 @@ class _Pusher:
             self.side = _side(self.hub, self.glass_side)          # face_px may have changed (register in place)
             try:
                 b = io.BytesIO()
-                Image.open(io.BytesIO(jpeg)).convert("RGB").resize((self.side, self.side)).save(b, "JPEG", quality=JPEG_Q)
+                im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+                if self.hub.focus:               # a picture of more than her face: this square shows her head and shoulders
+                    im = im.crop(_window(self.hub.focus, im.width, im.height, self.side, self.side))
+                im.resize((self.side, self.side)).save(b, "JPEG", quality=JPEG_Q)
                 _glass().face_frame(self.id, b.getvalue(), seconds=3)
                 self.fails = 0
                 self.sent += 1
@@ -830,7 +899,11 @@ class _AvBuilder:
         w, h = self.spec["w"], self.spec["h"]
         sw, sh = im.size
         if (sw, sh) != (w, h):
-            if abs(sw * h - sh * w) <= max(sw, sh):          # the same shape: a plain resize
+            if abs(sw * h - sh * w) <= max(sw, sh) and not self.hub.focus:   # the same shape: a plain resize
+                im = im.resize((w, h))
+            elif self.spec.get("fit") == "cover" and self.hub.focus:        # filled, and the source said where her face is: her head and shoulders
+                im = im.crop(_window(self.hub.focus, sw, sh, w, h)).resize((w, h), Image.Resampling.LANCZOS)
+            elif abs(sw * h - sh * w) <= max(sw, sh):
                 im = im.resize((w, h))
             elif self.spec.get("fit") == "cover":            # another shape, filled: cropped HERE, so what the glass cannot show never crosses the air
                 from PIL import ImageOps

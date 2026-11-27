@@ -121,7 +121,7 @@ function drawPage(container) {
 // One seat: one avatar's picture goes to every screen; each screen's own Devices page says when
 // it shows her (off, while she talks, always). core/avatar_feed.py
 
-const AVATAR_NAMES = { avatar: '3D avatar', flashhead: 'FlashHead' };
+const AVATAR_NAMES = { avatar: '3D avatar', flashhead: 'FlashHead', vidavatar: 'Avatar Video' };
 
 async function drawFace(el) {
     let st;

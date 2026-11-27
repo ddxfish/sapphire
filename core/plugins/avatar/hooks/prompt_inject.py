@@ -52,6 +52,13 @@ def prompt_inject(event):
     except Exception:
         pass
 
+    try:
+        from core import avatar_feed
+        if avatar_feed.body_for(getattr(event, "chat_name", None)) not in (None, "avatar"):
+            return          # this chat shows another avatar's body (a video avatar with clips for its persona): that plugin tells her its own names
+    except Exception:
+        pass
+
     model = _get_active_model()
     glb_path = USER_AVATAR_DIR / model
     tracks = _get_track_names(glb_path)

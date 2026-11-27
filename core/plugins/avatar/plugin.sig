@@ -11,7 +11,7 @@
     "glb_merger.py": "sha256:6baccd4aced1a2fb5d97bc0b679ea58b8f0bc35527abadbc1dd9b3ace99d13ca",
     "glb_parser.py": "sha256:e03aab34f4496a8f866c600e3b67d6d0c8305ac1a00c94cdfc4b809bc72ca09c",
     "hooks/mouth.py": "sha256:02a01e55c18bab3b27edbc6896fb32717230657075e6477ec9370b112e1c99f4",
-    "hooks/prompt_inject.py": "sha256:561459f9b8c348165e9549561825b1efc01cc5528f2b89db35440c0cf56698e9",
+    "hooks/prompt_inject.py": "sha256:09ed65eccc8aebc01323b6bba726e7face349a4b547afce9dfb299ac527ca73d",
     "mouth.py": "sha256:7598715dfe31c90f59bf4905e06674013b189bc15c25f8d7b839b7a0435060c0",
     "plugin.json": "sha256:9118820357be7102aed4050ab28314b1844bf1d0e953e3dae6c2dac36da7f417",
     "render_server.py": "sha256:6484e97c283bc1a2ae1dd6c92daafd509418576d39a6449d0e8053b09dcedda9",
@@ -34,5 +34,5 @@
     "web/stage.js": "sha256:de93699cf7830219bfbad287670ce468e78484cf1632de54f061a6b7fdc246ba",
     "web/visemes.json": "sha256:d59fd0d349b1b2fec3d70597da36d56931956e89dc8c1675af83a1a704e086ac"
   },
-  "signature": "YXvMwcUZJCCw2XwPrO6T9UKytGEYnjxzDvauOXKgwdlKUvWy/L5D+tgiGtv7/N/38NkX/l2F9nr/YSJ3JrVRAQ=="
+  "signature": "fn9XBzyeLNxEfPw/ieM+7SMfXV0RqW/ekepfZZ/fR626NaXy8ftT4o0XnnnqZH1xfhcOFT17r8VxOrZxlnnDCg=="
 }
