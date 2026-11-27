@@ -63,6 +63,26 @@ def test_a_piece_deleted_from_the_vault_frees_its_key(store):
     assert pv.sealed_piece('emotions', 'tender') is False
 
 
+def test_the_sidecar_answers_for_a_sealed_prompt_name_nothing_references(store):
+    """The names index lists only names something references. An unreferenced
+    vault prompt had no sealed check: its name looked free, and its old ledger
+    rows could not be told apart while locked (isolation hunt F5)."""
+    assert pv.set_monolith('nightself', SECRET)[0]
+    assert pv.set_preset('night-preset', {'character': 'sapphire'})[0]
+    assert pv.sealed_prompt('nightself') is None and pv.holds_prompt('nightself')
+    assert pv.lock("user")
+    pv._refs_loaded = False
+    assert pv.refs_names() == {}, "setup: nothing references them"
+    assert pv.sealed_prompt('nightself') is True and pv.sealed_prompt('night-preset') is True
+    assert pv.sealed_prompt('dayself') is False and pv.holds_prompt('nightself')
+    assert pv.sealed_piece('emotions', 'nightself') is False, "a prompt name is not a piece key"
+    raw = pv.REFS_PATH.read_text(encoding='utf-8')
+    assert 'nightself' not in raw and 'night-preset' not in raw
+    bad = pc.prompt_name_problem('nightself')
+    assert bad is not None and 'asleep in the locked vault' in str(bad)
+    assert pc.prompt_name_problem('dayself') is None
+
+
 # ── C2: each writer ──
 
 def test_the_save_funnel_refuses_a_new_piece_under_a_sealed_key(world, monkeypatch):

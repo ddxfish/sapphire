@@ -1587,12 +1587,37 @@ def outputs_of(outputs):
     return [i for i in items if i['type'] == 'output'] or items
 
 
-def keep(name, ext):
+PRIVATE_MARK = '-pv'       # ends the name (before the extension) of a file made in a private chat
+
+
+def keep(name, ext, private=False):
     """A fresh path under user/comfyui/outputs for a file a run made. Its extension is one a
-    browser plays or shows as a picture; anything else is kept as .bin (never a page)."""
+    browser plays or shows as a picture; anything else is kept as .bin (never a page).
+    `private` = made in a private chat: the name carries PRIVATE_MARK, the one thing that
+    says so (the file itself is a plain file, never encrypted)."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ext = ext.lower() if str(ext or '').lower() in KEPT_EXT else '.bin'
-    return OUTPUT_DIR / f"{slug(name)}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}{ext}"
+    mark = PRIVATE_MARK if private else ''
+    return OUTPUT_DIR / f"{slug(name)}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}{mark}{ext}"
+
+
+def put_away(name) -> bool:
+    """Is this a private chat's file while the vault is locked? Then the app does not list or
+    play it, as it does not show that chat (Krem 2026-11-26: clips stay plain files, this is
+    only the app's own pages). No vault, or an open one, puts nothing away. Cannot tell = yes."""
+    if not Path(str(name or '')).stem.endswith(PRIVATE_MARK):
+        return False
+    try:
+        from core import prompt_vault
+        status = prompt_vault.vault_status()
+        return bool(status.get('exists')) and not status.get('unlocked')
+    except Exception:
+        return True
+
+
+PRIVATE_WORDS = ("This chat is private, but the file is not encrypted with it: it is an ordinary file in "
+                 "user/comfyui/outputs that anyone at this computer can open. Sapphire's own pages hide it "
+                 "while the vault is locked. Say so if the user may not know.")
 
 
 def kept(name):
@@ -1660,7 +1685,7 @@ def measure(path):
 
 def recent(n=24):
     """The newest kept files, newest first: [{name, kind}]."""
-    files = sorted(_clips(), key=lambda p: p.stat().st_mtime, reverse=True)[:n]
+    files = sorted((p for p in _clips() if not put_away(p.name)), key=lambda p: p.stat().st_mtime, reverse=True)[:n]
     kind_of = lambda ext: 'video' if ext in VIDEO_EXT else 'audio' if ext in AUDIO_EXT else 'image' if ext in IMAGE_EXT | {'.gif'} else 'file'
     return [{'name': p.name, 'kind': kind_of(p.suffix.lower())} for p in files]
 

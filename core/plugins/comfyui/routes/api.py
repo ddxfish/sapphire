@@ -201,7 +201,7 @@ def file(name=None, **_):
     else is a download, so a file from another machine can never open as a page of this app."""
     from fastapi.responses import FileResponse
     path = cf.kept(name)
-    if not path:
+    if not path or cf.put_away(name):                # a private chat's clip while the vault is locked: the same answer as gone
         return {'error': 'That clip is gone.'}, 404
     media = cf.MEDIA_TYPES.get(path.suffix.lower())
     headers = {'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff'}

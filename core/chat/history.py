@@ -60,7 +60,8 @@ def sealed_prompt_name(name) -> bool:
         return False
     try:
         from core import prompt_vault
-        return name in prompt_vault.refs_names()
+        # the names index (referenced names) or the hashed index (every name)
+        return name in prompt_vault.refs_names() or prompt_vault.sealed_prompt(name) is True
     except Exception:
         return False
 

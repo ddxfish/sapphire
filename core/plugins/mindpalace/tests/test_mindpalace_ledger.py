@@ -447,3 +447,78 @@ def test_clear_ledger_requires_typed_confirm_and_records_itself(palace):
         left = conn.execute("SELECT COUNT(*) FROM ledger_reads "
                             "WHERE scope='c1'").fetchone()[0]
     assert left == 0                           # watermark reset too
+
+
+# ─── Rows about what the vault holds now (isolation hunt F5, 2026-11-26) ─────
+# A piece edited in plaintext, then moved into the vault: its old rows keep
+# the before/after text. No row is changed; a reader that may not read the
+# vault is shown that the text is withheld.
+
+OLD_TEXT = "PRIVATE-WORDS this piece said before it was moved into the vault"
+
+
+@pytest.fixture
+def vault_world(palace, monkeypatch):
+    """One prompt row for emotions/tender and one for the prompt 'nightself';
+    the vault 'holds' both, and the test sets who is reading."""
+    from core import prompt_vault as pv
+    pt._ensure_db()
+    lg.record('v1', 'user', 'edited', layer='prompt', target='component/emotions/tender',
+              summary='prompt piece "tender" (emotions) edited',
+              detail={'before': OLD_TEXT, 'after': OLD_TEXT + ' v2', 'reason': 'tuning'})
+    lg.record('v1', 'user', 'edited', layer='prompt', target='monolith/nightself',
+              summary='prompt "nightself" edited', detail={'before': OLD_TEXT, 'after': 'x'})
+    lg.record('v1', 'user', 'edited', layer='prompt', target='component/emotions/happy',
+              summary='prompt piece "happy" (emotions) edited',
+              detail={'before': 'plain before', 'after': 'plain after'})
+    state = {'unlocked': False, 'reader': False}
+    monkeypatch.setattr(pv, 'holds_piece', lambda ct, k: (ct, k) == ('emotions', 'tender'))
+    monkeypatch.setattr(pv, 'holds_prompt', lambda n: n == 'nightself')
+    monkeypatch.setattr(pv, 'vault_unlocked', lambda: state['unlocked'])
+    monkeypatch.setattr(pv, 'reader_ok', lambda: state['reader'])
+    return state
+
+
+def _deep(scope='v1'):
+    ids = [r['id'] for r in _rows(scope)]
+    with pt._get_connection() as conn:
+        return lg.detail_block(conn.cursor(), scope, ids)[0]
+
+
+def _page(scope='v1'):
+    return json.dumps(self_routes.get_ledger(query={'scope': scope}))
+
+
+def test_her_read_of_a_vault_items_old_rows_is_withheld_outside_a_private_turn(vault_world):
+    for unlocked in (False, True):                 # locked, and unlocked in an ordinary chat
+        vault_world['unlocked'] = unlocked
+        text = _deep()
+        assert OLD_TEXT not in text and 'withheld' in text
+        assert 'plain before' in text and 'plain after' in text, "an ordinary piece reads as ever"
+        assert 'reason: tuning' in text, "why it was changed is still hers to read"
+
+
+def test_a_private_turn_reads_them_while_the_vault_is_open(vault_world):
+    vault_world.update(unlocked=True, reader=True)
+    assert OLD_TEXT in _deep()
+
+
+def test_the_ledger_page_shows_them_only_while_the_vault_is_open(vault_world):
+    assert OLD_TEXT not in _page() and 'withheld' in _page()
+    vault_world['unlocked'] = True
+    assert OLD_TEXT in _page()
+
+
+def test_the_rows_themselves_are_never_changed(vault_world):
+    _deep(); _page()
+    held = [r for r in _rows('v1') if r['target'] == 'component/emotions/tender'][0]
+    assert held['detail']['before'] == OLD_TEXT
+
+
+def test_cannot_tell_means_withheld(vault_world, monkeypatch):
+    from core import prompt_vault as pv
+
+    def broken(*a):
+        raise RuntimeError("vault module unreadable")
+    monkeypatch.setattr(pv, 'holds_piece', broken)
+    assert OLD_TEXT not in _deep()

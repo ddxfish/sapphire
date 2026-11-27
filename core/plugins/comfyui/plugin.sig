@@ -2,15 +2,15 @@
   "plugin": "comfyui",
   "version": "2.3.0",
   "files": {
-    "README.md": "sha256:6fd6d070847d17b4543de3a2d0ccdafc50203fbcb687fa4a5d2375fb2fa1fe9c",
+    "README.md": "sha256:61cf5f601bce55d6cd07425ff5098c6af70c2b813c26628624f6aa48678fe48e",
     "__init__.py": "sha256:8eddafbc6c5478ce18a2f51144b2456f87822cc8989e7fda917f334734a86f82",
     "app/index.js": "sha256:bea90497de833d97ed91fc149598db499e8cd15ced3c540d846df7dbe72825b3",
-    "comfy.py": "sha256:b03007b9b7c8a2f66abfd2a247cc1a709574cdf47e7e3626d94c532eef50387a",
+    "comfy.py": "sha256:25227d5c0eb588b5b25b9f6dc5a780966dd9f6cf2be9cc02a7455e16129770ce",
     "plugin.json": "sha256:6802d5867aacef883f832baa9774123a5807a318e0cc1850aa35631b6c828e47",
-    "routes/api.py": "sha256:93ff22b53485e35847ceb13998b9125cca49d23bdb597b5c8ad0e8d4047de11e",
-    "tests/test_comfyui.py": "sha256:07246df8fe511796baccaead6705f3feb3a7bc6598bc0ea94e49a5968a3e3a7c",
-    "tools/comfy_tools.py": "sha256:e6f4d1620b06317a6d6eaf19f1007ffbab655500c36e68773f6ec8d5b6f0cbcf",
+    "routes/api.py": "sha256:f816737a3f26d55029c60898c2c558da94bacfea787c6f041ec35c68ab081f73",
+    "tests/test_comfyui.py": "sha256:fea542dc8b9c7a74eee4e5e9221cc3661fb3f8ba4ab2de643f0f5881a504e2f9",
+    "tools/comfy_tools.py": "sha256:30747dc839a16fddbb55a51af287e09f4ec812aa6ea382d46f5dae54dbcaa965",
     "web/index.js": "sha256:086b2389d9021e0a2248dafbd362240cc277d362b0a4653415483774169c3958"
   },
-  "signature": "+z2C4mF4dl0RlnMTBtn5kBlnL22a0HtJ8Q6ZzLyq8mU+BsNWbNDN/Cbi0aTNCd7l3uwNglLxvNrYUJlR384rCQ=="
+  "signature": "UDn6SY+2GD4SFU7FU2JGcO1ofRQCtlRLkYovubBr6aFJl2CEQf17MKoGz0tc2oPLZSvAzefcGex8JbITZdevBg=="
 }

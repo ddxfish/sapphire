@@ -121,5 +121,26 @@
       "read_document",
       "search_help_docs"
     ]
+  },
+  "memory_read_only": {
+    "emoji": "\ud83d\udcd6",
+    "functions": [
+      "ask_user",
+      "search_memory",
+      "get_recent_memories",
+      "list_entities",
+      "read_self",
+      "read_ledger",
+      "list_goals",
+      "library",
+      "read_document",
+      "read_attachment",
+      "search_attachments",
+      "memory_view_image",
+      "local_view_images",
+      "notepad_read",
+      "search_help_docs",
+      "get_time"
+    ]
   }
 }

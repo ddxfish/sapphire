@@ -1955,3 +1955,67 @@ def test_the_page_gets_its_job_at_once_and_the_sending_is_the_jobs_first_step(co
     ok = _finished(api, _run(api, png(), workflow='clip', prompt='she waves'))
     assert ok['state'] == 'done' and ok['phase'] == 'working'
 
+
+
+# -- a clip made in a private chat (isolation hunt F4, Krem's ruling 2026-11-26) ------------
+# It stays a plain file: nothing is encrypted. Its name says where it was made, she is told
+# it is not protected, and the app's own pages put it away while the vault is locked.
+
+def _vault(monkeypatch, exists=True, unlocked=False):
+    from core import prompt_vault
+    monkeypatch.setattr(prompt_vault, 'vault_status', lambda: {'exists': exists, 'unlocked': unlocked})
+
+
+def _private_clip(tool, server, monkeypatch):
+    cf.write('clip', video_graph())
+    server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}], 'animated': [True]}}
+    server.files['c.mp4'] = b'mp4'
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))
+    monkeypatch.setattr(tool, '_private', lambda: True)
+    monkeypatch.setattr(tool, '_guard_private', lambda url, source: None)
+    return run(tool, prompt='x')
+
+
+def test_a_private_chats_clip_is_marked_and_she_is_told_it_is_a_plain_file(comfy, tool, server, monkeypatch):
+    result, ok = _private_clip(tool, server, monkeypatch)
+    assert ok
+    kept = list(cf.OUTPUT_DIR.iterdir())
+    assert len(kept) == 1 and kept[0].stem.endswith(cf.PRIVATE_MARK) and kept[0].suffix == '.mp4'
+    assert kept[0].read_bytes() == b'mp4', "a plain file, as it always was"
+    assert 'not encrypted' in result and 'user/comfyui/outputs' in result
+
+
+def test_an_ordinary_chats_clip_is_not_marked_or_remarked_on(comfy, tool, server, monkeypatch):
+    cf.write('clip', video_graph())
+    server.outputs = {'save': {'images': [{'filename': 'c.mp4', 'type': 'output'}], 'animated': [True]}}
+    server.files['c.mp4'] = b'mp4'
+    monkeypatch.setattr(cf, 'stills', lambda path, n=3: ([], None))
+    result, ok = run(tool, prompt='x')
+    assert ok and 'not encrypted' not in result
+    assert not list(cf.OUTPUT_DIR.iterdir())[0].stem.endswith(cf.PRIVATE_MARK)
+    _vault(monkeypatch)
+    assert len(cf.recent()) == 1, "and a locked vault puts nothing of it away"
+
+
+def test_the_apps_pages_put_it_away_while_the_vault_is_locked(comfy, tool, server, api, monkeypatch):
+    _private_clip(tool, server, monkeypatch)
+    name = list(cf.OUTPUT_DIR.iterdir())[0].name
+    _vault(monkeypatch, unlocked=True)
+    assert [f['name'] for f in cf.recent()] == [name]
+    assert not isinstance(api.file(name=name), tuple), "played while the vault is open"
+    _vault(monkeypatch, unlocked=False)
+    assert cf.recent() == [] and api.outputs()['files'] == []
+    assert api.file(name=name)[1] == 404, "the same answer as a clip that is gone"
+    assert api.outputs()['count'] == 1, "the space it takes is still counted, and Delete all still clears it"
+    _vault(monkeypatch, exists=False)
+    assert len(cf.recent()) == 1, "no vault: nothing is hidden anywhere, so not here either"
+
+
+def test_cannot_tell_puts_a_private_clip_away(comfy, monkeypatch):
+    from core import prompt_vault
+
+    def broken():
+        raise RuntimeError("vault unreadable")
+    monkeypatch.setattr(prompt_vault, 'vault_status', broken)
+    assert cf.put_away(f'clip-20261126-120000-abcd1234{cf.PRIVATE_MARK}.mp4') is True
+    assert cf.put_away('clip-20261126-120000-abcd1234.mp4') is False

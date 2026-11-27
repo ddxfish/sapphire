@@ -322,8 +322,9 @@ def prompt_name_problem(name) -> Problem | None:
     imports, the AI's create. Taken means anywhere visible (user, pack,
     unlocked vault) or a referenced name asleep in the locked vault: a
     plaintext copy there shadowed the private prompt after unlock (four
-    scouts, hunt 2026-11-08). Unreferenced sealed names stay invisible by
-    design — the vault never reveals them while locked."""
+    scouts, hunt 2026-11-08). The locked vault answers for every name it
+    holds, referenced or not, from salted hashes (prompt_vault.sealed_prompt):
+    nothing readable is stored, only someone who already has the name can ask."""
     bad = _name_shape_problem(name, "Prompt")
     if bad:
         return bad

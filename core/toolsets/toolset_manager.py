@@ -108,14 +108,16 @@ class ToolsetManager:
             # One-time additions, ledgered in the file's _migrations key: each
             # runs once per install, so a tool the user removes afterwards
             # stays removed. (The ledger is read before the first save above.)
-            if self._apply_once_adds():
+            added = self._apply_once_adds()
+            seeded = self._apply_once_seeds(core_path)
+            if added or seeded:
                 self._save_to_user()
             logger.info(f"Loaded {len(self._toolsets)} toolsets")
             return
 
         # First run — seed from core defaults (they already carry every
         # one-time addition, so all are ledgered as done)
-        self._migrations = list(self._ONCE_ADDS)
+        self._migrations = list(self._ONCE_ADDS) + list(self._ONCE_SEEDS)
         self._toolsets = {}
         try:
             with open(core_path, 'r', encoding='utf-8') as f:
@@ -164,6 +166,39 @@ class ToolsetManager:
         "help_docs_2026_11": {"limited_web": ["search_help_docs"],
                               "personality": ["search_help_docs"]},
     }
+
+    # Whole toolsets shipped after installs already seeded their own copy:
+    # key -> [toolset names]. Each is copied in from the core file once, when
+    # the user has no toolset of that name. One they made themselves under
+    # the same name is left exactly as it is, and one they delete afterwards
+    # stays deleted. A key never changes meaning.
+    _ONCE_SEEDS = {
+        # Memory she can read and nothing she can write: what to give a
+        # private chat that should leave nothing outside the vault (her
+        # notepad, self sheet and memories are not the vault's). Krem 2026-11-26.
+        "memory_read_only_2026_11": ["memory_read_only"],
+    }
+
+    def _apply_once_seeds(self, core_path):
+        """Copy each pending _ONCE_SEEDS toolset in from the core file, then
+        ledger it. Returns True if the ledger or a toolset changed (caller
+        persists). An unreadable core file leaves the entry pending."""
+        pending = [k for k in self._ONCE_SEEDS if k not in self._migrations]
+        if not pending:
+            return False
+        try:
+            with open(core_path, 'r', encoding='utf-8') as f:
+                core_data = json.load(f)
+        except Exception as e:
+            logger.warning(f"Toolset one-time seed skipped, core defaults unreadable: {e}")
+            return False
+        for key in pending:
+            for name in self._ONCE_SEEDS[key]:
+                if name not in self._toolsets and isinstance(core_data.get(name), dict):
+                    self._toolsets[name] = core_data[name]
+                    logger.info(f"Toolset '{name}' added (one-time: {key})")
+            self._migrations.append(key)
+        return True
 
     def _apply_once_adds(self):
         """Add each pending _ONCE_ADDS entry's tools to the user's toolsets of

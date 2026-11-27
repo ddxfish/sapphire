@@ -11,6 +11,7 @@ Named groups of tools so you don't have to switch between memory and web for exa
 | `work` | Research and productivity — `ask_user`, web research and images, goals, notepad, help docs |
 | `smarthome` | `ask_user` plus the three device tools: a Home Assistant's lights, scenes and climate, and every other device |
 | `personality` | Self-modification — `ask_user`, `slash_command`, prompt editing, prompt pieces, voice, model/toolset switching, memory, self-sheet, goals, `search_help_docs` |
+| `memory_read_only` | Reads and nothing that writes: `ask_user`, memory search and recents, entities, `read_self`, `read_ledger`, `list_goals`, library and chat documents, images, `notepad_read`, help docs, `get_time`. Made for a private chat that should leave nothing outside the vault ([PRIVACY.md](PRIVACY.md)). An existing install gets it once on update; a toolset you already made under this name is left as it is. |
 
 New chats start on `limited_web` (set in the chat defaults); `default` is deliberately lean so agents and scheduled tasks don't carry a heavy tool surface. A tool from a disabled plugin (the browser tools, for one) is simply absent until you enable the plugin. You can create your own toolsets that combine tools from any modules.
 
@@ -61,6 +62,7 @@ BUILT-IN TOOLSETS:
 - work: ask_user, web research + web_view_images, memory_view_image, local_view_images, goals, notepad, search_help_docs
 - smarthome: ask_user + device_list, device_status, device_action (a Home Assistant is a device)
 - personality: self-modification — ask_user, slash_command, prompt tools, set_voice, switch_model/switch_toolset (gated), list_tools, get_time, memory, read_self/update_self, goals, search_help_docs
+- memory_read_only: reads only — ask_user, search_memory, get_recent_memories, list_entities, read_self, read_ledger, list_goals, library, read_document, read_attachment, search_attachments, memory_view_image, local_view_images, notepad_read, search_help_docs, get_time. No save, update, delete, notepad write, schedule or prompt tool. For a private chat that should write nothing to the shared stores
 
 - Plus the two reserved names `all` (everything loaded, minus hidden tools) and `none`
 

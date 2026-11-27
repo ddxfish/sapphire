@@ -139,6 +139,7 @@ TASK CREATION (UI):
 
 SELF-SCHEDULING (tool):
 - schedule_task(description, time): '5pm'/'17:00'/'1700' = ONCE, at the next such time (today, else tomorrow), then the task deletes itself. No dates: "next Tuesday at 5" cannot be a one-shot (a weekday needs cron, and cron repeats). A 5-field cron = recurring, at least 5 minutes apart. Errors: "Could not parse time…", "…too frequent for a recurring task", "Invalid cron expression".
+- schedule_task in a PRIVATE chat is refused (its words would be stored unencrypted and shown on the Schedule page): tell the user to add it in Schedule, or ask again from an ordinary chat
 - It fires in a blank background chat, NOT this one (no memory of this conversation: put everything needed in description), spoken on the server's speakers, with the date and time given. Made in a private chat = a private task (local models only).
 - Max 10 of yours ("Maximum AI-scheduled tasks reached (10)"). You have no tool to list, edit or delete them: the user does that in Triggers > Scheduled, "Sapphire scheduled" column.
 

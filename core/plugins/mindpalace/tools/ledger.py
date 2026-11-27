@@ -112,6 +112,50 @@ def _gate(col='wr_private'):
         return f' AND {col} = 0'
 
 
+# A prompt row keeps the text a piece or prompt had BEFORE it was moved into
+# the vault (rows written inside the vault are names only). The row itself is
+# never changed: this module is append-only. What changes is what a reader is
+# shown: the text is withheld unless that reader may read the vault now
+# (isolation hunt F5, 2026-11-26).
+VAULT_WITHHELD = ("[withheld: this is in the prompt vault now. A private chat can read it "
+                  "while the vault is unlocked.]")
+
+
+def vault_held(layer, target) -> bool:
+    """Is this a prompt row about something the vault holds now, locked or
+    not? Cannot tell = yes."""
+    if layer != 'prompt' or not target:
+        return False
+    kind, _, rest = str(target).partition('/')
+    try:
+        from core import prompt_vault
+        if kind == 'component':
+            ctype, _, key = rest.partition('/')
+            return prompt_vault.holds_piece(ctype, key)
+        if kind == 'monolith':
+            return prompt_vault.holds_prompt(rest)
+    except Exception:
+        return True
+    return False
+
+
+def shown_detail(layer, target, detail, person=False):
+    """A row's detail as this reader may have it. `person` = the app's own
+    page, which reads the vault whenever it is unlocked; her tools read it
+    only inside a private chat's turn (the vault's reader rule)."""
+    if not isinstance(detail, dict) or not ('before' in detail or 'after' in detail):
+        return detail
+    if not vault_held(layer, target):
+        return detail
+    try:
+        from core import prompt_vault
+        if prompt_vault.vault_unlocked() and (person or prompt_vault.reader_ok()):
+            return detail
+    except Exception:
+        pass
+    return {**detail, **{k: VAULT_WITHHELD for k in ('before', 'after') if k in detail}}
+
+
 def mark_read(cursor, scope):
     """Stamp the watermark: she has read this scope's ledger. Powers the
     'while you were away' unread window. Never raises."""
@@ -304,6 +348,7 @@ def detail_block(cursor, scope, ids):
             except Exception:
                 d = None
             if isinstance(d, dict):
+                d = shown_detail(layer, target, d)
                 fields = d.pop('fields', None)
                 if isinstance(fields, dict):
                     for k in sorted(fields):

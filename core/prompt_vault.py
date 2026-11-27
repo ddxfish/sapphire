@@ -1333,6 +1333,11 @@ def _reconcile_refs_locked(referenced=None) -> bool:
     # vault badge (isolation hunt C2, 2026-11-23).
     new_own = {_hash_piece(_piece_salt, t, k)
                for t, entries in _data.get('components', {}).items() for k in entries}
+    # ...and its prompt names, under the type '_PROMPT' (no piece type): the
+    # names index above lists only names something references, so an
+    # unreferenced vault prompt had no sealed check at all, and its old ledger
+    # rows could not be told apart while locked (isolation hunt F5).
+    new_own |= {_hash_piece(_piece_salt, _PROMPT, n) for n in valid}
     if keep == _refs and new_hashes == _piece_hashes and new_own == _own_hashes:
         return True
     _refs.clear()
@@ -1340,6 +1345,9 @@ def _reconcile_refs_locked(referenced=None) -> bool:
     _piece_hashes = new_hashes
     _own_hashes = new_own
     return _save_refs_locked()
+
+
+_PROMPT = 'prompt'      # the type a vault prompt's NAME is hashed under (never a piece type)
 
 
 def _hash_piece(salt, ctype, key) -> str:
@@ -1386,6 +1394,17 @@ def holds_piece(ctype, key) -> bool:
     plaintext writer asks before it takes a key that is not in its own store:
     a plaintext copy under a vault key shadows the vault's piece."""
     return vault_has_piece(ctype, key) or sealed_piece(ctype, key) is True
+
+
+def sealed_prompt(name):
+    """Does the LOCKED vault hold a prompt (monolith or preset) of this name,
+    referenced or not? Same answers as sealed_piece."""
+    return sealed_piece(_PROMPT, name) if isinstance(name, str) and name else False
+
+
+def holds_prompt(name) -> bool:
+    """The vault holds a prompt of this name, in either lock state."""
+    return vault_has_prompt(name) or sealed_prompt(name) is True
 
 
 def piece_ref_pairs():

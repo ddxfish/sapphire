@@ -103,7 +103,8 @@ def test_an_early_migration_save_keeps_the_once_add_ledger(tmp_path):
     _mgr(tmp_path, {'_migrations': ['help_docs_2026_11'],
                     'personality': {'functions': ['view_prompt']}})       # rename + 'default' seed both save
     disk = json.loads((tmp_path / "toolsets.json").read_text(encoding="utf-8"))
-    assert disk['_migrations'] == ['help_docs_2026_11']
+    assert disk['_migrations'][0] == 'help_docs_2026_11'                  # kept; later one-time keys follow it
+    assert disk['_migrations'].count('help_docs_2026_11') == 1
     assert 'search_help_docs' not in disk['personality']['functions']    # not re-added
 
 

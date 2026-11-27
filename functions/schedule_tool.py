@@ -105,9 +105,36 @@ def _get_user_now():
     return datetime.now().astimezone()
 
 
+PRIVATE_CHAT_MSG = ("Nothing was scheduled: this chat is private, and a scheduled task's words are "
+                    "stored unencrypted and shown on the Schedule page even while the vault is locked. "
+                    "Tell the user they can add it themselves in Schedule, or ask you again from an "
+                    "ordinary chat.")
+
+
+def _private_chat() -> bool:
+    """Is this a private chat's turn? The turn's own flag, or its chat's
+    setting (override-aware: a task on a named chat is judged on that chat)."""
+    try:
+        from core.chat.function_manager import scope_private
+        if scope_private.get():
+            return True
+    except Exception:
+        return True
+    try:
+        from core.api_fastapi import get_system
+        return bool((get_system().llm_chat.session_manager.get_chat_settings() or {}).get('private_chat'))
+    except Exception:
+        return False
+
+
 def execute(function_name, arguments, config_obj=None):
     if function_name != "schedule_task":
         return f"Unknown function: {function_name}", False
+    # Krem's ruling 2026-11-26 (isolation hunt F3): refused, not stored. The
+    # task file is plaintext, its first 50 characters become the task's name
+    # on the Schedule page and on bus events, and none of that is the vault's.
+    if _private_chat():
+        return PRIVATE_CHAT_MSG, False
 
     description = arguments.get("description", "").strip()
     time_str = arguments.get("time", "").strip()
@@ -202,18 +229,6 @@ def execute(function_name, arguments, config_obj=None):
             "max_runs": 1 if one_shot else 0,
             "delete_after_run": one_shot,
         }
-        # Privacy rolls downhill: a task authored inside a private chat is
-        # private-derived text, and fire-time otherwise derives privacy from
-        # the PROMPT alone \u2014 the deferred-execution hole (hunt 2026-08-17).
-        # The scheduler + ExecutionContext already honor this flag end to end.
-        try:
-            from core.api_fastapi import get_system
-            if bool((get_system().llm_chat.session_manager
-                     .get_chat_settings() or {}).get('private_chat')):
-                task_data["privacy_required"] = True
-        except Exception:
-            pass
-
         task = scheduler.create_task(task_data)
 
         if one_shot:

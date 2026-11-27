@@ -316,7 +316,7 @@ def _deliver(comfy, name, items, seed, prompt, notes, shaped=None, kept_words=''
         return what + (f" ({sizes[-1][0]}x{sizes[-1][1]})" if sizes[-1] else '')
 
     for n, item in enumerate(files):
-        dest = cf.keep(name, Path(item['filename']).suffix.lower())
+        dest = cf.keep(name, Path(item['filename']).suffix.lower(), private=_private())
         comfy.fetch(item, dest)
         links.append({'url': f'/api/plugin/comfyui/file/{dest.name}', 'name': dest.name})
         frames, seconds = cf.stills(dest) if n == 0 else ([], None)
@@ -365,6 +365,8 @@ def _deliver(comfy, name, items, seed, prompt, notes, shaped=None, kept_words=''
         text += "\n" + extra
     if links and kept_words:
         text += "\n" + kept_words
+    if links and _private():
+        text += "\n" + cf.PRIVATE_WORDS
     if links:
         text += "\n" + attachments.marker(f"ComfyUI: {name}", links)
     return ci.result(text, shown) if shown else text

@@ -148,7 +148,7 @@ While they are left out, a restore does not bring them back, and the chats that 
 - Everything goes to the ComfyUI address you set and nowhere else. The one exception: in an ordinary chat she may pass a web address as the input image, and Sapphire fetches that picture.
 - **Private chats.** The tool works in a private chat only while nothing leaves your network. If the ComfyUI address is out on the internet, it refuses. The input image has to be one that is already here; a web address is refused.
 - **What stays on the ComfyUI machine.** ComfyUI keeps the prompts in its history, writes them into the pictures it saves, and keeps every input image in its input folder. ComfyUI has no login. Started with `--listen`, anyone on your network can read these, including what came from a private chat.
-- **Clips** made in a private chat are plain files in `user/comfyui/outputs/` (see above).
+- **Clips** made in a private chat are plain files in `user/comfyui/outputs/` (see above). They are not encrypted. Such a file's name ends in `-pv`, Sapphire is told it is not protected, and while the vault is locked the panel, the Apps page and the player do not list or play it. Anyone who can open the folder can still open the file.
 
 ## Troubleshooting
 

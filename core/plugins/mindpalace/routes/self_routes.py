@@ -140,6 +140,9 @@ def _ledger_row(r, children=0, note_id=None, note_detail=None, report=None):
             detail['reason'] = nd['reason']
         else:
             detail.pop('reason', None)
+    # text a piece had before it moved into the vault: not shown while locked
+    from plugins.mindpalace.tools import ledger as lg
+    detail = lg.shown_detail(r[4], r[5], detail, person=True)
     return {'id': r[0], 'ts': r[1], 'actor': r[2], 'action': r[3],
             'layer': r[4], 'target': r[5],
             'summary': report or r[6],   # a run's after-action replaces "running…"
