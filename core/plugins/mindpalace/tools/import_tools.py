@@ -165,6 +165,11 @@ def _provenance(row: dict):
     emb = _get(row, 'embedding')
     prov = _get(row, 'embedding_provider')
     dim = _get(row, 'embedding_dim')
+    from core.embeddings import KEPT_NEAR
+    if emb is None and prov == KEPT_NEAR:
+        # no vector ON PURPOSE (a private turn's words, held back from a far
+        # embedder): the mark comes along, or the backfill sends them out
+        return None, KEPT_NEAR, None
     if emb is None or prov is None or dim is None:
         return None, None, None
     pid, adim = _active_provenance()

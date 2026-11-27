@@ -448,7 +448,10 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
     ok, msg = prompts.save_component(comp_type, key, value, reason=reason,
                                      origin=origin)
     if not ok:
-        if msg == prompts.VAULT_LOCKED_MSG:
+        # a refusal is the caller's to fix, not a server fault: a flagless
+        # save under a sealed key answered 500 (live check 2026-11-26)
+        if msg in (prompts.VAULT_LOCKED_MSG,
+                   prompts.PIECE_ASLEEP_MSG.format(piece=f"{comp_type}/{key}")):
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=500, detail=msg)
     if reason:

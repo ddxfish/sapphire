@@ -658,10 +658,16 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
                 # lands with a NULL vector, invisible to semantic search while
                 # the backfill latch stays set. Warn + re-arm (mirrors
                 # memory_tools 2026-05-07 #H; negspace N22, 2026-08-31).
+                # ...or this turn's privacy held the text back from a far
+                # embedder: the row says so and the sweeps leave it alone
+                # (core/embeddings KEPT_NEAR; isolation hunt E1).
+                from core.embeddings import kept_stamp
+                embedding_provider = kept_stamp(embedder)
                 global _backfill_done
                 _backfill_done = False
-                logger.warning("[KNOWLEDGE] people embed returned None — "
-                               "row may store NULL vector; backfill re-armed.")
+                if embedding_provider is None:
+                    logger.warning("[KNOWLEDGE] people embed returned None — "
+                                   "row may store NULL vector; backfill re-armed.")
 
         now = datetime.now().isoformat()
 
@@ -683,7 +689,10 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
             # a transient embed failure shouldn't strip a good vector off an
             # existing row. Scout finding: update_memory used to NULL-out the
             # vector on embed failure; applying the guard here too.
-            if embedding_blob is not None:
+            # Kept near (a private turn, a far embedder): the old vector is of
+            # the OLD words and its stamp would let a later sweep or re-embed
+            # send the NEW ones out. It goes, and the row says why.
+            if embedding_blob is not None or embedding_provider is not None:
                 updates.append('embedding = ?'); params.append(embedding_blob)
                 updates.append('embedding_provider = ?'); params.append(embedding_provider)
                 updates.append('embedding_dim = ?'); params.append(embedding_dim)
@@ -867,10 +876,16 @@ def add_entry(tab_id, content, chunk_index=0, source_filename=None):
             # Embed returned None — row stores a NULL vector. Warn + re-arm the
             # backfill latch so the next search sweeps it up (mirrors
             # memory_tools 2026-05-07 #H; negspace N22, 2026-08-31).
+            # ...or this turn's privacy held the text back from a far embedder
+            # (a private chat's document, a private turn's note): the row says
+            # so and the sweeps leave it alone (core/embeddings KEPT_NEAR).
+            from core.embeddings import kept_stamp
+            embedding_provider = kept_stamp(embedder)
             global _backfill_done
             _backfill_done = False
-            logger.warning("[KNOWLEDGE] add_entry embed returned None — "
-                           "row stored with NULL vector; backfill re-armed.")
+            if embedding_provider is None:
+                logger.warning("[KNOWLEDGE] add_entry embed returned None — "
+                               "row stored with NULL vector; backfill re-armed.")
 
     with _get_connection() as conn:
         cursor = conn.cursor()
@@ -923,8 +938,14 @@ def update_entry(entry_id, content):
             # (guard below). Not NULL, so backfill can't fix it; stale-vector
             # re-embed is a separate board item. At least say so in the log
             # (negspace N22, 2026-08-31).
-            logger.warning("[KNOWLEDGE] update_entry embed returned None — "
-                           "content updated but its stored vector is now STALE.")
+            # Kept near (a private turn, a far embedder) is different: the
+            # stale vector and its stamp must go, or a later sweep or re-embed
+            # sends the new words out. The row says why instead.
+            from core.embeddings import kept_stamp
+            embedding_provider = kept_stamp(embedder)
+            if embedding_provider is None:
+                logger.warning("[KNOWLEDGE] update_entry embed returned None — "
+                               "content updated but its stored vector is now STALE.")
 
     tab_scope = None
     with _get_connection() as conn:
@@ -932,7 +953,7 @@ def update_entry(entry_id, content):
         # Only overwrite embedding columns when we actually produced a fresh
         # embedding — a transient embed failure shouldn't strip the existing
         # vector. Scout finding: this was a silent data-loss path.
-        if embedding_blob is not None:
+        if embedding_blob is not None or embedding_provider is not None:
             cursor.execute(
                 'UPDATE knowledge_entries SET content = ?, embedding = ?, '
                 'embedding_provider = ?, embedding_dim = ?, updated_at = ? WHERE id = ?',
@@ -1353,9 +1374,13 @@ def _backfill_knowledge_embeddings():
     # Knowledge entries
     with _get_connection() as conn:
         cursor = conn.cursor()
+        # KEPT_NEAR rows (a private chat's document, a private turn's note)
+        # are not this sweep's to send while the embedder is far.
+        from core.embeddings import not_kept_sql
         cursor.execute(
             'SELECT id, content FROM knowledge_entries '
-            'WHERE embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL'
+            'WHERE (embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL)'
+            + not_kept_sql(embedder)
         )
         entry_rows = cursor.fetchall()
 
@@ -1392,7 +1417,8 @@ def _backfill_knowledge_embeddings():
         cursor = conn.cursor()
         cursor.execute(
             'SELECT id, name, relationship, phone, email, address, notes FROM people '
-            'WHERE embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL'
+            'WHERE (embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL)'
+            + not_kept_sql(embedder)
         )
         people_rows = cursor.fetchall()
 
@@ -1685,7 +1711,7 @@ def _save_person(name, relationship=None, phone=None, email=None, address=None,
     pid, is_new = create_or_update_person(name, relationship, phone, email, address, notes,
                                           scope=scope, person_id=person_id)
     action = "Saved new" if is_new else "Updated"
-    logger.info(f"{action} person [{pid}] '{name.strip()}' (scope: {scope})")
+    logger.info(f"{action} person [{pid}] (scope: {scope})")
     return f"{action} contact: {name.strip()} (ID: {pid})", True
 
 

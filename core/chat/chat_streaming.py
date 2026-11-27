@@ -1,5 +1,6 @@
 import json
 import logging
+from core import log_safe
 import re
 import time
 from typing import Generator, Union, Dict, Any
@@ -1063,7 +1064,7 @@ class StreamingChat:
                         self._cleanup_stream()
                         budget.tighten(provider_key, effective_model, provider)
                         continue
-                    logger.error(f"[ERR] [STREAMING] Iteration {iteration + 1} failed: {e}", exc_info=True)
+                    logger.error(f"[ERR] [STREAMING] Iteration {iteration + 1} failed: {log_safe.err(e)}", exc_info=log_safe.exc(e))
                     self._cleanup_stream()
                     raise
                 
@@ -1200,7 +1201,7 @@ class StreamingChat:
                             # with permissive defaults). 2026-05-14.
                             logger.error(
                                 f"[STREAMING] Failed to parse tool arguments for "
-                                f"{function_name} (finish={finish}): {raw_args!r}"
+                                f"{function_name} (finish={finish}): {log_safe.words(raw_args)}"
                             )
                             error_result = bad_args_result(finish)
                             # Loop-warn to the LLM only; history keeps raw error.
@@ -1281,7 +1282,7 @@ class StreamingChat:
                             )
 
                         except Exception as tool_error:
-                            logger.error(f"Tool execution error: {tool_error}", exc_info=True)
+                            logger.error(f"Tool execution error: {log_safe.err(tool_error)}", exc_info=log_safe.exc(tool_error))
                             # Exception strings can embed whole payloads — this
                             # path bypasses _extract_tool_images, so cap here.
                             error_result = cap_tool_result_text(f"Error: {str(tool_error)}", function_name)
@@ -1689,7 +1690,7 @@ class StreamingChat:
             self._cleanup_stream()
             raise
         except Exception as e:
-            logger.error(f"[ERR] [STREAMING FATAL] Unhandled error: {e}", exc_info=True)
+            logger.error(f"[ERR] [STREAMING FATAL] Unhandled error: {log_safe.err(e)}", exc_info=log_safe.exc(e))
             # Learn-once proxy hint — this is the one catcher every streaming
             # provider failure funnels through (claude stream-enter included),
             # so proxy-blocked errors get named here. (SOCKS-for-all, 2026-08-31)

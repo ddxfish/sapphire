@@ -247,6 +247,65 @@ def test_public_never_carries_a_secret(host):
     assert view['parts'][0]['capabilities'] == ['shell', 'lamp'] and view['parts'][0]['available'] is True
 
 
+# A device set to a private chat keeps its setting, and the page never shows
+# that chat's name while the vault is locked (Krem 2026-11-26, as tasks do).
+
+CHAT_DRIVER = {'label': 'Fake speaker', 'module': 'device_driver.py', 'capabilities': ['shell'],
+               'config_schema': [{'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'local_chat': True},
+                                 {'key': 'host', 'type': 'string', 'label': 'Host'}]}
+
+
+@pytest.fixture
+def speaker(host, monkeypatch):
+    assert host.reg.register_driver('fakechat', CHAT_DRIVER, 'fakeplug')
+    core.add('speaker', 'Speaker', 'fakechat', {'chat': 'bedroom', 'host': 'a'})
+    sealed = {'bedroom'}
+    monkeypatch.setattr(core, '_chat_sealed', lambda name: name in sealed)
+    return sealed
+
+
+def _chat(device_id='speaker'):
+    return core.get(device_id)['parts'][0]['config']['chat']
+
+
+def test_public_never_names_a_sealed_chat(speaker):
+    view = core.public(core.get('speaker'))
+    assert view['parts'][0]['values']['chat'] == core.SEALED_CHAT
+    assert 'bedroom' not in json.dumps(view)
+    assert _chat() == 'bedroom', "only the served copy: the setting is as it was"
+
+
+def test_a_save_that_sends_the_label_back_keeps_the_chat(speaker):
+    row, _ = core.update('speaker', parts={'fakechat': {'chat': core.SEALED_CHAT, 'host': 'b'}})
+    assert _chat() == 'bedroom' and row['parts'][0]['config']['host'] == 'b'
+    core.update('speaker', parts={'fakechat': {'chat': 'kitchen'}})
+    assert _chat() == 'kitchen', "a name typed over the label replaces it"
+
+
+def test_an_open_vault_shows_the_name(speaker):
+    speaker.clear()
+    assert core.public(core.get('speaker'))['parts'][0]['values']['chat'] == 'bedroom'
+
+
+def test_no_vault_or_an_open_one_hides_nothing_and_a_locked_one_fails_shut(monkeypatch):
+    from core import prompt_vault
+    import core.api_fastapi as af
+    monkeypatch.setattr(prompt_vault, 'vault_status', lambda: {'exists': False, 'unlocked': False})
+    assert core._chat_sealed('bedroom') is False
+    monkeypatch.setattr(prompt_vault, 'vault_status', lambda: {'exists': True, 'unlocked': True})
+    assert core._chat_sealed('bedroom') is False
+    monkeypatch.setattr(prompt_vault, 'vault_status', lambda: {'exists': True, 'unlocked': False})
+    sm = types.SimpleNamespace(names_sealed_chat=lambda n: n == 'bedroom')
+    monkeypatch.setattr(af, 'get_system', lambda: types.SimpleNamespace(
+        llm_chat=types.SimpleNamespace(session_manager=sm)))
+    assert core._chat_sealed('bedroom') is True and core._chat_sealed('kitchen') is False
+
+    def gone():
+        raise RuntimeError("not up yet")
+    monkeypatch.setattr(af, 'get_system', gone)
+    assert core._chat_sealed('kitchen') is True, "locked and cannot tell: not shown"
+
+
 # --- what she reads ----------------------------------------------------------
 
 def test_empty_list(host):

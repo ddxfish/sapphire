@@ -566,9 +566,13 @@ def _backfill_embeddings():
     # vector search.
     with _get_connection() as conn:
         cursor = conn.cursor()
+        # KEPT_NEAR rows (a private chat's words, held back at save) are not
+        # this sweep's to send while the embedder is far (core/embeddings).
+        from core.embeddings import not_kept_sql
         cursor.execute(
             'SELECT id, content, embedding, embedding_provider, embedding_dim FROM memories '
-            'WHERE embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL'
+            'WHERE (embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL)'
+            + not_kept_sql(embedder)
         )
         rows = cursor.fetchall()
 
@@ -875,11 +879,20 @@ def _save_memory(content: str, label: str = None, scope: str = 'default',
                 # be picked up by re-embed. Clear the latch so the next
                 # search-triggered backfill sweep picks this row up. Memory
                 # day-ruiner scout 2026-05-07 #H.
-                embed_failed_mid_session = True
-                logger.warning(
-                    "[MEMORY] Embed call returned None during save — row will be "
-                    "stored with NULL vector and re-embedded on next search."
-                )
+                # ...unless this turn's privacy is WHY: a private chat's words
+                # are held back from an embedder off this machine. The row
+                # says so (core/embeddings KEPT_NEAR) and the sweeps leave it
+                # alone while the embedder is far. It used to look like any
+                # row without a vector, and the next search's backfill sent
+                # it out (isolation hunt E1, 2026-11-23).
+                from core.embeddings import kept_stamp
+                embedding_provider = kept_stamp(embedder)
+                embed_failed_mid_session = embedding_provider is None
+                if embed_failed_mid_session:
+                    logger.warning(
+                        "[MEMORY] Embed call returned None during save — row will be "
+                        "stored with NULL vector and re-embedded on next search."
+                    )
 
         with _get_connection() as conn:
             cursor = conn.cursor()

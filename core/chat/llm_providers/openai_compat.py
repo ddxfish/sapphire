@@ -14,6 +14,7 @@ This is the default provider and your 99% use case.
 
 import json
 import logging
+from core import log_safe
 import re
 import threading
 import time
@@ -624,7 +625,7 @@ class OpenAICompatProvider(BaseProvider):
                     self._strip_rejected(request_kwargs)
                     msg = (f"{where} ({self.model}) rejected {', '.join(bad)} — sent without it from "
                            f"now on (until restart). Clear it under Settings › LLM › {where} to stop this.")
-                    logger.warning(f"[OPENAI-COMPAT] {msg} | {e}")
+                    logger.warning(f"[OPENAI-COMPAT] {msg} | {log_safe.err(e)}")
                     _notify(msg)
                 for n in sw:
                     switches.discard(n)
@@ -1057,7 +1058,8 @@ class OpenAICompatProvider(BaseProvider):
         # DEBUG: Log message structure (reduced verbosity)
         logger.info(f"[OPENAI-COMPAT] Sending {len(clean_messages)} messages to {self.base_url} model={self.model}")
         logger.debug(f"[OPENAI-COMPAT] Multimodal supported: {self._supports_multimodal()}")
-        for i, msg in enumerate(clean_messages):
+        # previews quote the prompt and every message: never for a private turn, at any log level
+        for i, msg in enumerate(() if log_safe.private_turn() else clean_messages):
             role = msg.get('role')
             content = msg.get('content')
             content_type = type(content).__name__
@@ -1105,7 +1107,7 @@ class OpenAICompatProvider(BaseProvider):
         try:
             stream = self._create(request_kwargs)
         except Exception as e:
-            logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
+            logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {log_safe.err(e)}")
             logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
             raise
         

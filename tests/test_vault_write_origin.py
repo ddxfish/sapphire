@@ -82,6 +82,18 @@ def test_her_create_is_told_why(world, monkeypatch):
     assert 'tender' not in pm._components['emotions']
 
 
+def test_the_editor_route_refuses_a_sealed_key_as_a_conflict_not_a_fault(world, client, monkeypatch):
+    """A save with neither create nor update (a script, an old page) reached
+    the funnel's refusal and came back 500 (live check 2026-11-26)."""
+    _seal(monkeypatch)
+    c, _ = client
+    for body in ({'value': 'a plaintext shadow'}, {'value': 'a plaintext shadow', 'create': True}):
+        r = c.put('/api/prompts/components/emotions/tender', json=body)
+        assert r.status_code == 409, r.text
+        assert 'asleep in the locked vault' in r.json()['detail']
+    assert 'tender' not in pm._components['emotions']
+
+
 def test_rename_cannot_land_on_a_sealed_key(world, monkeypatch):
     _seal(monkeypatch)
     ok, msg = pc.rename_piece('emotions', 'happy', 'tender')

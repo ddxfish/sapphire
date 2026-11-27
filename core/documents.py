@@ -177,7 +177,7 @@ def _embed(chunks, report=None):
     embedder = _kb()._get_embedder()
     if not chunks or not embedder or not embedder.available:
         return [empty] * len(chunks)
-    from core.embeddings import stamp_embedding
+    from core.embeddings import stamp_embedding, kept_stamp
     out = []
     for at in range(0, len(chunks), EMBED_BATCH):
         batch = chunks[at:at + EMBED_BATCH]
@@ -186,7 +186,10 @@ def _embed(chunks, report=None):
         except Exception as e:
             logger.warning(f"[Documents] embedding failed: {e}")
             vecs = None
-        out += [stamp_embedding(v, embedder) for v in vecs] if vecs is not None else [empty] * len(batch)
+        # no vector because a private chat's text was held back: the chunk says
+        # so (KEPT_NEAR), and no later sweep sends it to a far embedder
+        held = (None, kept_stamp(embedder), None) if vecs is None else empty
+        out += [stamp_embedding(v, embedder) for v in vecs] if vecs is not None else [held] * len(batch)
         if report:
             report(len(out), len(chunks))
     return out
@@ -349,10 +352,12 @@ def _heal(chat):
         if not embedder or not embedder.available:
             return
         active = getattr(embedder, 'provider_id', None)
+        from core.embeddings import not_kept_sql
         with kb._get_connection() as conn:
             cur = conn.cursor()
             cur.execute('SELECT e.id, e.content FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id '
-                        'WHERE t.scope = ? AND (e.embedding IS NULL OR e.embedding_provider IS NOT ?)',
+                        'WHERE t.scope = ? AND (e.embedding IS NULL OR e.embedding_provider IS NOT ?)'
+                        + not_kept_sql(embedder, 'e.embedding_provider'),
                         (scope_of(chat), active))
             rows = cur.fetchall()
         if not rows:

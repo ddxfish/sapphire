@@ -32,7 +32,7 @@ During conversation she decides what's worth keeping and saves it with `save_mem
 - **Plans have a date.** `when=` on a save or update marks a memory as a plan for that day (an appointment, a deadline). Plans show on the Self page's **Upcoming** strip. `when='none'` clears it.
 - **Labels** are optional and freeform, one per memory. A label filter matches the whole label exactly: a memory saved with the label `family, routines` is found by neither `family` nor `routines`, so give each memory a single label.
 
-The Memories tab searches as you type and filters with the **🔒 Keyed**, **🏠 Private-model** and **🗑 Retired** pills. A private-model memory was written by a model you marked private (or marked by you on its card): a cloud model is not shown it, only told how many matched, and cannot change or delete it. *Keep private-model memories from cloud models* in Mind → Settings → ⚙ General turns that off. **+ Add** writes one yourself, **Export / Import** moves a scope's memories as a file, and "meta" on any card shows how that memory was made. Merged and retired memories go to a recoverable archive, never deleted outright.
+The Memories tab searches as you type and filters with the **🔒 Keyed**, **🏠 Private-model** and **🗑 Retired** pills. A private-model memory was written by a model you marked private (or marked by you on its card): a cloud model is not shown it, only told how many matched, and cannot change or delete it. *Keep private-model memories from cloud models* in Mind → Settings → ⚙ General turns that off. While it is on, a private-model memory that has no vector yet is also not sent to an embedding provider off this machine or your network by the background backfill: it is found by keywords until you use a local or network embedder. **+ Add** writes one yourself, **Export / Import** moves a scope's memories as a file, and "meta" on any card shows how that memory was made. Merged and retired memories go to a recoverable archive, never deleted outright.
 
 ### Keyed (private) memories
 
@@ -209,6 +209,7 @@ SELF: each sheet section caps at 2000 chars (custom boxes: 8 per scope, 6000 cha
 
 LIBRARIAN: Beta, three gates all off by default (librarian_enabled, librarian_nightly_enabled at 03:30, per-scope resident toggles). 5 passes, 7 charter stages; pass = standing note + charter + data; Run ALL shows a token estimate, confirm bypasses the daily cap; dedup dry run is LLM-free; ⭐ favorites refuse merges; merges soft (archive).
 
+KEPT NEAR: a memory saved or edited in a private chat is not sent to an embedder off this machine or LAN (stamped embedding_provider='kept-near', no vector); the backfill skips those rows and private-model rows while the embedder is far. They match by keywords only. Nothing for you to do.
 PRIVATE-MODEL: rows written on a model marked private (or marked 🏠 by the user) are hidden from cloud models (private_model_filter, default on): search/recent add "N more matching memories are only available on private models" (a count, nothing to fetch), and update_memory/delete_memory refuse them ("kept for private models and was not updated/deleted"). Not your error: say so and carry on.
 
 KEYED: private_key rows only for calls passing the key; never tended/merged/promoted; ledger logs '[keyed]'; absent from wake pulls; text still goes to the embedder at save (remote embedder = leaves the machine).

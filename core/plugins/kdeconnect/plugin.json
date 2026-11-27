@@ -45,6 +45,7 @@
             "key": "chat",
             "type": "string",
             "label": "Talks in chat",
+            "local_chat": true,
             "tab": "Status",
             "help": "The chat its texts and what it shares land in. Empty = the chat that is open. A name that is not a chat yet is made when you save."
           },

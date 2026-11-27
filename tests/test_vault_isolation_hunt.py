@@ -231,6 +231,9 @@ def test_b4_public_turn_cannot_shadow_an_unlocked_vault_key(world):
                                         'key': 'tender', 'value': 'shadow'})
     assert not ok and 'tender' not in pm._components['emotions']
     assert SECRET not in text
+    # and the refusal is true: it is a vault piece, not "a built-in piece"
+    # (live check 2026-11-26, she caught the contradiction with the list)
+    assert 'vault piece' in text and 'built-in' not in text
 
 
 def test_the_editor_routes_read_the_vault(world, client):
@@ -624,6 +627,16 @@ def test_d1_the_open_private_chat_holds_one_too(store):
     assert pv.leases_held() == 0
 
 
+def _idle_seal_done():
+    """A waiting idle seal runs on its own thread when the last private turn
+    ends. Wait for it: a thread still working in the chat store while the next
+    test starts is how this store's sqlite close hang gets triggered."""
+    import threading
+    for t in threading.enumerate():
+        if t.name == 'vault-idle-seal':
+            t.join(5)
+
+
 def test_d1_the_idle_lock_waits_for_a_private_turn_then_seals(store):
     llm = _llm(store)
     _, sid, _ = llm.begin_stream("secret", exclusive=True)
@@ -631,10 +644,7 @@ def test_d1_the_idle_lock_waits_for_a_private_turn_then_seals(store):
     pv._on_idle()
     assert pv.vault_unlocked(), "the idle seal must wait for the private turn"
     llm.end_stream(sid, "secret")                # its rows are written
-    for _ in range(100):
-        if not pv.vault_unlocked():
-            break
-        time.sleep(0.02)
+    _idle_seal_done()
     assert not pv.vault_unlocked(), "and seal the moment it ends"
 
 
@@ -646,7 +656,7 @@ def test_d1_a_person_back_before_the_turn_ends_calls_the_idle_lock_off(store):
     assert pv._pending
     pv.touch()                                   # the person spoke
     llm.end_stream(sid, "secret")
-    time.sleep(0.2)
+    _idle_seal_done()
     assert pv.vault_unlocked() and not pv._pending
 
 

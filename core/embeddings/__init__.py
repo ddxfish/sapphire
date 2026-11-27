@@ -192,8 +192,79 @@ def _private_turn_refuses(url) -> bool:
     return True
 
 
+# ── kept near: the row remembers its text was held back ──
+#
+# A private turn's text is not sent to an embedder off this machine and its
+# network; the embed gives None and the row is stored with no vector. That
+# row then looked exactly like one saved while the embedder was down, and
+# every deferred job (the stores' backfills, the re-embed after a swap) sent
+# such rows to whatever embedder was active, outside any turn (isolation hunt
+# E1, 2026-11-23). So the row says so, in the column every store already has:
+# `embedding_provider = KEPT_NEAR`, vector and dim NULL. Readers lose nothing
+# (vector search needs a vector; keyword search finds the row). Every job
+# that embeds outside a turn leaves KEPT_NEAR rows alone while the active
+# embedder is far, and a local or LAN embedder embeds them, the stamp
+# replaced by its own.
+
+KEPT_NEAR = 'kept-near'
+
+
+def far(embedder) -> bool:
+    """Does text sent to this embedder leave this machine and its network?
+    The built-in local and null ones never; a remote one by its address;
+    anything else by what it says (`is_far`, set from a plugin provider's
+    is_local at registration). One that does not say counts as far."""
+    if embedder is None or isinstance(embedder, (LocalEmbedder, NullEmbedder)):
+        return False
+    said = getattr(embedder, 'is_far', None)
+    if said is None:
+        return True
+    try:
+        return bool(said() if callable(said) else said)
+    except Exception:
+        return True
+
+
+def kept_near(embedder) -> bool:
+    """Is THIS turn's text held back from this embedder (a private turn
+    meeting a far one)? Cannot tell = held back."""
+    try:
+        from core.chat.function_manager import scope_private
+        if not scope_private.get():
+            return False
+    except Exception:
+        return True
+    return far(embedder)
+
+
+def kept_stamp(embedder):
+    """What a save writes in `embedding_provider` when its embed gave None:
+    KEPT_NEAR if this turn's privacy is why, else None (the embedder was down
+    and a backfill may embed the row later)."""
+    return KEPT_NEAR if kept_near(embedder) else None
+
+
+def not_kept_sql(embedder, col='embedding_provider') -> str:
+    """SQL a deferred job ANDs onto its row pick: nothing while the embedder
+    is near, else the KEPT_NEAR rows are left out. (IS NOT: a NULL stamp is
+    not KEPT_NEAR.)"""
+    return f" AND {col} IS NOT '{KEPT_NEAR}'" if far(embedder) else ''
+
+
+def _far_url(url) -> bool:
+    try:
+        from core.chat.llm_providers.openai_compat import near_host
+        return bool(url) and not near_host(url)
+    except Exception:
+        return True
+
+
 class RemoteEmbedder:
     """OpenAI-compatible embedding API client (for Nomic via TEI, etc.)."""
+
+    @property
+    def is_far(self):
+        return _far_url(self._normalize_url(getattr(config, 'EMBEDDING_API_URL', '')))
 
     # Remote providers don't declare dim statically — we learn it from the first
     # successful response. Provider identity is the URL itself (the real space
@@ -290,6 +361,10 @@ class SapphireRouterEmbedder:
         import os
         url = os.environ.get('SAPPHIRE_ROUTER_URL') or getattr(config, 'SAPPHIRE_ROUTER_URL', '')
         return url.rstrip('/')
+
+    @property
+    def is_far(self):
+        return _far_url(self._get_url())
 
     def _get_tenant_id(self):
         import os
@@ -573,7 +648,35 @@ class EmbeddingRegistry(BaseProviderRegistry):
             elif not cached[0]:
                 logger.debug(f"[embedding] Plugin '{key}' canary previously failed — using null")
                 return NullEmbedder()
+            if not _gate_plugin_embedder(instance, key, bool(entry.get('is_local', False))):
+                return NullEmbedder()
         return instance
+
+
+def _gate_plugin_embedder(instance, key, is_local) -> bool:
+    """A plugin's embedder gets the same private-turn gate the built-in
+    remote ones carry inside their own embed(): only those two checked, so a
+    plugin's cloud embedder was handed a private chat's text. Set on the
+    INSTANCE (its class stays the plugin's: unregister_plugin finds the
+    active embedder by type). Whether it is far comes from the provider's
+    is_local, unless the class says so itself. False = it could not be
+    gated, and an ungated embedder is not used."""
+    try:
+        if getattr(instance, 'is_far', None) is None:
+            instance.is_far = not is_local
+        inner = instance.embed
+
+        def embed(texts, prefix='search_document'):
+            if kept_near(instance):
+                logger.info("[embedding] private turn: plugin embedder skipped")
+                return None
+            return inner(texts, prefix=prefix)
+        instance.embed = embed
+        return True
+    except Exception as e:
+        logger.error(f"[embedding] Plugin '{key}' could not be given the private-turn "
+                     f"gate ({e}) — disabling it")
+        return False
 
 
 embedding_registry = EmbeddingRegistry()

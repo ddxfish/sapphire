@@ -691,9 +691,11 @@ class StreamingTTSPump:
         # so the LLM's emoji-only sentences just don't get spoken (which
         # is what the user would expect anyway).
         if not _HAS_SPEECH_RE.search(text_to_synth or ""):
+            # Never the words: this line once carried them, and a private
+            # chat's reply sat in the plaintext log (live check 2026-11-26).
             logger.info(
                 f"[TTS-STREAM] Skipping chunk {chunk['index']} — no speakable "
-                f"chars (text={text_to_synth!r:.60})"
+                f"chars ({len(text_to_synth or '')} chars)"
             )
             return
         meta = {
@@ -724,7 +726,7 @@ class StreamingTTSPump:
         logger.info(
             f"[TTS-STREAM] submit chunk {chunk['index']} "
             f"({chunk['boundary']}, {len(text_to_synth)} chars, "
-            f"stream={self._provider_streams}): {text_to_synth!r:.80}"
+            f"stream={self._provider_streams})"
         )
         # New shape: per-chunk Queue holds Kokoro pipeline segments as they
         # arrive over chunked-transfer. done flags when the worker has

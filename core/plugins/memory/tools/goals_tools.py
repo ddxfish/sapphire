@@ -737,7 +737,7 @@ def _create_goal(title, description=None, priority='medium', parent_id=None, sco
     kind = "Subtask" if parent_id else "Goal"
     parent_note = f" under goal [{parent_id}]" if parent_id else ""
     perm_note = " [PERMANENT]" if permanent else ""
-    logger.info(f"Created {kind.lower()} [{goal_id}] '{title}' ({priority}) in scope '{scope}'{parent_note}{perm_note}")
+    logger.info(f"Created {kind.lower()} [{goal_id}] ({priority}) in scope '{scope}'{parent_note}{perm_note}")   # ids, never the words
     try:
         from core.mind_events import publish_mind_changed
         publish_mind_changed('goal', scope, 'save')
@@ -1076,7 +1076,7 @@ def _update_goal(goal_id, scope='default', **kwargs):
     if progress_note:
         changes.append(f"logged: {progress_note[:80]}{'...' if len(progress_note) > 80 else ''}")
 
-    logger.info(f"Updated goal [{goal_id}]: {', '.join(changes)}")
+    logger.info(f"Updated goal [{goal_id}]: {len(changes)} change(s)")
     try:
         from core.mind_events import publish_mind_changed
         publish_mind_changed('goal', scope, 'update')
@@ -1137,7 +1137,7 @@ def _delete_goal(goal_id, cascade=True, scope='default'):
     if subtask_count > 0:
         sub_note = f" and {subtask_count} subtask(s)" if cascade else f" ({subtask_count} subtasks promoted to top-level)"
 
-    logger.info(f"Deleted goal [{goal_id}] '{title}'{sub_note}")
+    logger.info(f"Deleted goal [{goal_id}]{sub_note}")
     try:
         from core.mind_events import publish_mind_changed
         publish_mind_changed('goal', scope, 'delete')

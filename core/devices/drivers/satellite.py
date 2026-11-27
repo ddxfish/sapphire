@@ -57,7 +57,7 @@ SPEC = {
          'label': 'Key Sapphire sends',
          'help': "The satellite's own key (SAPPH_BODY_TOKEN on a Pi body). Stored scrambled."},
         # the chat this device is in, for everything it has that talks or shows: on the first tab (2026-10-09)
-        {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'tab': 'Status',
+        {'key': 'chat', 'type': 'string', 'label': 'Talks in chat', 'tab': 'Status', 'local_chat': True,
          'capability': ('mic', 'keyboard', 'buttons', 'screen'),
          'help': "The chat this device is in: what it hears, what is typed on it and what its buttons send "
                  "land there, and its screen shows it. Empty = the last chat used. A name that is not a "

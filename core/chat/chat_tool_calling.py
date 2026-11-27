@@ -1,5 +1,6 @@
 import json
 import logging
+from core import log_safe
 import time
 import re
 import uuid
@@ -56,7 +57,7 @@ def strip_ui_markers(content: str, keep_img: bool = False) -> str:
         markers_found = marker_pattern.findall(content)
         logger.info(f"[CLEANUP] Stripped {len(markers_found)} UI markers from tool result for LLM context")
         for marker in markers_found:
-            logger.debug(f"   - {marker.strip()[:120]}")
+            logger.debug(f"   - {log_safe.words(marker.strip()[:120])}")
     
     return clean.strip()
 
@@ -520,7 +521,7 @@ class ToolCallingEngine:
                 except json.JSONDecodeError:
                     pass
             if not isinstance(function_args, dict):
-                logger.error(f"Failed to parse tool arguments (finish={finish}): {raw_args!r}")
+                logger.error(f"Failed to parse tool arguments (finish={finish}): {log_safe.words(raw_args)}")
                 error_result = bad_args_result(finish)
                 # Loop-warn goes to the LLM message only — history keeps the raw error
                 # (else the warning persists and replays every future turn).
@@ -540,7 +541,7 @@ class ToolCallingEngine:
             try:
                 function_result, tool_ok = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot, with_success=True)
             except Exception as tool_error:
-                logger.error(f"Tool execution failed for {function_name}: {tool_error}", exc_info=True)
+                logger.error(f"Tool execution failed for {function_name}: {log_safe.err(tool_error)}", exc_info=log_safe.exc(tool_error))
                 function_result, tool_ok = f"Tool '{function_name}' failed: {str(tool_error)}", False
 
             # Extract images if tool returned structured result
@@ -562,7 +563,7 @@ class ToolCallingEngine:
 
             logger.info(f"[OK] Tool result added to messages")
             logger.debug(f"   Message role: {wrapped_msg['role']}")
-            logger.debug(f"   Content preview: {str(wrapped_msg.get('content', ''))[:100]}")
+            logger.debug(f"   Content preview: {log_safe.words(str(wrapped_msg.get('content', ''))[:100])}")
 
             if history:
                 logger.info(f"[SAVE] Saving tool result for: {function_name}")
@@ -638,7 +639,7 @@ class ToolCallingEngine:
         try:
             function_result, tool_ok = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot, with_success=True)
         except Exception as tool_error:
-            logger.error(f"Text-based tool failed for {function_name}: {tool_error}")
+            logger.error(f"Text-based tool failed for {function_name}: {log_safe.err(tool_error)}")
             function_result, tool_ok = f"Tool '{function_name}' failed: {str(tool_error)}", False
 
         result_str, tool_images = _extract_tool_images(function_result, history or image_sink, provider, function_name)

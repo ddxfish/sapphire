@@ -865,6 +865,20 @@ def test_zero_segments_logs_dropped_warning(enable_streaming, caplog):
         f"missing dropped warning: {msgs}"
 
 
+def test_the_pump_never_logs_the_words_it_speaks(enable_streaming, caplog):
+    """The submit line carried the first 80 characters of every sentence: a
+    private chat's spoken reply sat in the plaintext log and the journal
+    (live check 2026-11-26). Counts only, at every level, for every chat."""
+    caplog.set_level("DEBUG", logger="core.tts.stream_pump")
+    pump = StreamingTTSPump(system=_make_system(provider=_FakeProvider(audio_bytes=b"FAKE_OGG")))
+    pump.push("The lantern glass had a song.\n\nNobody else heard it sing.\n\n😀 🎉.\n\n")
+    list(pump.flush_and_close())
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("submit chunk" in m for m in msgs), f"setup: the submit line ran: {msgs}"
+    said = [m for m in msgs if any(w in m for w in ("lantern", "song", "Nobody", "sing", "😀"))]
+    assert not said, f"spoken words reached the log: {said}"
+
+
 # ─── Bonus edge cases — low-hanging fruit coverage ────────────────────────────
 
 def test_emoji_only_chunk_skipped_before_synth(enable_streaming, caplog):

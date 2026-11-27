@@ -870,6 +870,47 @@ def _ensure_db():
             return False
 
 
+# ── kept near: text that is not a far embedder's to have ──
+#
+# A private turn's words are held back from an embedder off this machine at
+# save (core/embeddings). The jobs that embed OUTSIDE a turn had no such
+# gate: the sweep sent every row with no vector to whatever embedder was
+# active, a private chat's memories included (isolation hunt E1, 2026-11-23).
+# Outside a turn two marks on the row decide, and both travel with it:
+#   - its own stamp, embedding_provider = KEPT_NEAR (a save or edit whose
+#     embed was held back);
+#   - the private-model mark (wr_private, or filed under a private entity),
+#     which already rides into day rows, merges and promotes: rows born with
+#     no vector, that only the sweep ever embeds. Honoured while the
+#     private-model filter is on.
+# While the embedder is far those rows are left exactly as they are (found
+# by keywords, as today). A local or LAN embedder embeds them. Nothing here
+# ever writes to an existing row except to embed it.
+
+def _not_for_embedder_sql(embedder, alias='') -> str:
+    """SQL the sweep ANDs onto its pick: '' while the embedder is near."""
+    from core.embeddings import far, KEPT_NEAR
+    if not far(embedder):
+        return ''
+    col = f'{alias}.embedding_provider' if alias else 'chunks.embedding_provider'
+    sql = f" AND {col} IS NOT '{KEPT_NEAR}'"
+    if _private_filter_on():
+        sql += f' AND NOT {_private_chunk(alias)}'
+    return sql
+
+
+def _row_held_back(cursor, chunk_id, embedder) -> bool:
+    """One existing row, about to be re-embedded by a rewrite: is its text
+    not this embedder's to have? (The same test as the sweep's.)"""
+    from core.embeddings import far, KEPT_NEAR
+    if not far(embedder):
+        return False
+    r = cursor.execute('SELECT embedding_provider FROM chunks WHERE id = ?', (chunk_id,)).fetchone()
+    if r and r[0] == KEPT_NEAR:
+        return True
+    return _private_filter_on() and _chunk_is_private(cursor, chunk_id)
+
+
 _backfill_done = False          # False, True (any provider), or the (provider, dim) it completed under
 _backfill_running = False
 _backfill_stop = False          # shutdown(): finish the batch, then stop
@@ -955,7 +996,8 @@ def _sweep():
             where.append('embedding_dim != ?'); params.append(dim)
         resets = _latch_resets
         with _get_connection() as conn:
-            rows = conn.execute(f"SELECT id, content FROM chunks WHERE {' OR '.join(where)}", params).fetchall()
+            rows = conn.execute(f"SELECT id, content FROM chunks WHERE ({' OR '.join(where)})"
+                                + _not_for_embedder_sql(embedder), params).fetchall()
         if not rows:
             # Rows committed after that look (a night's days, an import) reset
             # the latch; closing it now would leave them without vectors
@@ -2156,9 +2198,14 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
                 from core.embeddings import stamp_embedding
                 embedding_blob, embedding_provider, embedding_dim = stamp_embedding(embs[0], embedder)
             else:
-                embed_failed_mid_session = True
-                logger.warning("[MINDPALACE] Embed returned None during save — "
-                               "row stored with NULL vector, re-embedded on next search.")
+                # this turn's privacy held the text back: the row says so and
+                # no sweep sends it to a far embedder (see "kept near" above)
+                from core.embeddings import kept_stamp
+                embedding_provider = kept_stamp(embedder)
+                embed_failed_mid_session = embedding_provider is None
+                if embed_failed_mid_session:
+                    logger.warning("[MINDPALACE] Embed returned None during save — "
+                                   "row stored with NULL vector, re-embedded on next search.")
 
         now = _now()
         with _get_connection() as conn:
@@ -2965,12 +3012,20 @@ def _rewrite_content(cursor, memory_id, new_content, created, old_meta, scope, n
     embed_failed = False
     embedder = _get_embedder()
     if embedder.available:
-        embs = embedder.embed([new_content], prefix='search_document')
-        if embs is not None:
-            from core.embeddings import stamp_embedding
-            blob, provider, dim = stamp_embedding(embs[0], embedder)
+        from core.embeddings import stamp_embedding, kept_stamp, KEPT_NEAR
+        if _row_held_back(cursor, memory_id, embedder):
+            # a rewrite outside the row's own private turn (the librarian's
+            # passes, a revert): its words are still not a far embedder's
+            provider = KEPT_NEAR
         else:
-            embed_failed = True
+            embs = embedder.embed([new_content], prefix='search_document')
+            if embs is not None:
+                blob, provider, dim = stamp_embedding(embs[0], embedder)
+            else:
+                # held back by THIS turn's privacy: the old vector goes with
+                # the old words (as it always did) and the row says why
+                provider = kept_stamp(embedder)
+                embed_failed = provider is None
     old_meta = dict(old_meta) if isinstance(old_meta, dict) else {}
     for k in ('temporal_at', 'event_dates', 'event_date_src'):
         old_meta.pop(k, None)

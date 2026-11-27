@@ -5813,7 +5813,8 @@ class ChatSessionManager:
             removed = self.current_chat.messages.pop(last_assistant_idx)
             self._save_current_chat()
             logger.info(f"Removed last assistant message at index {last_assistant_idx}")
-            logger.debug(f"Removed content preview: {removed.get('content', '')[:100]}")
+            if not (self.current_settings or {}).get('private_chat'):     # the log is plaintext: never a private chat's words
+                logger.debug(f"Removed content preview: {removed.get('content', '')[:100]}")
             return True
         else:
             removed = self.current_chat.messages.pop(start_idx)

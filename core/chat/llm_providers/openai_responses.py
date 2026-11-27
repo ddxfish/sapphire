@@ -14,6 +14,7 @@ the Responses format (Open Responses standard).
 
 import json
 import logging
+from core import log_safe
 import time
 from typing import Dict, Any, List, Optional, Generator
 
@@ -332,7 +333,7 @@ class OpenAIResponsesProvider(BaseProvider):
             logger.error(f"[RESPONSES] SDK missing responses.create - update openai package: pip install -U openai")
             raise RuntimeError("OpenAI SDK too old - run: pip install -U openai") from e
         except Exception as e:
-            logger.error(f"[RESPONSES] REQUEST FAILED: {e}")
+            logger.error(f"[RESPONSES] REQUEST FAILED: {log_safe.err(e)}")
             raise
         
         # Track state

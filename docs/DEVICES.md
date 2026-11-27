@@ -535,9 +535,15 @@ this ring.
 **A busy chat.** If the chat is in the middle of a turn, the question waits its
 turn and is answered when the chat is free. It is never dropped.
 
-**Private chats.** A private chat never sends audio to a cloud speech engine,
-and never sends its reply to a cloud voice engine. The satellite stays silent
-and the reason is logged.
+**Private chats.** A device only talks in an ordinary chat. Set to a private
+chat, or left to follow the open chat while that one is private, it is
+refused and told why: pick another chat for it in Devices. A device set to an
+ordinary chat keeps working while the vault is open, so you can be in a
+private chat on the screen and still talk to her in her main chat through the
+speaker. If a device's "Talks in chat" names a private chat, the setting is
+kept, and while the vault is locked the box shows **🔒 locked vault** instead
+of the name. Saving with that label in the box leaves the chat as it was; type
+a new name over it to change it.
 
 ### Backups on its card
 

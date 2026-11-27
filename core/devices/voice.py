@@ -386,7 +386,7 @@ def chat_for(config, device_id=''):
     """(chat, its settings, '') for a device's settings: the chat it names,
     else the last chat used. A name that is no chat yet is made here (Krem
     2026-10-09: a typed name makes the chat). (chat, None, why) when the
-    chat cannot be used: it is locked, or it could not be made."""
+    chat cannot be used: it is private, or it could not be made."""
     from core.chat.history import landing_chat
     sm = _system().llm_chat.session_manager
     named = str((config or {}).get('chat') or '').strip()
@@ -398,6 +398,23 @@ def chat_for(config, device_id=''):
         if new and (sm.chat_exists(new) or sm.create_chat(new)):
             chat, settings = new, sm.get_settings_for(new)
             logger.info(f"[DEVICES] {device_id or 'a device'}: talks in the chat '{chat}', made for it if it was not there")
+    # Devices talk in ORDINARY chats only (Krem, 2026-11-26): a satellite, a
+    # phone or a keyboard pointed at a private chat is refused, open vault or
+    # locked. One pointed at an ordinary chat works as ever, vault open
+    # included: the person can sit in a private chat and still talk to her in
+    # her main chat through the speaker. The private chat is never named in
+    # the words (they are spoken aloud and logged).
+    try:
+        private = (settings or {}).get('private_chat') is True or \
+            (settings is None and sm.is_chat_hidden(chat) is True)
+    except Exception:
+        private = settings is None            # cannot tell and cannot read it: not a chat to talk in
+    if private:
+        if named:
+            return chat, None, (f"'{device_id}' is set to a private chat, and devices only talk in "
+                                f"ordinary chats. Pick another chat for it in Devices.")
+        return chat, None, (f"'{device_id}' follows the chat that is open, and that one is private. "
+                            f"Devices only talk in ordinary chats: set one for it in Devices.")
     if settings is None:
         return chat, None, f"The chat '{chat}' set for '{device_id}' cannot be opened."
     return chat, settings, ''

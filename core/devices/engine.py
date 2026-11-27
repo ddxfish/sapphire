@@ -70,6 +70,10 @@ ALL = 'all'              # the composite device: her voice on every device that 
 RESERVED = ('found', ALL, 'firmware', 'provision', 'here', 'flash')   # names a device may not have: the routes and `all` use them
 CLEAR = '__CLEAR__'
 KEPT = 'set'            # what public() shows for a stored secret; sent back, it means "as it is"
+# What public() shows where a `local_chat` setting names a chat the locked
+# vault hides (Krem 2026-11-26: keep the setting, never show the name while
+# sealed, as tasks do). Sent back, it means "as it is".
+SEALED_CHAT = '\U0001F512 locked vault'
 PAGE = 'Settings > Devices'
 SCREEN = 4000            # characters of one help screen, about 1k tokens
 MOST = 8                 # actions a capability shows when the screen is over that
@@ -461,7 +465,7 @@ def _clean(schema, incoming, previous):
                 v = incoming[key]
                 ops[key] = None if v in ('', None, CLEAR) else str(v)[:16000]
             continue
-        if key in incoming:
+        if key in incoming and not (field.get('local_chat') and incoming[key] == SEALED_CHAT):
             config[key] = _coerce(field, incoming[key])
         elif key in previous:
             config[key] = previous[key]
@@ -1126,9 +1130,29 @@ def remove(device_id):
     return row
 
 
+def _chat_sealed(name) -> bool:
+    """Is this a chat the locked vault hides? No vault or an open one hides
+    nothing. Locked and cannot tell = yes: the name is not shown. Asked per
+    device on every page read, so the store's per-seal list answers, never a
+    database read each (names_sealed_chat)."""
+    try:
+        from core import prompt_vault
+        status = prompt_vault.vault_status()
+        if not status.get('exists') or status.get('unlocked'):
+            return False
+    except Exception:
+        return True
+    try:
+        from core.api_fastapi import get_system
+        return get_system().llm_chat.session_manager.names_sealed_chat(str(name)) is True
+    except Exception:
+        return True
+
+
 def public(row):
     """A row for the Devices page: every part with its schema and its values.
-    A secret field reads 'set' or '' - never the secret."""
+    A secret field reads 'set' or '' - never the secret, and a chat the locked
+    vault hides reads SEALED_CHAT - never its name."""
     held = _secrets().status(row['id'])
     parts = []
     for part in row.get('parts', []):
@@ -1160,6 +1184,8 @@ def public(row):
                 values[f['key']] = values[f['was']]
         unreadable = []
         for field in schema:
+            if field.get('local_chat') and values.get(field['key']) and _chat_sealed(values[field['key']]):
+                values[field['key']] = SEALED_CHAT
             if field.get('secret'):
                 state = held.get(f"{part['driver']}.{field['key']}")
                 values[field['key']] = KEPT if state == 'set' else ''

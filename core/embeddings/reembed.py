@@ -169,7 +169,7 @@ def cancel_reembed():
 def _count_pending(embedder):
     """Count rows across all tables that would be re-embedded. Rows with
     matching provenance are skipped (already current)."""
-    from core.embeddings import current_provenance
+    from core.embeddings import current_provenance, not_kept_sql
     import sqlite3 as _sql
     active_pid = getattr(embedder, 'provider_id', None)
     counts = {}
@@ -179,8 +179,8 @@ def _count_pending(embedder):
             with open_conn() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    f'SELECT COUNT(*) FROM {table} WHERE embedding_provider IS NOT ? '
-                    f'OR embedding_provider IS NULL',
+                    f'SELECT COUNT(*) FROM {table} WHERE (embedding_provider IS NOT ? '
+                    f'OR embedding_provider IS NULL)' + not_kept_sql(embedder),
                     (active_pid,)
                 )
                 return cur.fetchone()[0]
@@ -225,6 +225,14 @@ def _bump_error(msg):
         _state.last_error = msg
 
 
+def _not_kept(embedder) -> str:
+    """Rows a private turn's privacy held back at save (KEPT_NEAR) are not
+    this job's to send while the embedder is far: before, a swap to another
+    remote embedder sent every one of them out (isolation hunt E1)."""
+    from core.embeddings import not_kept_sql
+    return not_kept_sql(embedder)
+
+
 def _process_memories(embedder):
     from plugins.memory.tools import memory_tools as mt
     from core.embeddings import stamp_embedding
@@ -232,8 +240,8 @@ def _process_memories(embedder):
 
     with mt._get_connection() as conn:
         rows = conn.execute(
-            'SELECT id, content FROM memories WHERE embedding_provider IS NOT ? '
-            'OR embedding_provider IS NULL',
+            'SELECT id, content FROM memories WHERE (embedding_provider IS NOT ? '
+            'OR embedding_provider IS NULL)' + _not_kept(embedder),
             (active_pid,)
         ).fetchall()
 
@@ -272,8 +280,8 @@ def _process_knowledge_entries(embedder):
 
     with kt._get_connection() as conn:
         rows = conn.execute(
-            'SELECT id, content FROM knowledge_entries WHERE embedding_provider IS NOT ? '
-            'OR embedding_provider IS NULL',
+            'SELECT id, content FROM knowledge_entries WHERE (embedding_provider IS NOT ? '
+            'OR embedding_provider IS NULL)' + _not_kept(embedder),
             (active_pid,)
         ).fetchall()
 
@@ -315,7 +323,8 @@ def _process_people(embedder):
     with kt._get_connection() as conn:
         rows = conn.execute(
             'SELECT id, name, relationship, phone, email, address, notes '
-            'FROM people WHERE embedding_provider IS NOT ? OR embedding_provider IS NULL',
+            'FROM people WHERE (embedding_provider IS NOT ? OR embedding_provider IS NULL)'
+            + _not_kept(embedder),
             (active_pid,)
         ).fetchall()
 

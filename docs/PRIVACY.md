@@ -51,7 +51,8 @@ You can tell a private chat by the glow on the chat area border, the 🗝 next t
 | **Local models only** | Auto mode only picks providers ticked *Local / private server*. Pinning a cloud provider refuses the turn with a message. |
 | **Local tools only** | Any tool that reaches the network refuses and tells the AI why — including the ones that feel personal but hand text to a service: email, phone calls, Telegram, the plugin store. Tools that declare no locality at all (many older plugins predate the flag) are blocked too, fail-closed — if your unflagged plugins only talk to local hardware, **Settings > Privacy > "allow tools with no locality flag"** lets them run; explicitly network tools stay blocked regardless. |
 | **Voice stays local** | Cloud STT and TTS refuse — you get a short notice instead of speech. The check follows the chat the speech belongs to, so a background turn (a scheduled task, a voice session) is judged on *its* chat, not on whichever chat you happen to have open. The same goes for the microphone and the wake word: they are judged on the chat your words are for (a private room on screen, the chat voice lands in), and a reply is judged on the chat that wrote it. |
-| **Embeddings stay local** | A memory saved in a private chat is not sent to an embedder off this machine or your local network. It is saved without one, and search falls back to keywords for it. A local embedder works as usual. |
+| **Embeddings stay local** | A memory, a note or a document saved in a private chat is not sent to an embedder off this machine or your local network, at save time or later by any background job. It is saved without a vector, and search falls back to keywords for it. A local or network embedder works as usual, and embeds those rows once you switch to one. In Mind Palace the same goes for every memory a private model wrote (see [MEMORY.md](MEMORY.md)). |
+| **Devices use ordinary chats** | A satellite, a phone or a keyboard only talks in an ordinary chat. Pointed at a private chat (or following the open chat while that one is private) it is refused, and says to pick another chat in Devices. One set to an ordinary chat keeps working while the vault is open: you can sit in a private chat and still talk to her in her main chat through the speaker. A device's setting that names a private chat is kept, and while the vault is locked the Devices page shows **🔒 locked vault** there instead of the name. |
 | **Encrypted at rest** | Messages, chat settings, tool images, and plugin data are stored as AES-256-GCM values (`@enc1:` prefixed) under the vault's key. |
 | **Invisible when sealed** | Lock the vault and the chat is gone from the picker, Chat Manager, chat search, and the API — it answers exactly like a chat that never existed. |
 
@@ -65,7 +66,7 @@ If you're sitting in a private chat when it locks, Sapphire moves you out first 
 
 **A reply in progress in a private chat:**
 
-- **You lock it** (the padlock, **Lock now**, or deleting the vault): the vault does not stay open. Every private reply in progress is stopped, the same as pressing Stop: what she had written so far is saved, the rest is cut. That includes ones you can't see, such as a task running on a private chat or someone talking to a satellite in one. The vault locks once they have stopped, usually within a second or two, and after 15 seconds regardless.
+- **You lock it** (the padlock, **Lock now**, or deleting the vault): the vault does not stay open. Every private reply in progress is stopped, the same as pressing Stop: what she had written so far is saved, the rest is cut. That includes ones you can't see, such as a task running on a private chat or a seat in a private room. The vault locks once they have stopped, usually within a second or two, and after 15 seconds regardless.
 - **The idle timer locks it:** it waits for a private reply in progress to finish, then locks. If that reply runs for another whole idle period, it is stopped.
 
 Talking to her resets the idle clock from anywhere: typing, the wake word, a satellite, a phone call. Her own activity does not: a scheduled task on a private chat won't keep the vault open, and after the idle lock that task fails with an error until you unlock.
@@ -158,8 +159,9 @@ Plugin authors: see [Private chats & `privacy_aware`](plugin-author/hooks.md#pri
 ## Honest limits
 
 - **No vault means no encryption.** If you never create a vault, a chat marked private still refuses cloud models and network tools — but it isn't encrypted and it doesn't hide. Create the vault first. (Chats marked private before you had a vault are swept in automatically at the next unlock.)
-- **Documents attached to a private chat are not encrypted.** The file and its extracted text sit in plaintext on disk (`user/documents/` and the knowledge database), and they stay there while the vault is locked. The files are only as private as your disk.
-- **Chat names are plaintext at rest** in the database. Content, settings, and images encrypt; the name does not. Keep names neutral.
+- **Documents attached to a private chat are not encrypted.** The file and its extracted text sit in plaintext on disk (`user/documents/` and the knowledge database), and they stay there while the vault is locked; attaching one says so. Their text is not sent to an embedder off this machine or your network, but the files are only as private as your disk.
+- **Chat names are plaintext at rest** in the database and in the log file (`user/logs/`). Content, settings, and images encrypt; the name does not. Keep names neutral. The log never holds a private chat's words: errors and tool problems there are logged by kind and size only. Short labels can still appear (a memory's label, a knowledge tab's name).
+- **Old log files may hold spoken replies.** Until late November 2026 the log recorded the first 80 characters of every sentence Sapphire spoke aloud, private chats included. Logs are kept 30 days. If you used voice in a private chat, delete the files in `user/logs/` (and clear the system journal if Sapphire runs as a service) after updating.
 - **Nothing decrypts while locked** — not the app, not a tool, not you. That's the point, and it's also why there's no recovery.
 - **Old backups and old exports** made while a chat was public stay plaintext.
 - **Managed mode** (hosted/Docker-managed installs) disables the vault and private chats entirely.
@@ -188,8 +190,11 @@ PRIVATE CHATS:
 - Release only via Chat Manager 🔓 (decrypts back to plaintext storage)
 - Enforcement: local-only LLM providers, network tools refuse, cloud STT/TTS refuse, a remote embedder is skipped (the memory saves unembedded, search uses keywords)
 - At rest: message rows, chat settings, tool images, and plugin chat data stored as `@enc1:` AES-256-GCM under a chat data key wrapped inside the vault frame
-- Chat NAMES stay plaintext at rest
-- Chat DOCUMENTS of a private chat: plaintext at rest (`user/documents/`, knowledge db)
+- Chat NAMES stay plaintext at rest (database, log file)
+- LOG: a private turn's words are not logged. Spoken sentences log counts only (any chat); malformed tool arguments, tool exceptions and model-server error bodies log size or kind only in a private turn (`core/log_safe.py`); the opt-in tool trace file skips private turns. Names still log: chat names, memory labels, knowledge tab names. `[TTS-STREAM]` lines carried sentence text before the 2026-11-26 fix; old logs keep it for 30 days
+- Chat DOCUMENTS of a private chat: plaintext at rest (`user/documents/`, knowledge db); chunks are embedded only by a local or LAN embedder
+- KEPT NEAR: a row whose text a private turn held back from a far embedder is stamped `embedding_provider = 'kept-near'` (no vector). Backfills and the re-embed job skip those rows while the embedder is far; in Mind Palace they also skip private-model rows (`wr_private`, or filed under a private entity) while `private_model_filter` is on. Such rows are found by keywords, not by meaning. A plugin's cloud embedder gets the same private-turn gate as the built-in remote ones
+- DEVICES: a device's turn (voice, typed, button, a phone's document) is refused when its chat is private, open vault or locked; the refusal never names the chat. A device set to a public chat is not gated by the open vault. A `local_chat` device setting naming a sealed chat is served as `🔒 locked vault` (engine `SEALED_CHAT`); sent back on a save it keeps the stored name
 - Speech gates judge the chat the words belong to: `/api/transcribe` takes `chat` (the chat on screen) and also checks the landing chat; the wake word checks the landing chat; `/api/tts` file mode takes `chat` (the chat that wrote the reply). A chat that cannot be read fails closed
 - NO vault = pre-vault meaning: local-only enforcement, no encryption, no hiding. Legacy private chats are encrypted by a sweep at the next unlock
 

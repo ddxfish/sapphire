@@ -2,6 +2,7 @@
 
 import json
 import logging
+from core import log_safe
 import time
 import os
 import importlib
@@ -1726,7 +1727,7 @@ class FunctionManager:
             else:
                 result, success = raw, True
         except Exception as e:
-            logger.error(f"Error executing function {function_name}: {e}")
+            logger.error(f"Error executing function {function_name}: {log_safe.err(e)}")
             result = f"Error executing {function_name}: {str(e)}"
             success = False
 
@@ -1781,9 +1782,9 @@ class FunctionManager:
     def _log_tool_call(self, function_name, arguments, result, execution_time, success):
         """Log tool call to history. Disabled - legacy debug feature."""
         max_entries = getattr(config, 'TOOL_HISTORY_MAX_ENTRIES', 0)
-        if max_entries == 0:
+        if max_entries == 0 or scope_private.get():     # a plaintext file: never a private chat's arguments and results
             return
-        
+
         tool_entry = {
             "timestamp": datetime.now().isoformat(),
             "function_name": function_name,

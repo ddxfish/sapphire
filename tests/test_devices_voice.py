@@ -839,3 +839,39 @@ def test_ima_stream_cuts_the_last_block_to_the_samples_it_holds():
         per = (block - 4) * 2 + 1
         full, last = divmod(n, per)
         assert block == 512 and len(body) == full * block + (4 + last // 2 if last else 0)
+
+
+# ── devices talk in ordinary chats only (Krem, 2026-11-26) ──
+
+def _chats(home, table, hidden=()):
+    sm = home.system.llm_chat.session_manager
+    sm.get_settings_for.side_effect = lambda chat: table.get(chat)
+    sm.is_chat_hidden.side_effect = lambda chat: chat in hidden
+
+
+def test_a_device_set_to_a_private_chat_is_refused_and_the_chat_is_not_named(home):
+    _chats(home, {'diary': {'private_chat': True}})
+    chat, settings, why = voice.chat_for({'chat': 'diary'}, 'pi2')
+    assert settings is None
+    assert 'private chat' in why and 'ordinary chats' in why and 'Devices' in why
+    assert 'diary' not in why, "the words are spoken aloud and logged"
+
+
+def test_a_device_set_to_a_sealed_private_chat_is_refused_the_same_way(home):
+    _chats(home, {}, hidden=('diary',))                 # locked vault: its settings cannot be read
+    _, settings, why = voice.chat_for({'chat': 'diary'}, 'pi2')
+    assert settings is None and 'private chat' in why and 'diary' not in why
+
+
+def test_a_device_that_follows_the_open_chat_is_refused_while_that_chat_is_private(home):
+    _chats(home, {'open-chat': {'private_chat': True}})
+    _, settings, why = voice.chat_for({}, 'pi2')
+    assert settings is None and 'follows the chat that is open' in why and 'open-chat' not in why
+
+
+def test_a_device_set_to_an_ordinary_chat_works_whatever_chat_is_open(home):
+    """The person sits in a private chat and still talks to her in her main
+    chat through the speaker: the device's own chat decides, nothing else."""
+    _chats(home, {'open-chat': {'private_chat': True}, 'main': {'private_chat': False}})
+    chat, settings, why = voice.chat_for({'chat': 'main'}, 'pi2')
+    assert (chat, why) == ('main', '') and settings == {'private_chat': False}

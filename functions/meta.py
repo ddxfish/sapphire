@@ -868,6 +868,13 @@ def _prompt_pieces(args):
                         f"prompt_pieces(action='edit', component='{component}', key='{key}', value=...); "
                         f"to keep both, create it under another key."), False
             if taken:
+                # Taken but not in this turn's view: a vault piece (an ordinary
+                # chat's turn, vault open) or hidden pack scaffolding. Saying
+                # "built-in" for a vault piece was false (live check 2026-11-26).
+                from core import prompt_vault
+                if prompt_vault.holds_piece(component, key):
+                    return (f"{component}/'{key}' is the name of a vault piece, and vault pieces "
+                            f"are only available in a private chat. Create it under another key."), False
                 return (f"{component}/'{key}' is taken by a built-in piece. "
                         f"Create it under another key."), False
             if bad:
@@ -1033,7 +1040,7 @@ def _reset_chat(args):
             return ("You're not in a chat right now (background task) — "
                     "nothing was reset. Name the target instead: "
                     "reset_chat(chat_name='...', reason='...').", False)
-        logger.info(f"AI INITIATED CHAT RESET - Reason: {reason}")
+        logger.info("AI INITIATED CHAT RESET")       # never her reason: it describes the conversation
         sm.clear()  # clears + persists the EFFECTIVE chat and publishes CHAT_CLEARED
         if not _ov:
             # Transient TTL prompt pieces are process-GLOBAL and ride the
@@ -1064,7 +1071,7 @@ def _reset_chat(args):
                     f"not resetting it mid-call.", False)
     except Exception:
         pass
-    logger.info(f"AI INITIATED CHAT RESET of '{name}' - Reason: {reason}")
+    logger.info(f"AI INITIATED CHAT RESET of '{name}'")
     if not sm.clear_chat(name):
         return (f"Couldn't reset '{name}' — it doesn't exist (or is "
                 f"sealed in a locked vault).", False)

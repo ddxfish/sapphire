@@ -27,7 +27,7 @@ import core.api_fastapi  # noqa: F401  (route modules trip circular imports alon
 import core.prompt_crud as pc
 import core.prompt_vault as pv
 from core.prompt_manager import prompt_manager as pm
-from test_vault_isolation_hunt import store  # noqa: F401  (the fixture rides along)
+from test_vault_isolation_hunt import store, _idle_seal_done  # noqa: F401  (the fixture rides along)
 
 CANARY = "CANARY-7f3a-PRIVATE-WORDS"
 TYPED = f"my secret is {CANARY} (typed)"
@@ -391,10 +391,7 @@ def test_the_idle_lock_lets_a_private_reply_finish_then_seals(rig):
     pv._on_idle()
     assert pv.vault_unlocked() and not t.stream.cancel_flag, "the idle lock waits"
     t.finish()
-    for _ in range(200):
-        if not pv.vault_unlocked():
-            break
-        time.sleep(0.01)
+    _idle_seal_done()
     assert_sealed_and_clean(sm)
     kept = _unlocked_rows(sm, "secret")
     assert TYPED in kept and "with me." in kept, "the whole reply was kept"
@@ -479,6 +476,7 @@ def test_lock_unlock_storm_against_private_writers(rig, monkeypatch, seed):
     def let_go():
         if held:
             rig.end_stream(held.pop(rnd.randrange(len(held))), "secret")
+            _idle_seal_done()        # the last one back may wake a waiting idle seal: one thread at a time
 
     def lock():
         pv.lock("user")
@@ -494,7 +492,7 @@ def test_lock_unlock_storm_against_private_writers(rig, monkeypatch, seed):
         rnd.choice(steps)()
     while held:
         let_go()
-    time.sleep(0.05)                 # a waiting idle seal runs on its own thread when the last turn ends
+    _idle_seal_done()                # a waiting idle seal runs on its own thread when the last turn ends
     pv.lock("user")
     assert written > 0, "the storm never wrote anything"
     assert_sealed_and_clean(sm)

@@ -1554,6 +1554,11 @@ def write_section(scope, section, content, fields_spec=None):
                 if embs is not None:
                     from core.embeddings import stamp_embedding
                     embedding_blob, provider, dim = stamp_embedding(embs[0], embedder)
+                else:
+                    # a private turn's words, held back from a far embedder:
+                    # the row says so and no sweep sends them out later
+                    from core.embeddings import kept_stamp
+                    provider = kept_stamp(embedder)
 
             cursor.execute(
                 'INSERT INTO chunks (layer, scope, content, label, importance, meta, '

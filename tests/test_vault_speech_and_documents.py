@@ -62,7 +62,8 @@ def test_e2_a_private_chats_document_never_reaches_a_far_embedder(docs):
     with d._for_chat('secret'):
         out = d._embed(['private page one', 'private page two'])
     assert emb.calls == [True], "the embedder was not told this text is private"
-    assert out == [(None, None, None)] * 2, "kept: keyword search only"
+    from core.embeddings import KEPT_NEAR
+    assert out == [(None, KEPT_NEAR, None)] * 2, "kept, and the chunks say so: keyword search only"
 
 
 def test_e2_a_near_embedder_still_embeds_it(docs):
