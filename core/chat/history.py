@@ -1304,6 +1304,10 @@ class ChatSessionManager:
         # Ensure default chat exists and load last active (or default)
         self._ensure_default_exists()
         last_active = self._read_last_active()
+        # what the marker said at boot: None = blank, which is what a PRIVATE
+        # open chat leaves (see _save_last_active). Read by the conversation
+        # manager's boot resume.
+        self.boot_last_active = last_active
         if last_active and last_active != "default":
             if self._load_chat(last_active):
                 self.active_chat_name = last_active
@@ -1830,18 +1834,29 @@ class ChatSessionManager:
         s = json.dumps(settings)
         return self._enc_value(s) if self._is_vaulted_conn(conn, chat_name) else s
 
-    def _settings_dict(self, value, chat_name: str):
+    def _settings_dict(self, value, chat_name: str, vaulted=False):
         """Stored settings value → dict, decrypting when needed. None when a
         vaulted chat's settings are unreadable (sealed) — sweeps and readers
-        treat that as 'not visible right now'."""
+        treat that as 'not visible right now'.
+
+        `vaulted`: the chat row's own flag, from the readers that answer "is
+        this chat private?". A vaulted chat IS private, whatever its settings
+        say: its rows are ciphertext. The answer used to come from the
+        settings alone, so a settings value that went blank (or was rewritten
+        without the flag) made an encrypted chat read as an ordinary one, and
+        every gate that asks let it run on a cloud model while the vault was
+        open (day-in-the-vault run, 2026-11-26)."""
         v = self._dec_value(value, "settings", chat_name)
         if v is None:
             return None
         try:
-            return json.loads(v) if v else {}
+            d = json.loads(v) if v else {}
         except Exception as e:
             logger.error(f"settings of chat '{chat_name}' unparseable: {e}")
             return None
+        if vaulted and isinstance(d, dict):
+            d['private_chat'] = True
+        return d
 
     @staticmethod
     def _row_json(msg: Dict[str, Any]) -> str:
@@ -1899,7 +1914,7 @@ class ChatSessionManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT settings, messages, storage_format FROM chats WHERE name = ?",
+                    "SELECT settings, messages, storage_format, vaulted FROM chats WHERE name = ?",
                     (chat_name,)
                 )
                 row = cursor.fetchone()
@@ -1936,7 +1951,7 @@ class ChatSessionManager:
                         new_messages = json.loads(raw_messages)
                     new_rows_state = None
                     row_skips = None
-                file_settings = self._settings_dict(row["settings"], chat_name)
+                file_settings = self._settings_dict(row["settings"], chat_name, vaulted=row["vaulted"])
                 if file_settings is None:
                     # Vaulted chat while sealed — must not become active with
                     # defaults masquerading as its settings. Nothing committed:
@@ -2545,7 +2560,7 @@ class ChatSessionManager:
         try:
             with self._get_connection() as conn:
                 row = conn.execute(
-                    "SELECT settings, messages, storage_format FROM chats WHERE name = ?",
+                    "SELECT settings, messages, storage_format, vaulted FROM chats WHERE name = ?",
                     (chat_name,)).fetchone()
                 if not row:
                     return None
@@ -2560,7 +2575,7 @@ class ChatSessionManager:
                         messages.append(json.loads(v))
                 else:
                     messages = json.loads(row["messages"])
-                settings = self._settings_dict(row["settings"], chat_name)
+                settings = self._settings_dict(row["settings"], chat_name, vaulted=row["vaulted"])
                 if settings is None:
                     return None
                 return {"settings": settings, "messages": messages}
@@ -3516,7 +3531,7 @@ class ChatSessionManager:
                     if keyless_vaulted and row["vaulted"] \
                             and row["name"] != self.active_chat_name:
                         continue
-                    settings = self._settings_dict(row["settings"], row["name"])
+                    settings = self._settings_dict(row["settings"], row["name"], vaulted=row["vaulted"])
                     if settings is None:
                         # Encrypted settings without the key (include_hidden
                         # truth pass while sealed, or tamper): surface a
@@ -4269,6 +4284,21 @@ class ChatSessionManager:
                         enc_imgs.append((self._enc_value_bytes(r["data"]), r["id"]))
                 conn.executemany(
                     "UPDATE tool_images SET data = ? WHERE id = ?", enc_imgs)
+                # ...and each picture's CAPTION: the image put into words
+                # (core/image_describe), written in plaintext while the chat
+                # was ordinary. This pass took the pixels and left the words,
+                # at rest and in every backup after (two scouts, 2026-11-26).
+                enc_caps = [(self._enc_value(r["caption"]), r["id"]) for r in conn.execute(
+                    "SELECT id, caption FROM tool_images WHERE chat_name = ? "
+                    "AND caption IS NOT NULL AND caption != ''", (chat_name,))
+                    if not prompt_vault.is_chat_encrypted(r["caption"])]
+                conn.executemany("UPDATE tool_images SET caption = ? WHERE id = ?", enc_caps)
+                # ...and rows a repair set aside while the chat was ordinary
+                # (chat_messages_quarantine): they are its messages too.
+                enc_q = [(self._enc_value(r["message_json"]), r["id"]) for r in conn.execute(
+                    "SELECT id, message_json FROM chat_messages_quarantine WHERE chat_name = ?", (chat_name,))
+                    if not prompt_vault.is_chat_encrypted(r["message_json"])]
+                conn.executemany("UPDATE chat_messages_quarantine SET message_json = ? WHERE id = ?", enc_q)
                 # v1.3: chat-scoped plugin data rides the same flip. rowid-
                 # keyed — the 4-column PK is clumsy in an executemany WHERE.
                 enc_pcd = []
@@ -4391,6 +4421,29 @@ class ChatSessionManager:
                         dec_imgs.append((d, r["id"]))
                 conn.executemany(
                     "UPDATE tool_images SET data = ? WHERE id = ?", dec_imgs)
+                # The captions and the quarantined rows come back with the
+                # rest (the twin of the encrypt pass): left as ciphertext in
+                # an ordinary chat they read as nothing while the vault is
+                # locked and are gone for good after Delete vault.
+                dec_caps = []
+                for r in conn.execute(
+                        "SELECT id, caption FROM tool_images WHERE chat_name = ? "
+                        "AND caption IS NOT NULL", (chat_name,)):
+                    if prompt_vault.is_chat_encrypted(r["caption"]):
+                        d = self._dec_value(r["caption"], "image caption", chat_name)
+                        if d is None:
+                            return False, f"caption of image {r['id']} undecryptable — aborted"
+                        dec_caps.append((d, r["id"]))
+                conn.executemany("UPDATE tool_images SET caption = ? WHERE id = ?", dec_caps)
+                dec_q = []
+                for r in conn.execute(
+                        "SELECT id, message_json FROM chat_messages_quarantine WHERE chat_name = ?", (chat_name,)):
+                    if prompt_vault.is_chat_encrypted(r["message_json"]):
+                        d = self._dec_value(r["message_json"], "quarantined row", chat_name)
+                        if d is None:
+                            return False, f"a quarantined row of '{chat_name}' undecryptable — aborted"
+                        dec_q.append((d, r["id"]))
+                conn.executemany("UPDATE chat_messages_quarantine SET message_json = ? WHERE id = ?", dec_q)
                 # v1.3 twin: strict — a half-decrypted journal is a forked
                 # playthrough, so any unreadable row aborts the whole flip.
                 dec_pcd = []
@@ -4837,14 +4890,14 @@ class ChatSessionManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT settings FROM chats WHERE name = ?", (chat_name,)
+                    "SELECT settings, vaulted FROM chats WHERE name = ?", (chat_name,)
                 )
                 row = cursor.fetchone()
                 if not row:
                     return None
                 # Vaulted+sealed settings decrypt to None → absent, which IS
                 # the Phase 1 contract (encryption made it physics).
-                stored = self._settings_dict(row["settings"], chat_name)
+                stored = self._settings_dict(row["settings"], chat_name, vaulted=row["vaulted"])
                 if stored is None:
                     return None
                 # Legacy pre-encryption private chats (vaulted=0, plaintext
@@ -5361,10 +5414,10 @@ class ChatSessionManager:
         self._ensure_db()
         try:
             with self._get_connection() as conn:
-                row = conn.execute("SELECT settings FROM chats WHERE name = ?", (chat_name,)).fetchone()
+                row = conn.execute("SELECT settings, vaulted FROM chats WHERE name = ?", (chat_name,)).fetchone()
             if not row:
                 return None
-            s = self._settings_dict(row['settings'], chat_name)
+            s = self._settings_dict(row['settings'], chat_name, vaulted=row['vaulted'])
             if s is None:
                 return None   # vaulted + sealed = absent (Phase 2 physics)
             # Legacy plaintext private chats: Phase 1 policy gate.

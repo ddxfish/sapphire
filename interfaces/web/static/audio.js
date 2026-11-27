@@ -1176,10 +1176,17 @@ const signalMicActive = (active) => {
     }).catch(() => {});
 };
 
+// The chat the person started speaking in (the mic button). Read at the
+// PRESS: the label used to be read at release and again after the transcript
+// came back, so a vault lock mid-sentence sent a private chat's audio, and
+// then its words, as the ordinary chat's the tab had been moved to.
+let _spokenIn = null;
+
 export const handlePress = async (btn) => {
     if (isRec) return;
     const ok = await startRec();
     if (ok) {
+        _spokenIn = getViewedChat();
         isRec = true;
         btn.classList.add('recording');
         ui.showStatus();
@@ -1212,9 +1219,22 @@ export const handleRelease = async (btn, triggerSendFn) => {
             ui.updateStatus('Transcribing...');
             dispatch(Events.STT_PROCESSING, { source: 'browser' });
             try {
-                const response = await api.postAudio(blob);
+                const spokenIn = _spokenIn;
+                if (spokenIn && getViewedChat() !== spokenIn) {
+                    // the chat changed while the button was held: nothing is sent, not even the audio
+                    ui.hideStatus();
+                    ui.showToast('The chat changed while you were speaking, so that was not sent.', 'warning', 6000);
+                    return null;
+                }
+                const response = await api.postAudio(blob, spokenIn);
                 // /api/transcribe manages _web_active in its own finally block
                 const text = response.text;
+                if (spokenIn && getViewedChat() !== spokenIn) {
+                    // ...or while it was being transcribed: the words are dropped, never sent to the chat now open
+                    ui.hideStatus();
+                    ui.showToast('The chat changed while you were speaking, so that was not sent.', 'warning', 6000);
+                    return null;
+                }
 
                 if (!text || !text.trim()) {
                     const msg = response.quiet

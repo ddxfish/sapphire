@@ -1779,6 +1779,14 @@ def run():
             host=config.WEB_UI_HOST,
             port=config.WEB_UI_PORT,
             log_level="info",
+            # No access log. core/sapphire_logging pins `uvicorn.access` quiet,
+            # but building this Config re-ran uvicorn's own logging setup,
+            # which gave that logger its own stdout handler at INFO: every
+            # request line went to the journal with its full query string
+            # (the words typed into chat search, a memory's private key, a
+            # chat's name on nearly every call), past the redaction filter.
+            # Found by the log scout 2026-11-26; 69 lines in three minutes.
+            access_log=False,
             ssl_certfile=ssl_paths[0] if ssl_paths else None,
             ssl_keyfile=ssl_paths[1] if ssl_paths else None,
         )

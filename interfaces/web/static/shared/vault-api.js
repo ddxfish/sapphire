@@ -15,6 +15,15 @@ const post = (url, body) => fetchWithTimeout(url, {
 export const vaultSetup = (key) => post('/api/vault/setup', { key });
 export const vaultUnlock = (key) => post('/api/vault/unlock', { key });
 export const vaultLock = () => post('/api/vault/lock');
+// "I am here": typing counts as using the app. Throttled; never throws (a
+// failed ping must not disturb a keystroke).
+let _lastTouch = 0;
+export function vaultTouch() {
+    const now = Date.now();
+    if (now - _lastTouch < 20000) return;
+    _lastTouch = now;
+    post('/api/vault/touch').catch(() => {});
+}
 // Deletes the vault AND every private chat it encrypts. confirm = the typed words.
 export const vaultDelete = (confirm) => post('/api/vault/delete', { confirm });
 // Change passphrase — current required even while unlocked; lock state preserved.

@@ -1387,6 +1387,32 @@ def _fire_chat_hook(hook_name: str, meta: dict):
         logger.warning(f"{hook_name} hook dispatch failed: {e}")
 
 
+def _summarising(chat_name) -> bool:
+    """Is a compress or extract job running on this chat? It reads the chat
+    once and keeps sending its pieces to the provider it picked at the start,
+    which for an ordinary chat may be a cloud one."""
+    try:
+        from core.chat import compress
+        with compress._job_lock:
+            job = dict(compress._job or {})
+        return bool(job.get("running")) and job.get("chat") == chat_name
+    except Exception:
+        return False
+
+
+def _held_by_a_task(system, chat_name) -> bool:
+    """Is a turn or a held task running on this chat? The store's own rename
+    and delete guards count only typed streams; a scheduled task's hold is
+    registered with the chat engine and they never saw it. A rename or delete
+    under a task on a private chat, followed by a new chat of the old name,
+    let the task's reply (written from the private history) be appended to
+    that new ORDINARY chat in plaintext (rename scout, 2026-11-26)."""
+    try:
+        return system.llm_chat.chat_busy(chat_name) is True
+    except Exception:
+        return False
+
+
 def _delete_one_chat(system, chat_name: str, origin=None):
     """Single-chat delete with the FULL cleanup chain — the one true path,
     shared by the single route and bulk-delete. Returns (ok, message).
@@ -1397,6 +1423,8 @@ def _delete_one_chat(system, chat_name: str, origin=None):
     operator's persona/tools/scopes. Refuse until the call ends."""
     if chat_name in _live_call_chats(system):
         return False, f"'{chat_name}' has a live phone call — hang up before deleting."
+    if _held_by_a_task(system, chat_name):
+        return False, f"'{chat_name}' is answering right now. Delete it once it has finished."
     # a chat room's seats have chats of their own and its guests a word coming
     # (core/rooms.py): the record is read BEFORE the row goes
     try:
@@ -1604,6 +1632,9 @@ async def rename_chat(chat_name: str, request: Request, _=Depends(require_login)
         raise
     except Exception:
         pass
+    if _held_by_a_task(system, chat_name):
+        raise HTTPException(status_code=409,
+                            detail=f"'{chat_name}' is answering right now. Rename it once it has finished.")
     ok, result = system.llm_chat.session_manager.rename_chat(chat_name, new_name)
     if not ok:
         raise HTTPException(status_code=400, detail=result)
@@ -2142,7 +2173,7 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
         if new_settings.get('private_chat') is True:
             try:
                 _was = (system.llm_chat.session_manager.read_chat_settings(chat_name) or {}).get('private_chat')
-                _busy = (not _was) and system.llm_chat.chat_busy(chat_name)
+                _busy = (not _was) and (system.llm_chat.chat_busy(chat_name) is True or _summarising(chat_name))
             except Exception as e:
                 logger.warning(f"busy check before making a chat private failed, refusing: {type(e).__name__}")
                 _busy = True

@@ -1648,7 +1648,7 @@ class StreamingChat:
                 _forced_text, _forced_error = full_final, False
 
             except Exception as final_error:
-                logger.error(f"[STREAMING] Forced final response failed: {final_error}")
+                logger.error(f"[STREAMING] Forced final response failed: {log_safe.err(final_error)}")
                 error_msg = self._save_error_row(final_error, provider_key)
                 yield {"type": "content", "text": error_msg}
                 _forced_text, _forced_error = error_msg, True

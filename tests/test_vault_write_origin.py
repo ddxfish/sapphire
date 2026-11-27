@@ -274,7 +274,9 @@ def test_c5_the_sidebar_saves_only_what_it_painted_for_this_chat():
 def test_c6_the_send_carries_where_the_draft_was_written():
     assert 'body.draft_chat = queueHooks.draftChat' in _src('api.js')
     send = _src('handlers/send-handlers.js')
-    assert 'noteDraft(!!input.value.trim(), getViewedChat())' in send
+    assert 'noteDraft(!!input.value.trim() || Images.hasPendingUploadImages(), getViewedChat())' in send
+    # a staged picture is a draft too: it stamps the chat it was staged in
+    assert 'if (pendingImgs.length) noteDraft(true, getViewedChat());' in send
     assert "e.code === 'private_draft'" in send
     refused = send.split("e.code === 'private_draft'", 1)[1].split('if (statusCode === 409)', 1)[0]
     # locked: the words do not come back to the public chat's box. Open: the

@@ -974,6 +974,17 @@ def _start_job(session_manager, chat_name: str, mode: str, work, *, begin: str, 
                 _job["progress"] = msg
             _notify.tick(nid, text=msg)
 
+        # This thread is no turn, so nothing told the code below that the chat
+        # is private: a model-server error while summarising it was logged in
+        # full (its body can echo the transcript). The job runs as that chat's
+        # private turn would (core/log_safe, the embedder gate), as a
+        # document's embed already does (core/documents._for_chat).
+        if _priv:
+            try:
+                from core.chat.function_manager import scope_private
+                scope_private.set(True)
+            except Exception:
+                pass
         try:
             report = work(on_progress)
             with _job_lock:
@@ -994,7 +1005,8 @@ def _start_job(session_manager, chat_name: str, mode: str, work, *, begin: str, 
                              "result": {"chat": chat_name, "mode": mode, "nothing": str(e)},
                              "finished": datetime.now().isoformat()})
         except Exception as e:
-            logger.exception(f"Compress '{chat_name}' failed")
+            from core import log_safe
+            logger.error(f"Compress '{chat_name}' failed: {log_safe.err(e)}", exc_info=log_safe.exc(e))
             _notify.finish(nid, failed=True, title=failed,
                            body='See the log.' if _priv else str(e))
             with _job_lock:

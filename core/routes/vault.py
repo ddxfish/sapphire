@@ -169,6 +169,20 @@ async def vault_delete(request: Request, _=Depends(require_login)):
     raise HTTPException(status_code=500, detail=f"Vault delete failed ({code})")
 
 
+@router.post("/api/vault/touch")
+async def vault_touch(request: Request, _=Depends(require_login)):
+    """The person is here: they are typing. Resets the idle clock while the
+    vault is open; nothing otherwise. Until this existed only SENDING counted,
+    so the vault locked under someone composing a long private message and
+    their draft was cleared with it, though the docs said typing counts
+    (timing scout, 2026-11-26). The page calls it at most every 20 s while
+    keys are being pressed. A logged-in browser only: an API token is not the
+    person and cannot hold the vault open."""
+    if prompt_vault.person_reads(request) and prompt_vault.vault_unlocked():
+        prompt_vault.touch()
+    return {"status": "success"}
+
+
 @router.post("/api/vault/lock")
 async def vault_lock(_=Depends(require_login)):
     """Lock NOW. Synchronous by contract (phase 0b): active-preset handoff

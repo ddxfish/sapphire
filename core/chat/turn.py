@@ -22,6 +22,7 @@ never buffered, never numbered. The ring dies with the turn.
 """
 import contextvars
 import logging
+from core import log_safe      # the engine below logs through it; so must this frame (it re-logged the same error raw)
 import queue
 import threading
 import time
@@ -166,10 +167,10 @@ class Turn:
                 if ev.get('type') == 'llm_done':
                     self.llm_done.set()
         except ConnectionError as e:
-            logger.warning(f"[TURN] {self.label}: {e}")
+            logger.warning(f"[TURN] {self.label}: {log_safe.err(e)}")
             terminal = {'type': 'turn_end', 'error': self._friendly(e)}
         except Exception as e:
-            logger.error(f"[TURN] {self.label} failed: {e}", exc_info=True)
+            logger.error(f"[TURN] {self.label} failed: {log_safe.err(e)}", exc_info=log_safe.exc(e))
             terminal = {'type': 'turn_end', 'error': self._friendly(e)}
         finally:
             # Close the engine exactly once, HERE, in the Context that ran it —

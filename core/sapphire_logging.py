@@ -187,6 +187,7 @@ root_logger.addHandler(console_handler)
 # auth failures). Pinned independently of the root level so they stay quiet even
 # when the user flips LOG_LEVEL=DEBUG to debug Sapphire itself.
 _NOISY_LOGGERS = ('uvicorn.access', 'telethon', 'httpx', 'httpcore', 'discord')
+_PAYLOAD_LOGGERS = ('openai', 'anthropic')      # their DEBUG lines carry whole requests: never lifted
 
 def _quiet_noisy_loggers():
     # LOG_LEVEL=DEBUG lifts the pin: py-cord's gateway/heartbeat lines are the
@@ -194,6 +195,12 @@ def _quiet_noisy_loggers():
     # (Discord hunt 2.13.0, row 83). Any other level keeps the libraries quiet.
     # uvicorn.access stays pinned at every level — one line per HTTP request
     # would drown the diagnostics the user flipped to DEBUG to see.
+    # The model SDKs are pinned at EVERY level, DEBUG included: at DEBUG the
+    # openai library logs each request's whole payload ("Request options"),
+    # which is the system prompt and the full history of every turn, private
+    # chats and vault prompts among them (log scout 2026-11-26).
+    for _name in _PAYLOAD_LOGGERS:
+        logging.getLogger(_name).setLevel(logging.WARNING)
     if logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
         for _name in _NOISY_LOGGERS:
             logging.getLogger(_name).setLevel(logging.WARNING if _name == 'uvicorn.access' else logging.NOTSET)

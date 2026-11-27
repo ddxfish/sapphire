@@ -761,12 +761,13 @@ export const fetchAudio = async (text, signal = null, opts = null) => {
     }
 };
 
-export const postAudio = async (blob) => {
+export const postAudio = async (blob, chat = null) => {
     const form = new FormData();
     form.append('audio', blob, 'recording.wav');
-    // the chat these words are for (the one on screen): the server will not
-    // send a private chat's audio to a transcriber off this machine
-    const viewed = getViewedChat();
+    // the chat these words are for: the one the person STARTED speaking in
+    // (audio.js reads it at the press), else the one on screen. The server
+    // will not send a private chat's audio to a transcriber off this machine.
+    const viewed = chat || getViewedChat();
     if (viewed) form.append('chat', viewed);
     // the server's words stand (core/routes/tts.py transcribe says each case)
     return await fetchWithTimeout('/api/transcribe', { method: 'POST', body: form }, 120000);

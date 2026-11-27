@@ -95,6 +95,21 @@ class ConversationManager:
         import config
         if getattr(config, "CONVERSATION_LAST_MODE", "off") != "local":
             return
+        # A restart always comes up with the vault locked, on an ordinary
+        # chat. If the chat that was open when the app went down was private
+        # (the store blanks its marker for one), the person was talking
+        # hands-free to a private chat: the mic does not come back on by
+        # itself in the ordinary chat (crash scout, 2026-11-26).
+        try:
+            from core import prompt_vault
+            sm = self.system.llm_chat.session_manager
+            if prompt_vault.vault_exists() and not getattr(sm, 'boot_last_active', 'unknown'):
+                logger.warning("[CONV] local conversation mode NOT resumed: the chat open at shutdown was private. "
+                               "Turn it on again when you are ready.")
+                return
+        except Exception as e:
+            logger.warning(f"[CONV] local conversation mode not resumed (could not check the last chat: {type(e).__name__})")
+            return
         logger.info("[CONV] resuming local conversation mode (it was on at shutdown)")
         if not self.start_local():
             logger.warning("[CONV] local conversation mode did not resume — "

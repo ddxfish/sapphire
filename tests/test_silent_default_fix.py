@@ -28,7 +28,7 @@ def test_read_chat_settings_returns_none_for_missing_chat():
         "ChatSessionManager must expose read_chat_settings for the new route"
     src = inspect.getsource(ChatSessionManager.read_chat_settings)
     # Reads from SQLite directly
-    assert 'SELECT settings FROM chats' in src
+    assert 'SELECT settings, vaulted FROM chats' in src
     assert 'return None' in src
 
 

@@ -624,7 +624,9 @@ def test_the_extract_job_holds_the_one_slot_and_ends_with_its_count(keeper, monk
                                          target_tokens=2000, persona='sapphire')
     assert ok, err
     for _ in range(100):
-        if compress.get_job_status().get('done'):
+        # the job marks itself done a moment BEFORE it closes its notice: wait
+        # for both (waiting on `done` alone failed once in a full run)
+        if compress.get_job_status().get('done') and ended:
             break
         time.sleep(0.02)
     status = compress.get_job_status()

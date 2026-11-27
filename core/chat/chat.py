@@ -8,6 +8,7 @@
 # parallel ~470-line blocking engine that drifted from streaming for a year.)
 import base64
 import logging
+from core import log_safe
 import re
 import time
 from typing import Dict, Any, Optional, List
@@ -913,7 +914,9 @@ class LLMChat:
             # The doors never see a raise. The engine already saved the
             # error row before raising (chat_stream's outer handlers), so
             # no history write here — one more would double-log the turn.
-            logger.error(f"Chat error: {e}", exc_info=True)
+            # the engine logged it through log_safe and re-raised: this frame
+            # used to log the same exception again in full (scouts 2026-11-26)
+            logger.error(f"Chat error: {log_safe.err(e)}", exc_info=log_safe.exc(e))
             return fallback_error_text(e)
         finally:
             self.end_stream(sid, chat_name)

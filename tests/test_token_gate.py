@@ -159,3 +159,28 @@ def test_a_websocket_route_is_not_the_gates_business(sm):
     (five plugin-socket tests failed on exactly that)."""
     ws = types.SimpleNamespace(scope={'type': 'websocket'}, headers=BEARER, session={})
     assert _gate(ws) is None
+
+
+# ── typing counts as being here (timing scout, 2026-11-26) ──
+
+def test_typing_resets_the_idle_clock_for_the_person_and_never_for_a_token(client, monkeypatch):
+    c, csrf = client
+    touched = []
+    monkeypatch.setattr(pv, 'vault_unlocked', lambda: True)
+    monkeypatch.setattr(pv, 'touch', lambda: touched.append(1))
+    assert c.post('/api/vault/touch', headers={'X-CSRF-Token': csrf}).status_code == 200
+    assert touched == [1], "the person's keystrokes are activity"
+    assert c.post('/api/vault/touch', headers={'X-CSRF-Token': csrf, **BEARER}).status_code == 200
+    assert touched == [1], "an API token cannot hold the vault open"
+    monkeypatch.setattr(pv, 'vault_unlocked', lambda: False)
+    c.post('/api/vault/touch', headers={'X-CSRF-Token': csrf})
+    assert touched == [1], "a locked vault has no clock to reset"
+
+
+def test_the_composer_tells_the_vault_someone_is_typing():
+    from pathlib import Path
+    static = Path(__file__).parent.parent / "interfaces" / "web" / "static"
+    send = (static / "handlers" / "send-handlers.js").read_text(encoding='utf-8')
+    assert 'if (input.value) vaultTouch();' in send
+    api = (static / "shared" / "vault-api.js").read_text(encoding='utf-8')
+    assert "now - _lastTouch < 20000" in api and "post('/api/vault/touch')" in api

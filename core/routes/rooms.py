@@ -92,6 +92,15 @@ async def remove_seat(chat: str, seat_id: str, _=Depends(require_login)):
 async def say(chat: str, request: Request, _=Depends(require_login)):
     """The person's line. It lands between seat turns and wakes the room."""
     await _room_or_404(chat)
+    try:
+        # the person talking in a room IS the person being here: the seats'
+        # turns are machine turns, so half an hour of room talk used to count
+        # as walking away (timing scout, 2026-11-26)
+        from core import prompt_vault
+        if prompt_vault.person_reads(request) and prompt_vault.vault_unlocked():
+            prompt_vault.touch()
+    except Exception:
+        pass
     body = await _json(request)
     images = body.get('images')
     if images is not None and not (isinstance(images, list) and len(images) <= 8 and all(

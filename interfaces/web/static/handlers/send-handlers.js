@@ -8,6 +8,7 @@ import { attachDocument } from '../features/doc-bar.js';
 import { dispatch, on, Events } from '../core/event-bus.js';
 import { focusUnlessEditing } from '../shared/dom-guard.js';
 import { getBoundChat, getViewedChat } from '../core/bound-chat.js';
+import { vaultTouch } from '../shared/vault-api.js';
 import { isCommand, run as runCommand } from './commands.js';
 import { onCommandInput, onCommandKey } from './command-menu.js';
 import { openPrivatePicker } from '../shared/private-picker.js';
@@ -515,6 +516,11 @@ export function updateImagePreviewArea() {
 
     previewArea.innerHTML = '';
     const pendingImgs = Images.getPendingUploadImages();
+    // A staged picture is a draft too, and belongs to the chat it was staged
+    // in. Only typed text used to stamp the origin: a photo pasted into a
+    // private chat with no words stayed in the box through a lock and left
+    // with the next message typed in an ordinary chat (rename scout, 2026-11-26).
+    if (pendingImgs.length) noteDraft(true, getViewedChat());
 
     if (pendingImgs.length === 0) {
         previewArea.style.display = 'none';
@@ -744,7 +750,8 @@ export async function dropSealedDraft() {
 export function handleInput() {
     const { input } = getElements();
     input.parentElement.dataset.replicatedValue = input.value;
-    noteDraft(!!input.value.trim(), getViewedChat());
+    noteDraft(!!input.value.trim() || Images.hasPendingUploadImages(), getViewedChat());   // text OR a staged picture
+    if (input.value) vaultTouch();          // typing is being here: the vault's idle clock hears it (throttled)
     onCommandInput(input);
     // Debounced user_typing event for avatar (fire once, not per keystroke)
     if (!_userTypingTimer && input.value.trim()) {

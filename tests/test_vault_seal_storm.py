@@ -16,6 +16,7 @@ and that the vault really is locked. `test_the_scan_can_see_plaintext` proves
 the scan is not blind.
 """
 import json
+import logging
 import threading
 import time
 import types
@@ -32,6 +33,48 @@ from test_vault_isolation_hunt import store, _idle_seal_done  # noqa: F401  (the
 CANARY = "CANARY-7f3a-PRIVATE-WORDS"
 TYPED = f"my secret is {CANARY} (typed)"
 SAID = [f"I will keep {CANARY} ", "safe ", "with me."]
+
+
+# ── the log: every scenario in this file and in test_vault_day_in_the_life runs under it ──
+
+def _log_lines(caplog):
+    """Every captured record of the test's own run, as the file handler would
+    write it: the message, and the traceback when one is logged. Read by
+    phase: inside a fixture's teardown `caplog.records` is the TEARDOWN
+    phase's list and is empty (this check was blind for that reason at
+    first; `test_the_log_check_can_see` keeps it honest)."""
+    import traceback
+    out = []
+    for phase in ('setup', 'call'):
+        for r in caplog.get_records(phase):
+            text = r.getMessage()
+            if r.exc_info:
+                text += '\n' + ''.join(traceback.format_exception(*r.exc_info))
+            out.append((r.name, r.levelname, text))
+    return out
+
+
+@pytest.fixture(autouse=True)
+def the_log_holds_no_private_words(caplog, request):
+    """Every logger, every level, for the whole journey."""
+    caplog.set_level(logging.DEBUG)
+    yield
+    if request.node.name == 'test_the_log_check_can_see':     # the one test that plants it on purpose
+        return
+    bad = [(name, level, text[:160]) for name, level, text in _log_lines(caplog) if CANARY in text]
+    assert not bad, f"private words in the log: {bad[:3]}"
+
+
+def test_the_log_check_can_see(caplog):
+    caplog.set_level(logging.DEBUG)
+    logging.getLogger('some.plugin').info(f"said {CANARY}")
+    try:
+        raise ValueError(f"quoting {CANARY}")
+    except ValueError:
+        logging.getLogger('some.other').error("it failed", exc_info=True)
+    seen = [t for _n, _l, t in _log_lines(caplog) if CANARY in t]
+    assert len(seen) == 2, "the check must see a plain line and a traceback"
+
 
 
 # ── the rig ──

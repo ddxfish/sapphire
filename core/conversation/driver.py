@@ -69,6 +69,13 @@ class ConversationDriver:
         self.system = system
         self.sample_rate = sample_rate
         self._chat_name = chat_name     # None = default chat (local/browser); set for phone calls
+        # Hands-free follows the open chat. It remembers the chat it last
+        # heard the person in: if that was a PRIVATE chat and it is no longer
+        # where voice lands (the vault locked, a restart, an eviction), the
+        # session is over until the person turns it on again
+        # (core/voice_privacy). None until the first utterance of a session.
+        self._heard_in = None
+        self._session_over = False
         self._tts_split = (tts_split or "").strip().lower() or None   # per-surface pump split mode
         self._cue_fn = None             # optional turn-cue player (v2.9 soundscape)
         self._llm_timeout = 0.0         # >0 arms the one-shot silent regen on first-token timeout
@@ -170,7 +177,33 @@ class ConversationDriver:
         self._cue("barge")                         # floor's yours — she heard you
 
     # ── the streaming turn ──────────────────────────────────────────────────
+    def _voice_gone(self) -> bool:
+        """Before anything is transcribed: may this hands-free utterance be
+        heard at all? False for a call (its chat is fixed)."""
+        if self._chat_name:
+            return False
+        from core.voice_privacy import voice_lands, VOICE_SESSION_OVER_MSG
+        now = voice_lands(self.system)
+        was = getattr(self, '_heard_in', None)
+        if not getattr(self, '_session_over', False) and was and was[1] and (now[0] != was[0]):
+            self._session_over = True
+            logger.warning("[CONV] the private chat this session was talking in is no longer open — "
+                           "conversation mode stopped for this session")
+        if getattr(self, '_session_over', False):
+            try:
+                from core.event_bus import publish, Events
+                publish(Events.STT_ERROR, {"message": VOICE_SESSION_OVER_MSG})
+            except Exception:
+                pass
+            self._cue("error")
+            return True
+        self._heard_in = now                 # an ordinary chat switch: hands-free follows, as it always did
+        return False
+
     def _run_turn(self, pcm):
+        if self._voice_gone():
+            return
+        _spoken_in = getattr(self, '_heard_in', None)
         # Voice privacy gate (vault v1.1): a private chat refuses cloud STT
         # (voice in) AND cloud TTS (speech out). Either leak kills the whole
         # turn — a half-voice call is a dead line, not privacy.
@@ -258,6 +291,18 @@ class ConversationDriver:
             if not text:
                 logger.info("[CONV] turn: start word only, nothing to act on")
                 return
+            # ...and again now the words are ready: transcription took time,
+            # and the chat they were spoken to may have left meanwhile
+            if not self._chat_name:
+                from core.voice_privacy import voice_moved, VOICE_MOVED_MSG
+                if voice_moved(self.system, _spoken_in):
+                    logger.warning("[CONV] the chat changed while the person was speaking — utterance dropped")
+                    try:
+                        publish(Events.STT_ERROR, {"message": VOICE_MOVED_MSG})
+                    except Exception:
+                        pass
+                    self._cue("error")
+                    return
             logger.info("[CONV] turn: transcribed user utterance -> streaming")
 
             sink = self._ensure_sink()

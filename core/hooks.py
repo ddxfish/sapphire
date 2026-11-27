@@ -391,10 +391,21 @@ class HookRunner:
             try:
                 handler(event)
             except Exception as e:
-                logger.error(
-                    f"[HOOKS] Error in {plugin_name}:{handler.__name__} on '{hook_name}': {e}",
-                    exc_info=True
-                )
+                if event.chat_private:
+                    # A privacy-aware plugin was handed a private turn's words
+                    # and then failed: its exception can quote them, and the
+                    # log is plaintext. Its kind and where it broke, never
+                    # its words (day-in-the-vault run, 2026-11-26).
+                    kind = f"{type(e).__name__} <words withheld: private chat>"
+                    logger.error(
+                        f"[HOOKS] Error in {plugin_name}:{handler.__name__} on '{hook_name}': {kind}",
+                        exc_info=(Exception, Exception(kind), e.__traceback__)
+                    )
+                else:
+                    logger.error(
+                        f"[HOOKS] Error in {plugin_name}:{handler.__name__} on '{hook_name}': {e}",
+                        exc_info=True
+                    )
                 continue
 
             if is_ghost_hook and event.ghost_text:

@@ -27,6 +27,7 @@
 import * as audio from '../audio.js';
 import { showToast } from '../shared/toast.js';
 import { micAudio, micWhy } from '../shared/mic-words.js';
+import { getViewedChat } from '../core/bound-chat.js';
 
 const TARGET_RATE = 16000;
 const RETRY_MS = [2000, 5000, 10000, 20000, 30000];   // then every 30 s
@@ -244,10 +245,24 @@ const _connect = () => {
     sock.onerror = () => { /* onclose follows with the code */ };
 };
 
+// The chat hands-free was talking in when the connection dropped. A server
+// restart comes back with the vault locked on an ordinary chat: the mic must
+// not go on talking there by itself as if nothing happened.
+let chatAtDrop = null;
+const _sameChatStill = async () => {
+    if (!chatAtDrop) return true;
+    try {
+        const r = await fetch('/api/status');
+        if (!r.ok) return true;                 // not back yet: the retry loop decides
+        const now = (await r.json())?.active_chat;
+        return !now || now === chatAtDrop;
+    } catch { return true; }
+};
+
 const _scheduleRetry = () => {
     if (idlePoll) { clearInterval(idlePoll); idlePoll = null; }
     turnOpen = false;
-    if (!droppedAt) droppedAt = Date.now();
+    if (!droppedAt) { droppedAt = Date.now(); chatAtDrop = getViewedChat(); }
     if (Date.now() - droppedAt > GIVE_UP_MS) {
         wanted = false;                 // not stop(): the server being away isn't the user's Off --
         _teardown();                    // keep the device flag so a reload once it's back resumes
@@ -257,5 +272,14 @@ const _scheduleRetry = () => {
     }
     const ms = RETRY_MS[Math.min(retries++, RETRY_MS.length - 1)];
     console.warn(`[CONV-WS] dropped — reconnecting in ${ms / 1000}s`);
-    retryTimer = setTimeout(() => { retryTimer = null; if (wanted) _connect(); }, ms);
+    retryTimer = setTimeout(async () => {
+        retryTimer = null;
+        if (!wanted) return;
+        if (!(await _sameChatStill())) {
+            stop();
+            showToast('Conversation mode was turned off: the chat changed while it was disconnected. Turn it on again to talk here.', 'warning', 9000);
+            return;
+        }
+        if (wanted) _connect();
+    }, ms);
 };

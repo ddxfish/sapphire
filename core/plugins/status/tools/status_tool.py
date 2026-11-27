@@ -301,6 +301,18 @@ def execute(function_name, arguments, config=None):
                 from plugins.status.routes.status import get_logs_sync
                 log_data = get_logs_sync()  # no request = defaults (200 lines, ALL)
                 error_lines = [l for l in (log_data.get("lines", [])) if l["level"] in ("WARNING", "ERROR", "CRITICAL")]
+                # Unlocked: the private chats' names can be read, so every line
+                # that carries one is left out. These lines go to the MODEL,
+                # and on a cloud model that is a private chat's name leaving
+                # the machine (log scout 2026-11-26). Cannot list them = no tail.
+                try:
+                    from core.api_fastapi import get_system
+                    _sm = get_system().llm_chat.session_manager
+                    _private = [c['name'] for c in _sm.list_chat_files() if c.get('private_chat') and c.get('name')]
+                except Exception:
+                    lines.append("\nRecent warnings/errors: hidden (could not check them for private chat names).")
+                    return "\n".join(lines), True
+                error_lines = [l for l in error_lines if not any(n in str(l.get("text", "")) for n in _private)]
                 recent = error_lines[-20:]
                 if recent:
                     lines.append(f"\nRecent warnings/errors ({len(recent)}):")

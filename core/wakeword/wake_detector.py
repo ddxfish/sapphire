@@ -313,6 +313,11 @@ class WakeWordDetector:
             publish(Events.STT_ERROR, {"message": f"Wakeword heard — {gate}"})
             return
 
+        # where these words are meant for: read NOW, at the wake, and checked
+        # again when they are ready (core/voice_privacy.voice_moved)
+        from core.voice_privacy import voice_lands
+        started_in = voice_lands(self.system)
+
         start_time = threading.local()
         start_time.value = time.time()
         logger.info("Wake word detected! Starting to listen...")
@@ -377,6 +382,17 @@ class WakeWordDetector:
             # noise, OR a known canned phrase). Single check covers both.
             if not text or not text.strip():
                 logger.warning("No speech detected (empty or hallucination)")
+                self.system.speak_error('speech')
+                return
+
+            # The chat changed between the wake word and now (the vault idle-
+            # locked mid-sentence, the person was moved, a switch): these
+            # words were for the chat that left. Dropped before any plugin,
+            # any chat and any model hears them.
+            from core.voice_privacy import voice_moved, VOICE_MOVED_MSG
+            if voice_moved(self.system, started_in):
+                logger.warning("[WAKE] the chat changed while the person was speaking — utterance dropped")
+                publish(Events.STT_ERROR, {"message": VOICE_MOVED_MSG})
                 self.system.speak_error('speech')
                 return
 
