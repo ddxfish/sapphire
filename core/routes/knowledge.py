@@ -483,7 +483,38 @@ async def import_vcf(request: Request, _=Depends(require_login)):
     }
 
 
-@router.get("/api/knowledge/tabs")
+async def _docs_gate(request: Request, _=Depends(require_login), system=Depends(get_system)):   # login first: no answer of any kind to a stranger
+    """A chat's documents are knowledge tabs in scope '__rag__:<chat>'
+    (core/documents.py). The per-chat document routes check the chat first;
+    these general ones took any scope, tab id or entry id, so with the vault
+    locked they listed, returned, changed and deleted a sealed private chat's
+    document text by name (bug hunt 2026-11-26). One check for all of them:
+    a request that reaches a chat's documents answers 404 unless that chat
+    can be read right now, the same answer as a chat that does not exist."""
+    from plugins.memory.tools import knowledge_tools as knowledge
+    scopes = {request.query_params.get('scope')}
+    params = request.path_params
+    try:
+        if params.get('tab_id') is not None:
+            scopes.add((knowledge.get_tabs_by_id(int(params['tab_id'])) or {}).get('scope'))
+        if params.get('entry_id') is not None:
+            with knowledge._get_connection() as conn:
+                row = conn.execute('SELECT t.scope FROM knowledge_entries e JOIN knowledge_tabs t '
+                                   'ON e.tab_id = t.id WHERE e.id = ?', (int(params['entry_id']),)).fetchone()
+            scopes.add(row[0] if row else None)
+        if request.method in ('POST', 'PUT') and 'json' in request.headers.get('content-type', ''):
+            body = await request.json()
+            scopes.add(body.get('scope') if isinstance(body, dict) else None)
+    except HTTPException:
+        raise
+    except Exception:
+        pass                      # an id that is not a number, a body that is not JSON: the route says so
+    for scope in scopes:
+        if isinstance(scope, str) and scope.startswith('__rag__:'):
+            _chat_gate(system, scope[8:])
+
+
+@router.get("/api/knowledge/tabs", dependencies=[Depends(_docs_gate)])
 async def list_tabs(request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     scope = request.query_params.get('scope', 'default')
@@ -491,7 +522,7 @@ async def list_tabs(request: Request, _=Depends(require_login)):
     return {"tabs": knowledge.get_tabs(scope, tab_type)}
 
 
-@router.get("/api/knowledge/tabs/{tab_id}")
+@router.get("/api/knowledge/tabs/{tab_id}", dependencies=[Depends(_docs_gate)])
 async def get_tab(tab_id: int, request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     scope = request.query_params.get('scope', 'default')
@@ -499,7 +530,7 @@ async def get_tab(tab_id: int, request: Request, _=Depends(require_login)):
     return {"entries": entries}
 
 
-@router.post("/api/knowledge/tabs")
+@router.post("/api/knowledge/tabs", dependencies=[Depends(_docs_gate)])
 async def create_knowledge_tab(request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     data = await request.json()
@@ -513,7 +544,7 @@ async def create_knowledge_tab(request: Request, _=Depends(require_login)):
     raise HTTPException(status_code=409, detail="Tab already exists in this scope")
 
 
-@router.put("/api/knowledge/tabs/{tab_id}")
+@router.put("/api/knowledge/tabs/{tab_id}", dependencies=[Depends(_docs_gate)])
 async def update_knowledge_tab(tab_id: int, request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     data = await request.json()
@@ -522,7 +553,7 @@ async def update_knowledge_tab(tab_id: int, request: Request, _=Depends(require_
     raise HTTPException(status_code=404, detail="Tab not found")
 
 
-@router.delete("/api/knowledge/tabs/{tab_id}")
+@router.delete("/api/knowledge/tabs/{tab_id}", dependencies=[Depends(_docs_gate)])
 async def delete_knowledge_tab(tab_id: int, request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     if knowledge.delete_tab(tab_id):
@@ -530,7 +561,7 @@ async def delete_knowledge_tab(tab_id: int, request: Request, _=Depends(require_
     raise HTTPException(status_code=404, detail="Tab not found")
 
 
-@router.post("/api/knowledge/tabs/{tab_id}/entries")
+@router.post("/api/knowledge/tabs/{tab_id}/entries", dependencies=[Depends(_docs_gate)])
 async def add_knowledge_entry(tab_id: int, request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     from datetime import datetime
@@ -551,7 +582,7 @@ async def add_knowledge_entry(tab_id: int, request: Request, _=Depends(require_l
     return {"ids": entry_ids, "chunks": len(chunks)}
 
 
-@router.post("/api/knowledge/tabs/{tab_id}/upload")
+@router.post("/api/knowledge/tabs/{tab_id}/upload", dependencies=[Depends(_docs_gate)])
 async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Depends(require_login)):
     """Upload a text file into a knowledge tab — chunks and embeds automatically."""
     from plugins.memory.tools import knowledge_tools as knowledge
@@ -587,7 +618,7 @@ async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Dep
     return {"filename": filename, "chunks": len(chunks), "entry_ids": entry_ids, "replaced": replaced}
 
 
-@router.delete("/api/knowledge/tabs/{tab_id}/file/{filename}")
+@router.delete("/api/knowledge/tabs/{tab_id}/file/{filename}", dependencies=[Depends(_docs_gate)])
 async def delete_knowledge_file(tab_id: int, filename: str, _=Depends(require_login)):
     """Delete all entries from a specific uploaded file."""
     from plugins.memory.tools import knowledge_tools as knowledge
@@ -597,7 +628,7 @@ async def delete_knowledge_file(tab_id: int, filename: str, _=Depends(require_lo
     return {"deleted": count, "filename": filename}
 
 
-@router.put("/api/knowledge/entries/{entry_id}")
+@router.put("/api/knowledge/entries/{entry_id}", dependencies=[Depends(_docs_gate)])
 async def update_knowledge_entry(entry_id: int, request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     data = await request.json()
@@ -609,7 +640,7 @@ async def update_knowledge_entry(entry_id: int, request: Request, _=Depends(requ
     raise HTTPException(status_code=404, detail="Entry not found")
 
 
-@router.delete("/api/knowledge/entries/{entry_id}")
+@router.delete("/api/knowledge/entries/{entry_id}", dependencies=[Depends(_docs_gate)])
 async def delete_knowledge_entry(entry_id: int, request: Request, _=Depends(require_login)):
     from plugins.memory.tools import knowledge_tools as knowledge
     if knowledge.delete_entry(entry_id):
@@ -1015,7 +1046,7 @@ async def import_people_json(request: Request, _=Depends(require_login)):
 # KNOWLEDGE TAB EXPORT/IMPORT
 # =============================================================================
 
-@router.get("/api/knowledge/tabs/{tab_id}/export")
+@router.get("/api/knowledge/tabs/{tab_id}/export", dependencies=[Depends(_docs_gate)])
 async def export_knowledge_tab(tab_id: int, request: Request, _=Depends(require_login)):
     """Export a knowledge tab with all entries as JSON (no vectors)."""
     from plugins.memory.tools import knowledge_tools as knowledge
@@ -1035,7 +1066,7 @@ async def export_knowledge_tab(tab_id: int, request: Request, _=Depends(require_
     }
 
 
-@router.post("/api/knowledge/tabs/import")
+@router.post("/api/knowledge/tabs/import", dependencies=[Depends(_docs_gate)])
 async def import_knowledge_tab(request: Request, _=Depends(require_login)):
     """Import a knowledge tab from JSON export. Creates tab, adds entries."""
     from plugins.memory.tools import knowledge_tools as knowledge
@@ -1091,7 +1122,7 @@ async def import_knowledge_tab(request: Request, _=Depends(require_login)):
     return {"imported": imported, "skipped": 0, "tab_id": tab_id, "merged": False}
 
 
-@router.get("/api/knowledge/dedup")
+@router.get("/api/knowledge/dedup", dependencies=[Depends(_docs_gate)])
 async def find_duplicates(request: Request, _=Depends(require_login)):
     """Scan knowledge base for duplicate entries. Returns grouped duplicates.
 
@@ -1228,7 +1259,7 @@ async def find_duplicates(request: Request, _=Depends(require_login)):
     }
 
 
-@router.delete("/api/knowledge/dedup/resolve")
+@router.delete("/api/knowledge/dedup/resolve", dependencies=[Depends(_docs_gate)])
 async def resolve_duplicates(request: Request, _=Depends(require_login)):
     """Delete specific duplicate entries by ID list. Keeps the first, deletes the rest."""
     from plugins.memory.tools import knowledge_tools as knowledge

@@ -227,11 +227,22 @@ class ExecutionContext:
             bool(self.task_settings.get("privacy_required"))
             or bool(isinstance(prompt_data, dict)
                     and prompt_data.get('privacy_required')))
-        # The vault's reader rule (core/prompt_vault.py): a private task is
-        # held local-only below, so its render may read the vault. A public
-        # task (a heartbeat on a plain preset wearing a vault mood) keeps the
-        # closed render: the same text it would get with the vault locked.
-        if self._prompt_privacy_required:
+        # The vault's reader rule (core/prompt_vault.py): the vault is read
+        # for a PRIVATE CHAT's task, or for a task with no chat at all whose
+        # own prompt is private (it writes into no chat; its reply is kept out
+        # of every delivery). Never on the prompt's privacy alone when the
+        # task answers into an ordinary chat: that rendered the vault persona
+        # and wrote her reply, and whatever her prompt tools read, into that
+        # chat's plaintext transcript (bug hunt 2026-11-26). `chat_private` is
+        # the target chat's own flag (executor, foreground lane).
+        chat_private = self.task_settings.get("chat_private")
+        opens = self._prompt_privacy_required if chat_private is None else bool(chat_private)
+        if isinstance(prompt_data, dict) and prompt_data.get('withheld') and not opens:
+            # the typed lane refuses this pairing too (resolve._prompt_gate)
+            raise RuntimeError("This task's prompt is in the vault and its chat is an ordinary one. "
+                               "A vault prompt only runs in a private chat: make the chat private, "
+                               "or give the task another prompt.")
+        if opens:
             with prompt_vault.reading(True):
                 prompt_data = prompts.get_prompt(prompt_name)
         if prompt_data:

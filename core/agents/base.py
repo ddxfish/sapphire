@@ -106,8 +106,25 @@ class Agent:
         # woke us): hooks fired on this thread resolve privacy and settings
         # through it (vault hunt H2; scout C M5, 2026-10-06).
         token = self._engine.install_carrier(self)
+        # An agent spawned from a private chat works on that chat's words. It
+        # holds a vault lease like a private turn does (core/prompt_vault.py):
+        # a clicked lock stops it and sees it gone before the key drops, and
+        # the idle lock waits for it. Before, it ran on with private context
+        # after the seal (bug hunt 2026-11-26). No vault or a locked one: no
+        # lease, nothing to hold open.
+        lease = None
         try:
-            self.run(self.mission)
+            if getattr(self, 'privacy', False):
+                from core import prompt_vault
+                try:
+                    lease = prompt_vault.lease(cancel=self.stop)
+                except prompt_vault.Sealing:
+                    self._cancelled.set()          # the vault is locking right now: it does not start
+        except Exception as e:
+            logger.warning(f"Agent {self.name}: vault lease not taken ({type(e).__name__})")
+        try:
+            if not self._cancelled.is_set():
+                self.run(self.mission)
             if self._cancelled.is_set():
                 self.status = 'stopped'
                 self.result = None             # the director said "I don't want this": honor that
@@ -120,6 +137,12 @@ class Agent:
         finally:
             self._end_time = time.time()
             self._engine.release_carrier(token)
+            if lease is not None:
+                try:
+                    from core import prompt_vault
+                    prompt_vault.release(lease)
+                except Exception:
+                    pass
             # Guarded: an exception here would kill the thread silently and the
             # engine would never learn the agent finished.
             try:

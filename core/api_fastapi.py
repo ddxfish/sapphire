@@ -83,9 +83,12 @@ async def _lifespan(app):
     watch.cancel()
 
 
+from core.auth import token_gate as _token_gate      # an API token never reaches a private chat (core/auth.py)
+
 app = FastAPI(
     title="Sapphire",
     lifespan=_lifespan,
+    dependencies=[Depends(_token_gate)],
     docs_url=None,  # Disable swagger UI
     redoc_url=None,  # Disable redoc
     openapi_url=None  # Disable openapi.json
@@ -847,6 +850,15 @@ def _apply_prompt_setting(system, settings: dict):
     vault's reader rule (core/prompt_vault.py) opens the vault only when the
     chat is private. Whoever switched to it is not the reader."""
     from core.prompt_crud import live_reading
+    if not (settings or {}).get('private_chat'):
+        # an ordinary chat is being put on: no vault piece stays worn or timed
+        # from the private chat that was open before it (prompt_state)
+        try:
+            from core import prompt_state
+            if prompt_state.drop_vault_pieces():
+                logger.info("Vault pieces left the live state: the chat now open is an ordinary one")
+        except Exception as e:
+            logger.warning(f"could not clear vault pieces from the live state: {e}")
     with live_reading(system, settings):
         if "prompt" in settings:
             prompt_name = settings["prompt"]

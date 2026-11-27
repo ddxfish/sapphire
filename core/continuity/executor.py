@@ -789,7 +789,13 @@ class ContinuityExecutor:
             # Settings are read unconditionally: the privacy stamp below needs them.
             # A read failure propagates — a task that can't see its target chat's
             # settings must not run as if it could (fail-closed, like the gate).
-            chat_settings = session_manager.read_chat_settings(target_chat) or {}
+            chat_settings = session_manager.read_chat_settings(target_chat)
+            if chat_settings is None:
+                # None is "missing, sealed or unreadable". `or {}` here read
+                # all three as "an ordinary chat": the private stamp below was
+                # skipped and the chat's history went to the task's provider
+                # (bug hunt 2026-11-26). The comment above always said this.
+                raise RuntimeError("The chat this task targets can't be read right now, so it did not run.")
             if task.get("trigger_config", {}).get("chat_from_payload"):
                 from core.chat.function_manager import scope_setting_keys
                 cc = chat_settings
@@ -820,6 +826,10 @@ class ContinuityExecutor:
             # provider selection AND network tools off it.
             if chat_settings.get("private_chat"):
                 task_settings["privacy_required"] = True
+            # ...and the chat's own flag, apart from the prompt's: the vault
+            # is read for a private chat's task, never because the prompt
+            # alone is private (ExecutionContext._build_prompt).
+            task_settings["chat_private"] = bool(chat_settings.get("private_chat"))
             ctx = ExecutionContext(
                 self.system.llm_chat.function_manager,
                 self.system.llm_chat.tool_engine,

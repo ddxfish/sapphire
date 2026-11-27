@@ -70,7 +70,7 @@ async def get_system_prompt(request: Request, prompt_name: str = None, _=Depends
     if prompt_name:
         # the person's own screen reads the vault (core/prompt_vault.py)
         from core import prompt_vault
-        with prompt_vault.reading(True):
+        with prompt_vault.reading(prompt_vault.person_reads(request)):
             prompt_data = prompts.get_prompt(prompt_name)
         if not prompt_data:
             raise HTTPException(status_code=404, detail=f"Prompt '{prompt_name}' not found.")

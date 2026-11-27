@@ -505,6 +505,17 @@ def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
     # re-enter the next batch for a second look (double-work / re-merge loop).
     meta['librarian_at'] = now
     meta['added_by'] = 'ai'
+    # sources: every row it was made from (a merge), default the one source.
+    src_ids = [int(i) for i in (sources or [src_id])]
+    # Made from a private chat's words, it carries that chat mark: the row
+    # is born with no vector, and the mark is what keeps every sweep from
+    # sending it to an embedder off this machine (pt._from_private_chat).
+    if cursor.execute(
+            'SELECT 1 FROM chunks WHERE %s AND id IN (%s) LIMIT 1'
+            % (pt._from_private_chat(''), ','.join('?' * len(src_ids))), src_ids).fetchone() is not None:
+        meta['chat'] = pt.PRIVATE_CHAT
+    else:
+        meta.pop('chat', None) if meta.get('chat') == pt.PRIVATE_CHAT else None
     cursor.execute(
         'INSERT INTO chunks (layer, scope, content, entity_id, tier, label, '
         'favorite, importance, private_key, meta, created, updated) '
@@ -515,8 +526,6 @@ def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
     # A row made from private-model words is private, and one made from
     # public words stays public, whoever tends it: a private librarian must
     # not hide what it only rearranged.
-    # sources: every row it was made from (a merge), default the one source.
-    src_ids = [int(i) for i in (sources or [src_id])]
     taint = cursor.execute(
         'SELECT 1 FROM chunks WHERE %s AND id IN (%s) LIMIT 1'
         % (pt._private_chunk(''), ','.join('?' * len(src_ids))), src_ids).fetchone() is not None

@@ -17,6 +17,7 @@ import {
     setHistLen,
     getHistLen
 } from '../core/state.js';
+import { getViewedChat } from '../core/bound-chat.js';
 
 export async function handleTrash(idx) {
     console.log(`Trashing from message ${idx}`);
@@ -63,10 +64,22 @@ export async function handleRegen(idx, ask = true) {
     // mirror (main.js gates on !getAbortController()), so a live foreign
     // turn never flipped isProc and regen proceeded into a 409 AFTER
     // deleting the turn (S1 #3, hunt 2026-08-30).
+    // The chat this click was made in. The dialog can sit open while the
+    // vault locks (idle, another tab) and the tab is moved to another chat:
+    // OK then cut and regenerated THAT chat's history at the same position
+    // (bug hunt 2026-11-26).
+    const chatAtClick = getViewedChat();
+    const moved = () => {
+        if (getViewedChat() === chatAtClick) return false;
+        ui.showToast('The chat changed while that was open, so nothing was regenerated.', 'info', 6000);
+        return true;
+    };
     if (ask && !confirm('Regenerate this response?')) return;
+    if (moved()) return;
     // again AFTER the dialog: it can sit open while the vault opens in
     // another tab, and the delete below runs before the server's refusal
     if (ask && await _gated()) return;
+    if (moved()) return;
 
     // Regen means "that answer was wrong" — cut its voice at the click, not
     // at the new turn's first chunk (a slow CPU = 10s+ of the wrong answer
@@ -88,7 +101,8 @@ export async function handleRegen(idx, ask = true) {
             audioFn,
             refresh,
             abortController,
-            getIsCancelling
+            getIsCancelling,
+            chatAtClick
         );
 
         if (len !== null) setHistLen(len);

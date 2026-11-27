@@ -6,6 +6,7 @@ import { stripThink } from './shared/think.js';
 import { splitParagraphs } from './shared/prose.js';
 import { responseError } from './shared/fetch.js';
 import { micAudio, micWhy } from './shared/mic-words.js';
+import { getViewedChat } from './core/bound-chat.js';
 
 let audioContext, mediaStream, sourceNode, processorNode;
 let audioChunks = [];
@@ -276,7 +277,9 @@ export const replayTts = async (idx) => {
     // Streaming gives progressive playback + activates plugin hooks (e.g.
     // captioning banner works for replays too).
     try {
-        const ok = await playTextStreaming(prose);
+        // the chat this text belongs to: unnamed, the server judged cloud
+        // voice on the pointer, and a private session's words went out
+        const ok = await playTextStreaming(prose, null, getViewedChat());
         if (ok) return;
     } catch (e) {
         console.warn('[TTS] streaming replay failed, falling back:', e?.message || e);

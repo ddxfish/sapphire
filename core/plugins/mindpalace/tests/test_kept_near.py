@@ -14,6 +14,8 @@ except to embed it.
 
 Package-path imports on purpose (never re-import a plugin module in a test).
 """
+import json
+
 import numpy as np
 import pytest
 
@@ -147,58 +149,107 @@ def test_a_local_models_save_in_an_ordinary_chat_is_embedded_as_ever(palace):
 
 
 # ── rows born without a vector: only the sweep ever embeds them ──
+# The mark that decides is "written in a private chat" (`meta.chat ==
+# '__private__'`, there since vaulted chats), never the private-MODEL mark:
+# a local model in an ordinary chat is embedded at save, so skipping its
+# rows later protected nothing and cost them their vectors (bug hunt
+# 2026-11-26, Fable scout).
 
-def _bare_row(text, wr_private):
+def _bare_row(text, wr_private=False, private_chat=False, provider=None, vec=None):
     """As a day row, a merge or an import lands: no vector, the writer's mark."""
+    meta = {'chat': '__private__'} if private_chat else {'chat': 'desk'}
     with pt._get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO chunks (layer, scope, content, created, updated, wr_private) "
-            "VALUES ('events', 's', ?, ?, ?, ?)", (text, pt._now(), pt._now(), int(wr_private)))
+            "INSERT INTO chunks (layer, scope, content, created, updated, wr_private, meta, "
+            "embedding, embedding_provider, embedding_dim) "
+            "VALUES ('events', 's', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (text, pt._now(), pt._now(), int(wr_private), json.dumps(meta),
+             vec, provider, 3 if vec is not None else None))
         conn.commit()
         return cur.lastrowid
 
 
-def test_the_sweep_does_not_send_a_private_models_row_to_a_far_embedder(palace):
+def test_the_sweep_does_not_send_a_private_chats_row_to_a_far_embedder(palace):
     pt._ensure_db()
-    private = _bare_row(PRIVATE, wr_private=True)
-    plain = _bare_row(PUBLIC, wr_private=False)
+    private = _bare_row(PRIVATE, private_chat=True)
+    plain = _bare_row(PUBLIC)
     _sweep()
-    assert palace.sent == [PUBLIC]
+    assert palace.sent == [PUBLIC], "the private row's text went to the far embedder"
     assert _stamp(private)[:3] == (None, None, None), "left exactly as it was: nothing is written to it"
     assert _stamp(plain)[1] == 'test:remote'
 
 
 def test_and_embeds_it_once_the_embedder_is_near(palace):
     pt._ensure_db()
-    private = _bare_row(PRIVATE, wr_private=True)
+    private = _bare_row(PRIVATE, private_chat=True)
     palace.is_far = False
     _sweep()
     assert palace.sent == [PRIVATE] and _stamp(private)[1] == 'test:remote'
 
 
-def test_with_the_private_model_filter_off_those_rows_are_ordinary(palace, monkeypatch):
-    """The person switched the private-model separation off: only the row's
-    own KEPT_NEAR stamp holds text back then."""
-    monkeypatch.setattr(pt, "_private_filter_on", lambda: False)
+def test_a_private_models_row_from_an_ordinary_chat_is_embedded_as_ever(palace):
+    """THE regression: a local model in an ordinary chat. Its rows carry the
+    private-model mark and nothing else, and they are not held back."""
     pt._ensure_db()
-    _bare_row(PRIVATE, wr_private=True)
-    with private_turn():
-        kept = _save('kept ' + PRIVATE)
-    _sweep()
-    assert palace.sent == [PRIVATE]
-    assert _stamp(kept)[1] == emb.KEPT_NEAR
-
-
-def test_a_row_filed_under_a_private_person_is_held_back_too(palace):
-    pt._ensure_db()
+    row = _bare_row(PUBLIC, wr_private=True)
     with pt._get_connection() as conn:
         eid = conn.execute("INSERT INTO entities (scope, name, kind, created, updated, wr_private) "
                            "VALUES ('s', 'Someone', 'person', ?, ?, 1)", (pt._now(), pt._now())).lastrowid
-        cid = conn.execute("INSERT INTO chunks (layer, scope, content, entity_id, created, updated) "
-                           "VALUES ('knowledge', 's', ?, ?, ?, ?)", (PRIVATE, eid, pt._now(), pt._now())).lastrowid
+        filed = conn.execute("INSERT INTO chunks (layer, scope, content, entity_id, created, updated, meta) "
+                             "VALUES ('knowledge', 's', ?, ?, ?, ?, '{}')",
+                             ('about someone', eid, pt._now(), pt._now())).lastrowid
         conn.commit()
     _sweep()
-    assert palace.sent == [] and _stamp(cid)[:3] == (None, None, None)
+    assert sorted(palace.sent) == sorted([PUBLIC, 'about someone'])
+    assert _stamp(row)[1] == 'test:remote' and _stamp(filed)[1] == 'test:remote'
+
+
+def test_a_local_models_edit_in_an_ordinary_chat_keeps_the_row_embedded(palace):
+    turn(LOCAL)
+    cid = _save(PUBLIC)
+    assert _stamp(cid)[3] == 1 and _stamp(cid)[1] == 'test:remote'
+    palace.sent.clear()
+    msg, ok = pt._update_memory(cid, 's', content=PUBLIC + ' (edited)')
+    assert ok, msg
+    assert palace.sent == [PUBLIC + ' (edited)']
+    assert _stamp(cid)[0] is not None and _stamp(cid)[1] == 'test:remote', "the edit cost it its vector"
+
+
+def test_a_row_embedded_while_the_embedder_was_near_is_not_sent_after_a_swap(palace):
+    """Saved in a private chat under a local embedder: an ordinary stamp and
+    a real vector. Then the person picks a far embedder. The re-embed walk
+    must not send it (the stamp alone cannot say 'private')."""
+    pt._ensure_db()
+    old = np.ones(3, dtype=np.float32).tobytes()
+    private = _bare_row(PRIVATE, private_chat=True, provider='local:old', vec=old)
+    plain = _bare_row(PUBLIC, provider='local:old', vec=old)
+    _sweep()
+    assert palace.sent == [PUBLIC]
+    assert _stamp(private)[:2] == (old, 'local:old'), "its old vector is left as it is"
+    assert _stamp(plain)[1] == 'test:remote'
+
+
+def test_what_the_librarian_makes_from_a_private_chats_row_is_marked_too(palace):
+    """A merge or a promote is born with no vector. Made from a private
+    chat's words, it carries that chat mark, so no sweep sends it."""
+    from plugins.mindpalace.tools import librarian_tools as lt
+    pt._ensure_db()
+    src = _bare_row(PRIVATE, private_chat=True)
+    plain_src = _bare_row(PUBLIC)
+    from plugins.mindpalace.tools import metadata as md
+    cols = 'id, layer, scope, content, entity_id, tier, label, favorite, importance, private_key, meta, created'
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        rows = {i: tuple(cur.execute(f'SELECT {cols} FROM chunks WHERE id = ?', (i,)).fetchone())
+                for i in (src, plain_src)}
+        made = lt._insert_derived(cur, pt, md, rows[src], PRIVATE + ' (merged)', 'events', 's')
+        plain = lt._insert_derived(cur, pt, md, rows[plain_src], PUBLIC + ' (merged)', 'events', 's')
+        conn.commit()
+        marks = {r[0]: json.loads(r[1] or '{}').get('chat')
+                 for r in conn.execute('SELECT id, meta FROM chunks WHERE id IN (?, ?)', (made, plain))}
+    assert marks[made] == '__private__' and marks[plain] != '__private__'
+    _sweep()
+    assert PRIVATE + ' (merged)' not in palace.sent and PUBLIC + ' (merged)' in palace.sent
 
 
 # ── rewrites ──
@@ -215,6 +266,19 @@ def test_an_edit_in_a_private_chat_drops_the_old_vector_and_says_why(palace):
     assert palace.sent == []
 
 
+def test_an_ordinary_chats_edit_of_a_kept_row_embeds_its_new_words(palace):
+    """The new words are that ordinary turn's own. Before, the stamp was
+    sticky and the row stayed out of search by meaning for good."""
+    with private_turn():
+        cid = _save(PRIVATE)
+    assert _stamp(cid)[1] == emb.KEPT_NEAR
+    turn(LOCAL)                 # an ordinary chat; a cloud model may not edit a private-model row at all
+    msg, ok = pt._update_memory(cid, 's', content=PUBLIC)
+    assert ok, msg
+    assert palace.sent == [PUBLIC]
+    assert _stamp(cid)[0] is not None and _stamp(cid)[1] == 'test:remote'
+
+
 def test_a_rewrite_outside_any_turn_does_not_send_a_kept_row(palace):
     """The librarian's passes rewrite a row's words (a date stamp, a revert)
     and re-embed it: not a kept row, not to a far embedder."""
@@ -229,14 +293,29 @@ def test_a_rewrite_outside_any_turn_does_not_send_a_kept_row(palace):
     assert _stamp(cid)[:3] == (None, emb.KEPT_NEAR, None)
 
 
-def test_a_rewrite_outside_any_turn_does_not_send_a_private_models_row(palace):
+def test_a_rewrite_outside_any_turn_does_not_send_a_private_chats_row(palace):
     pt._ensure_db()
-    cid = _bare_row(PRIVATE, wr_private=True)
+    cid = _bare_row(PRIVATE, private_chat=True)
     with pt._get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute('SELECT created FROM chunks WHERE id = ?', (cid,)).fetchone()
-        pt._rewrite_content(cur, cid, PRIVATE + ' (reworded)', row[0], None, 's')
+        row = cur.execute('SELECT created, meta FROM chunks WHERE id = ?', (cid,)).fetchone()
+        pt._rewrite_content(cur, cid, PRIVATE + ' (reworded)', row[0], json.loads(row[1]), 's')
         conn.commit()
+    assert palace.sent == []
+
+
+def test_a_rewrite_while_the_embedder_is_down_keeps_the_kept_stamp(palace, monkeypatch):
+    """It wrote NULL over 'kept-near', and the next sweep sent the row out."""
+    with private_turn():
+        cid = _save(PRIVATE)
+    monkeypatch.setattr(palace, 'available', False)
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute('SELECT created, meta FROM chunks WHERE id = ?', (cid,)).fetchone()
+        pt._rewrite_content(cur, cid, PRIVATE + ' (reworded)', row[0], json.loads(row[1]), 's')
+        conn.commit()
+    monkeypatch.setattr(palace, 'available', True)
+    _sweep()
     assert palace.sent == []
 
 

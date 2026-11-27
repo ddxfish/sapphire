@@ -600,6 +600,8 @@ let _sbPaintSeq = 0;
 // text (the editing hold below skipped the repaint) and the next keystroke
 // saved it onto the public chat (isolation hunt C5, 2026-11-23).
 let _sbPaintedChat = null;
+let _sbPaintingChat = null;     // the chat the newest paint in flight is for
+let _sbPaintingAt = 0;          // ...and when it started: one that died is not waited on for long
 
 async function loadSidebar(overrideSettings = null, overrideChat = null) {
     const container = document.getElementById('view-chat');
@@ -609,6 +611,8 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
     const chatName = chatSelect?.value;
     if (!chatName) return;
     const mySeq = ++_sbPaintSeq;
+    _sbPaintingChat = chatName;     // a paint for this chat is under way (see debouncedSave)
+    _sbPaintingAt = Date.now();
 
     // Paint VALUES straight from the caller's settings (the activate
     // response) when offered. Guard hard: an empty or mismatched override
@@ -830,6 +834,9 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
 
         renderPersonaStrip(container, settings, init);
 
+        // A newer paint started while this one awaited the scope options:
+        // it must not finish last and leave this chat's values on screen.
+        if (mySeq !== _sbPaintSeq) return;
         // Inject plugin-registered accordions
         _sbPaintedChat = chatName;      // every control above now shows THIS chat
         await _loadPluginAccordions(container, init);
@@ -885,7 +892,10 @@ function debouncedSave(container, keys = []) {
         // Saved nowhere; the repaint puts the right values under the hand.
         console.warn(`[SIDEBAR] change dropped — the sidebar shows '${_sbPaintedChat}', the chat is '${chatNow}'`);
         ui.showToast('This chat\'s settings were still loading. Try that again.', 'info', 3000);
-        loadSidebar();
+        // Start a paint only when none is already on its way for this chat:
+        // every dropped keystroke used to restart it (a new seq discards the
+        // one in flight), so typing through a repaint kept it from ever landing.
+        if (_sbPaintingChat !== chatNow || Date.now() - _sbPaintingAt > 3000) loadSidebar();
         return;
     }
     if (saveTimer && pendingSaveChatName && chatNow !== pendingSaveChatName) {

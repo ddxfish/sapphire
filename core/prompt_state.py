@@ -77,6 +77,47 @@ def clear_transients():
     return had
 
 
+def drop_vault_pieces() -> bool:
+    """Take every vault piece out of the live state: what is worn and what is
+    timed. For the switch from a private chat to an ordinary one. The render
+    was already closed there, but the KEYS stayed: her "active:" line named a
+    vault mood to an ordinary (cloud) turn, and her next piece change forked
+    them into a new plaintext preset (bug hunt 2026-11-26; the lock does the
+    same through prompt_vault._handoff_active). Returns True if anything went.
+    A single-value component that wore a vault piece goes back to its default."""
+    try:
+        from core import prompt_vault
+        held = prompt_vault.vault_has_piece
+    except Exception:
+        return False
+    dropped = False
+    with _state_lock:
+        for comp, default in _STATE_DEFAULTS.items():
+            cur = _assembled_state.get(comp)
+            if isinstance(cur, list):
+                keep = [k for k in cur if not held(comp, k)]
+                if len(keep) != len(cur):
+                    _assembled_state[comp] = keep
+                    dropped = True
+            elif isinstance(cur, str) and cur and held(comp, cur):
+                _assembled_state[comp] = default
+                dropped = True
+        for comp in list(_transient_overlay.keys()):
+            entry = _transient_overlay[comp]
+            if isinstance(entry, list):
+                keep = [(k, exp) for k, exp in entry if not held(comp, k)]
+                if len(keep) != len(entry):
+                    dropped = True
+                    if keep:
+                        _transient_overlay[comp] = keep
+                    else:
+                        del _transient_overlay[comp]
+            elif entry and held(comp, entry[0]):
+                del _transient_overlay[comp]
+                dropped = True
+    return dropped
+
+
 def expire_transients():
     """Drop expired transient pieces. Returns True if anything was dropped."""
     now = time.time()

@@ -719,12 +719,16 @@ class TestVaultWarmth:
             mock_hooks.has_handlers.return_value = False
             obj._get_system_prompt()
 
-    def test_vault_prompt_turn_touches(self, vault):
+    def test_building_the_system_prompt_never_feeds_the_idle_clock(self, vault):
+        """It did, for a chat wearing a vault prompt: but this build runs for
+        every turn on every lane, so a heartbeat kept the vault open for good
+        (bug hunt 2026-11-26). The clock is fed where a PERSON's turn starts
+        (chat_streaming), whatever prompt the chat wears."""
         pv.setup("key")
         pv.set_monolith("vlt_warm", "text")
         pv._last_activity = 0.0
         self._run_turn("vlt_warm")
-        assert pv._last_activity > 0.0
+        assert pv._last_activity == 0.0
 
     def test_public_turn_does_not_touch(self, vault):
         pv.setup("key")

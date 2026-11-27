@@ -132,7 +132,7 @@ async def handle_chat(request: Request, _=Depends(require_login), system=Depends
 
 
 PRIVATE_DRAFT_MSG = ("That message was written in a private chat, so it was not sent "
-                     "here. Unlock the vault and send it there.")
+                     "here. Send it from that chat.")
 
 
 def _private_draft_elsewhere(sm, draft_chat, target) -> bool:
@@ -716,6 +716,11 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         from core.chat.history import count_tokens, count_message_tokens
 
         chat_settings = system.llm_chat.session_manager.get_chat_settings()
+        if system.llm_chat.session_manager.pointer_sealed():
+            # locked, and a turn that would not stop still holds the pointer on
+            # a private chat: its settings (Custom Context among them) are not
+            # served. The flag stays, so the page knows where it stands.
+            chat_settings = {'private_chat': True}
 
         chat_settings = _backfill_persona_visuals(chat_settings)
 
@@ -884,7 +889,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         # Prompts data — the person's screen: it reads the vault while unlocked
         # (the reader rule, core/prompt_vault.py).
         from core import prompt_packs, prompt_vault as _pv_reader
-        with _pv_reader.reading(True):
+        with _pv_reader.reading(_pv_reader.person_reads(request)):
             prompt_names = prompts.list_prompts()
             _hidden_prompts = prompts.hidden_prompt_kinds()
             pack_sources = prompt_packs.get_sources()
@@ -1290,6 +1295,8 @@ async def list_chats(request: Request, type: str = None, kind: str = None,
     sessions doesn't need every custom_context and ghost text."""
     try:
         chats = system.llm_chat.session_manager.list_chat_files(stats=bool(stats))
+        if getattr(request.state, 'api_token', False):        # an API token is never shown a private chat (core/auth.token_gate)
+            chats = [c for c in chats if not c.get('private_chat')]
         want = (kind or type or '').strip().lower()
         if want:
             chats = [c for c in chats if c.get('kind') == want]
@@ -1304,13 +1311,16 @@ async def list_chats(request: Request, type: str = None, kind: str = None,
                                         for k in keep if k in (c.get('settings') or {})}}
                      for c in chats]
         active_chat = system.llm_chat.get_active_chat()
+        if getattr(request.state, 'api_token', False) \
+                and (system.llm_chat.session_manager.get_chat_settings() or {}).get('private_chat'):
+            active_chat = None                # ...nor told the name of the private chat that is open
         return {"chats": chats, "active_chat": active_chat}
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to list chats")
 
 
 @router.get("/api/chats/search")
-async def search_chats(q: str = "", _=Depends(require_login), system=Depends(get_system)):
+async def search_chats(request: Request, q: str = "", _=Depends(require_login), system=Depends(get_system)):
     """Deep content search for the Chat Manager: which chats mention q, and
     in how many messages. Content-only; name filtering is the frontend's job.
     (Registered before the /api/chats/{chat_name} routes on purpose.)"""
@@ -1319,6 +1329,9 @@ async def search_chats(q: str = "", _=Depends(require_login), system=Depends(get
         raise HTTPException(status_code=400, detail="Search query required")
     try:
         hits = system.llm_chat.session_manager.search_chat_content(q)
+        if getattr(request.state, 'api_token', False):        # nor told which private chats mention a word
+            private = {c['name'] for c in system.llm_chat.session_manager.list_chat_files() if c.get('private_chat')}
+            hits = {name: n for name, n in hits.items() if name not in private}
         return {"query": q, "hits": hits,
                 "chats": len(hits), "messages": sum(hits.values())}
     except Exception:
@@ -2120,6 +2133,23 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
                 # the eyeball PUTs directly while unlocked and surfaces the
                 # 409 instead.)
                 logger.warning(f"privacy-required check on settings PUT skipped: {e}")
+
+        # Making a chat private while something is running on it (Krem's
+        # ruling 2026-11-26): a turn picks its provider and its tools once, at
+        # its start, so a cloud task or turn already under way kept going to
+        # the cloud for its remaining rounds after the flip. Refused until the
+        # chat is idle; nothing is cancelled for the person.
+        if new_settings.get('private_chat') is True:
+            try:
+                _was = (system.llm_chat.session_manager.read_chat_settings(chat_name) or {}).get('private_chat')
+                _busy = (not _was) and system.llm_chat.chat_busy(chat_name)
+            except Exception as e:
+                logger.warning(f"busy check before making a chat private failed, refusing: {type(e).__name__}")
+                _busy = True
+            if _busy:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This chat is answering right now. Make it private once it has finished.")
 
         # A sealed vault name can't be stamped on ANY chat (store funnels
         # refuse too; this is the honest message). Name kept out of the

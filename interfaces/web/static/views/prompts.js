@@ -1539,12 +1539,16 @@ async function runPromptSave() {
 function debouncedSaveComponent(type, key, value) {
     const timerId = `${type}:${key}`;
     clearTimeout(compSaveTimers[timerId]);
+    // Where this text came from, read NOW: by the time the timer fires a
+    // lock's refresh may have rebuilt the vault set without this key, and
+    // the save then went out unstamped (refused, but with the wrong words).
+    const origin = pieceOrigin(type, key);
     compSaveTimers[timerId] = setTimeout(async () => {
         try {
-            // pieceOrigin: THE stale-editor site (finding 6) — this debounced
+            // origin: THE stale-editor site (finding 6) — this debounced
             // save fires after an idle-lock too; the stamp lets the server
             // 409 it instead of writing vault text to the plaintext store.
-            await saveComponent(type, key, value, liveReason(timerId), pieceOrigin(type, key), { update: true });
+            await saveComponent(type, key, value, liveReason(timerId), origin, { update: true });
             if (components[type]) components[type][key] = value;
             // If this component is used by the current prompt, refresh preview
             if (selectedData?.components) {

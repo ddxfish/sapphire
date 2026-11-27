@@ -291,6 +291,33 @@ def test_a_private_task_reads_the_vault_and_a_public_one_does_not(world, monkeyp
     assert private is True and SECRET in text
 
 
+def test_a_task_answering_into_an_ordinary_chat_never_opens_the_vault(world, monkeypatch):
+    """The reader used to open on the PROMPT's privacy alone. A heartbeat on
+    an ordinary chat then rendered the vault persona (or a plain preset's
+    vault mood) and wrote into that chat's plaintext transcript (bug hunt
+    2026-11-26). `chat_private` is the target chat's own flag."""
+    from core.continuity.execution_context import ExecutionContext
+    assert pv.set_monolith('private-persona', SECRET)[0]
+
+    def build(settings):
+        ctx = ExecutionContext.__new__(ExecutionContext)
+        ctx.task_settings = settings
+        return ExecutionContext._build_prompt(ctx), ctx._prompt_privacy_required
+
+    # a plain preset wearing a vault mood, with a privacy stamp from somewhere: closed
+    text, private = build({'prompt': 'plain', 'privacy_required': True, 'chat_private': False})
+    assert private is True and SECRET not in text, "still held to local models, and no vault text"
+    # the vault prompt itself on an ordinary chat: refused, as the typed lane refuses it
+    with pytest.raises(RuntimeError) as e:
+        build({'prompt': 'private-persona', 'chat_private': False})
+    assert 'private chat' in str(e.value) and SECRET not in str(e.value)
+    # the same task on a private chat reads the vault
+    text, private = build({'prompt': 'private-persona', 'privacy_required': True, 'chat_private': True})
+    assert SECRET in text
+    text, _ = build({'prompt': 'plain', 'privacy_required': True, 'chat_private': True})
+    assert SECRET in text
+
+
 def test_dangling_refs_do_not_depend_on_the_reader(world):
     """On a closed reader's view 'plain' wears a missing piece. The strip
     tool removes what this reports, so it reads the full view."""
@@ -729,12 +756,44 @@ def test_no_lease_while_the_vault_is_locked(store):
 
 
 def test_delete_vault_stops_private_turns_and_goes_through(store, fast_stop):
+    """A turn that stops when told to: the delete goes through."""
+    import threading
+    llm = _llm(store)
+    stream, sid, _ = llm.begin_stream("secret", exclusive=True)
+
+    def obey():                                  # the turn's own thread: sees the flag, ends
+        while not stream.cancel_flag:
+            time.sleep(0.005)
+        llm.end_stream(sid, "secret")
+    t = threading.Thread(target=obey, daemon=True)
+    t.start()
+    ok, code = pv.destroy()
+    t.join(2)
+    assert (ok, code) == (True, '') and stream.cancel_flag
+    assert not store.chat_exists("secret")
+
+
+def test_delete_vault_waits_for_a_turn_that_will_not_stop(store, fast_stop):
+    """It used to purge under the running turn, whose next tool image or tool
+    result could then land in plaintext under the purged name (bug hunt
+    2026-11-26). Now: the vault LOCKS, nothing is deleted, and the answer is
+    'busy'. Once the turn has ended the delete goes through."""
     llm = _llm(store)
     stream, sid, _ = llm.begin_stream("secret", exclusive=True)
     ok, code = pv.destroy()
-    assert (ok, code) == (True, '') and stream.cancel_flag
-    assert not store.chat_exists("secret")
+    assert (ok, code) == (False, 'busy') and stream.cancel_flag
+    assert pv.vault_exists() and not pv.vault_unlocked(), "locked, not deleted"
+    assert store.chat_exists("secret"), "nothing was purged"
     llm.end_stream(sid, "secret")
+    assert pv.destroy() == (True, '')
+    assert not store.chat_exists("secret")
+
+
+def test_a_tool_image_for_a_chat_that_is_gone_is_dropped_not_stored_in_plaintext(store):
+    assert store.save_tool_image('abc123def456', b'picture bytes', 'image/png', chat_name='no-such-chat') is False
+    with store._get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tool_images WHERE id = 'abc123def456'").fetchone()[0] == 0
+    assert store.save_tool_image('abc123def457', b'picture bytes', 'image/png', chat_name='desk') is True
 
 
 # ── D2: a turn that outlived delete-vault never writes into the public
@@ -786,3 +845,17 @@ def test_d2_a_chat_made_public_mid_turn_still_takes_the_turns_rows(store):
     mark = sm.purge_mark(True)
     assert sm.append_messages_to_chat(
         "desk", [{"role": "assistant", "content": "hello"}], purge_mark=mark) is True
+
+
+def test_switching_to_an_ordinary_chat_takes_vault_pieces_out_of_the_live_state(world):
+    """The render was closed there already, but the keys stayed: her
+    "active:" line named a vault mood to an ordinary turn, and her next
+    piece change forked them into a plaintext preset (bug hunt 2026-11-26)."""
+    ps._assembled_state['emotions'] = ['happy', 'tender']
+    ps.set_transient_piece('emotions', 'tender', 30)
+    ps.set_transient_piece('emotions', 'happy', 30)
+    assert ps.drop_vault_pieces() is True
+    assert ps._assembled_state['emotions'] == ['happy']
+    assert [k for k, _ in ps.get_transients().get('emotions', [])] == ['happy'], "an ordinary timed piece stays"
+    assert ps.drop_vault_pieces() is False, "nothing left to take out"
+    ps.clear_transients()

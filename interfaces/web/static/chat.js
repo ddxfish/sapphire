@@ -38,6 +38,7 @@ const noteDegraded = (name, deg) => {
 // edited bubble; they replay a held refresh so no event is lost.
 let _heldRefresh = false;
 export const takeHeldRefresh = () => { const h = _heldRefresh; _heldRefresh = false; return h; };
+let _paintedChat = null;        // the chat whose transcript is in #chat-container
 
 export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     // Hold the render while a message edit is open — renderHistory rebuilds the
@@ -48,8 +49,15 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     // feed — the owner follows its ticket, send-handlers.js): the reconnect resync and SERVER_RESTARTED
     // call refresh() straight, and renderHistory would delete the bubble she
     // is still filling. 2026-09-15.
-    if (document.querySelector('#chat-container .message.editing')
-            || document.getElementById('streaming-message')) {
+    const editor = document.querySelector('#chat-container .message.editing');
+    const looking = getBoundChat() || document.getElementById('chat-select')?.value;
+    if (editor && _paintedChat && looking && _paintedChat !== looking) {
+        // A different chat is on screen now (a switch, a vault lock that moved
+        // the tab). The editor belonged to the chat that left: holding for it
+        // kept that chat's whole transcript painted under the new chat's name,
+        // a private one included (bug hunt 2026-11-26). It goes with its chat.
+        editor.classList.remove('editing');
+    } else if (editor || document.getElementById('streaming-message')) {
         _heldRefresh = true;
         return { hist: null, len: lastLen };
     }
@@ -87,6 +95,7 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
         }
         const isNew = hist.length > lastLen;
         ui.renderHistory(hist);
+        _paintedChat = returnedChat || expectedChat || null;
         if (playAudio && isNew && audioFn && hist.length > 0 && typeof audioFn === 'function') {
             const last = hist[hist.length - 1];
             if (last.role === 'assistant') await audioFn(last.content);
@@ -265,12 +274,19 @@ async function picturesToResend(images = []) {
     }));
 }
 
-export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null) => {
+export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortController = null, isCancellingGetter = null, expectChat = null) => {
     console.log(`[REGEN DEBUG] Starting regen at index ${idx}`);
     let viewer = false;
     try {
         console.log('[REGEN DEBUG] Fetching history...');
-        const hist = await api.fetchHistory();
+        // the history must be the chat the click was made in: the name rides
+        // the same response as the rows, so a pointer that moved is caught here
+        const full = await api.fetchHistoryFull();
+        if (expectChat && full?.chat_name && full.chat_name !== expectChat) {
+            ui.showToast('The chat changed, so nothing was regenerated.', 'info', 6000);
+            return null;
+        }
+        const hist = full.messages;
         console.log(`[REGEN DEBUG] Got history, length: ${hist.length}`);
         
         if (idx >= hist.length) {
@@ -385,7 +401,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                     const bubbles = document.querySelectorAll('#chat-container .message.user');
                     bubbles[bubbles.length - 1]?.remove();
                     const inp = document.getElementById('prompt-input');
-                    if (inp) { inp.value = isCommand(userMessage) ? '/' + userMessage : userMessage; inp.dispatchEvent(new Event('input')); }
+                    if (inp && !inp.value) { inp.value = isCommand(userMessage) ? '/' + userMessage : userMessage; inp.dispatchEvent(new Event('input')); }   // never over a draft
                     if (images.length) {
                         restorePending(images);
                         import('./handlers/send-handlers.js').then(m => m.updateImagePreviewArea());

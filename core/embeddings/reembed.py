@@ -180,7 +180,8 @@ def _count_pending(embedder):
                 cur = conn.cursor()
                 cur.execute(
                     f'SELECT COUNT(*) FROM {table} WHERE (embedding_provider IS NOT ? '
-                    f'OR embedding_provider IS NULL)' + not_kept_sql(embedder),
+                    f'OR embedding_provider IS NULL)' + not_kept_sql(embedder)
+                    + (_not_private_docs(embedder) if table == 'knowledge_entries' else ''),   # what the walk leaves out is not pending
                     (active_pid,)
                 )
                 return cur.fetchone()[0]
@@ -233,6 +234,17 @@ def _not_kept(embedder) -> str:
     return not_kept_sql(embedder)
 
 
+def _not_private_docs(embedder) -> str:
+    """A private chat's documents saved under a local embedder carry an
+    ordinary stamp. They are not this job's to send to a far one either
+    (core/documents.far_skip_sql)."""
+    try:
+        from core.documents import far_skip_sql
+        return far_skip_sql(embedder)
+    except Exception:
+        return " AND tab_id NOT IN (SELECT id FROM knowledge_tabs WHERE substr(scope, 1, 8) = '__rag__:')"
+
+
 def _process_memories(embedder):
     from plugins.memory.tools import memory_tools as mt
     from core.embeddings import stamp_embedding
@@ -281,7 +293,7 @@ def _process_knowledge_entries(embedder):
     with kt._get_connection() as conn:
         rows = conn.execute(
             'SELECT id, content FROM knowledge_entries WHERE (embedding_provider IS NOT ? '
-            'OR embedding_provider IS NULL)' + _not_kept(embedder),
+            'OR embedding_provider IS NULL)' + _not_kept(embedder) + _not_private_docs(embedder),
             (active_pid,)
         ).fetchall()
 

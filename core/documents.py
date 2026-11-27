@@ -151,6 +151,29 @@ def _chat_private(chat) -> bool:
         return True
 
 
+def far_skip_sql(embedder, entries='knowledge_entries') -> str:
+    """SQL to AND onto a walk of knowledge_entries that runs outside any turn
+    (the knowledge backfill, the re-embed job): while the embedder is far,
+    leave out the documents of every private chat. A document saved under a
+    local embedder carries an ordinary stamp, so the stamp could not say
+    "private", and a switch to a far embedder sent it out (bug hunt
+    2026-11-26). Sealed chats count. Cannot list the chats = every chat's
+    documents are left out; they heal per chat, where privacy is known."""
+    from core.embeddings import far
+    if not far(embedder):
+        return ''
+    try:
+        from core.api_fastapi import get_system
+        sm = get_system().llm_chat.session_manager
+        scopes = [scope_of(c['name']) for c in sm.list_chat_files(include_hidden=True) if c.get('private_chat')]
+        if not scopes:
+            return ''
+        which = 'scope IN (%s)' % ','.join("'" + s.replace("'", "''") + "'" for s in scopes)
+    except Exception:
+        which = "substr(scope, 1, 8) = '__rag__:'"
+    return f" AND {entries}.tab_id NOT IN (SELECT id FROM knowledge_tabs WHERE {which})"
+
+
 @contextmanager
 def _for_chat(chat):
     """Embed inside this: whose document it is. Embedding happens at upload
@@ -352,12 +375,15 @@ def _heal(chat):
         if not embedder or not embedder.available:
             return
         active = getattr(embedder, 'provider_id', None)
-        from core.embeddings import not_kept_sql
+        # Every chunk without this embedder's vector, kept-near ones included:
+        # whether the embedder may have them is decided below, on what the chat
+        # is NOW (_for_chat). A stamp from an upload whose chat could not be
+        # read, or was private then, must not keep the document out of search
+        # by meaning for good (bug hunt 2026-11-26).
         with kb._get_connection() as conn:
             cur = conn.cursor()
             cur.execute('SELECT e.id, e.content FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id '
-                        'WHERE t.scope = ? AND (e.embedding IS NULL OR e.embedding_provider IS NOT ?)'
-                        + not_kept_sql(embedder, 'e.embedding_provider'),
+                        'WHERE t.scope = ? AND (e.embedding IS NULL OR e.embedding_provider IS NOT ?)',
                         (scope_of(chat), active))
             rows = cur.fetchall()
         if not rows:

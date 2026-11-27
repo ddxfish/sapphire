@@ -310,6 +310,11 @@ def session_cfg(session=None):
                                  .is_chat_hidden(session))
         except Exception:
             pass
+        # Not hidden and still unreadable (a database error, a blob that will
+        # not decrypt): the session may be private, so the seat is held to
+        # local models. Before, it ran on the room-wide provider with no
+        # privacy at all (bug hunt 2026-11-26).
+        cfg['privacy_required'] = True
         return cfg
     # Private session chat → the seat inherits core's local-only rule
     # (the explicit-key path here used to bypass it entirely — P3-T3).

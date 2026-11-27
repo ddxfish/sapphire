@@ -344,10 +344,13 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             return;
         }
         if (statusCode === 409 && e.code === 'private_draft') {
-            // Written in a private chat, sent from a public one (the vault
-            // locked under the draft): the words do NOT come back to this
-            // chat's box. The bubble goes; the server's words say why.
-            myBubble?.remove();
+            // Written in a private chat, sent from a public one. With the
+            // vault LOCKED (it locked under the draft) the words do NOT come
+            // back to this chat's box. With it open the private chat is one
+            // click away, so they do: dropping them there only lost her text.
+            let open = false;
+            try { open = !!(await api.fetchStatus())?.vault?.unlocked; } catch { /* unknown = locked */ }
+            if (open) restoreDraft(); else myBubble?.remove();
             ui.showToast(e.message, 'warning', 7000);
             return;
         }
@@ -386,6 +389,7 @@ export async function handleSend({ refocus = true, text = null, attach = true } 
             input.value = typed;
             input.dispatchEvent(new Event('input'));
             if (draftChat) setDraftChat(draftChat);   // it was written THERE, wherever the view is now
+            dropSealedDraft();                        // ...and if THERE has been sealed since, it goes after all
         }
         if (attach && sentImages.length) {
             Images.restorePending(sentImages);
@@ -704,6 +708,7 @@ export async function triggerSendWithText(text, { card = false } = {}) {
         return true;
     }
     const { input } = getElements();
+    setDraftChat(getViewedChat());        // spoken just now, here: never an older draft's chat
     input.value = text;
     input.dispatchEvent(new Event('input'));
     await handleSend({ refocus: false });

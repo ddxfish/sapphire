@@ -35,6 +35,8 @@ import os
 import struct
 import threading
 import time
+
+from starlette.requests import Request
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -96,11 +98,25 @@ def reader_ok() -> bool:
     return bool(_reader.get())
 
 
-async def editor_reader():
+def person_reads(request=None) -> bool:
+    """May this web request read the vault as the person at their own screen?
+    A logged-in browser, yes. An API token is an integration and gets the
+    locked-vault view even while the vault is open (Krem 2026-11-26).
+    Cannot tell = no."""
+    if request is None:
+        return False
+    try:
+        from core.auth import token_caller
+        return not token_caller(request)
+    except Exception:
+        return False
+
+
+async def editor_reader(request: Request):
     """Route dependency for the person at the editor: their request reads the
     vault. async on purpose - a sync dependency runs in a worker thread and
     its set would never reach the route. Not reset: a request is its own task."""
-    _reader.set(True)
+    _reader.set(person_reads(request))
 
 
 class VaultCorrupt(ValueError):
@@ -565,12 +581,18 @@ def _stop_turns(cancels):
                 cancel()
         except Exception as e:
             logger.warning(f"[VAULT] a private turn could not be told to stop: {e}")
+    global _survivors
     if _no_leases.wait(STOP_WAIT_S):
+        _survivors = 0
         logger.info(f"[VAULT] stopped {len(cancels)} private turn(s) before the seal")
     else:
-        logger.warning(f"[VAULT] {leases_held()} private turn(s) still running "
+        _survivors = leases_held()
+        logger.warning(f"[VAULT] {_survivors} private turn(s) still running "
                        f"{STOP_WAIT_S:.0f}s after being stopped — sealing anyway; "
                        f"whatever they write now is refused")
+
+
+_survivors = 0       # private turns that outlived the last seal's stop (destroy asks)
 
 
 def lock(reason="", wait=False) -> bool:
@@ -678,9 +700,18 @@ def destroy() -> tuple:
     global _refs, _refs_loaded, _piece_salt, _piece_hashes, _own_hashes
     if not vault_exists():
         return False, 'no_vault'
+    global _survivors
+    _survivors = 0
     lock(reason="deleting")       # stop private turns, flush, evict, hand off — the normal seal
     if vault_unlocked():
         return False, 'busy'      # unlocked again under us: keep it
+    if _survivors:
+        # A private turn did not stop. The vault is LOCKED now, and the delete
+        # waits: purging under a turn that is still running let its next tool
+        # image or tool result be saved in plaintext under the purged name
+        # (bug hunt 2026-11-26). The person tries again when it has ended.
+        logger.warning("[VAULT] delete refused: a private turn is still running (the vault is locked)")
+        return False, 'busy'
     try:
         from core.api_fastapi import get_system
         n = get_system().llm_chat.session_manager.purge_vaulted_chats()

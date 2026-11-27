@@ -267,6 +267,19 @@ class ConversationManager:
         import uuid
         cap = int(getattr(config, "CONVERSATION_EXTERNAL_SLOTS", 2))
         sid = session_id or uuid.uuid4().hex[:12]
+        # A call rule or a voice channel pointed at a private chat: refused at
+        # the door, like a device (core/devices/voice.chat_for). Its audio
+        # crosses a carrier or a voice service both ways, and its replies
+        # would draw on the private chat's history. Never named in the log.
+        try:
+            sm = self.system.llm_chat.session_manager
+            _s = sm.get_settings_for(chat_name) if chat_name else sm.get_chat_settings()
+        except Exception:
+            _s = None
+        if _s is None or (isinstance(_s, dict) and _s.get('private_chat')):
+            logger.warning(f"[CONV] start_external({source_label}) refused: its chat is private "
+                           f"or can't be read, and calls use ordinary chats")
+            return None
         with self._external_lock:
             if len(self.external) >= cap:
                 logger.warning(f"[CONV] start_external({source_label}) refused — "

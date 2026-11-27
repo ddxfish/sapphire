@@ -339,6 +339,14 @@ class LLMChat:
             self._streams_by_id[sid] = stream
             self._streams_by_chat.setdefault(chat_name, set()).add(sid)
 
+    def chat_busy(self, chat_name) -> bool:
+        """Is a turn or a held task running on this chat right now? (An audio
+        tail, whose rows are already written, is not.)"""
+        with self._streams_lock:
+            return any(self._live(self._streams_by_id[i])
+                       for i in self._streams_by_chat.get(chat_name, set())
+                       if i in self._streams_by_id)
+
     def end_stream(self, stream_id, chat_name):
         """Unregister a stream. Idempotent. When the chat's last stream goes,
         the inbox is told the chat may be free (core/chat/inbox.py). Hands
@@ -600,18 +608,10 @@ class LLMChat:
         context_parts = []
         chat_settings = self.session_manager.get_chat_settings()
 
-        # Vault warmth: a turn actually WEARING a vault prompt is vault
-        # activity — idle-lock is for walking away, not for chatting.
-        # Listing/browsing reads of the merged views deliberately never
-        # touch (an open Prompts page must not keep the vault warm).
-        try:
-            from core import prompt_vault, prompt_state
-            if prompt_vault.vault_has_prompt(chat_settings.get('prompt')) \
-                    or prompt_vault.vault_has_prompt(
-                        prompt_state.get_active_preset_name()):
-                prompt_vault.touch()
-        except Exception:
-            pass
+        # No vault touch here. This build runs for EVERY turn on every lane,
+        # so a heartbeat on a chat wearing a vault prompt kept the vault open
+        # for good (bug hunt 2026-11-26). The idle clock is fed by the
+        # person's own turns, where the turn starts (chat_streaming).
 
         # Datetime moved to the ghost-message rail (core/ghost_messages.py)
         # 2026-05-08 — same per-turn freshness, but injected as a separate

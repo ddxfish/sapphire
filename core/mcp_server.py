@@ -434,10 +434,27 @@ def call(system, name, args, where='', persona=None):
         return f"There is no tool named '{name}' on this door.", False
     fm = system.llm_chat.function_manager
     token = client.set(persona or 'client')
+    # A tool called at this door has no chat of its own, and "this chat" used
+    # to fall through to whatever the person had open. While that is a PRIVATE
+    # chat the call runs with no chat at all (the task lane's chatless
+    # carrier): before, get_self_info named the private chat and its prompt,
+    # and agent_peek returned the transcripts of agents spawned from it (bug
+    # hunt 2026-11-26; the old hunt's B3). An ordinary open chat is as before.
+    carried = None
+    try:
+        sm = system.llm_chat.session_manager
+        if (sm.get_chat_settings() or {}).get('private_chat') or sm.pointer_sealed():
+            from core.chat import stream_brain
+            carried = stream_brain.set_override(sm.make_ephemeral_override({}))
+    except Exception as e:
+        return f"That tool could not be run right now ({type(e).__name__}).", False
     try:
         result, ok = fm.execute_function(name, args, allowed_tools=allowed, with_success=True)
     finally:
         client.reset(token)
+        if carried is not None:
+            from core.chat import stream_brain
+            stream_brain.reset_override(carried)
     if isinstance(result, dict):               # a picture-taking tool: its words, its pictures as image blocks
         images = [p for p in result.get('images') or [] if isinstance(p, dict) and p.get('data')]
         return str(result.get('text') or ''), bool(ok), ({'images': images} if images else None)

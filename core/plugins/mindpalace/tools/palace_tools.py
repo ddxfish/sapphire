@@ -887,28 +887,53 @@ def _ensure_db():
 # by keywords, as today). A local or LAN embedder embeds them. Nothing here
 # ever writes to an existing row except to embed it.
 
+PRIVATE_CHAT = '__private__'    # meta.chat of a row written in a private chat (metadata._context_fields)
+
+
+def _from_private_chat(alias='') -> str:
+    """SQL test: was this row written in a private chat? Its durable mark is
+    `meta.chat` (it rides every save, whatever embedder was active, and an
+    edit keeps it); `embedding_provider = KEPT_NEAR` is the same fact for a
+    row whose embed was held back. NOT the private-model mark: a local model
+    in an ordinary chat is embedded at save, so holding its rows back later
+    protected nothing and cost them their vectors (bug hunt 2026-11-26)."""
+    from core.embeddings import KEPT_NEAR
+    p = f'{alias}.' if alias else 'chunks.'
+    return (f"({p}embedding_provider IS '{KEPT_NEAR}' "
+            f"OR COALESCE(json_extract({p}meta, '$.chat'), '') = '{PRIVATE_CHAT}')")
+
+
 def _not_for_embedder_sql(embedder, alias='') -> str:
     """SQL the sweep ANDs onto its pick: '' while the embedder is near."""
-    from core.embeddings import far, KEPT_NEAR
-    if not far(embedder):
-        return ''
-    col = f'{alias}.embedding_provider' if alias else 'chunks.embedding_provider'
-    sql = f" AND {col} IS NOT '{KEPT_NEAR}'"
-    if _private_filter_on():
-        sql += f' AND NOT {_private_chunk(alias)}'
-    return sql
+    from core.embeddings import far
+    return f' AND NOT {_from_private_chat(alias)}' if far(embedder) else ''
+
+
+def _ordinary_turn() -> bool:
+    """Is an ordinary chat's own turn doing this write? A turn, not a private
+    one, and not while a librarian pass is open: her passes run as turns too,
+    and what they reword is the row's old text, not new words of theirs.
+    Cannot tell = no."""
+    try:
+        from core.chat.function_manager import tool_context, scope_private
+        if not tool_context.get() or scope_private.get():
+            return False
+        from plugins.mindpalace.tools import librarian_tools
+        return librarian_tools.current_pass_kind() is None
+    except Exception:
+        return False
 
 
 def _row_held_back(cursor, chunk_id, embedder) -> bool:
     """One existing row, about to be re-embedded by a rewrite: is its text
-    not this embedder's to have? (The same test as the sweep's.)"""
-    from core.embeddings import far, KEPT_NEAR
-    if not far(embedder):
+    not this embedder's to have? The sweep's test, with one difference: an
+    ordinary chat's turn that gives the row new words embeds them (they are
+    that turn's own; the stamp used to be sticky)."""
+    from core.embeddings import far
+    if not far(embedder) or _ordinary_turn():
         return False
-    r = cursor.execute('SELECT embedding_provider FROM chunks WHERE id = ?', (chunk_id,)).fetchone()
-    if r and r[0] == KEPT_NEAR:
-        return True
-    return _private_filter_on() and _chunk_is_private(cursor, chunk_id)
+    return cursor.execute(f"SELECT 1 FROM chunks WHERE id = ? AND {_from_private_chat('')}",
+                          (chunk_id,)).fetchone() is not None
 
 
 _backfill_done = False          # False, True (any provider), or the (provider, dim) it completed under
@@ -3011,8 +3036,13 @@ def _rewrite_content(cursor, memory_id, new_content, created, old_meta, scope, n
     blob = provider = dim = None
     embed_failed = False
     embedder = _get_embedder()
-    if embedder.available:
-        from core.embeddings import stamp_embedding, kept_stamp, KEPT_NEAR
+    from core.embeddings import stamp_embedding, kept_stamp, KEPT_NEAR
+    if not embedder.available:
+        # no embed is tried: a kept row stays kept (NULL here used to be
+        # written over the stamp, and the next sweep sent the row out)
+        was = cursor.execute('SELECT embedding_provider FROM chunks WHERE id = ?', (memory_id,)).fetchone()
+        provider = KEPT_NEAR if was and was[0] == KEPT_NEAR else None
+    else:
         if _row_held_back(cursor, memory_id, embedder):
             # a rewrite outside the row's own private turn (the librarian's
             # passes, a revert): its words are still not a far embedder's
@@ -3026,6 +3056,11 @@ def _rewrite_content(cursor, memory_id, new_content, created, old_meta, scope, n
                 # the old words (as it always did) and the row says why
                 provider = kept_stamp(embedder)
                 embed_failed = provider is None
+    if blob is None and provider is None:
+        # no vector and not kept near: the sweep must look again, or this row
+        # waits for something else to reopen the latch (an older gap: the
+        # callers that ignore embed_failed, Fable scout 2026-11-26)
+        reset_backfill_latch()
     old_meta = dict(old_meta) if isinstance(old_meta, dict) else {}
     for k in ('temporal_at', 'event_dates', 'event_date_src'):
         old_meta.pop(k, None)

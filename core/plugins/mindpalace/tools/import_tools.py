@@ -248,7 +248,11 @@ def _import_memories(config, dest_cursor, existing_keys, scopes_seen, skip_keys=
             if strip:
                 content, stamp = temporal.strip_stamp(str(content), created)
                 if stamp:
-                    emb = prov = dim = None     # the copied vector was for the stamped text
+                    # the copied vector was for the stamped text; a kept-near
+                    # mark is about whose words they are and stays with them
+                    from core.embeddings import KEPT_NEAR
+                    emb = dim = None
+                    prov = prov if prov == KEPT_NEAR else None
 
             meta = {"import_key": key}
             if original is not None:

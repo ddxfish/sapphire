@@ -13,6 +13,9 @@ import * as api from '../api.js';
 import { escapeHtml as esc } from './modal.js';
 
 let _open = null;   // one picker at a time — a second trigger rides the first
+let _closeOpen = null;
+/** Close the picker if it is open (main.js calls this when the vault changes). */
+export function closePrivatePicker() { const c = _closeOpen; _closeOpen = null; if (_open && c) c(); }
 
 // THE client rule (server twin: chat_streaming.private_gate): vault open and
 // the chat on screen is public and not a plugin surface. One function, read
@@ -74,6 +77,9 @@ export function openPrivatePicker({ reason = 'send' } = {}) {
         };
         const onKey = (e) => { if (e.key === 'Escape') done(null); };
         document.addEventListener('keydown', onKey);
+        // The vault locked while this was open (another tab, the idle timer):
+        // the list above names private chats and must not stay on screen.
+        _closeOpen = () => done(null);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
         overlay.querySelector('#pp-cancel').onclick = () => done(null);
 

@@ -174,18 +174,25 @@ class ConversationDriver:
         # Voice privacy gate (vault v1.1): a private chat refuses cloud STT
         # (voice in) AND cloud TTS (speech out). Either leak kills the whole
         # turn — a half-voice call is a dead line, not privacy.
+        # A chat that cannot be read (sealed, a database error) is judged as
+        # private, and a check that fails refuses the turn. Before, both were
+        # taken as "ordinary" and the words went to a cloud transcriber before
+        # the turn itself refused (bug hunt 2026-11-26). This driver is also
+        # the person's own conversation mode at the desk, where a private
+        # chat with local speech is fine: calls into private chats are turned
+        # away where they start (manager.start_external).
         try:
-            if self._chat_name:
-                _settings = self.system.llm_chat.session_manager.get_settings_for(self._chat_name) or {}
-            else:
-                _settings = self.system.llm_chat.session_manager.get_chat_settings() or {}
+            sm = self.system.llm_chat.session_manager
+            _settings = sm.get_settings_for(self._chat_name) if self._chat_name else sm.get_chat_settings()
         except Exception:
-            _settings = {}
+            _settings = None
+        if _settings is None:
+            _settings = {'private_chat': True}
         try:
             from core.voice_privacy import stt_gate_reason, tts_gate_reason
             _gate = stt_gate_reason(_settings) or tts_gate_reason(_settings)
         except Exception:
-            _gate = ''
+            _gate = "voice privacy could not be checked"
         if _gate:
             if not self._privacy_gate_logged:
                 logger.warning(f"[CONV] {_gate} — voice turns disabled for this session")

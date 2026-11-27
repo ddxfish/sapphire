@@ -4550,8 +4550,22 @@ class ChatSessionManager:
         """Get raw messages (for storage/debugging)."""
         return self.current_chat.get_messages()
 
+    def pointer_sealed(self) -> bool:
+        """The open chat is private and the vault is locked: an eviction that
+        has not landed yet, because a turn that would not stop still holds the
+        pointer (prompt_vault.lock waits 15 s, then drops the key anyway).
+        Until it lands, nothing of that chat is handed to a reader: its rows
+        are still decrypted in memory, and "locked" has to mean locked
+        (bug hunt 2026-11-26). Cannot tell = yes."""
+        try:
+            return bool((self.current_settings or {}).get('private_chat')) and _vault_sealed()
+        except Exception:
+            return True
+
     def get_messages_for_display(self) -> List[Dict[str, Any]]:
         """Get messages formatted for UI with <think> tags reconstructed."""
+        if self.pointer_sealed():
+            return []
         return self.current_chat.get_messages_for_display()
 
     def get_display_messages_for(self, chat_name: Optional[str]) -> Optional[List[Dict[str, Any]]]:
@@ -6011,6 +6025,13 @@ class ChatSessionManager:
                 payload = data
                 if self._is_vaulted_conn(conn, owner):
                     payload = self._enc_value_bytes(data)
+                elif conn.execute("SELECT 1 FROM chats WHERE name = ?", (owner,)).fetchone() is None:
+                    # No such chat any more (deleted, or purged with the vault
+                    # while this turn was still running): with no row it reads
+                    # as "not vaulted", and the picture was stored in plaintext
+                    # under a dead private chat's name (bug hunt 2026-11-26).
+                    logger.info(f"Tool image '{image_id}' dropped: its chat is gone")
+                    return False
                 conn.execute(
                     """INSERT OR REPLACE INTO tool_images
                        (id, chat_name, data, media_type, created_at, visible)

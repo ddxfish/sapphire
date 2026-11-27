@@ -406,6 +406,17 @@ def _get_current_people_scope():
         return None
 
 
+def _not_private_docs(embedder) -> str:
+    """SQL for the backfill: a private chat's documents saved under a local
+    embedder carry an ordinary stamp, and are not sent to a far one
+    (core/documents.far_skip_sql). Cannot ask = no chat's documents go."""
+    try:
+        from core.documents import far_skip_sql
+        return far_skip_sql(embedder)
+    except Exception:
+        return " AND tab_id NOT IN (SELECT id FROM knowledge_tabs WHERE substr(scope, 1, 8) = '__rag__:')"
+
+
 def _get_embedder():
     """Get the singleton embedder directly from core.embeddings."""
     try:
@@ -1380,7 +1391,7 @@ def _backfill_knowledge_embeddings():
         cursor.execute(
             'SELECT id, content FROM knowledge_entries '
             'WHERE (embedding IS NULL OR embedding_provider IS NULL OR embedding_dim IS NULL)'
-            + not_kept_sql(embedder)
+            + not_kept_sql(embedder) + _not_private_docs(embedder)
         )
         entry_rows = cursor.fetchall()
 

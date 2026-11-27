@@ -408,9 +408,13 @@ def test_delete_vault_under_a_turn_on_a_private_default(rig):
     sm.add_user_message(f"earlier private history {CANARY}")
     assert sm.set_active_chat("desk")
     t = Turn(rig, "default", by_name=True, obey=False).start()
+    # a turn that will not stop: the vault locks and the delete WAITS (it used
+    # to purge under the turn and lean on the purge mark alone)
+    assert pv.destroy() == (False, 'busy')
+    assert pv.vault_exists() and not pv.vault_unlocked() and sm.chat_exists("secret")
+    t.finish()
     assert pv.destroy() == (True, '')
     assert sm.chat_exists("default") and not sm.chat_exists("secret")
-    t.finish()
     assert not pv.vault_exists()
     assert CANARY.encode() not in _at_rest(sm)
     assert _rows(sm, "default") == [], "the new public default starts empty and stays that way"

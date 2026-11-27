@@ -204,7 +204,9 @@ def file(name=None, **_):
     if not path or cf.put_away(name):                # a private chat's clip while the vault is locked: the same answer as gone
         return {'error': 'That clip is gone.'}, 404
     media = cf.MEDIA_TYPES.get(path.suffix.lower())
-    headers = {'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff'}
+    # a private chat's clip is never kept by the browser: a cached copy plays after the lock without asking
+    caching = 'no-store' if Path(str(name)).stem.endswith(cf.PRIVATE_MARK) else 'private, max-age=86400'
+    headers = {'Cache-Control': caching, 'X-Content-Type-Options': 'nosniff'}
     if not media:
         headers['Content-Disposition'] = f'attachment; filename="{path.name}"'
     return FileResponse(str(path), media_type=media or 'application/octet-stream', headers=headers)

@@ -277,5 +277,51 @@ def test_c6_the_send_carries_where_the_draft_was_written():
     assert 'noteDraft(!!input.value.trim(), getViewedChat())' in send
     assert "e.code === 'private_draft'" in send
     refused = send.split("e.code === 'private_draft'", 1)[1].split('if (statusCode === 409)', 1)[0]
-    assert 'restoreDraft' not in refused, "the refused words must not come back to the public chat's box"
+    # locked: the words do not come back to the public chat's box. Open: the
+    # private chat is a click away, so they do (bug hunt 2026-11-26: dropping
+    # them there only lost her text). Unknown counts as locked.
+    assert 'vault?.unlocked' in refused
+    assert 'if (open) restoreDraft(); else myBubble?.remove();' in refused
+    assert 'let open = false' in refused
     assert 'dropSealedDraft' in _src('main.js')
+
+
+# ── the bug hunt on the bug hunt, web side (2026-11-26) ──
+
+def test_regenerate_checks_it_is_still_the_chat_that_was_clicked():
+    """A Regenerate dialog left open across a lock: OK then cut the tail of
+    the public chat the tab had been moved to."""
+    h = _src('handlers/message-handlers.js')
+    regen = h.split('export async function handleRegen', 1)[1].split('export async function handleEdit', 1)[0]
+    assert 'const chatAtClick = getViewedChat();' in regen
+    confirm = regen.index("confirm('Regenerate this response?')")
+    assert regen.index('if (moved()) return;', confirm) > confirm, "checked after the dialog closes"
+    assert 'chatAtClick\n        );' in regen, "and handed to the history fetch"
+    c = _src('chat.js')
+    body = c.split('export const handleRegen', 1)[1].split('const clicked = hist[idx];', 1)[0]
+    assert 'full.chat_name !== expectChat' in body and 'return null;' in body
+
+
+def test_an_editor_left_open_does_not_hold_another_chats_transcript_on_screen():
+    c = _src('chat.js')
+    body = c.split('export const fetchAndRender', 1)[1].split('const seq = ++_histPaintSeq', 1)[0]
+    assert '_paintedChat !== looking' in body
+    assert "editor.classList.remove('editing')" in body
+    assert '_paintedChat = returnedChat || expectedChat || null' in c
+
+
+def test_the_draft_follows_a_lock_the_tab_slept_through_and_a_rename():
+    m = _src('main.js')
+    resync = m.split('export async function fullResync', 1)[1].split('\n}\n', 1)[0]
+    assert 'dropSealedDraft()' in resync
+    renamed = m.split('eventBus.Events.CHAT_RENAMED', 1)[1].split('});', 1)[0]
+    assert 'getDraftChat() === data.old' in renamed and 'setDraftChat(data.new)' in renamed
+    s = _src('handlers/send-handlers.js')
+    spoken = s.split('export async function triggerSendWithText', 1)[1].split('await handleSend({ refocus: false });\n    return true;', 1)[0]
+    assert 'setDraftChat(getViewedChat())' in spoken, "dictated words belong to the chat on screen"
+    assert 'closePrivatePicker' in m and 'export function closePrivatePicker' in _src('shared/private-picker.js')
+
+
+def test_the_replay_button_names_its_chat():
+    a = _src('audio.js')
+    assert 'playTextStreaming(prose, null, getViewedChat())' in a

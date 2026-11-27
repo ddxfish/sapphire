@@ -279,8 +279,10 @@ def _names_hidden_chat(data) -> bool:
     probe = _hidden_chat_probe
     if probe is None or not isinstance(data, dict):
         return False
-    for key in ('chat', 'chat_name'):
+    for key in ('chat', 'chat_name', 'scope'):
         name = data.get(key)
+        if key == 'scope':       # a chat's documents: '__rag__:<chat>' (core/documents.py)
+            name = name[8:] if isinstance(name, str) and name.startswith('__rag__:') else None
         if isinstance(name, str) and name:
             try:
                 if probe(name):

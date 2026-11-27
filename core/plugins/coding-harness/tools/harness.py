@@ -503,7 +503,8 @@ def _run_command(args, settings):
         _ceiling = 200_000
     limit = max(200, min(limit, _ceiling))
 
-    logger.info(f"HARNESS [{cwd}] $ {command[:100]}")
+    from core import log_safe            # a private chat's command is its words: size only (core/log_safe.py)
+    logger.info(f"HARNESS [{cwd}] $ {log_safe.words(command[:100])}")
     # Own process group so a timeout can kill the whole tree (see _kill_tree),
     # and stderr merged into stdout so a single byte cap bounds RAM. Read in a
     # thread keeping a bounded head+tail ring; the main loop is the wall clock.

@@ -148,6 +148,18 @@ async def _disconnect_server(name):
     _unregister_tools(name)
 
 
+def _far_server(config) -> bool:
+    """Is this server at an address off this machine and its network? A stdio
+    server has no address. An address that cannot be judged counts as far."""
+    if (config.get("type") or "stdio") == "stdio":
+        return False
+    try:
+        from core.chat.llm_providers.openai_compat import near_host
+        return not near_host(config.get("url") or "")
+    except Exception:
+        return True
+
+
 def _register_tools(name, mcp_tools):
     """Convert MCP tool defs to Sapphire format, register with FunctionManager."""
     fm = _plugin_loader._function_manager if _plugin_loader else None
@@ -157,6 +169,13 @@ def _register_tools(name, mcp_tools):
 
     module_name = f"mcp:{name}"
     sapphire_tools = []
+    # A server reached at an address off this machine and its network is the
+    # network, and says so: its tools are refused in a private chat. Before,
+    # every MCP tool was "unflagged", so the Settings > Privacy opt-in meant
+    # for local hardware also let a remote server's tools run there (bug hunt
+    # 2026-11-26). A stdio process or a near address stays unflagged: what it
+    # does with the words is not knowable from here, and the opt-in decides.
+    far = _far_server((_servers.get(name) or {}).get('config') or {})
     for t in mcp_tools:
         # Two servers with a tool of the same name: the first keeps it. The
         # map used to be overwritten here while FunctionManager kept the first
@@ -168,6 +187,7 @@ def _register_tools(name, mcp_tools):
             continue
         sapphire_tools.append({
             "type": "function",
+            **({"is_local": False} if far else {}),
             "function": {
                 "name": t["name"],
                 "description": t.get("description", ""),

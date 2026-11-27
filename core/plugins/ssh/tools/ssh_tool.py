@@ -287,7 +287,8 @@ def _run_remote(server, command, timeout, auth=None, raw=False):
     raw=True answers (stdout, ok) for code that parses the output (the
     backup target); the usual answer is the formatted report for her."""
     host, user = server['host'], server['user']
-    logger.info(f"SSH [{server['name']}] ({user}@{host}): {command[:100]}")
+    from core import log_safe            # a private chat's command is its words: size only (core/log_safe.py)
+    logger.info(f"SSH [{server['name']}] ({user}@{host}): {log_safe.words(command[:100])}")
     result, err = _exec(server, 'ssh', [f'{user}@{host}', command], timeout, auth, 'Command')
     if err:
         return err, False

@@ -209,7 +209,7 @@ SELF: each sheet section caps at 2000 chars (custom boxes: 8 per scope, 6000 cha
 
 LIBRARIAN: Beta, three gates all off by default (librarian_enabled, librarian_nightly_enabled at 03:30, per-scope resident toggles). 5 passes, 7 charter stages; pass = standing note + charter + data; Run ALL shows a token estimate, confirm bypasses the daily cap; dedup dry run is LLM-free; ⭐ favorites refuse merges; merges soft (archive).
 
-KEPT NEAR: a memory saved or edited in a private chat is not sent to an embedder off this machine or LAN (stamped embedding_provider='kept-near', no vector); the backfill skips those rows and private-model rows while the embedder is far. They match by keywords only. Nothing for you to do.
+KEPT NEAR: a memory saved or edited in a private chat is not sent to an embedder off this machine or LAN (stamped embedding_provider='kept-near', no vector); the backfill skips those rows, and every row written in a private chat (meta.chat='__private__'), while the embedder is far. A local model's rows from ordinary chats embed as ever. They match by keywords only. Nothing for you to do.
 PRIVATE-MODEL: rows written on a model marked private (or marked 🏠 by the user) are hidden from cloud models (private_model_filter, default on): search/recent add "N more matching memories are only available on private models" (a count, nothing to fetch), and update_memory/delete_memory refuse them ("kept for private models and was not updated/deleted"). Not your error: say so and carry on.
 
 KEYED: private_key rows only for calls passing the key; never tended/merged/promoted; ledger logs '[keyed]'; absent from wake pulls; text still goes to the embedder at save (remote embedder = leaves the machine).

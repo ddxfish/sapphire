@@ -285,3 +285,79 @@ def test_a_private_chats_document_stays_off_a_far_embedder_through_every_job(kno
     monkeypatch.setattr(kb, '_backfill_done', False)
     kb._backfill_knowledge_embeddings()                     # the knowledge store's sweep (the second door)
     assert not any('PRIVATE' in t for t in knowledge.sent), knowledge.sent
+
+
+# ── the swap from a local embedder to a far one (bug hunt 2026-11-26) ──
+# A private chat's document saved while the embedder was LOCAL has a real
+# vector and an ordinary stamp. The stamp cannot say "private", so the walks
+# that run outside any turn ask which chats are private.
+
+@pytest.fixture
+def two_chats(knowledge, monkeypatch, tmp_path):
+    import core.documents as d
+    import core.api_fastapi as af
+    chats = {'secret': {'private_chat': True}, 'desk': {'private_chat': False}}
+    sm = types.SimpleNamespace(
+        get_settings_for=lambda name: chats.get(name), chat_exists=lambda n: n in chats,
+        list_chat_files=lambda include_hidden=False: [{'name': n, **s} for n, s in chats.items()])
+    monkeypatch.setattr(af, 'get_system', lambda: types.SimpleNamespace(
+        llm_chat=types.SimpleNamespace(session_manager=sm)))
+    monkeypatch.setattr(d, '_dir', lambda: tmp_path / 'documents')
+    monkeypatch.setattr(d, '_changed', lambda chat: None)
+    monkeypatch.setattr(d, '_heal_later', lambda chat: None)
+    monkeypatch.setattr(d, '_kept_near', {})
+    knowledge.is_far = False                                 # uploads happen under a local embedder
+    d.add('secret', 'diary.txt', (PRIVATE + ' in a document. ').encode() * 5)
+    d.add('desk', 'memo.txt', (PUBLIC + ' in a document. ').encode() * 5)
+    with kb._get_connection() as conn:
+        assert {r[0] for r in conn.execute('SELECT embedding_provider FROM knowledge_entries')} == {'test:remote'}
+    knowledge.sent.clear()
+    knowledge.is_far = True                                  # the person picks a far embedder
+    monkeypatch.setattr(type(knowledge), 'provider_id', 'test:far', raising=False)
+    return types.SimpleNamespace(d=d, chats=chats, embedder=knowledge)
+
+
+def test_the_reembed_job_does_not_send_a_private_chats_documents_after_a_swap(two_chats):
+    from core.embeddings import reembed
+    e = two_chats.embedder
+    assert reembed._count_pending(e)['knowledge_entries'] > 0
+    reembed._process_knowledge_entries(e)
+    assert e.sent and not any('PRIVATE' in t for t in e.sent), "a private chat's document went to the far embedder"
+    assert reembed._count_pending(e)['knowledge_entries'] == 0, "what the walk leaves out is not reported as pending"
+
+
+def test_nor_do_the_backfill_or_the_documents_own_heal(two_chats, monkeypatch):
+    e = two_chats.embedder
+    two_chats.d._heal('secret')
+    monkeypatch.setattr(kb, '_backfill_done', False)
+    kb._backfill_knowledge_embeddings()
+    assert not any('PRIVATE' in t for t in e.sent)
+    two_chats.d._heal('desk')
+    assert any('ordinary' in t for t in e.sent), "an ordinary chat's document heals as ever"
+    assert two_chats.d._kept_near.get('secret') == 'test:far', "and the private one is not retried every turn"
+
+
+def test_a_chat_that_is_ordinary_now_gets_its_kept_chunks_embedded(two_chats):
+    """Stamped at an upload when the chat was private (or could not be read).
+    It is ordinary now, so the heal embeds them: the stamp was permanent."""
+    with kb._get_connection() as conn:
+        conn.execute("UPDATE knowledge_entries SET embedding = NULL, embedding_dim = NULL, "
+                     "embedding_provider = ? WHERE content LIKE '%PRIVATE%'", (emb.KEPT_NEAR,))
+        conn.commit()
+    two_chats.chats['secret']['private_chat'] = False
+    two_chats.d._heal('secret')
+    assert any('PRIVATE' in t for t in two_chats.embedder.sent)
+    with kb._get_connection() as conn:
+        assert {r[0] for r in conn.execute(
+            "SELECT embedding_provider FROM knowledge_entries WHERE content LIKE '%PRIVATE%'")} == {'test:far'}
+
+
+def test_cannot_list_the_chats_leaves_every_chats_documents_out(two_chats, monkeypatch):
+    import core.api_fastapi as af
+    from core.embeddings import reembed
+
+    def gone():
+        raise RuntimeError("not up")
+    monkeypatch.setattr(af, 'get_system', gone)
+    reembed._process_knowledge_entries(two_chats.embedder)
+    assert two_chats.embedder.sent == []

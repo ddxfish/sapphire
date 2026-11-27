@@ -5,6 +5,7 @@ import logging
 from collections import defaultdict
 from typing import Optional
 from fastapi import Request, HTTPException, Depends
+from starlette.requests import HTTPConnection
 from starlette.responses import RedirectResponse
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,80 @@ async def require_login(request: Request):
     if request.url.path.startswith('/api/'):
         raise HTTPException(status_code=401, detail="Unauthorized")
     raise HTTPException(status_code=307, headers={"Location": "/login"})
+
+
+# ── API tokens and private chats (Krem's ruling 2026-11-26) ──
+# A bearer token is an integration, not the person at their own screen. It
+# gets the locked-vault view: no vault prompt or piece text, and no private
+# chat, even while the vault is open. Only a logged-in browser reads those.
+
+# Routes that act on the chat the person has OPEN when no chat is named.
+_POINTER_ROUTES = ('/api/history', '/api/chat', '/api/cancel', '/api/status', '/api/init',
+                   '/api/commands', '/api/tts', '/api/transcribe')
+TOKEN_PRIVATE_MSG = "A private chat is open, and API tokens can't read or use private chats."
+
+
+def token_caller(request) -> bool:
+    """Is this request an API token's (no logged-in browser session)?"""
+    try:
+        if request.session.get('logged_in'):
+            return False
+    except Exception:
+        pass
+    return (request.headers.get('Authorization') or '').startswith('Bearer ')
+
+
+async def token_gate(request: HTTPConnection):
+    """App-wide dependency. For a token caller: a request that names a
+    private chat answers 404, the same as a chat that does not exist, and one
+    that would act on the open chat while that chat is private answers 403.
+    Cannot tell = refused. A person's browser passes untouched.
+    Typed HTTPConnection, not Request: an app-wide dependency also runs for
+    websocket routes, which have no Request to give (they are session-cookie
+    only, core/auth.require_login_ws, so no token ever reaches one)."""
+    if request.scope.get('type') != 'http':
+        return
+    if not token_caller(request) or request.url.path == '/mcp':      # the MCP door has its own rules (core/mcp_server.py)
+        return
+    request.state.api_token = True
+    try:
+        from core.api_fastapi import get_system
+        sm = get_system().llm_chat.session_manager
+    except Exception:
+        return                                # no chat store yet (setup, boot): nothing private to reach
+    named = set()
+    params = request.path_params
+    for key in ('chat_name', 'chat'):
+        if params.get(key):
+            named.add(str(params[key]))
+    q = request.query_params
+    if q.get('chat'):
+        named.add(q['chat'])
+    if (q.get('scope') or '').startswith('__rag__:'):
+        named.add(q['scope'][8:])
+    if request.method in ('POST', 'PUT', 'DELETE', 'PATCH') and 'json' in request.headers.get('content-type', ''):
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                for key in ('chat', 'chat_name'):
+                    if isinstance(body.get(key), str) and body[key]:
+                        named.add(body[key])
+        except Exception:
+            pass
+    try:
+        for name in named:
+            s = sm.get_settings_for(name)
+            if s is not None and s.get('private_chat'):
+                raise HTTPException(status_code=404, detail="Chat not found")
+        path = request.url.path
+        pointer = path == '/api/chats/active' or any(path == p or path.startswith(p + '/') for p in _POINTER_ROUTES)
+        if pointer and not named and (sm.get_chat_settings() or {}).get('private_chat'):
+            raise HTTPException(status_code=403, detail=TOKEN_PRIVATE_MSG)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"token gate could not check a chat's privacy, refusing: {type(e).__name__}")
+        raise HTTPException(status_code=403, detail="Could not check whether that chat is private.")
 
 
 async def require_login_ws(websocket) -> bool:

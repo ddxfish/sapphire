@@ -3,7 +3,7 @@ import * as audio from './audio.js';
 import * as ui from './ui.js';
 import * as notify from './shared/notify.js';
 import { initNotifySidebar } from './features/notify-sidebar.js';
-import { initElements, refresh, setHistLen, getElements, getIsProc, setProc, getAbortController, setSendLabel } from './core/state.js';
+import { initElements, refresh, setHistLen, getElements, getIsProc, setProc, getAbortController, setSendLabel, getDraftChat, setDraftChat } from './core/state.js';
 import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
 import { initConvo } from './features/convo.js';
@@ -448,6 +448,7 @@ export async function fullResync() {
     refreshProfileBadge();
     resetProviderMeta();
     syncNavWithPlugins();
+    dropSealedDraft();      // a tab that slept through the lock never heard vault_changed
 }
 
 function initEventBus() {
@@ -729,7 +730,12 @@ function initEventBus() {
         // server's real active — the adopt=false path could re-synthesize a
         // sealed chat's RAW name into the select/header in a two-tab storm.
         // then: a draft written in a chat the lock just sealed leaves the box
-        if (data?.action === 'vault_changed') { populateChatDropdown({ forceAdopt: true }); dropSealedDraft(); }
+        if (data?.action === 'vault_changed') {
+            populateChatDropdown({ forceAdopt: true });
+            dropSealedDraft();
+            // a private picker left open lists private chats by name
+            import('./shared/private-picker.js').then(m => m.closePrivatePicker()).catch(() => {});
+        }
         refreshAndUpdateScene();
     });
     eventBus.on(eventBus.Events.TOOLSET_CHANGED, refreshAndUpdateScene);
@@ -834,7 +840,10 @@ function initEventBus() {
         populateChatDropdown();
     });
 
-    eventBus.on(eventBus.Events.CHAT_RENAMED, () => {
+    eventBus.on(eventBus.Events.CHAT_RENAMED, (data) => {
+        // the composer's draft follows its chat's new name: left on the old
+        // one it read as "a deleted chat's draft" and lost its origin
+        if (data?.old && data?.new && getDraftChat() === data.old) setDraftChat(data.new);
         populateChatDropdown();
     });
 

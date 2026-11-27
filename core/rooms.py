@@ -1312,6 +1312,11 @@ def _rt(chat):
 
 def state(chat):
     rt = _rooms.get(chat)
+    try:
+        if rt is not None and _sm().is_chat_hidden(chat) is True:
+            rt = None            # a sealed room answers as a name that was never a room
+    except Exception:
+        pass                     # no store to ask: nothing is sealed
     if rt is None:
         return {'chat': chat, 'running': False, 'round': 0, 'turn': None, 'waiting': False, 'skip': 0,
                 'since_human': 0, 'rounds_run': 0, 'heard': None, 'doors': {}}
