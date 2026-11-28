@@ -174,6 +174,7 @@ def test_a_persona_starts_with_the_shipped_list(mk):
     ends = {r["name"]: (r["from"], r["to"]) for r in rows}
     assert ends["wave"] == ("home", "home")
     assert (ends["sit"], ends["idle_sit"], ends["stand"]) == (("home", "sit"), ("sit", "sit"), ("sit", "home"))      # a sitting position ships with the list
+    assert (ends["dance"], ends["idle_dance"], ends["dance_out"]) == (("home", "dance"), ("dance", "dance"), ("dance", "home"))     # and a dance she keeps up
     import re
     assert not any(re.search(r"\b(her|she|his|he|herself|himself)\b", r["action"]) for r in rows)      # any persona, not one
 
@@ -201,9 +202,10 @@ def test_generate_needs_a_home_picture_and_a_workflow_that_can_loop(mk):
     with pytest.raises(mk.MakerError, match="takes no picture"):
         mk.go("ada", ["wave", "nod"])
     v = mk.go("ada")                                           # Generate all: what can be made is, and why the rest is not is said
-    assert mk.load("ada")["order"] == ["sit"] and "takes no picture" in v["note"] and "could not be queued" in v["note"]
+    assert mk.load("ada")["order"] == ["sit", "dance"] and "takes no picture" in v["note"] and "could not be queued" in v["note"]
     mk.stop("ada")
-    mk.load("ada")["rows"]["sit"]["state"] = "new"
+    for name in ("sit", "dance"):
+        mk.load("ada")["rows"][name]["state"] = "new"
     mk.load("ada")["order"].clear()
     mk.setup("ada", {"workflow": ""})                          # nothing picked: the first workflow that loops is used
     mk.go("ada", ["wave"])
@@ -756,3 +758,36 @@ def test_a_clip_with_a_free_end_is_checked_for_zoom_and_a_drifted_face(mk):
     drift = mk.flags({**GOOD, "zoom": 0.99, "face_end": 30.8}, start="home", end="sit", finds=True)
     assert drift[0][0].startswith("her face has drifted from her picture") and drift[0][1] is True
     assert mk.flags({**GOOD, "zoom": 2.36, "face_end": 30.8}) == []          # a clip pinned at both ends is held to its pictures instead
+
+
+# ── the workflow that ships ─────────────────────────────────────────────────
+@pytest.fixture
+def cf(monkeypatch, tmp_path):
+    from plugins.comfyui import comfy
+    monkeypatch.setattr(comfy, "WORKFLOW_DIR", tmp_path / "comfy-workflows")
+    return comfy
+
+
+def test_the_shipped_workflow_is_one_the_maker_can_use_and_carries_nothing_of_ours(cf):
+    path = PLUGIN / "workflows" / "avatar-ltx25-first-last.json"
+    graph, meta = cf.read(path)
+    assert cf.kind(graph) == "video" and len(cf.image_slots(graph, meta)) == 2
+    assert meta["description"].startswith("LTX-2.5")
+    text = path.read_text(encoding="utf-8")
+    text.encode("cp1252")
+    assert not any(w in text.lower() for w in ("clipmaker", "brunette", "/home/", "just do it", "sapphire-avatar"))
+    assert {n["inputs"]["image"] for n in graph.values() if n["class_type"] == "LoadImage"} == {"example.png"}
+
+
+def test_the_starter_is_offered_only_while_no_first_and_last_frame_workflow_is_installed(mk, cf, monkeypatch):
+    assert mk.view("ada")["starter"] is None                   # the fixture's "flf" has both frames
+    monkeypatch.setattr(mk, "workflows", lambda: [{"name": "i2v", "slots": 1, "usable": True, "words": "one picture"}])
+    offer = mk.view("ada")["starter"]
+    assert offer["name"] == "avatar-ltx25-first-last" and len(offer["models"]) == 5 and all(m.endswith(".safetensors") for m in offer["models"])
+    got = mk.starter_install()
+    assert got == offer and cf.find("avatar-ltx25-first-last")[1].parent == cf.WORKFLOW_DIR
+    graph, meta = cf.read(cf.find("avatar-ltx25-first-last")[1])
+    assert len(cf.image_slots(graph, meta)) == 2 and meta["description"]
+    assert mk.view("ada")["starter"] is None                   # installed: not offered again
+    with pytest.raises(mk.MakerError, match="already installed"):
+        mk.starter_install()
